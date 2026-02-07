@@ -6,7 +6,7 @@
     position: sticky;
     top: 0;
     left: 0;
-    height: 3rem;
+    height: 2.5rem;
     padding: .5rem;
     background-color: rgb(from var(--color-border-s) r g b / .9);
     backdrop-filter: blur(10px);

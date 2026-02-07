@@ -1,37 +1,34 @@
-@import "tailwindcss";
-
-@theme {
-  --color-stupig-50: #E0F3FE;
-  --color-stupig-100: #C7E9FE;
-  --color-stupig-200: #95D6FD;
-  --color-stupig-300: #63C3FC;
-  --color-stupig-400: #31AFFB;
-  --color-stupig-500: #059BF4;
-  --color-stupig-600: #047BC2;
-  --color-stupig-700: #035B90;
-  --color-stupig-800: #023C5E;
-  --color-stupig-900: #011C2C;
-  --color-stupig-950: #000000;
+:root {
+  --color-theme: #047bc2;
+  --color-theme-d: #015b90;
+  --color-theme-s: #cca0c6;
+  --color-border: #eee;
+  --color-border-s: #f6f6f6;
+  --color-border-ss: #ffffff;
+  --color-text: #4d4d4d;
+  --color-text-s: #656565;
 }
-
-@layer base {
-  * {
-    @apply transition-all duration-500;
-  }
-  
-  body {
-    @apply m-0;
-    -webkit-tap-highlight-color: transparent;
-  }
-  
-  a {
-    @apply text-stupig-600 dark:text-stupig-400 underline underline-offset-[0.3em] decoration-[0.1em] outline-none;
-    @apply hover:text-stupig-700 dark:hover:text-stupig-300;
-    -webkit-tap-highlight-color: transparent;
-  }
-  
-  button, input, select, textarea {
-    @apply outline-none;
-    -webkit-tap-highlight-color: transparent;
-  }
+* {
+  transition-duration: .5s;
+  color: var(--color-text);
+}
+body {
+  margin: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+a, button, input, select, textarea {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+a {
+  color: var(--color-theme);
+  text-decoration: underline;
+  text-underline-offset: .3em;
+  text-decoration-thickness: .1em;
+}
+a:focus, button:focus {
+  outline: none;
+}
+a:hover {
+  color: var(--color-theme-s);
 }
