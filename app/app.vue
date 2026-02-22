@@ -1,105 +1,76 @@
-<style scoped>
-  .bar {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    position: sticky;
-    top: 0;
-    left: 0;
-    height: 2.5rem;
-    padding: .5rem;
-    background-color: rgb(from var(--color-border-s) r g b / .9);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border-bottom: 1px solid rgb(from var(--color-border-s) r g b / .7);
-  }
-  .bar:has(.logo:hover) {
-    background-color: rgb(from var(--color-border-ss) r g b / .9);
-  }
-  .bar .logo {
-    height: 100%;
-    width: 3rem;
-    display: grid;
-    cursor: pointer;
-  }
-  .bar .logo > img {
-    grid-area: 1 / 1;
-    height: 100%;
-    display: block;
-    object-fit: contain;
-  }
-  .bar .logo .logo-top {
-    z-index: 1;
-  }
-  .bar .logo .logo-top:hover {
-    opacity: .3;
-  }
-  .bar .title {
-    margin-left: 2rem;
-    color: var(--color-text-s);
-  }
-  .bar:has(.logo:hover) .title {
-    color: var(--color-theme-d);
-  }
-  .bar .avatar {
-    margin-left: auto;
-    width: 2rem;
-    height: 2rem;
-    border-radius: 50%;
-    background-color: var(--color-border-ss);
-  }
-  .wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    min-height: calc(100vh - 3.5rem);
-  }
-  .poster {
-    width: 100%;
-    max-width: 30rem;
-    margin-top: 1rem;
-  }
-  .app {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    max-width: 60rem;
-    padding: 1.5rem 1.5rem 0 1.5rem;
-    margin-bottom: 5rem;
-    box-sizing: border-box;
-  }
-  .footage {
-    font-size: 70%;
-    color: var(--color-text-ss);
-    margin-bottom: 3rem;
-  }
-</style>
-
 <template>
-  <UApp>
-    <div class="bar">
-      <div class="logo" @click="go('/')">
-        <img class="logo-top" src="/imgs/logo_regular.svg" alt="Stupig logo" />
-        <img src="/imgs/logo_fancy.svg" alt="Stupig logo" />
-      </div>
-      <span class="title">蠢猪小组！</span>
-      <img class="avatar" src="/imgs/avatar.svg" alt="User avatar" />
-    </div>
-    <div class="wrap">
-      <img v-if="isHome" class="poster" src="/imgs/告别momomo海报.jpg" alt="告别momomo海报"/>
-      <div class="app">
-        <NuxtPage />
-      </div>
-      <div class="footage">
-        <p>© 2026 蠢猪小组 All rights reserved.</p>
-      </div>
-    </div>
-  </UApp>
+  <UHeader :toggle="false">
+    <template #left>
+      <ULink class="hover:blur-[1px] active:blur-[1px] transition-[filter] duration-300" to="/">
+        <img class="h-10 w-auto dark:hidden" src="/imgs/logo_fancy.svg" alt="Stupig Logo" />
+        <img class="h-10 w-auto light:hidden" src="/imgs/logo_fancy_light.svg" alt="Stupig Logo" />
+      </ULink>
+    </template>
+    <template #right>
+      <UColorModeButton />
+      <UUser v-if="!! useCookie('login')" class="cursor-pointer" size="sm" name="是个人物" description="点此登录 / 注册" :avatar="{ icon: 'i-lucide-user' }" to="javascript: //植入病毒;" @click="() => void (login_modal = true)" />
+    </template>
+  </UHeader>
+  <UMain class="overflow-x-clip">
+    <NuxtPage />
+  </UMain>
+  <UModal id="login" v-model:open="login_modal" description="忘账号密码者，皆蠢猪耶？" :ui="{ footer: 'justify-end' }">
+    <template #title>
+      <img class="h-10 mb-1 w-auto dark:invert" src="/imgs/logo_regular.svg" alt="Stupig Logo" />
+      <span>登录 / 注册</span>
+    </template>
+    
+    <template #body>
+      <UTabs v-model="login_or_register" :items="login_tab_items">
+        <template #login>
+
+        </template>
+        <template #register>
+
+        </template>
+      </UTabs>
+    </template>
+
+    <template #footer>
+      <Transition name="fade-down" mode="out-in">
+        <div v-if="login_or_register === LoginOrRegister.Login" key="login" class="flex gap-1.5">
+          <UButton icon="twemoji:pig-face" label="我是蠢猪，密码忘了" color="neutral" variant="outline" />
+          <UButton label="立即登录" color="neutral" />
+        </div>
+        <div v-else key="register" class="flex gap-1.5">
+          <UButton label="立即注册" color="neutral" />
+        </div>
+      </Transition>
+    </template>
+  </UModal>
 </template>
 
-<script setup>
-  const route = useRoute()
-  const isHome = computed(() => route.path === '/')
+<script lang="ts" setup>
+  const login_modal = ref(false)
+  enum LoginOrRegister {
+    Login = '0',
+    Register = '1'
+  }
+  const login_or_register = ref(LoginOrRegister.Login)
+  const login_tab_items = reactive([
+    {
+      label: '登录',
+      icon: 'lucide:user-check',
+      slot: 'login'
+    },
+    {
+      label: '注册',
+      icon: 'lucide:circle-plus',
+      slot: 'register'
+    }
+  ])
+
+  const login_form = reactive({
+    username: '',
+    phone: '',
+    phone_vcode: '',
+    password: '',
+    new_password: '',
+    confirm_password: ''
+  })
 </script>

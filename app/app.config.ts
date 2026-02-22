@@ -1,8 +1,7 @@
 export default defineAppConfig({
   ui: {
-    colors: {
-      primary: 'stupig',
-      neutral: 'slate'
+    link: {
+      base: 'focus-visible:hidden underline underline-offset-6 hover:decoration-3 active:decoration-3 active:text-default',
     }
   }
 })

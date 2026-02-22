@@ -1,31 +1,58 @@
 <template>
-  <div>
-    <h1>
-      欢迎来到
-      <br />
-      蠢猪小组 官网！
-    </h1>
-    <h3>
-      我们是来自 广州市西关外国语学校
-      <br />
-      现役高三(一)班的
-      <br />
-      蠢猪小组！
-    </h3>
-    <p style="color: var(--color-text-s);">
-      蠢猪小组，神人居所。<br />
-      官桥犯唐，趣日可多。<br />
-      无语有语，聚而奇之。<br />
-      有机一言，天地何之？<br />
-      广甚贪杯，晚修醒酒。<br />
-      羊手轻挥，天工所求。<br />
-      水月发难，天庭震动。<br />
-      齐聚团建，雅趣其中。<br />
-      吃饱义卖，好数冥币。<br />
-      哪管压力，何待佳期？<br />
-      日月驻足，天地不行。<br />
-      惟感蠢猪，赤子之心！<br />
-    </p>
-    <NuxtLink to="/contact">联系我们</NuxtLink>
+  <div class="container mx-auto grid grid-cols-1 lg:grid-cols-2 gap-x-24 gap-y-4 px-4 pt-12">
+    <div class="grow flex flex-col items-stretch gap-4">
+      <h1 class="text-left">
+        欢迎来到
+        <br />
+        蠢猪小组 官网！
+      </h1>
+      <h2 class="band relative py-12 flex flex-col mt-6 sm:mt-16 md:*:text-4xl/14">
+        <span class="self-start font-normal">
+          我们来自
+        </span>
+        <span class="self-end">广州市西关外国语学校</span>
+        <span class="self-end">
+          <span class="font-normal">现役</span>
+          高三 1 班
+          <UIcon class="align-middle" name="twemoji:pig-face" />
+        </span>
+      </h2>
+    </div>
+    <div class="grow flex flex-col items-center gap-4 bg-default py-12 band-x-super-pro-max">
+      <img class="max-w-120 dark:invert " src="/imgs/whats_up.svg" alt="Stupig Chant" />
+      <ULink class="font-bold mt-16" to="/contact">联系我们这帮“全能型人才”</ULink>
+    </div>
   </div>
 </template>
+
+<style scoped>
+  @reference '@/assets/css/global.css';
+
+  .band > * {
+    @apply bg-default/25 backdrop-blur-[2px] shadow-xl px-2;
+    @variant lg {
+      @apply px-4;
+    }
+    @variant dark {
+      @apply shadow-gray-400/50;
+    }
+  }
+  .band::before {
+    @apply content-[''] absolute inset-y-0 -left-[100vw] w-[200vw] -z-233
+      bg-blue-300/20 mask-[url('/imgs/good!.svg')] mask-repeat-x mask-center;
+  }
+  .dark .band::before {
+    @apply bg-gray-500/20;
+  }
+
+  .band-x-super-pro-max {
+    @variant lg {
+      @apply bg-default/50 backdrop-blur-[2px] border-l border-t border-r border-pink-200;
+    }
+  }
+  .dark .band-x-super-pro-max {
+    @variant lg {
+      @apply border-gray-700;
+    }
+  }
+</style>
