@@ -1,0 +1,59 @@
+/* PrimeVue design token overrides — must load AFTER primevue core CSS */
+
+:root {
+  --p-inputtext-invalid-placeholder-color: var(--p-inputtext-placeholder-color);
+
+  --p-toast-blur: 16px;
+
+  --p-dialog-border-radius: theme('borderRadius.md');
+
+  --p-autocomplete-overlay-border-radius: theme('borderRadius.md');
+  --p-autocomplete-option-border-radius: theme('borderRadius.md');
+
+  --p-button-raised-shadow:
+    0 1px 1px 0 rgb(0 0 0 / 0.1),
+    0 1px 1px -1px rgb(0 0 0 / 0.1);
+  
+  --p-paginator-background: none;
+
+  --p-datepicker-buttonbar-padding: .5rem 0 .25rem 0;
+}
+
+.p-component {
+  font-family: inherit;
+}
+
+.p-formfield {
+  box-sizing: border-box;
+}
+
+.p-toast {
+  width: calc(100vw - 1rem);
+  max-width: theme('maxWidth.sm');
+}
+.p-toast-message {
+  @apply shadow-md;
+}
+.p-toast-summary {
+  line-height: 18px;
+  padding-bottom: 2px;
+}
+
+.p-iconfield .p-inputicon {
+  z-index: 2;
+}
+
+.p-datepicker-panel {
+  max-width: 100vw;
+}
+
+.p-dialog-enter-active {
+  animation: card-in 0.2s ease-out;
+}
+.p-dialog-leave-active {
+  animation: card-out 0.15s ease-in;
+}
+
+.p-datepicker-calendar-container {
+  padding-bottom: .5rem;
+}

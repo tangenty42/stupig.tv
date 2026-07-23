@@ -1,0 +1,227 @@
+<template>
+  <div
+    ref="containerRef"
+    class="my-height-transition"
+  >
+    <div ref="innerRef" class="my-height-transition-inner">
+      <slot />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+const props = withDefaults(defineProps<{
+  active?: boolean
+  duration?: number
+  easing?: string
+  threshold?: number
+  keepExplicitHeight?: boolean
+}>(), {
+  active: true,
+  duration: 300,
+  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+  threshold: 0.5,
+  keepExplicitHeight: true,
+})
+
+const containerRef = ref<HTMLElement | null>(null)
+const innerRef = ref<HTMLElement | null>(null)
+
+let observer: ResizeObserver | null = null
+let frameId: number | null = null
+let cleanupTimer: ReturnType<typeof setTimeout> | null = null
+let removeTransitionEndListener: (() => void) | null = null
+let isAnimating = false
+let targetHeight = 0
+
+function stopCleanupTimer() {
+  if (! cleanupTimer)
+    return
+
+  clearTimeout(cleanupTimer)
+  cleanupTimer = null
+}
+
+function stopAnimationFrame() {
+  if (frameId === null)
+    return
+
+  cancelAnimationFrame(frameId)
+  frameId = null
+}
+
+function stopObserver() {
+  if (! observer)
+    return
+
+  observer.disconnect()
+  observer = null
+}
+
+function removeTransitionListener() {
+  if (! removeTransitionEndListener)
+    return
+
+  removeTransitionEndListener()
+  removeTransitionEndListener = null
+}
+
+function resetContainerStyles(container: HTMLElement) {
+  if (props.keepExplicitHeight)
+    container.style.height = `${targetHeight}px`
+  else
+    container.style.height = ''
+
+  container.style.transition = ''
+  container.style.willChange = ''
+  container.style.overflow = ''
+}
+
+function ensureTransitionEndCleanup(container: HTMLElement) {
+  removeTransitionListener()
+
+  const onTransitionEnd = (event: TransitionEvent) => {
+    if (event.propertyName !== 'height')
+      return
+
+    const currentHeight = container.getBoundingClientRect().height
+    if (Math.abs(currentHeight - targetHeight) > props.threshold)
+      return
+
+    isAnimating = false
+    resetContainerStyles(container)
+    stopCleanupTimer()
+    removeTransitionListener()
+  }
+
+  container.addEventListener('transitionend', onTransitionEnd)
+  removeTransitionEndListener = () => {
+    container.removeEventListener('transitionend', onTransitionEnd)
+  }
+}
+
+function animateToHeight(container: HTMLElement, nextHeight: number) {
+  const currentHeight = container.getBoundingClientRect().height
+  if (Math.abs(nextHeight - currentHeight) < props.threshold)
+    return
+
+  targetHeight = nextHeight
+  container.style.overflow = 'hidden'
+  container.style.willChange = 'height'
+
+  if (! isAnimating) {
+    container.style.transition = ''
+    container.style.height = `${currentHeight}px`
+
+    // Force layout so transition starts from current rendered height.
+    void container.offsetHeight
+
+    container.style.transition = `height ${props.duration}ms ${props.easing}`
+    isAnimating = true
+    ensureTransitionEndCleanup(container)
+  }
+
+  container.style.height = `${nextHeight}px`
+
+  stopCleanupTimer()
+  cleanupTimer = setTimeout(() => {
+    isAnimating = false
+    resetContainerStyles(container)
+    stopCleanupTimer()
+    removeTransitionListener()
+  }, props.duration + 150)
+}
+
+function stopAll() {
+  stopObserver()
+  stopAnimationFrame()
+  stopCleanupTimer()
+  removeTransitionListener()
+  isAnimating = false
+
+  const container = containerRef.value
+  if (container)
+    resetContainerStyles(container)
+}
+
+function startObserving() {
+  const container = containerRef.value
+  const inner = innerRef.value
+  if (! container || ! inner || ! props.active)
+    return
+
+  targetHeight = inner.getBoundingClientRect().height
+  container.style.overflow = 'hidden'
+  container.style.height = `${targetHeight}px`
+
+  stopObserver()
+
+  observer = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    if (! entry || ! props.active)
+      return
+
+    const nextHeight = entry.contentRect.height
+    if (Math.abs(nextHeight - targetHeight) < props.threshold)
+      return
+
+    stopAnimationFrame()
+    frameId = requestAnimationFrame(() => {
+      const currentContainer = containerRef.value
+      if (currentContainer)
+        animateToHeight(currentContainer, nextHeight)
+      frameId = null
+    })
+
+    targetHeight = nextHeight
+  })
+
+  observer.observe(inner)
+}
+
+onMounted(() => {
+  startObserving()
+})
+
+watch(() => props.active, async (active) => {
+  if (! import.meta.client)
+    return
+
+  if (active) {
+    await nextTick()
+    startObserving()
+    return
+  }
+
+  stopAll()
+})
+
+watch(() => [props.duration, props.easing, props.threshold, props.keepExplicitHeight], () => {
+  if (! import.meta.client)
+    return
+
+  const container = containerRef.value
+  if (container && ! isAnimating)
+    resetContainerStyles(container)
+})
+
+onBeforeUnmount(() => {
+  stopAll()
+})
+</script>
+
+<style scoped>
+  .my-height-transition {
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .my-height-transition-inner {
+    width: 100%;
+    /* Establish a flow-root formatting context so child vertical margins
+       (my-4, last-card mb-4, ...) do not collapse out of the measured box.
+       Without this, a child's margin-top escapes the ResizeObserver-measured
+       height and renders as no visible gap. */
+    display: flow-root;
+  }
+</style>

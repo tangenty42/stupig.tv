@@ -1,58 +1,67 @@
 <template>
-  <div class="container mx-auto grid grid-cols-1 lg:grid-cols-2 gap-x-24 gap-y-4 px-4 pt-12">
-    <div class="grow flex flex-col items-stretch gap-4">
-      <h1 class="text-left">
-        欢迎来到
-        <br />
-        蠢猪小组 官网！
-      </h1>
-      <h2 class="band relative py-12 flex flex-col mt-6 sm:mt-16 md:*:text-4xl/14">
-        <span class="self-start font-normal">
-          我们来自
-        </span>
-        <span class="self-end">广州市西关外国语学校</span>
-        <span class="self-end">
-          <span class="font-normal">现役</span>
-          高三 1 班
-          <UIcon class="align-middle" name="twemoji:pig-face" />
-        </span>
-      </h2>
+  <div class="grid grid-cols-1 gap-x-0 lg:gap-x-20 gap-y-4 pt-12 md:grid-cols-2">
+    <div class="flex flex-col items-stretch">
+      <div class="text-7xl">
+        <div class="text-[45%] lg:text-[55%] text-center lg:text-end text-slate-700 dark:text-slate-300">
+          <MySpacedText text="我们是" class="lg:gap-0" />
+        </div>
+        <div class="font-bold text-[160%] lg:text-[100%] text-slate-800 dark:text-slate-100 mt-12 lg:mt-3 flex flex-col lg:flex-row lg:flex-nowrap items-center justify-center lg:justify-end">
+          <div class="shrink-0">
+            蠢猪
+          </div>
+          <div class="shrink-0 relative">
+            <span>小组</span>
+            <span class="absolute bottom-0 ml-2 hidden lg:inline-block">.</span>
+          </div>
+        </div>
+      </div>
+      <div class="band mt-20 lg:mt-12" :style="{ '--band-mask-url': `url('${static_url('/imgs/good!.svg')}')` }">
+        <div class="h-full w-full flex flex-col pt-8 pb-24 text-xl text-slate-600/80 dark:text-slate-400/80">
+          <div class="self-center lg:self-end text-[80%] text-slate-600/60 dark:text-slate-400/50 flex items-center gap-2">
+            <MySpacedText text="我们来自" />
+          </div>
+          <div class="self-center lg:self-end mt-4 lg:mt-2">
+            <MySpacedText text="广州市西关外国语学校" />
+          </div>
+          <div class="self-center lg:self-end text-[70%] text-slate-600/70 dark:text-slate-400/60 flex flex-wrap gap-2 items-center justify-center">
+            <div><MySpacedText text="2026届" /></div>
+            <div><MySpacedText text="高三1班" /></div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="grow flex flex-col items-center gap-4 bg-default py-12 band-x-super-pro-max">
-      <img class="max-w-120 dark:invert " src="/imgs/whats_up.svg" alt="Stupig Chant" />
-      <ULink class="font-bold mt-16" to="/contact">联系我们这帮“全能型人才”</ULink>
+    <div class="card-x-super-pro-max flex grow flex-col items-center gap-4">
+      <img class="max-w-lg dark:invert" :src="static_url('/imgs/whats_up.svg')" alt="Stupig Chant">
+      <NuxtLink class="link" to="/contact">
+        &nbsp;&nbsp;&nbsp;联系我们这帮“全能型人才”
+      </NuxtLink>
+      <div class="pt-[200vh] text-slate-500 dark:text-slate-400">
+        蠢人，你在期待什么？
+      </div>
     </div>
   </div>
 </template>
 
-<style scoped>
-  @reference '@/assets/css/global.css';
+<script setup lang="ts">
+const static_url = useStaticUrl()
+</script>
 
-  .band > * {
-    @apply bg-default/25 backdrop-blur-[2px] shadow-xl px-2;
-    @variant lg {
-      @apply px-4;
-    }
-    @variant dark {
-      @apply shadow-gray-400/50;
-    }
+<style scoped>
+  .band {
+    position: relative;
   }
   .band::before {
-    @apply content-[''] absolute inset-y-0 -left-[100vw] w-[200vw] -z-233
-      bg-blue-300/20 mask-[url('/imgs/good!.svg')] mask-repeat-x mask-center;
-  }
-  .dark .band::before {
-    @apply bg-gray-500/20;
+    @apply content-[''] absolute inset-y-0 -left-[100vw] w-[200vw] -z-[233]
+      bg-gradient-to-t from-blue-400/15 dark:from-gray-500/10 to-transparent to-80%;
+    mask: var(--band-mask-url);
+    mask-repeat: repeat-x;
+    mask-position: center;
   }
 
-  .band-x-super-pro-max {
-    @variant lg {
-      @apply bg-default/50 backdrop-blur-[2px] border-l border-t border-r border-pink-200;
-    }
+  .card-x-super-pro-max {
+    @apply bg-transparent md:px-8 pb-12 pt-16 md:pt-6 md:-mt-12 md:shadow-lg md:backdrop-blur-[6px];
   }
-  .dark .band-x-super-pro-max {
-    @variant lg {
-      @apply border-gray-700;
-    }
+  .dark .card-x-super-pro-max {
+    @apply md:shadow-2xl md:shadow-gray-400/20;
   }
 </style>

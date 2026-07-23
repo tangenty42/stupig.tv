@@ -1,28 +1,122 @@
-@import 'tailwindcss';
-@import '@nuxt/ui';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+/* ----- Aliyun captcha ----- */
+.captcha4_captcha, .captcha4_captcha * {
+  pointer-events: auto !important;
+}
+
+/* ----- Cropper ----- */
+.cropper-view-box {
+  outline: none !important;
+}
+.cropper-drag-box {
+  border: none !important;
+}
+
+/* ----- Base ----- */
 @layer base {
+  html,
+  body,
+  #__nuxt {
+    min-height: 100%;
+  }
+
+  body {
+    @apply font-sans text-slate-900 antialiased;
+    background-color: #f6efe4;
+    background-image:
+      radial-gradient(circle at top left, rgba(217, 29, 201, 0.12), transparent 22%),
+      radial-gradient(circle at 82% 20%, rgba(44, 134, 244, 0.12), transparent 26%),
+      linear-gradient(180deg, #fcfaf6 0%, #f5ecdf 100%);
+  }
+
+  .dark body {
+    @apply text-slate-50;
+    background-color: #111827;
+    background-image:
+      radial-gradient(circle at top left, rgba(217, 108, 29, 0.22), transparent 26%),
+      radial-gradient(circle at 82% 8%, rgba(44, 134, 244, 0.22), transparent 24%),
+      linear-gradient(180deg, #111827 0%, #020617 100%);
+  }
+
   img {
     user-select: none;
   }
+
   h1 {
     @apply text-4xl font-bold;
   }
+
   h2 {
-    @apply text-2xl font-semibold text-gray-500 dark:text-gray-400;
+    @apply text-2xl font-semibold text-slate-600 dark:text-slate-300;
+  }
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10%) scale(1.1);
+    filter: blur(10px);
+  }
+}
+@keyframes card-out {
+  to {
+    opacity: 0;
+    transform: translateY(200%) rotate(-20deg);
+  }
+}
+
+/* ----- Utility classes ----- */
+@layer components {
+  .link {
+    @apply font-medium no-underline inline-flex flex-wrap items-center gap-1;
+    padding-bottom: 2px;
+    border-bottom: 1px solid currentColor;
+    transition: border-bottom-width 0.15s ease;
+  }
+
+  .link:hover,
+  .link:active {
+    border-bottom-width: 3px;
+  }
+
+  .section-card {
+    @apply border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur-lg dark:border-slate-700 dark:bg-slate-900/80 rounded-md;
+  }
+
+  .muted {
+    @apply text-slate-400 dark:text-slate-500;
+    font-size: 85%;
+  }
+
+  .form-label {
+    @apply mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300;
+  }
+
+  .form-error {
+    @apply mt-1 me-4 text-end block text-xs text-[var(--p-inputtext-invalid-border-color)];
+  }
+
+  .fade-down-enter-active {
+    transition: all 0.2s ease-out;
   }
 
   .fade-down-leave-active {
     transition: all 0.1s ease-out;
   }
-  .fade-down-enter-active {
-    transition: all 0.2s ease-out;
-  }
+
+  .fade-down-enter-from,
   .fade-down-leave-to {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  .fade-down-enter-from {
     opacity: 0;
     transform: translateY(30px);
   }
