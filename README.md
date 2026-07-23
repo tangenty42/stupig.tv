@@ -1,2 +1,5 @@
-# 部署须知
-- 小心宝塔默认的项目配置文件里“禁止访问的敏感文件”和“禁止访问的敏感目录”这两段，必须注释之！不知道这两段禁止何意味？我只知道何味道：百思不得其解，浪费半小时 :)
+# About Stupig
+We are the Stupigs! Visit our website.
+
+# Deployment
+- should mount the root of the static site as `/mounted_static` (or the value of `MOUNTED_STATIC`) in the container

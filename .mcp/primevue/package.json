@@ -1,0 +1,13 @@
+{
+  "name": "primevue-mcp-wrapper",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "node patch.js"
+  },
+  "dependencies": {
+    "@primeuix/mcp": "^1.0.1",
+    "@primevue/mcp": "^4.5.5"
+  }
+}

@@ -22,9 +22,11 @@ logs
 .env
 .env.*
 !.env.example
-
-# VSCode settings
-.vscode
+config.*
+!config.example.*
 
 # Lock files
 *-lock.*
+
+# PNPM store
+.pnpm-store

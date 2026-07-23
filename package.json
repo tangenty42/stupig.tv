@@ -4,18 +4,76 @@
   "private": true,
   "scripts": {
     "build": "nuxt build",
-    "dev": "nuxt dev --host=0.0.0.0 --port=3042",
+    "dev": "nuxt dev --host 0.0.0.0 --port 3042",
     "generate": "nuxt generate",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
-    "start": "PORT=3042 node .output/server/index.mjs"
+    "prepare": "simple-git-hooks",
+    "start": "PORT=3042 node .output/server/index.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@nuxt/ui": "^4.4.0",
-    "nuxt": "^4.3.1",
-    "tailwindcss": "^4.1.18",
-    "vue": "^3.5.28",
-    "vue-router": "^4.6.4",
-    "zod": "^4.3.6"
+    "@alicloud/dypnsapi20170525": "^2.0.0",
+    "@alicloud/openapi-client": "^0.4.15",
+    "@alicloud/tea-util": "^1.4.11",
+    "@primeuix/themes": "2.0.3",
+    "@primevue/forms": "4.5.5",
+    "@vueuse/nuxt": "^14.3.0",
+    "bcryptjs": "^3.0.3",
+    "cropperjs": "^1.6.2",
+    "dayjs": "^1.11.21",
+    "dotenv": "^17.4.2",
+    "jsonwebtoken": "^9.0.3",
+    "mqtt": "^5.15.2",
+    "mysql2": "^3.23.1",
+    "node-sql-parser": "^5.4.0",
+    "primeicons": "^7.0.0",
+    "primevue": "^4.5.5",
+    "tailwindcss-primeui": "^0.6.1",
+    "ua-parser-js": "^2.0.10",
+    "viewerjs": "^1.11.8",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vue": "^3.5.40",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^9.2.0",
+    "@iconify-json/lucide": "^1.2.118",
+    "@nuxt/icon": "^2.3.1",
+    "@nuxtjs/color-mode": "^4.0.1",
+    "@primevue/nuxt-module": "^4.5.5",
+    "@teages/nuxt-legacy": "^3.0.1",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.1.1",
+    "@vitejs/plugin-legacy": "^8.2.1",
+    "autoprefixer": "^10.5.4",
+    "browserslist": "^4.28.6",
+    "eslint": "^10.7.0",
+    "lint-staged": "^17.2.0",
+    "nuxt": "^4.5.0",
+    "simple-git-hooks": "^2.13.1",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.7"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm lint-staged"
+  },
+  "lint-staged": {
+    "*.{js,mjs,ts,vue,json,jsonc,json5,yaml,yml,md}": "eslint --fix --no-warn-ignored"
+  },
+  "browserslist": {
+    "production": [
+      "Chrome >= 80",
+      "Edge >= 80",
+      "Firefox >= 78",
+      "Safari >= 13.1"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
   }
 }
