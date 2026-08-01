@@ -11,11 +11,11 @@ export default antfu(
     stylistic: {
       overrides: {
         // Space after all unary operators: `! x`, `- x`, `typeof x`
-        '@stylistic/space-unary-ops': ['error', { words: true, nonwords: true }],
+        // (`ts-non-null` is exempt: the TS non-null assertion postfix must
+        // hug its operand — `obj!.foo`, not `obj !.foo`)
+        '@stylistic/space-unary-ops': ['error', { words: true, nonwords: true, overrides: { 'ts-non-null': false } }],
         // No padding inside template placeholders: `${statement}`
         '@stylistic/template-curly-spacing': ['error', 'never'],
-        // Break method chains only when long (4+ calls)
-        '@stylistic/newline-per-chained-call': ['error', { ignoreChainWithDepth: 3 }],
       },
     },
   },
@@ -25,6 +25,11 @@ export default antfu(
       'vue/attribute-hyphenation': ['error', 'always'],
       // Keep existing block order: template / script / style
       'vue/block-order': ['error', { order: ['template', 'script', 'style'] }],
+      // Match script unary spacing inside Vue template expressions
+      // (the rule delegates to @stylistic/space-unary-ops; the ts-non-null
+      // exemption is kept in parity with the script rule as a safeguard —
+      // template TSNonNullExpression nodes are not visited by this rule today)
+      'vue/space-unary-ops': ['error', { words: true, nonwords: true, overrides: { 'ts-non-null': false } }],
       // Project convention: snake_case props and emits
       'vue/prop-name-casing': 'off',
       'vue/custom-event-name-casing': 'off',
@@ -34,7 +39,6 @@ export default antfu(
       // Node server code uses global `process` / `Buffer` idiomatically
       'node/prefer-global/process': 'off',
       'node/prefer-global/buffer': 'off',
-      // TODO: time.test.ts has a verbatim duplicated `it` block — pending removal approval
       'test/no-identical-title': 'warn',
     },
   },

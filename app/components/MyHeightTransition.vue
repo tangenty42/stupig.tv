@@ -74,6 +74,9 @@ function resetContainerStyles(container: HTMLElement) {
 
   container.style.transition = ''
   container.style.willChange = ''
+  // No clipping at rest: any overflow value (even overflow-y) turns the
+  // container into a scroll container that also clips horizontally, which
+  // would crop box-shadow and other horizontal overflow of the content.
   container.style.overflow = ''
 }
 
@@ -151,7 +154,6 @@ function startObserving() {
     return
 
   targetHeight = inner.getBoundingClientRect().height
-  container.style.overflow = 'hidden'
   container.style.height = `${targetHeight}px`
 
   stopObserver()
@@ -213,7 +215,9 @@ onBeforeUnmount(() => {
 <style scoped>
   .my-height-transition {
     width: 100%;
-    overflow: hidden;
+    /* No overflow at rest: overflow is applied inline only during the height
+       animation (see animateToHeight) and removed afterwards, so box-shadow
+       and other overflow of the content are never cropped. */
   }
 
   .my-height-transition-inner {

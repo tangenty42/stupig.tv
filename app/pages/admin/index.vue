@@ -1,11 +1,7 @@
 <template>
   <div class="space-y-6 pb-12 pt-8">
-    <MyHeightSection tag="section" class="section-card">
-      <h1 class="!text-3xl">
-        管理员面板
-      </h1>
-
-      <div class="mt-6 mb-4">
+    <MyHeightSection tag="section" class="section-card-collapse">
+      <div class="mb-4">
         <MyAdminCmdBar
           :selected_ids="selected_ids"
           placeholder="请输入约束 / 命令"
@@ -13,7 +9,7 @@
           @execute-command="handle_command"
           @clear-selection="clear_selection"
         />
-        <MyBadge :type="active_filter ? 'warning' : 'info'" class="mt-2 inline-flex flex-wrap items-center gap-2">
+        <MyBadge outlined :type="active_filter ? 'warning' : 'info'" class="mt-2 inline-flex flex-wrap items-center gap-2">
           <span class="font-medium">当前约束</span>
           <span class="font-mono text-xs">{{ active_filter || '空，按 UID 倒序' }}</span>
           <Button
@@ -29,11 +25,29 @@
           </Button>
         </MyBadge>
       </div>
+    </MyHeightSection>
 
-      <Divider />
+    <MyHeightSection tag="section" class="section-card-collapse">
+      <div class="mb-6 flex gap-3 items-center justify-between">
+        <h2>用户列表</h2>
 
-      <div class="mt-4 flex flex-wrap gap-2">
+        <div class="flex flex-wrap gap-2">
+          <Button v-if="selected_count" severity="secondary" text rounded label="清空已选" size="small" @click="clear_selection">
+            <template #icon>
+              <MyIcon name="lucide:trash-2" />
+            </template>
+          </Button>
+          <Button severity="secondary" text rounded :loading="users_loading" label="刷新" size="small" @click="reload_users('manual')">
+            <template #icon>
+              <MyIcon name="lucide:refresh-cw" />
+            </template>
+          </Button>
+        </div>
+      </div>
+
+      <div class="mb-2 flex flex-wrap gap-2">
         <Button
+          rounded
           :variant="current_page_all_selected ? undefined : 'text'"
           :label="current_page_all_selected ? '取消全选' : '全选本页'"
           size="small"
@@ -48,6 +62,7 @@
           :key="shortcut.key"
           :severity="shortcut.severity"
           text
+          rounded
           :loading="batch_pending_command === shortcut.key"
           :disabled="batch_busy"
           :label="shortcut.label"
@@ -58,27 +73,6 @@
             <MyIcon :name="shortcut.icon" />
           </template>
         </Button>
-      </div>
-    </MyHeightSection>
-
-    <MyHeightSection tag="section" class="section-card">
-      <div class="flex gap-3 items-start justify-between">
-        <h2 class="!text-xl">
-          用户列表
-        </h2>
-
-        <div class="flex flex-wrap gap-2">
-          <Button v-if="selected_count" severity="secondary" text label="清空已选" size="small" @click="clear_selection">
-            <template #icon>
-              <MyIcon name="lucide:trash-2" />
-            </template>
-          </Button>
-          <Button severity="secondary" text :loading="users_loading" label="刷新" size="small" @click="reload_users('manual')">
-            <template #icon>
-              <MyIcon name="lucide:refresh-cw" />
-            </template>
-          </Button>
-        </div>
       </div>
 
       <Paginator
@@ -91,24 +85,26 @@
         @page="change_page"
       />
 
-      <div v-if="users_loading && !users.length" class="mt-6 grid gap-4 md:grid-cols-2">
+      <div v-if="users_loading && ! users.length" class="mt-6 grid gap-4 md:grid-cols-2">
         <div v-for="index in 4" :key="index" class="admin-skeleton-card" />
       </div>
 
       <div v-else-if="users.length" class="user-card-grid mt-6 pb-3 columns-1 gap-4 md:columns-2">
-        <MyAdminUserCard
-          v-for="user in users"
-          :key="user.id"
-          :user="user"
-          :selected="selected_ids.has(user.id)"
-          :disable_pending="pending_disable_user_ids.has(user.id)"
-          :logout_pending="pending_logout_user_ids.has(user.id)"
-          @toggle-disabled="toggle_disabled"
-          @force-logout="force_logout"
-          @toggle-verified="toggle_verified"
-          @toggle-admin="toggle_admin"
-          @toggle-select="toggle_selection"
-        />
+        <KeepAlive>
+          <MyAdminUserCard
+            v-for="user in users"
+            :key="user.id"
+            :user="user"
+            :selected="selected_ids.has(user.id)"
+            :disable_pending="pending_disable_user_ids.has(user.id)"
+            :logout_pending="pending_logout_user_ids.has(user.id)"
+            @toggle-disabled="toggle_disabled"
+            @force-logout="force_logout"
+            @toggle-verified="toggle_verified"
+            @toggle-admin="toggle_admin"
+            @toggle-select="toggle_selection"
+          />
+        </KeepAlive>
       </div>
 
       <div v-else class="mt-6 rounded-md border border-dashed border-slate-300 bg-slate-50/80 px-6 py-12 text-center dark:border-slate-700 dark:bg-slate-900/40">
@@ -125,7 +121,7 @@
       v-model:visible="verify_note_dialog_visible"
       header="认证说明"
       :pending="verify_note_pending"
-      :closable="!verify_note_pending"
+      :closable="! verify_note_pending"
     >
       <div>
         <Textarea
@@ -165,7 +161,7 @@ definePageMeta({
 type RefreshReason = 'initial' | 'query' | 'manual' | 'polling' | 'mutation'
 type BatchCommand = 'BAN' | 'UNBAN' | 'KICK' | 'VERIFY' | 'UNVERIFY' | 'PROMOTE' | 'DEMOTE'
 
-const rows_per_page_options = [10, 50, 100, 154800]
+const rows_per_page_options = [1, 10, 50, 100, 154800]
 const runtime_config = useRuntimeConfig()
 const poll_interval_seconds = runtime_config.public.poll_interval_seconds
 const poll_interval_ms = poll_interval_seconds * 1000
@@ -185,7 +181,7 @@ const { ok, error } = useMyToast()
 
 const active_filter = ref('')
 const page = ref(1)
-const page_size = ref(rows_per_page_options[0] !)
+const page_size = ref(rows_per_page_options[0]!)
 
 const users_result = ref<ApiAdminUserList | null>(null)
 const users_loading = ref(false)

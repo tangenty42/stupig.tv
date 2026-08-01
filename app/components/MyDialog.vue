@@ -5,8 +5,8 @@
     :header="header"
     :aria-label="header"
     :draggable="false"
-    :closable="props.closable ?? (!props.pending)"
-    :dismissable-mask="props.closable ?? (!props.pending)"
+    :closable="props.closable ?? (! props.pending)"
+    :dismissable-mask="props.closable ?? (! props.pending)"
     class="w-full max-w-md"
   >
     <template v-if="$slots.default" #default>

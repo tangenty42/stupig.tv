@@ -1,23 +1,24 @@
 <template>
   <div class="space-y-6 pb-12 pt-8">
-    <div v-if="loading" class="section-card">
+    <div v-if="loading" class="section-card-collapse">
       <Skeleton width="50%" height="2rem" class="mb-4" />
       <Skeleton width="100%" height="1rem" class="mb-2" />
       <Skeleton width="80%" height="1rem" />
     </div>
 
     <template v-else-if="profile">
-      <MyHeightSection tag="section" class="section-card">
-        <div class="w-full flex flex-wrap justify-between items-start gap-4 sm:gap-6">
+      <MyHeightSection tag="section" class="section-card-collapse">
+        <div class="w-full flex flex-wrap justify-between gap-y-6">
           <OverlayBadge :severity="avatar_badge_severity" :value="avatar_badge_label" class="avatar-online-badge">
             <MyAvatar :user="profile" size="xlarge" previewable />
           </OverlayBadge>
-          <div class="flex flex-wrap items-start justify-between gap-2">
+          <div class="flex flex-col gap-2">
             <Button
               v-if="profile.editable"
               size="small"
               text
-              severity="secondary"
+              rounded
+              severity="primary"
               label="更换头像"
               :loading="avatar_upload_pending"
               :disabled="avatar_upload_pending"
@@ -31,11 +32,12 @@
               v-if="profile.editable && profile.avatar_file"
               size="small"
               text
-              severity="warn"
+              rounded
+              severity="secondary"
               label="删除头像"
               :loading="avatar_delete_pending"
               :disabled="avatar_delete_pending"
-              @click="delete_avatar()"
+              @click="confirm_delete_avatar"
             >
               <template #icon>
                 <MyIcon name="lucide:trash-2" />
@@ -44,11 +46,11 @@
           </div>
         </div>
 
-        <div class="w-full mt-4">
-          <h1 class="flex items-center gap-x-2 gap-y-0.5 !text-3xl">
+        <div class="w-full mt-6">
+          <div class="font-medium flex items-center gap-x-2 gap-y-0.5 text-3xl">
             <span>{{ profile.username }}</span>
             <MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="text-emerald-500" />
-          </h1>
+          </div>
           <div class="mt-6 flex flex-wrap items-start gap-2">
             <span v-if="profile.is_verified && profile.verified_note" class="label border-emerald-200/50 dark:border-emerald-900/50 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
               <div class="shrink-0 flex items-center gap-1">
@@ -64,9 +66,9 @@
           </div>
         </div>
 
-        <div class="mt-8 grid gap-x-4 gap-y-6 sm:gap-y-4 text-sm justify-items-stretch sm:grid-cols-2 md:grid-cols-3 sm:items-start">
-          <div v-for="item in profile_meta_items" :key="item.key" class="rounded-sm flex flex-col items-start overflow-hidden bg-slate-100 dark:bg-slate-800/50">
-            <div class="h-full w-full px-2 py-1 flex items-center justify-start bg-slate-200 dark:bg-slate-800">
+        <div class="mt-12 grid gap-x-4 gap-y-6 sm:gap-y-4 text-sm justify-items-stretch sm:grid-cols-2 md:grid-cols-3 sm:items-start">
+          <div v-for="item in profile_meta_items" :key="item.key" class="mb-2 rounded-sm flex flex-col items-start overflow-hidden shadow-sm bg-slate-100 dark:bg-slate-800/50">
+            <div class="h-full w-full px-2 py-1 flex items-center justify-start bg-slate-200 dark:bg-slate-800 rounded-b-sm">
               <div class="w-full flex gap-2 items-center justify-between text-slate-500 dark:text-slate-400 px-2 py-1">
                 <div class="shrink-0 flex gap-2 items-center">
                   <MyIcon :name="item.icon" class="text-xl" />
@@ -76,7 +78,8 @@
                   <Button
                     v-if="item.key === 'birthday' && profile.editable"
                     size="small"
-                    variant="text"
+                    text
+                    rounded
                     severity="secondary"
                     label="编辑"
                     @click="open_birthday_editor"
@@ -88,7 +91,8 @@
                   <Button
                     v-if="item.key === 'phone' && profile.editable"
                     size="small"
-                    variant="text"
+                    text
+                    rounded
                     severity="secondary"
                     label="更换"
                     @click="scroll_to_phone_form"
@@ -125,8 +129,8 @@
       </MyHeightSection>
 
       <template v-if="profile.editable">
-        <MyHeightSection tag="section" class="section-card">
-          <h2 class="mb-4 !text-xl">
+        <MyHeightSection tag="section" class="section-card-collapse">
+          <h2 class="mb-6">
             修改密码
           </h2>
 
@@ -137,7 +141,7 @@
                 <MyFormField name="confirm_new_password" label="确认新密码" as="Password" autocomplete="new-password" no-paste />
               </div>
               <div class="mt-4 flex flex-wrap items-end gap-3">
-                <Button label="直接修改" :loading="operate_password_pending" :disabled="operate_password_pending" @click="operate_password_form?.submit()">
+                <Button rounded label="直接修改" :loading="operate_password_pending" :disabled="operate_password_pending" @click="operate_password_form?.submit()">
                   <template #icon>
                     <MyIcon name="lucide:lock" />
                   </template>
@@ -154,19 +158,19 @@
                 <MyFormField name="confirm_new_password" label="确认新密码" as="Password" autocomplete="new-password" no-paste />
               </div>
               <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
-                <Button label="修改" :loading="password_pending" :disabled="password_pending" @click="password_form?.submit()">
+                <Button rounded label="修改" :loading="password_pending" :disabled="password_pending" @click="password_form?.submit()">
                   <template #icon>
                     <MyIcon name="lucide:lock" />
                   </template>
                 </Button>
-                <Button label="打倒旧密码，我要新方案" severity="warn" text size="small" @click="password_mode = 'otp'" />
+                <Button label="打倒旧密码，我要新方案" severity="primary" text rounded size="small" @click="password_mode = 'otp'" />
               </div>
             </Form>
           </div>
 
-          <div v-else class="space-y-4">
+          <div v-else>
             <Form ref="password_otp_form" :resolver="password_otp_resolver" :initial-values="form_default.profile_change_password_by_otp" :validate-on-value-update="true" :validate-on-blur="true" @submit="on_submit_password_by_otp">
-              <div class="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+              <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <MyFormField
                   name="otp"
                   as="InputOtp"
@@ -178,19 +182,19 @@
                 <MyFormField name="confirm_new_password" label="确认新密码" as="Password" autocomplete="new-password" no-paste />
               </div>
               <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
-                <Button label="修改" :loading="password_otp_pending" :disabled="password_otp_pending" @click="password_otp_form?.submit()">
+                <Button rounded label="修改" :loading="password_otp_pending" :disabled="password_otp_pending" @click="password_otp_form?.submit()">
                   <template #icon>
                     <MyIcon name="lucide:lock" />
                   </template>
                 </Button>
-                <Button label="我错了！我还记得旧密码" severity="warn" text size="small" @click="password_mode = 'old'" />
+                <Button label="旧密码老师，我还记得你" severity="primary" text rounded size="small" @click="password_mode = 'old'" />
               </div>
             </Form>
           </div>
         </MyHeightSection>
 
-        <MyHeightSection ref="phone_form_section" tag="section" class="section-card">
-          <h2 class="mb-4 !text-xl">
+        <MyHeightSection ref="phone_form_section" tag="section" class="section-card-collapse">
+          <h2 class="mb-6">
             更换手机号
           </h2>
 
@@ -204,7 +208,7 @@
               />
             </div>
             <div class="mt-4 flex flex-wrap items-end gap-3">
-              <Button label="直接更换" :loading="operate_phone_pending" :disabled="operate_phone_pending" @click="operate_phone_form?.submit()">
+              <Button rounded label="直接更换" :loading="operate_phone_pending" :disabled="operate_phone_pending" @click="operate_phone_form?.submit()">
                 <template #icon>
                   <MyIcon name="lucide:lock" />
                 </template>
@@ -236,20 +240,38 @@
               />
             </div>
             <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
-              <Button label="更换" :loading="phone_change_pending" :disabled="phone_change_pending" @click="phone_form?.submit()">
+              <Button rounded label="更换" :loading="phone_change_pending" :disabled="phone_change_pending" @click="phone_form?.submit()">
                 <template #icon>
                   <MyIcon name="lucide:lock" />
                 </template>
               </Button>
-              <Button label="我旧手机号无法接收验证码！" severity="warn" text size="small" @click="info('受着，或者联系我们！')" />
+              <Button label="我旧手机号无法接收验证码！" severity="primary" text rounded size="small" @click="info('受着，或者联系我们！')" />
             </div>
           </Form>
         </MyHeightSection>
 
-        <MyHeightSection tag="section" class="section-card">
-          <h2 class="!text-xl">
-            最近登录记录
-          </h2>
+        <MyHeightSection tag="section" class="section-card-collapse">
+          <div class="mb-6 flex flex-wrap items-center justify-between gap-2">
+            <h2>
+              登录记录
+            </h2>
+            <SelectButton
+              v-model="session_filter"
+              :options="session_filter_options"
+              option-label="label"
+              option-value="value"
+              :allow-empty="false"
+              size="small"
+              aria-label="登录记录筛选"
+            >
+              <template #option="{ option }">
+                <span class="flex items-center gap-1.5">
+                  <MyIcon :name="option.icon" />
+                  <span>{{ option.label }}</span>
+                </span>
+              </template>
+            </SelectButton>
+          </div>
 
           <div class="mt-4 columns-1 gap-4 md:columns-2">
             <div
@@ -262,7 +284,7 @@
                   <div class="flex flex-wrap gap-x-2 items-center">
                     <div class="text-slate-500 dark:text-slate-400">
                       <span class="text-lg font-semibold">{{ ua_label(record.user_agent) }}</span>
-                      <span v-if="record.is_current" class="text-sm">（当前设备）</span>
+                      <span v-if="record.is_current" class="ms-2 text-sm">(当前设备)</span>
                     </div>
                   </div>
                   <div class="mt-1.5 w-full flex items-center justify-between">
@@ -270,13 +292,14 @@
                       {{ session_status_text(record) }}
                     </MyBadge>
                     <Button
-                      v-if="!record.is_current"
+                      v-if="! record.is_current"
                       size="small"
-                      severity="warn"
+                      severity="secondary"
                       text
+                      rounded
                       :loading="self_session_pending_id === record.id"
                       label="强制退出"
-                      @click="force_logout_self_session(record.id, record.is_current)"
+                      @click="confirm_force_logout_session($event, record.id, record.is_current)"
                     >
                       <template #icon>
                         <MyIcon name="lucide:log-out" />
@@ -300,7 +323,7 @@
             </div>
           </div>
 
-          <div v-if="!self_session_records.length" class="my-4 w-full text-center text-slate-500 dark:text-slate-400">
+          <div v-if="! self_session_records.length" class="my-4 w-full text-center text-slate-500 dark:text-slate-400">
             ？！暂无记录！？
           </div>
         </MyHeightSection>
@@ -315,8 +338,8 @@
 
         <template #footer>
           <div class="flex justify-end gap-2">
-            <Button label="取消" severity="secondary" text :disabled="birthday_pending" @click="birthday_editor_visible = false" />
-            <Button label="确定" :loading="birthday_pending" :disabled="birthday_pending" @click="birthday_form?.submit()">
+            <Button label="取消" severity="secondary" text rounded :disabled="birthday_pending" @click="birthday_editor_visible = false" />
+            <Button rounded label="确定" :loading="birthday_pending" :disabled="birthday_pending" @click="birthday_form?.submit()">
               <template #icon>
                 <MyIcon name="lucide:check" />
               </template>
@@ -349,6 +372,7 @@ const { auth: auth_api, profile: profile_api } = useApi()
 const { user: auth_user } = useAuth()
 const { error, ok, info } = useMyToast()
 const { verify: captcha_verify } = useCaptcha()
+const { confirm_require } = useMyConfirm()
 const date_now = useReactiveDateNow()
 
 const loading = useState('loading', () => false)
@@ -440,13 +464,13 @@ const birthday_form_default = computed(() => {
 const reactive_date_now = useReactiveDateNow()
 
 function build_date_budget_text(item: ProfileMetaItem) {
-  const normal = item.value_date !.isBefore(reactive_date_now.value)
+  const normal = item.value_date!.isBefore(reactive_date_now.value)
 
   if (item.key === 'birthday' && ! normal) {
-    return duration_build_string([item.value_date !, reactive_date_now.value], '还有{formated}重生🪽', { just_now: '几十秒' })
+    return duration_build_string([item.value_date!, reactive_date_now.value], '还有{formated}重生🪽', { just_now: '几十秒' })
   }
   else if (item.date_template) {
-    return duration_build_string([item.value_date !, reactive_date_now.value], item.date_template)
+    return duration_build_string([item.value_date!, reactive_date_now.value], item.date_template)
   }
   return null
 }
@@ -500,13 +524,25 @@ const profile_meta_items = computed(() => {
       type: profile.value.birthday ? 'date' : 'text',
       value: profile.value.birthday ? undefined : '暂未设置',
       value_date: profile.value.birthday ? localize_date(profile.value.birthday) : undefined,
-      date_template: '{y} 岁',
+      date_template: '{Y} 岁',
       icon: 'lucide:cake',
     },
   ] as ProfileMetaItem[]
 })
 
-const self_session_records = computed(() => self_sessions.value?.records ?? [])
+type SessionFilter = 'valid' | 'expired'
+
+const session_filter_options: { label: string, value: SessionFilter, icon: string }[] = [
+  { label: '有效', value: 'valid', icon: 'lucide:circle-check' },
+  { label: '已过期', value: 'expired', icon: 'lucide:hourglass' },
+]
+
+const session_filter = ref<SessionFilter>('valid')
+
+const self_session_records = computed(() => {
+  const records = self_sessions.value?.records ?? []
+  return records.filter(record => session_filter.value === 'expired' ? record.is_expired : ! record.is_expired)
+})
 
 function open_birthday_editor() {
   birthday_editor_visible.value = true
@@ -514,6 +550,14 @@ function open_birthday_editor() {
 
 function scroll_to_phone_form() {
   scroll_to(phone_form_section.value?.el)
+}
+
+function confirm_delete_avatar(event: Event) {
+  confirm_require(event, '确定要删除头像吗？', delete_avatar)
+}
+
+function confirm_force_logout_session(event: Event, id: number, is_current: boolean) {
+  confirm_require(event, '确定要强制退出该设备吗？', () => force_logout_self_session(id, is_current))
 }
 
 async function delete_avatar() {
@@ -558,18 +602,18 @@ async function force_logout_self_session(id: number, _is_current: boolean) {
 }
 
 function session_status_text(record: ApiLoginSessionRecord) {
-  if (record.status === 'valid') {
-    return record.is_online ? '在线' : '离线'
-  }
-  if (record.status === 'logged_out') {
+  if (record.is_logged_out) {
     return '已退出'
   }
-  return '已过期'
+  if (record.is_expired) {
+    return '已过期'
+  }
+  return record.is_online ? '在线' : '离线'
 }
 
 function session_status_severity(record: ApiLoginSessionRecord) {
-  if (record.status === 'valid') {
-    return record.is_online ? 'success' : 'info'
+  if (! record.is_logged_out && record.is_online) {
+    return 'success'
   }
   return 'info'
 }
@@ -836,7 +880,7 @@ async function submit_change_phone(event?: FormSubmitEvent) {
 
 <style scoped>
   .label {
-    @apply inline-flex items-start gap-2 max-w-sm rounded-sm px-3 py-2 text-sm border;
+    @apply inline-flex items-start gap-2 max-w-sm rounded-full shadow-sm px-3 py-2 text-sm border;
   }
 
   .avatar-online-badge {
@@ -844,7 +888,7 @@ async function submit_change_phone(event?: FormSubmitEvent) {
   }
 
   .avatar-online-badge :deep(.p-badge) {
-    @apply min-w-5;
+    @apply min-w-5 rounded-full;
     inset-block-start: auto;
     inset-block-end: 0;
     inset-inline-end: 0;

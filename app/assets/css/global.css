@@ -33,11 +33,10 @@
 
   body {
     @apply font-sans text-slate-900 antialiased;
-    background-color: #f6efe4;
+    background-color: #ffffff;
     background-image:
-      radial-gradient(circle at top left, rgba(217, 29, 201, 0.12), transparent 22%),
-      radial-gradient(circle at 82% 20%, rgba(44, 134, 244, 0.12), transparent 26%),
-      linear-gradient(180deg, #fcfaf6 0%, #f5ecdf 100%);
+      radial-gradient(circle at top left, rgba(217, 29, 201, 0.02), transparent 22%),
+      radial-gradient(circle at 82% 10%, rgba(44, 134, 244, 0.04), transparent 26%);
   }
 
   .dark body {
@@ -58,7 +57,7 @@
   }
 
   h2 {
-    @apply text-2xl font-semibold text-slate-600 dark:text-slate-300;
+    @apply !text-xl font-semibold text-slate-600 dark:text-slate-300;
   }
 }
 
@@ -80,18 +79,28 @@
 @layer components {
   .link {
     @apply font-medium no-underline inline-flex flex-wrap items-center gap-1;
+    /* Underline thickness animates via box-shadow, a paint-only property, so
+       the box geometry never changes and the text cannot shake. The 1px base
+       comes from border-bottom (same as before); hover adds a 2px shadow band
+       just below it, visually identical to the old 3px border growth. */
+    line-height: 1.2;
     padding-bottom: 2px;
     border-bottom: 1px solid currentColor;
-    transition: border-bottom-width 0.15s ease;
+    box-shadow: 0 0 0 0 currentColor;
+    transition: all 0.15s ease;
   }
 
   .link:hover,
   .link:active {
-    border-bottom-width: 3px;
+    border-bottom: 1px solid currentColor;
+    box-shadow: 0 2px 0 0 currentColor;
   }
 
   .section-card {
-    @apply border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur-lg dark:border-slate-700 dark:bg-slate-900/80 rounded-md;
+    @apply border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur-lg dark:border-slate-700 dark:bg-slate-900/80 rounded-sm;
+  }
+  .section-card-collapse {
+    @apply bg-transparent px-0 py-4;
   }
 
   .muted {

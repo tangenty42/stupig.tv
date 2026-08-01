@@ -18,6 +18,10 @@ const visible = defineModel<boolean>('visible', { default: false })
 
 const viewer_container = ref<HTMLElement | null>(null)
 let viewer: Viewer | null = null
+// True while a viewerjs show/hide callback is writing back to the model, so
+// the model watcher doesn't echo the same transition back into the viewer
+// (which would race the open/close transition and tear the overlay).
+let syncing_from_viewer = false
 
 function alt_for(index: number) {
   return `图片 ${index + 1}`
@@ -31,7 +35,6 @@ function create_viewer() {
     return
   }
   if (viewer) {
-    viewer.hide()
     viewer.destroy()
     viewer = null
   }
@@ -66,31 +69,63 @@ function create_viewer() {
     loop: true,
     interval: 0,
     initialViewIndex: props.initialIndex,
-    zIndex: 9999,
+    // Keep the overlay above every app layer (header z-50, PrimeVue
+    // Toast/popups) so page content can't bleed through or receive taps.
+    zIndex: 21000,
     zIndexInline: 0,
-    ready() {
+    show() {
+      syncing_from_viewer = true
       visible.value = true
+      nextTick(() => {
+        syncing_from_viewer = false
+      })
     },
     hide() {
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur()
       }
+      syncing_from_viewer = true
       visible.value = false
+      nextTick(() => {
+        syncing_from_viewer = false
+      })
     },
   })
 }
 
-watch(() => props.images, () => {
-  nextTick(() => create_viewer())
-}, { deep: true, immediate: true })
+onMounted(() => {
+  create_viewer()
+})
 
+// Recreate the viewer only when the image set actually changes. The parent
+// recomputes `render_result` (a fresh array) on many unrelated reactive
+// updates, and rebuilding mid-view tears the open overlay — so compare URLs
+// and skip while the viewer is open.
+watch(() => props.images.join(''), (joined, previous) => {
+  if (joined === previous || visible.value) {
+    return
+  }
+  nextTick(() => create_viewer())
+})
+
+// The parent's v-model is the single source of truth for "should be open".
+// Opening goes through view(index) so a single long-lived viewer instance is
+// reused (no remount per image) and lands directly on the tapped image.
 watch(visible, (is_visible) => {
-  if (is_visible) {
-    viewer?.show()
+  if (syncing_from_viewer) {
+    return
   }
-  else {
-    viewer?.hide()
-  }
+  nextTick(() => {
+    if (! viewer) {
+      return
+    }
+    if (is_visible) {
+      viewer.view(props.initialIndex)
+    }
+    else {
+      viewer.hide()
+    }
+  })
 })
 
 onUnmounted(() => {

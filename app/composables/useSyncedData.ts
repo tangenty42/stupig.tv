@@ -200,20 +200,20 @@ export async function useSyncedData<T>(
           fetch_task: null,
           updaters: new Set(),
           fetch: () => {
-            if (proxy !.fetch_task) {
-              return proxy !.fetch_task
+            if (proxy!.fetch_task) {
+              return proxy!.fetch_task
             }
-            proxy !.loading = true
-            for (const u of proxy !.updaters) {
+            proxy!.loading = true
+            for (const u of proxy!.updaters) {
               u.set_loading(true)
             }
             const task = (async () => {
               try {
                 const value = await fetcher()
-                proxy !.value = value
-                proxy !.fetched = true
+                proxy!.value = value
+                proxy!.fetched = true
                 last_fetch_at = Date.now()
-                for (const u of proxy !.updaters) {
+                for (const u of proxy!.updaters) {
                   u.update(value)
                 }
               }
@@ -221,19 +221,19 @@ export async function useSyncedData<T>(
                 handle_error(error)
               }
               finally {
-                proxy !.loading = false
-                proxy !.fetch_task = null
-                for (const u of proxy !.updaters) {
+                proxy!.loading = false
+                proxy!.fetch_task = null
+                for (const u of proxy!.updaters) {
                   u.set_loading(false)
                 }
               }
             })()
-            proxy !.fetch_task = task
+            proxy!.fetch_task = task
             return task
           },
           drop: (updater) => {
-            proxy !.updaters.delete(updater)
-            if (proxy !.updaters.size === 0) {
+            proxy!.updaters.delete(updater)
+            if (proxy!.updaters.size === 0) {
               default_unsubscribe()
               shared_proxies.delete(key)
             }
@@ -244,7 +244,7 @@ export async function useSyncedData<T>(
         shared_proxies.set(key, proxy as UseSyncedDataProxy<unknown>)
 
         proxy.updaters.add(updater)
-        unsubscribe = () => proxy !.drop(updater)
+        unsubscribe = () => proxy!.drop(updater)
 
         if (immediate) {
           await proxy.fetch()
@@ -253,7 +253,7 @@ export async function useSyncedData<T>(
       }
       else {
         proxy.updaters.add(updater)
-        unsubscribe = () => proxy !.drop(updater)
+        unsubscribe = () => proxy!.drop(updater)
         if (proxy.fetched) {
           // Sync the latest shared state into this instance immediately.
           loading.value = proxy.loading

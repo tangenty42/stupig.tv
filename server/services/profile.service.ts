@@ -76,7 +76,7 @@ export const select_profile_row_sql = `
     (SELECT MAX(s.last_seen_at) FROM user_login_sessions s WHERE s.user_id = u.id) AS last_seen_at,
     EXISTS(
       SELECT 1 FROM user_login_sessions s
-      WHERE s.user_id = u.id AND s.status = 'valid' AND s.last_seen_at >= NOW() - INTERVAL ? SECOND
+      WHERE s.user_id = u.id AND s.is_logged_out = 0 AND s.expires_at > NOW() AND s.last_seen_at >= NOW() - INTERVAL ? SECOND
     ) AS is_online
   FROM users u
 `

@@ -1,7 +1,7 @@
 <template>
-  <div class="grid grid-cols-1 gap-x-0 lg:gap-x-20 gap-y-4 pt-12 md:grid-cols-2">
+  <div class="grid grid-cols-1 gap-x-0 lg:gap-x-24 gap-y-4 pt-12 md:grid-cols-2">
     <div class="flex flex-col items-stretch">
-      <div class="text-7xl">
+      <div class="text-7xl lg:mt-12">
         <div class="text-[45%] lg:text-[55%] text-center lg:text-end text-slate-700 dark:text-slate-300">
           <MySpacedText text="我们是" class="lg:gap-0" />
         </div>
@@ -11,7 +11,7 @@
           </div>
           <div class="shrink-0 relative">
             <span>小组</span>
-            <span class="absolute bottom-0 ml-2 hidden lg:inline-block">.</span>
+            <span class="absolute bottom-0 ml-2 hidden lg:inline-block">!</span>
           </div>
         </div>
       </div>
@@ -30,12 +30,12 @@
         </div>
       </div>
     </div>
-    <div class="card-x-super-pro-max flex grow flex-col items-center gap-4">
+    <div class="card-x-super-pro-max flex flex-col items-center gap-4">
       <img class="max-w-lg dark:invert" :src="static_url('/imgs/whats_up.svg')" alt="Stupig Chant">
       <NuxtLink class="link" to="/contact">
-        &nbsp;&nbsp;&nbsp;联系我们这帮“全能型人才”
+        联系我们这帮「全能型人才」
       </NuxtLink>
-      <div class="pt-[200vh] text-slate-500 dark:text-slate-400">
+      <div class="pt-[200vh] text-xs text-slate-500 dark:text-slate-400">
         蠢人，你在期待什么？
       </div>
     </div>

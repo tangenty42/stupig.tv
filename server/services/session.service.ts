@@ -1,4 +1,4 @@
-import type { SessionOverview, SessionRecord } from '@shared/types/api'
+import type { SessionOverview } from '@shared/types/api'
 import type { H3Event } from 'h3'
 import type { RowDataPacket } from 'mysql2/promise'
 
@@ -21,7 +21,8 @@ interface SessionRow extends RowDataPacket {
   user_id: number
   token_hash: string
   identity_token: string | null
-  status: string
+  is_logged_out: number
+  is_expired: number
   is_online: number
   is_current: number
   login_at: string
@@ -35,7 +36,7 @@ interface SessionRow extends RowDataPacket {
 
 interface ReusableSessionRow extends RowDataPacket {
   id: number
-  status: string
+  is_reusable: number
 }
 
 export function get_request_device_context(event: H3Event): DeviceContext {
@@ -58,21 +59,23 @@ export async function create_login_session(
   const expires_at = dayjs().utc().add(env.SESSION_MAX_AGE_DAYS, 'day')
     .toDate()
 
-  // Reuse the latest non-'valid' row for this device by rotating its token_hash.
-  // 'valid' rows are left alone so concurrent active tabs/devices keep their own rows.
+  // Reuse the latest inactive row for this device by rotating its token_hash.
+  // Active rows (not logged out, unexpired) are left alone so concurrent
+  // active tabs/devices keep their own rows.
   const [existing] = await db.execute<ReusableSessionRow[]>(
-    `SELECT id, status FROM user_login_sessions
+    `SELECT id, (is_logged_out = 1 OR expires_at <= NOW()) AS is_reusable
+     FROM user_login_sessions
      WHERE user_id = ? AND identity_token = ?
      ORDER BY id DESC LIMIT 1`,
     [user_id, identity_token],
   )
   const reusable = existing[0]
 
-  if (reusable && reusable.status !== 'valid') {
+  if (reusable && reusable.is_reusable) {
     await db.execute(
       `UPDATE user_login_sessions SET
          token_hash = ?,
-         status = 'valid',
+         is_logged_out = 0,
          login_at = NOW(),
          last_seen_at = NOW(),
          logout_at = NULL,
@@ -95,8 +98,8 @@ export async function create_login_session(
 
   await db.execute(
     `INSERT INTO user_login_sessions
-       (user_id, token_hash, identity_token, status, login_at, last_seen_at, logout_at, expires_at, login_ip, last_seen_ip, user_agent)
-     VALUES (?, ?, ?, 'valid', NOW(), NOW(), NULL, ?, ?, ?, ?)`,
+       (user_id, token_hash, identity_token, is_logged_out, login_at, last_seen_at, logout_at, expires_at, login_ip, last_seen_ip, user_agent)
+     VALUES (?, ?, ?, 0, NOW(), NOW(), NULL, ?, ?, ?, ?)`,
     [
       user_id,
       token_hash,
@@ -119,8 +122,9 @@ export async function get_login_sessions(
        user_id,
        token_hash,
        identity_token,
-       status,
-       (status = 'valid' AND last_seen_at >= NOW() - INTERVAL ? SECOND) AS is_online,
+       is_logged_out,
+       (expires_at <= NOW()) AS is_expired,
+       (is_logged_out = 0 AND expires_at > NOW() AND last_seen_at >= NOW() - INTERVAL ? SECOND) AS is_online,
        (token_hash <=> ?) AS is_current,
        login_at,
        last_seen_at,
@@ -131,13 +135,11 @@ export async function get_login_sessions(
        user_agent
      FROM user_login_sessions
      WHERE user_id = ?
-       AND status != 'expired'
-       AND NOT (status = 'valid' AND expires_at <= NOW())
      ORDER BY
        is_current DESC,
        CASE
-         WHEN status = 'valid' AND last_seen_at >= NOW() - INTERVAL ? SECOND THEN 0
-         WHEN status = 'valid' THEN 1
+         WHEN is_logged_out = 0 AND expires_at > NOW() AND last_seen_at >= NOW() - INTERVAL ? SECOND THEN 0
+         WHEN is_logged_out = 0 AND expires_at > NOW() THEN 1
          ELSE 2
        END ASC,
        id DESC`,
@@ -146,9 +148,10 @@ export async function get_login_sessions(
 
   const records = rows.map(row => ({
     ...row,
+    is_logged_out: Boolean(row.is_logged_out),
+    is_expired: Boolean(row.is_expired),
     is_online: Boolean(row.is_online),
     is_current: Boolean(row.is_current),
-    status: row.status as SessionRecord['status'],
   }))
 
   return { records }
@@ -156,14 +159,14 @@ export async function get_login_sessions(
 
 export async function logout_session(id: number): Promise<void> {
   await db.execute(
-    'UPDATE user_login_sessions SET status = \'logged_out\', logout_at = NOW() WHERE id = ?',
+    'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE id = ?',
     [id],
   )
 }
 
 export async function logout_session_by_token_hash(token_hash: string): Promise<void> {
   await db.execute(
-    'UPDATE user_login_sessions SET status = \'logged_out\', logout_at = NOW() WHERE token_hash = ?',
+    'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE token_hash = ?',
     [token_hash],
   )
 }
@@ -171,13 +174,13 @@ export async function logout_session_by_token_hash(token_hash: string): Promise<
 export async function logout_all_user_sessions(user_id: number, except_token_hash?: string | null): Promise<void> {
   if (except_token_hash) {
     await db.execute(
-      'UPDATE user_login_sessions SET status = \'logged_out\', logout_at = NOW() WHERE user_id = ? AND token_hash != ?',
+      'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE user_id = ? AND token_hash != ?',
       [user_id, except_token_hash],
     )
   }
   else {
     await db.execute(
-      'UPDATE user_login_sessions SET status = \'logged_out\', logout_at = NOW() WHERE user_id = ?',
+      'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE user_id = ?',
       [user_id],
     )
   }

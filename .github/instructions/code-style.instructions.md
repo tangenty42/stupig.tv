@@ -13,7 +13,6 @@ ESLint is the sole formatter for this project — **no Prettier**. Config lives 
 - 2-space indent (never tabs), single quotes, no semicolons, trailing commas — all auto-fixed.
 - Space after **all** unary operators: `! x`, `- x`, `typeof x`, `void x` (`@stylistic/space-unary-ops`).
 - No padding inside template placeholders: `` `${statement}` `` (`@stylistic/template-curly-spacing: never`).
-- Method chains: short chains (≤ 3 calls) may stay inline or break freely; chains of 4+ calls **must** break one call per line (`@stylistic/newline-per-chained-call` with `ignoreChainWithDepth: 3`).
 - Template props are kebab-case: `<tag prop-name />` (`vue/attribute-hyphenation: always`).
 - SFC block order: `template` → `script` → `style`.
 - Imports are sorted and unused imports are removed automatically (`perfectionist` + `unused-imports`).

@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const operate_for_raw = query.operate_for ? Number(query.operate_for) : null
 
-  const { target_id } = await resolve_operate_target(event, Number.isInteger(operate_for_raw) && operate_for_raw ! > 0 ? operate_for_raw : null)
+  const { target_id } = await resolve_operate_target(event, Number.isInteger(operate_for_raw) && operate_for_raw! > 0 ? operate_for_raw : null)
 
   const { previous_file } = await delete_profile_avatar(target_id)
 

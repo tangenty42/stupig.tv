@@ -44,6 +44,7 @@ const env_schema = z.object({
   SYNC_BROADCAST_CHANNEL_NAME: z.string().min(1),
   SYNC_CLIENT_ID_STORAGE_KEY: z.string().min(1),
   MAX_AVATAR_SIZE_MB: z.coerce.number(),
+  MAX_CONTENT_ATTACHMENT_SIZE_MB: z.coerce.number(),
   STATIC_ROOT: z.string().min(1),
   STATIC_BASE_URL: z.string(),
   ONLINE_TIMEOUT_SECONDS: z.coerce.number(),

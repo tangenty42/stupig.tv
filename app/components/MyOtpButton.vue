@@ -1,6 +1,6 @@
 <template>
   <Button
-    :disabled="!!remaining || loading"
+    :disabled="!! remaining || loading"
     :loading="loading"
     :label="remaining ? duration_format(duration) : '发送'"
     severity="secondary"

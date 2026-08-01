@@ -21,6 +21,7 @@ export default defineNuxtConfig({
       identity_cookie_name: env.IDENTITY_COOKIE_NAME,
       cookie_max_age: env.COOKIE_MAX_AGE_DAYS * 86400,
       max_avatar_size_mb: env.MAX_AVATAR_SIZE_MB,
+      max_content_attachment_size_mb: env.MAX_CONTENT_ATTACHMENT_SIZE_MB,
       static_base_url: env.STATIC_BASE_URL,
       mqtt_ws_host: env.MQTT_WS_HOST,
       mqtt_ws_port: env.MQTT_WS_PORT,

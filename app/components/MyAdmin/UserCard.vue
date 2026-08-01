@@ -5,7 +5,7 @@
     @click="emit('toggle-select', user.id)"
   >
     <template #content>
-      <div class="flex items-start gap-4">
+      <div class="flex items-start gap-5">
         <div class="shrink-0">
           <ClientOnly>
             <OverlayBadge :severity="user.is_online ? 'success' : 'secondary'" class="avatar-online-badge">
@@ -42,13 +42,13 @@
           </div>
 
           <div class="mt-3 flex flex-wrap items-center gap-2">
-            <MyBadge v-if="user.is_verified" type="success">
+            <MyBadge v-if="user.is_verified" outlined type="success">
               <span class="inline-flex items-center gap-1"><MyIcon name="lucide:badge-check" />认证</span>
             </MyBadge>
-            <MyBadge v-if="user.is_admin" type="warning">
+            <MyBadge v-if="user.is_admin" outlined type="warning">
               <span class="inline-flex items-center gap-1"><MyIcon name="lucide:shield-check" />管理员</span>
             </MyBadge>
-            <MyBadge v-if="user.is_banned" type="error">
+            <MyBadge v-if="user.is_banned" outlined type="error">
               <span class="inline-flex items-center gap-1"><MyIcon name="lucide:ban" />已封禁</span>
             </MyBadge>
           </div>
@@ -65,9 +65,9 @@
         </div>
       </div>
 
-      <div class="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+      <div class="mt-4 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-slate-100 pt-4 dark:border-slate-800">
         <NuxtLink target="_blank" :to="profile_link" @click.stop>
-          <Button size="small" text label="修改信息">
+          <Button size="small" text rounded label="修改信息">
             <template #icon>
               <MyIcon name="lucide:square-pen" />
             </template>
@@ -78,6 +78,7 @@
           size="small"
           :severity="user.is_banned ? 'success' : 'danger'"
           text
+          rounded
           :loading="disable_pending"
           :label="user.is_banned ? '解封' : '封禁'"
           @click.stop="toggle_disabled"
@@ -87,7 +88,7 @@
           </template>
         </Button>
 
-        <Button size="small" severity="secondary" text :loading="logout_pending" label="强制下线" @click.stop="force_logout">
+        <Button size="small" severity="secondary" text rounded :loading="logout_pending" label="强制下线" @click.stop="force_logout">
           <template #icon>
             <MyIcon name="lucide:log-out" />
           </template>
@@ -97,6 +98,7 @@
           size="small"
           :severity="user.is_verified ? 'secondary' : 'success'"
           text
+          rounded
           :label="user.is_verified ? '移除认证' : '授予认证'"
           @click.stop="toggle_verified"
         >
@@ -109,6 +111,7 @@
           size="small"
           :severity="user.is_admin ? 'secondary' : 'warn'"
           text
+          rounded
           :label="user.is_admin ? '移除管理员' : '设为管理员'"
           @click.stop="toggle_admin"
         >
@@ -162,7 +165,7 @@ function toggle_admin() {
 
 <style scoped>
   .admin-user-card {
-    @apply mb-4 break-inside-avoid rounded-2xl border border-slate-200 bg-white/80 shadow-sm transition-shadow hover:shadow-md dark:border-slate-700 dark:bg-slate-900/50;
+    @apply mb-4 break-inside-avoid rounded-sm border border-slate-200 bg-white/80 shadow-sm transition-shadow hover:shadow-md dark:border-slate-700 dark:bg-slate-900/50;
   }
 
   .avatar-online-badge {
@@ -170,7 +173,7 @@ function toggle_admin() {
   }
 
   .avatar-online-badge :deep(.p-badge) {
-    @apply w-5 h-5;
+    @apply w-4 h-4;
     inset-block-start: auto;
     inset-block-end: 0;
     inset-inline-end: 0;
