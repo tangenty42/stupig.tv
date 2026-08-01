@@ -6,7 +6,7 @@
       v-model:visible="crop_modal_visible"
       header="调整头像"
       :pending="pending"
-      @update:visible="() => { if (!crop_modal_visible) { close_crop_modal() } }"
+      @update:visible="() => { if (! crop_modal_visible) { close_crop_modal() } }"
     >
       <div class="overflow-hidden">
         <img ref="crop_image" :src="source_url" alt="待裁剪头像" class="block max-h-[60vh] w-full select-none">
@@ -27,8 +27,8 @@
             </Button>
           </div>
           <div class="flex items-center gap-2">
-            <Button label="取消" severity="secondary" text :disabled="pending" @click="close_crop_modal" />
-            <Button label="确定" :loading="pending" :disabled="pending" @click="submit_avatar">
+            <Button label="取消" severity="secondary" text rounded :disabled="pending" @click="close_crop_modal" />
+            <Button rounded label="确定" :loading="pending" :disabled="pending" @click="submit_avatar">
               <template #icon>
                 <MyIcon name="lucide:check" />
               </template>

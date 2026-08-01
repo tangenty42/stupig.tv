@@ -51,8 +51,6 @@ describe('duration_read', () => {
     expect(result.hour).toBe(22)
     expect(result.minute).toBe(27)
     expect(result.second).toBe(35)
-    expect(result.month_sum).toBe(1)
-    expect(result.day_sum).toBeCloseTo(41.4, 0)
   })
 
   it('converts a negative millisecond number using absolute value', () => {
@@ -141,8 +139,8 @@ describe('duration_format', () => {
 
 describe('duration_build_string', () => {
   it('replaces duration tokens in a template', () => {
-    const result = duration_build_string(3_661_001_000, '{y}|{m}|{d}')
-    expect(result).toBe('0|1|11')
+    const result = duration_build_string(3_661_001_000, '{Y}|{M}|{D}|{h}|{i}|{s}')
+    expect(result).toBe('0|1|11|22|27|35')
   })
 
   it('replaces the compact formatted duration token', () => {
@@ -153,16 +151,6 @@ describe('duration_build_string', () => {
   it('replaces the expanded formatted duration token', () => {
     const result = duration_build_string(1_201_000, '{formated_expand}')
     expect(result).toBe(' 20 分 01 秒')
-  })
-
-  it('pads zero-prefixed tokens', () => {
-    const result = duration_build_string(65_000, '{hh}:{ii}:{ss}')
-    expect(result).toBe('00:01:05')
-  })
-
-  it('includes month_sum and day_sum tokens', () => {
-    const result = duration_build_string(60_000, '{ms} {ds}')
-    expect(result).toBe('0 0')
   })
 
   it('selects the normal template variant for non-just-now durations', () => {
@@ -210,7 +198,7 @@ describe('datetime_build_string', () => {
   it('formats a UTC ISO string using cookie-zone local components', () => {
     const p = expected_parts('2024-01-15T09:05:03Z')
     const expected = `${p.year}/${pad(p.month)}/${pad(p.day)} ${pad(p.hour)}:${pad(p.minute)}:${pad(p.second)}`
-    const result = datetime_build_string('2024-01-15T09:05:03Z', '{yy}/{mm}/{dd} {hh}:{ii}:{ss}')
+    const result = datetime_build_string('2024-01-15T09:05:03Z', '{YYYY}/{MM}/{DD} {HH}:{mm}:{ss}')
     expect(result).toBe(expected)
   })
 
@@ -218,7 +206,7 @@ describe('datetime_build_string', () => {
     const ts = new Date('2024-01-15T09:05:03Z').getTime()
     const p = expected_parts(ts)
     const expected = `${p.year}/${pad(p.month)}/${pad(p.day)} ${pad(p.hour)}:${pad(p.minute)}:${pad(p.second)}`
-    const result = datetime_build_string(ts, '{yy}/{mm}/{dd} {hh}:{ii}:{ss}')
+    const result = datetime_build_string(ts, '{YYYY}/{MM}/{DD} {HH}:{mm}:{ss}')
     expect(result).toBe(expected)
   })
 
@@ -226,29 +214,35 @@ describe('datetime_build_string', () => {
     const date = new Date(2024, 0, 15, 9, 5, 3)
     const p = expected_parts(date)
     const expected = `${p.year}/${pad(p.month)}/${pad(p.day)} ${pad(p.hour)}:${pad(p.minute)}:${pad(p.second)}`
-    const result = datetime_build_string(date, '{yy}/{mm}/{dd} {hh}:{ii}:{ss}')
+    const result = datetime_build_string(date, '{YYYY}/{MM}/{DD} {HH}:{mm}:{ss}')
     expect(result).toBe(expected)
   })
 
   it('uses single-digit tokens without padding', () => {
     const p = expected_parts('2024-01-01T00:00:00Z')
     const expected = `${p.year.toString().slice(- 2)}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
-    const result = datetime_build_string('2024-01-01T00:00:00Z', '{y}-{m}-{d} {h}:{i}:{s}')
+    const result = datetime_build_string('2024-01-01T00:00:00Z', '{YY}-{M}-{D} {H}:{m}:{s}')
     expect(result).toBe(expected)
   })
 
-  it('formats a two-digit year with {y} based on current century cutoff', () => {
-    const result_1996 = datetime_build_string('1996-01-01T00:00:00Z', '{y}-{m}-{d}')
+  it('formats a two-digit year with {YY} based on current century cutoff', () => {
+    const result_1996 = datetime_build_string('1996-01-01T00:00:00Z', '{YY}-{M}-{D}')
     const p_1996 = expected_parts('1996-01-01T00:00:00Z')
     expect(result_1996).toBe(`${p_1996.year.toString().slice(- 2)}-${p_1996.month}-${p_1996.day}`)
 
-    const result_2026 = datetime_build_string('2026-01-01T00:00:00Z', '{y}-{m}-{d}')
+    const result_2026 = datetime_build_string('2026-01-01T00:00:00Z', '{YY}-{M}-{D}')
     const p_2026 = expected_parts('2026-01-01T00:00:00Z')
     expect(result_2026).toBe(`${p_2026.year.toString().slice(- 2)}-${p_2026.month}-${p_2026.day}`)
 
-    const result_2006 = datetime_build_string('2006-01-01T00:00:00Z', '{y}-{m}-{d}')
+    const result_2006 = datetime_build_string('2006-01-01T00:00:00Z', '{YY}-{M}-{D}')
     const p_2006 = expected_parts('2006-01-01T00:00:00Z')
     expect(result_2006).toBe(`${p_2006.year.toString().slice(- 2)}-${p_2006.month}-${p_2006.day}`)
+  })
+
+  it('formats padded and unpadded 12-hour clock tokens', () => {
+    expect(datetime_build_string('2024-01-01T01:00:00Z', '{hh}|{h}')).toBe('12|12')
+    expect(datetime_build_string('2024-01-01T13:00:00Z', '{hh}|{h}')).toBe('12|12')
+    expect(datetime_build_string('2024-01-01T16:00:00Z', '{hh}|{h}')).toBe('03|3')
   })
 })
 

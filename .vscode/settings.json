@@ -1,21 +1,4 @@
 {
-  "css.customData": [
-    ".vscode/tailwind.css-data.json"
-  ],
-  "css.validate": false,
-  "scss.validate": false,
-  "less.validate": false,
-  "css.lint.unknownAtRules": "ignore",
-  "scss.lint.unknownAtRules": "ignore",
-  "less.lint.unknownAtRules": "ignore",
-  "postcss.lint.unknownAtRules": "ignore",
-  "[postcss]": {
-    "css.lint.unknownAtRules": "ignore"
-  },
-  "tailwindCSS.experimental.classRegex": [
-    ["class:\\s*['\"]([^'\"]*)['\"]"],
-    ["class:\\s*`([^`]*)`"]
-  ],
   "tailwindCSS.includeLanguages": {
     "vue": "html",
     "vue-html": "html"
@@ -26,14 +9,8 @@
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": "explicit"
   },
-  "editor.formatOnSave": false,
-  "eslint.validate": [
-    "javascript",
-    "typescript",
-    "vue",
-    "json",
-    "jsonc",
-    "yaml",
-    "markdown"
-  ]
+  "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "less.lint.unknownAtRules": "ignore",
+  "editor.formatOnSave": false
 }

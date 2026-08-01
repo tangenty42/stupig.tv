@@ -23,7 +23,7 @@ export default defineEventHandler(async (event) => {
   const operate_for_raw = files.find(item => item.name === 'operate_for')?.data?.toString()
   const operate_for = operate_for_raw ? Number(operate_for_raw) : null
 
-  const { target_id } = await resolve_operate_target(event, Number.isInteger(operate_for) && operate_for ! > 0 ? operate_for : null)
+  const { target_id } = await resolve_operate_target(event, Number.isInteger(operate_for) && operate_for! > 0 ? operate_for : null)
 
   const avatar_file = files.find(item => item.name === 'avatar')
 
@@ -36,7 +36,7 @@ export default defineEventHandler(async (event) => {
   const max_avatar_size = max_avatar_size_mb * 1024 * 1024
 
   if (avatar_file.data.length > max_avatar_size) {
-    throw new ApiError(413, `头像文件太大了，不能超过 ${max_avatar_size_mb}MB`)
+    throw new ApiError(413, `头像文件太大了，不能超过 ${max_avatar_size_mb} MB`)
   }
 
   const mime_type = avatar_file.type ?? ''

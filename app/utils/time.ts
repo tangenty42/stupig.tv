@@ -9,9 +9,7 @@ dayjs.extend(timezone)
 export interface SimpleDuration {
   year: number
   month: number
-  month_sum: number
   day: number
-  day_sum: number
   hour: number
   minute: number
   second: number
@@ -78,9 +76,7 @@ export function duration_between(start_date: DateLike, end_date: DateLike): Simp
   return {
     year: end.diff(start, 'year'),
     month: end.diff(start, 'month') % 12,
-    month_sum: end.diff(start, 'month'),
     day: end.diff(start, 'day') % 30,
-    day_sum: end.diff(start, 'day'),
     hour: end.diff(start, 'hour') % 24,
     minute: end.diff(start, 'minute') % 60,
     second: end.diff(start, 'second') % 60,
@@ -104,9 +100,7 @@ export function duration_read(duration: Durationlike): SimpleDuration {
     return {
       year,
       month,
-      month_sum: year * 12 + month,
       day,
-      day_sum: year * DAYS_IN_A_YEAR + month * DAYS_IN_A_MONTH + day,
       hour,
       minute,
       second,
@@ -121,9 +115,7 @@ export function duration_build_string(duration: Durationlike, template: string |
   const {
     year,
     month,
-    month_sum,
     day,
-    day_sum,
     hour,
     minute,
     second,
@@ -132,29 +124,21 @@ export function duration_build_string(duration: Durationlike, template: string |
   const formated = duration_format(duration, { expand: false, just_now })
   const formated_expand = duration_format(duration, { expand: true })
   const replacements: Record<string, string> = {
-    '{yy}': `${year}`.padStart(2, '0'),
-    '{mm}': `${month}`.padStart(2, '0'),
-    '{dd}': `${day}`.padStart(2, '0'),
-    '{ms}': `${month_sum}`,
-    '{ds}': `${day_sum}`,
-    '{hh}': `${hour}`.padStart(2, '0'),
-    '{ii}': `${minute}`.padStart(2, '0'),
-    '{ss}': `${second}`.padStart(2, '0'),
-    '{formated}': formated,
-    '{formated_expand}': formated_expand,
-    '{y}': `${year}`,
-    '{m}': `${month}`,
-    '{d}': `${day}`,
+    '{Y}': `${year}`,
+    '{M}': `${month}`,
+    '{D}': `${day}`,
     '{h}': `${hour}`,
     '{i}': `${minute}`,
     '{s}': `${second}`,
+    '{formated}': formated,
+    '{formated_expand}': formated_expand,
   }
   const regex = new RegExp(Object.keys(replacements).join('|'), 'g')
 
   if (Array.isArray(template)) {
-    return (formated === just_now ? template[1] : template[0]).replace(regex, match => replacements[match] !)
+    return (formated === just_now ? template[1] : template[0]).replace(regex, match => replacements[match]!)
   }
-  return template.replace(regex, match => replacements[match] !)
+  return template.replace(regex, match => replacements[match]!)
 }
 
 export function duration_format(duration: Durationlike, options: DurationFormatOptions = {}) {
@@ -206,33 +190,36 @@ export function datetime_read(date: DateLike) {
 
 export function datetime_build_string(date: DateLike, template: string) {
   const { year, month, day, hour, minute, second } = datetime_read(date)
+  const hour_12 = hour % 12 || 12
   const replacements: Record<string, string> = {
-    '{yy}': `${year}`,
-    '{mm}': `${month}`.padStart(2, '0'),
-    '{dd}': `${day}`.padStart(2, '0'),
-    '{hh}': `${hour}`.padStart(2, '0'),
-    '{ii}': `${minute}`.padStart(2, '0'),
+    '{YYYY}': `${year}`,
+    '{MM}': `${month}`.padStart(2, '0'),
+    '{DD}': `${day}`.padStart(2, '0'),
+    '{HH}': `${hour}`.padStart(2, '0'),
+    '{hh}': `${hour_12}`.padStart(2, '0'),
+    '{mm}': `${minute}`.padStart(2, '0'),
     '{ss}': `${second}`.padStart(2, '0'),
-    '{y}': `${(`${year}`).slice(- 2)}`,
-    '{m}': `${month}`,
-    '{d}': `${day}`,
-    '{h}': `${hour}`,
-    '{i}': `${minute}`,
+    '{YY}': `${(`${year}`).slice(- 2)}`,
+    '{M}': `${month}`,
+    '{D}': `${day}`,
+    '{H}': `${hour}`,
+    '{h}': `${hour_12}`,
+    '{m}': `${minute}`,
     '{s}': `${second}`,
   }
   const regex = new RegExp(Object.keys(replacements).join('|'), 'g')
 
-  return template.replace(regex, match => replacements[match] !)
+  return template.replace(regex, match => replacements[match]!)
 }
 
 export function date_format(date: DateLike) {
-  return datetime_build_string(date, '{yy}/{m}/{d}')
+  return datetime_build_string(date, '{YYYY}/{M}/{D}')
 }
 
 export function time_format(date: DateLike) {
-  return datetime_build_string(date, '{hh}:{ii}:{ss}')
+  return datetime_build_string(date, '{HH}:{mm}:{ss}')
 }
 
 export function datetime_format(date: DateLike) {
-  return datetime_build_string(date, '{yy}/{m}/{d} {hh}:{ii}:{ss}')
+  return datetime_build_string(date, '{YYYY}/{M}/{D} {HH}:{mm}:{ss}')
 }

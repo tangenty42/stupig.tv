@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
   await verify_captcha({ lot_number, captcha_output, pass_token, gen_time })
 
   const payload = schema.login_with_password.parse(rest)
-  const result = await login_with_password(payload, get_request_device_context(event), event.context.identity_token !)
+  const result = await login_with_password(payload, get_request_device_context(event), event.context.identity_token!)
 
   return ok(result, '登录成功')
 })

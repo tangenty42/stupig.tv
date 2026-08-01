@@ -178,7 +178,7 @@ async function on_otp_send() {
 
 if (props.otpSend) {
   const otp_target_phone = computed(() => {
-    const phone = props.otpSend !.targetPhone.trim()
+    const phone = props.otpSend!.targetPhone.trim()
     return phone_schema.safeParse(phone).success ? phone : null
   })
 
@@ -190,7 +190,7 @@ if (props.otpSend) {
     }
 
     try {
-      const data = await auth_api.get_otp_cooldown({ phone: target_phone, purpose: props.otpSend !.purpose })
+      const data = await auth_api.get_otp_cooldown({ phone: target_phone, purpose: props.otpSend!.purpose })
 
       const next_available_at = data?.next_available_at
       if (! next_available_at) {
@@ -237,7 +237,7 @@ if (props.otpSend) {
   )
   if (identity_token.value) {
     await useSyncedData<string | null>(
-      computed(() => sync_resource('otp_cooldown_by_identity', identity_token.value !)),
+      computed(() => sync_resource('otp_cooldown_by_identity', identity_token.value!)),
       sync_otp_cooldown,
       otp_cooldown_until,
       otp_sync_loading,

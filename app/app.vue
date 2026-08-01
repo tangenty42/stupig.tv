@@ -1,34 +1,72 @@
 <template>
   <div class="min-h-screen overflow-x-clip">
     <Toast position="center" />
+    <ConfirmPopup>
+      <template #message="{ message }">
+        <div class="p-confirmpopup-content">
+          <MyIcon name="lucide:triangle-alert" class="shrink-0 text-xl text-amber-500" />
+          <span>{{ message.message }}</span>
+        </div>
+      </template>
+    </ConfirmPopup>
 
     <header
       class="fixed inset-x-0 top-0 z-50 isolate transition-all duration-200 before:pointer-events-none before:absolute before:inset-0 before:opacity-0 before:backdrop-blur-[16px] before:transition-opacity before:duration-200"
       :class="scrolled ? 'border-b border-slate-200 bg-white/80 shadow-sm dark:border-slate-700 dark:bg-gray-900/80 before:opacity-100' : 'border-b border-transparent bg-transparent'"
     >
-      <div class="relative z-10 mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-        <NuxtLink class="transition-all duration-300 hover:blur-[1px] active:blur-[1px]" to="/">
+      <div class="relative mx-auto max-w-5xl">
+        <div
+          class="relative z-20"
+          :style="logo_spacer_style"
+        />
+
+        <NuxtLink
+          class="absolute left-3 top-[0.6rem] z-20 transition-[filter] duration-300 hover:blur-[1px] active:blur-[1px]"
+          :class="{ 'pointer-events-none': header_shift_progress === 1 }"
+          :style="logo_style"
+          to="/"
+        >
           <img class="h-10 w-auto dark:hidden" :src="static_url('/imgs/Stupig_fancy.svg')" alt="Stupig Logo">
           <img class="hidden h-10 w-auto dark:block" :src="static_url('/imgs/Stupig_fancy_light.svg')" alt="Stupig Logo">
         </NuxtLink>
 
-        <div class="flex items-center gap-2">
+        <div class="absolute right-2 top-2 z-30 flex items-center gap-2">
           <Button aria-label="切换浅色 / 深色模式" text rounded severity="secondary" @click="toggle_color_mode">
             <template #icon>
               <MyIcon :name="my_color_mode === 'dark' ? 'lucide:sun' : 'lucide:moon'" />
             </template>
           </Button>
-          <MyProfileHoverCard v-if="!!user" :profile="user" @logout="logout" />
-          <Button v-else label="登录 / 注册" size="small" severity="secondary" outlined :raised="!scrolled" @click="lor_modal = true">
+          <MyProfileHoverCard v-if="!! user" :profile="user" @logout="logout" />
+          <Button v-else label="登录 / 注册" size="small" severity="secondary" rounded text @click="lor_modal = true">
             <template #icon>
               <MyIcon name="lucide:user" />
             </template>
           </Button>
         </div>
+
+        <div
+          class="breadcrumb-row relative z-10 flex items-center px-4"
+          :style="breadcrumb_row_style"
+        >
+          <Breadcrumb :home="breadcrumb_home" :model="breadcrumb_items" class="!border-0 !bg-transparent !p-0">
+            <template #item="{ item, props }">
+              <NuxtLink v-if="item.route" v-slot="{ href, navigate }" :to="item.route" custom>
+                <a :href="href || undefined" v-bind="props.action" class="text-xs" @click="navigate">
+                  <MyIcon v-if="item.icon" :name="item.icon" />
+                  <span>{{ item.label }}</span>
+                </a>
+              </NuxtLink>
+              <span v-else v-bind="props.action" class="text-xs">{{ item.label }}</span>
+            </template>
+            <template #separator>
+              <MyIcon name="lucide:chevron-right" class="text-xs text-slate-400" />
+            </template>
+          </Breadcrumb>
+        </div>
       </div>
     </header>
 
-    <main class="mx-auto max-w-5xl px-4 pt-24">
+    <main class="mx-auto max-w-5xl px-4 pt-36">
       <NuxtPage />
     </main>
 
@@ -157,14 +195,14 @@
           <!-- eslint-disable-next-line vue/require-toggle-inside-transition -- toggle is on the nested divs -->
           <div class="mt-4">
             <div v-if="lor === 'login'" key="login" class="flex gap-2">
-              <Button label="立即登录" :loading="lor_pending" :disabled="lor_pending" @click="submit_active_login_form">
+              <Button rounded label="立即登录" :loading="lor_pending" :disabled="lor_pending" @click="submit_active_login_form">
                 <template #icon>
                   <MyIcon name="lucide:check" />
                 </template>
               </Button>
             </div>
             <div v-else key="register" class="flex gap-2">
-              <Button label="立即注册" :loading="lor_pending" :disabled="lor_pending" @click="form_register?.submit()">
+              <Button rounded label="立即注册" :loading="lor_pending" :disabled="lor_pending" @click="form_register?.submit()">
                 <template #icon>
                   <MyIcon name="lucide:check" />
                 </template>
@@ -191,10 +229,59 @@ const { user, token, apply_auth, update_user, logout } = useAuth()
 const { verify: captcha_verify, showing: captcha_showing } = useCaptcha()
 const color_mode = useColorMode()
 const my_color_mode = useMyColorMode()
+const route = useRoute()
 
-const scrolled = ref(false)
+const breadcrumb_home = {
+  icon: 'lucide:house',
+  label: '首页',
+  route: '/',
+}
+const breadcrumb_items = computed(() => {
+  if (route.path === '/') {
+    return []
+  }
+  if (route.path === '/contact') {
+    return [{ label: '联系我们' }]
+  }
+  if (route.path === '/admin') {
+    return [{ label: '控制台' }]
+  }
+  if (route.path.startsWith('/u/')) {
+    return [{ label: `用户主页 #${route.params.id}` }]
+  }
+
+  return route.path
+    .split('/')
+    .filter(Boolean)
+    .map(segment => ({ label: decodeURIComponent(segment) }))
+})
+
+const header_shift_distance = 80
+const header_shift_progress = ref(0)
+const scrolled = computed(() => header_shift_progress.value > 0)
+const logo_spacer_style = computed(() => {
+  const progress = header_shift_progress.value
+  const remaining = 1 - progress
+
+  return {
+    height: `${3.4 * remaining}rem`,
+  }
+})
+const logo_style = computed(() => {
+  const progress = header_shift_progress.value
+
+  return {
+    opacity: 1 - progress,
+    transform: `translateY(-${0.6 * progress}rem)`,
+  }
+})
+const breadcrumb_row_style = computed(() => ({
+  '--header-shift-progress': header_shift_progress.value,
+  'height': `${2.25 + 1.25 * header_shift_progress.value}rem`,
+}))
+
 function on_scroll() {
-  scrolled.value = window.scrollY > 0
+  header_shift_progress.value = Math.min(Math.max(window.scrollY / header_shift_distance, 0), 1)
 }
 onMounted(() => {
   on_scroll()
@@ -404,3 +491,15 @@ async function on_submit_register(e: FormSubmitEvent) {
   }
 }
 </script>
+
+<style scoped>
+.breadcrumb-row {
+  padding-inline-end: calc(1rem + 9rem * var(--header-shift-progress));
+}
+
+@media (min-width: 640px) {
+  .breadcrumb-row {
+    padding-inline-end: calc(1rem + 17rem * var(--header-shift-progress));
+  }
+}
+</style>

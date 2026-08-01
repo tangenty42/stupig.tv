@@ -15,7 +15,7 @@ defineProps<{
   }
   .badge-info {
     @apply
-      rounded-sm
+      rounded-full
       bg-slate-400
       dark:bg-slate-500
       px-2
@@ -27,7 +27,7 @@ defineProps<{
   }
   .badge-info-outlined {
     @apply
-      rounded-sm
+      rounded-full
       border
       border-slate-400/30
       dark:border-slate-500/30
@@ -42,7 +42,7 @@ defineProps<{
   }
   .badge-success {
     @apply
-      rounded-sm
+      rounded-full
       bg-primary-500
       px-2
       py-1
@@ -52,7 +52,7 @@ defineProps<{
   }
   .badge-success-outlined {
     @apply
-      rounded-sm
+      rounded-full
       border
       border-primary-500/30
       bg-primary-500/5
@@ -64,7 +64,7 @@ defineProps<{
   }
   .badge-warning {
     @apply
-      rounded-sm
+      rounded-full
       bg-yellow-600
       px-2
       py-1
@@ -75,7 +75,7 @@ defineProps<{
   }
   .badge-warning-outlined {
     @apply
-      rounded-sm
+      rounded-full
       border
       border-yellow-600/30
       bg-yellow-600/5
@@ -87,7 +87,7 @@ defineProps<{
   }
   .badge-error {
     @apply
-      rounded-sm
+      rounded-full
       bg-red-400
       dark:bg-red-500
       px-2
@@ -99,7 +99,7 @@ defineProps<{
   }
   .badge-error-outlined {
     @apply
-      rounded-sm
+      rounded-full
       border
       border-red-400/30
       dark:border-red-500/30

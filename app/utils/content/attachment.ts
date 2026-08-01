@@ -1,0 +1,51 @@
+import type { ContentStoryAttachment } from '@shared/types/content'
+
+export type AttachmentUploadStatus = 'queued' | 'uploading' | 'completed' | 'error' | 'cancelled'
+
+/** Unified view model for MyContentAttachmentCard: a stored attachment or a pending upload task. */
+export type AttachmentCardData
+  = | (ContentStoryAttachment & {
+    kind: 'stored'
+    /** Unreferenced stored attachments are deleted when the story is saved. */
+    referenced: boolean
+  })
+  | {
+    kind: 'upload'
+    file_name: string
+    mime_type: string | null
+    file_size: number
+    status: AttachmentUploadStatus
+    progress: number
+    message: string | null
+  }
+
+export const file_icon_names = [
+  'file',
+  'file-archive',
+  'file-audio',
+  'file-code-2',
+  'file-image',
+  'file-text',
+  'file-video',
+  'sheet',
+] as const
+
+export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'>): typeof file_icon_names[number] {
+  const mime_type = attachment.mime_type ?? ''
+  const extension = attachment.file_name.split('.').pop()?.toLowerCase() ?? ''
+  if (mime_type.startsWith('image/'))
+    return 'file-image'
+  if (mime_type.startsWith('video/'))
+    return 'file-video'
+  if (mime_type.startsWith('audio/'))
+    return 'file-audio'
+  if (mime_type.startsWith('text/') || mime_type === 'application/pdf')
+    return 'file-text'
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(extension))
+    return 'file-archive'
+  if (['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'vue', 'html', 'css', 'json', 'xml', 'yaml', 'yml'].includes(extension))
+    return 'file-code-2'
+  if (['csv', 'xls', 'xlsx', 'ods'].includes(extension))
+    return 'sheet'
+  return 'file'
+}

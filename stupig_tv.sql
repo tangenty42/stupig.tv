@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 1Panel-mysql
--- Generation Time: Jul 23, 2026 at 03:21 PM
+-- Generation Time: Jul 27, 2026 at 09:00 AM
 -- Server version: 8.4.8
 -- PHP Version: 8.3.30
 
@@ -20,6 +20,39 @@ SET time_zone = "+00:00";
 --
 -- Database: `stupig_tv`
 --
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `content_stories`
+--
+
+CREATE TABLE `content_stories` (
+  `id` bigint UNSIGNED NOT NULL,
+  `title` varchar(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `rating` tinyint UNSIGNED NOT NULL,
+  `event_precision` enum('day','month') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `event_dates` json NOT NULL,
+  `markdown` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_by` bigint UNSIGNED DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `content_story_attachments`
+--
+
+CREATE TABLE `content_story_attachments` (
+  `id` bigint UNSIGNED NOT NULL,
+  `story_id` bigint UNSIGNED NOT NULL,
+  `file_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `mime_type` varchar(127) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `file_size` bigint UNSIGNED NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -69,7 +102,7 @@ CREATE TABLE `user_login_sessions` (
   `user_id` bigint UNSIGNED NOT NULL,
   `token_hash` char(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `identity_token` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `status` enum('valid','logged_out','expired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'valid',
+  `is_logged_out` tinyint(1) NOT NULL DEFAULT '0',
   `login_at` timestamp NOT NULL,
   `last_seen_at` timestamp NOT NULL,
   `logout_at` timestamp NULL DEFAULT NULL,
@@ -84,6 +117,21 @@ CREATE TABLE `user_login_sessions` (
 --
 -- Indexes for dumped tables
 --
+
+--
+-- Indexes for table `content_stories`
+--
+ALTER TABLE `content_stories`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_content_stories_updated_at` (`updated_at`),
+  ADD KEY `idx_content_stories_created_by` (`created_by`);
+
+--
+-- Indexes for table `content_story_attachments`
+--
+ALTER TABLE `content_story_attachments`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_content_story_attachments_story_file` (`story_id`,`file_name`);
 
 --
 -- Indexes for table `otp_send_logs`
@@ -112,13 +160,25 @@ ALTER TABLE `users`
 --
 ALTER TABLE `user_login_sessions`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_user_login_sessions_user_status_seen` (`user_id`,`status`,`last_seen_at`),
   ADD KEY `idx_user_login_sessions_user_login` (`user_id`,`login_at`),
-  ADD KEY `idx_user_login_sessions_expires_at` (`expires_at`);
+  ADD KEY `idx_user_login_sessions_expires_at` (`expires_at`),
+  ADD KEY `idx_user_login_sessions_user_logout_seen` (`user_id`,`is_logged_out`,`last_seen_at`);
 
 --
 -- AUTO_INCREMENT for dumped tables
 --
+
+--
+-- AUTO_INCREMENT for table `content_stories`
+--
+ALTER TABLE `content_stories`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `content_story_attachments`
+--
+ALTER TABLE `content_story_attachments`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `otp_send_logs`
@@ -141,6 +201,18 @@ ALTER TABLE `user_login_sessions`
 --
 -- Constraints for dumped tables
 --
+
+--
+-- Constraints for table `content_stories`
+--
+ALTER TABLE `content_stories`
+  ADD CONSTRAINT `fk_content_stories_creator` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+--
+-- Constraints for table `content_story_attachments`
+--
+ALTER TABLE `content_story_attachments`
+  ADD CONSTRAINT `fk_content_story_attachments_story` FOREIGN KEY (`story_id`) REFERENCES `content_stories` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Constraints for table `user_login_sessions`

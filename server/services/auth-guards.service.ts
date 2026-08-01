@@ -6,11 +6,6 @@ import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { get_auth_token_from_cookie, get_client_ip, make_token_hash, verify_auth_token } from '@server/lib/session'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { env } from '@shared/env'
-import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
-
-dayjs.extend(utc)
 
 interface SessionVerificationRecord extends RowDataPacket {
   id: number
@@ -20,8 +15,8 @@ interface SessionVerificationRecord extends RowDataPacket {
   is_verified: number
   is_admin: number
   is_banned: number
-  status: string
-  created_at: string
+  is_logged_out: number
+  is_expired: number
 }
 
 export async function require_auth_user(event: H3Event): Promise<AuthUser> {
@@ -48,8 +43,8 @@ export async function require_auth_user(event: H3Event): Promise<AuthUser> {
        u.is_verified,
        u.is_admin,
        u.is_banned,
-       s.status,
-       s.created_at
+       s.is_logged_out,
+       (s.expires_at <= NOW()) AS is_expired
      FROM user_login_sessions s
      JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ?`,
@@ -65,22 +60,11 @@ export async function require_auth_user(event: H3Event): Promise<AuthUser> {
     throw new ApiError(401, '账号已被禁用')
   }
 
-  if (record.status === 'expired') {
-    throw new ApiError(401, '登录会话已过期')
-  }
-
-  if (record.status !== 'valid') {
+  if (record.is_logged_out) {
     throw new ApiError(401, '当前会话已退出或已失效')
   }
 
-  const session_max_age_ms = env.SESSION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000
-  const session_age_ms = dayjs().utc()
-    .diff(dayjs.utc(record.created_at))
-  if (session_age_ms > session_max_age_ms) {
-    await db.execute(
-      'UPDATE user_login_sessions SET status = \'expired\' WHERE token_hash = ?',
-      [token_hash],
-    )
+  if (record.is_expired) {
     // This session just expired; refresh session lists on all clients.
     publish_refresh({ resource: sync_resource('profile_sessions', record.id) })
     throw new ApiError(401, '登录会话已过期')

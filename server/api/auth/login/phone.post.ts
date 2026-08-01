@@ -6,7 +6,7 @@ import { schema } from '@shared/validate'
 export default defineEventHandler(async (event) => {
   const body = await readBody(event)
   const payload = schema.login_with_phone.parse(body)
-  const result = await login_with_phone(payload, get_request_device_context(event), event.context.identity_token !)
+  const result = await login_with_phone(payload, get_request_device_context(event), event.context.identity_token!)
 
   return ok(result, '登录成功')
 })

@@ -7,10 +7,10 @@
       aria-haspopup="true"
       aria-controls="user-hover-menu"
       :aria-label="`用户菜单：${profile.username}`"
-      class="flex cursor-pointer items-center gap-2 rounded-full px-2 py-1 transition sm:hover:bg-[var(--p-content-hover-background)]"
+      class="flex cursor-pointer items-center gap-2.5 rounded-full px-2 py-1 transition sm:hover:bg-[var(--p-content-hover-background)]"
     >
       <MyAvatar :user="profile" size="small" />
-      <div class="hidden sm:flex items-center gap-1 pe-1">
+      <div class="hidden sm:flex items-center gap-2 pe-1">
         <span class="text-sm font-medium">{{ profile.username }}</span>
         <MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="text-emerald-500" />
       </div>
@@ -23,7 +23,7 @@
         tag="div"
         role="region"
         aria-label="用户菜单"
-        class="section-card pt-5 pb-3 !shadow-lg absolute right-0 top-[calc(100%+0.4rem)] z-20 w-72"
+        class="section-card pt-5 pb-3 absolute right-0 top-full z-20 w-72 mt-4"
         @click.stop
       >
         <div class="mb-4 flex items-center gap-3.5">
@@ -88,7 +88,7 @@ function on_leave() {
   hide_timer = setTimeout(() => {
     open.value = false
     hide_timer = null
-  }, 150)
+  }, 200)
 }
 
 function on_outside_click(event: MouseEvent | TouchEvent) {

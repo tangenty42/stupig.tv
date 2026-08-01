@@ -5,10 +5,10 @@
 
   --p-toast-blur: 16px;
 
-  --p-dialog-border-radius: theme('borderRadius.md');
+  --p-dialog-border-radius: theme('borderRadius.sm');
 
-  --p-autocomplete-overlay-border-radius: theme('borderRadius.md');
-  --p-autocomplete-option-border-radius: theme('borderRadius.md');
+  --p-autocomplete-overlay-border-radius: theme('borderRadius.sm');
+  --p-autocomplete-option-border-radius: theme('borderRadius.sm');
 
   --p-button-raised-shadow:
     0 1px 1px 0 rgb(0 0 0 / 0.1),
@@ -17,6 +17,12 @@
   --p-paginator-background: none;
 
   --p-datepicker-buttonbar-padding: .5rem 0 .25rem 0;
+
+  --p-confirmpopup-shadow: theme('boxShadow.sm');
+
+  --p-togglebutton-border-radius: theme('borderRadius.full');
+  --p-togglebutton-content-border-radius: theme('borderRadius.full');
+  --p-selectbutton-border-radius: theme('borderRadius.full');
 }
 
 .p-component {
@@ -32,7 +38,7 @@
   max-width: theme('maxWidth.sm');
 }
 .p-toast-message {
-  @apply shadow-md;
+  @apply shadow-sm;
 }
 .p-toast-summary {
   line-height: 18px;
@@ -56,4 +62,37 @@
 
 .p-datepicker-calendar-container {
   padding-bottom: .5rem;
+}
+
+/* Paginator — compact, card-friendly styling */
+.p-paginator {
+  @apply gap-1 text-sm;
+}
+
+.p-paginator-current {
+  @apply mr-1 text-xs;
+}
+
+.p-paginator-page,
+.p-paginator-prev,
+.p-paginator-next,
+.p-paginator-first,
+.p-paginator-last {
+  @apply h-8 min-w-8 text-sm;
+}
+
+.p-paginator-page-selected.p-paginator-page-selected {
+  @apply bg-primary-500 text-white dark:text-white;
+}
+
+.p-paginator .p-select {
+  @apply ml-1 h-8;
+}
+
+.p-paginator .p-select .p-select-label {
+  @apply flex items-center px-2.5 py-0 text-sm leading-none;
+}
+
+.p-paginator .p-select .p-select-dropdown {
+  @apply w-7;
 }

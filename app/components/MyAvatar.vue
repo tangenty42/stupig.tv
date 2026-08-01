@@ -2,7 +2,7 @@
   <div
     v-if="image_url"
     class="avatar-wrapper"
-    :class="{ 'avatar-previewable cursor-pointer': previewable }"
+    :class="{ 'avatar-previewable cursor-zoom-in': previewable }"
     :style="{ width: size_computed, height: size_computed }"
     v-bind="$attrs"
     @click="on_click"

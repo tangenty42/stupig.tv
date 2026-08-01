@@ -18,7 +18,7 @@ export async function verify_captcha(params: CaptchaParams | undefined): Promise
     throw new ApiError(400, 'Wow~这招厉害！')
   }
 
-  const sign_token = createHmac('sha256', env.CAPTCHA_APP_KEY !)
+  const sign_token = createHmac('sha256', env.CAPTCHA_APP_KEY!)
     .update(params.lot_number)
     .digest('hex')
 

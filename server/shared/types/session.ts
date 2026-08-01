@@ -2,7 +2,8 @@ export interface SessionRecord {
   id: number
   token_hash: string
   identity_token: string | null
-  status: 'valid' | 'logged_out' | 'expired'
+  is_logged_out: boolean
+  is_expired: boolean
   is_online: boolean
   login_at: string
   last_seen_at: string

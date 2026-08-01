@@ -15,7 +15,7 @@ export function ua_label(user_agent: string | null | undefined): string {
     return `${os} · ${browser}`
   }
   if (os || browser) {
-    return (os ?? browser) !
+    return (os ?? browser)!
   }
   return UNKNOWN_DEVICE_LABEL
 }

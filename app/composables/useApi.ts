@@ -5,6 +5,11 @@ export type {
   AdminUserList as ApiAdminUserList,
   AuthResult as ApiAuthResult,
   User as ApiAuthUser,
+  ContentEventPrecision as ApiContentEventPrecision,
+  ContentStoryAttachment as ApiContentStoryAttachment,
+  ContentStoryCreated as ApiContentStoryCreated,
+  ContentStoryDetail as ApiContentStoryDetail,
+  ContentStorySummary as ApiContentStorySummary,
   SessionOverview as ApiLoginSessionOverview,
   SessionRecord as ApiLoginSessionRecord,
   OtpCooldownResult as ApiOtpCooldownResult,
@@ -163,6 +168,76 @@ export function useApi() {
       throw new Error(DEFAULT_API_ERROR_MESSAGE)
     }
     return data
+  }
+
+  async function upload_data<T>(
+    url: string,
+    form: FormData,
+    on_progress?: (progress: number) => void,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (import.meta.server) {
+      return request_data<T>(url, { method: 'POST', body: form })
+    }
+
+    stamp_request_activity()
+    const request_url = `${base_url.replace(/\/$/, '')}/${url.replace(/^\//, '')}`
+
+    return await new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      const abort = () => xhr.abort()
+      const cleanup = () => signal?.removeEventListener('abort', abort)
+      xhr.open('POST', request_url)
+      xhr.withCredentials = true
+      xhr.setRequestHeader('Accept', 'application/json')
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          on_progress?.(Math.max(1, Math.round(event.loaded / event.total * 95)))
+        }
+      })
+      xhr.addEventListener('load', async () => {
+        cleanup()
+        let response: ApiResponse<T> | null = null
+        try {
+          response = JSON.parse(xhr.responseText) as ApiResponse<T>
+        }
+        catch {
+          // Invalid response bodies fall through to the shared network error.
+        }
+
+        const message = response?.message || DEFAULT_API_ERROR_MESSAGE
+        if (xhr.status === 401) {
+          if (! unauthorized_handled) {
+            unauthorized_handled = true
+            await logout()
+          }
+          reject(new ApiError(message, 401))
+          return
+        }
+        if (xhr.status < 200 || xhr.status >= 300 || ! response?.success || response.data === null) {
+          reject(new ApiError(message, xhr.status || undefined))
+          return
+        }
+
+        on_progress?.(100)
+        resolve(response.data)
+      })
+      xhr.addEventListener('error', () => {
+        cleanup()
+        reject(new ApiError(DEFAULT_API_ERROR_MESSAGE))
+      })
+      xhr.addEventListener('abort', () => {
+        cleanup()
+        reject(new ApiError('上传已取消'))
+      })
+      if (signal?.aborted) {
+        reject(new ApiError('上传已取消'))
+        return
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+      on_progress?.(0)
+      xhr.send(form)
+    })
   }
 
   const auth = {
@@ -345,11 +420,68 @@ export function useApi() {
     },
   }
 
+  const content = {
+    async list_stories(): Promise<ApiContentStorySummary[]> {
+      return request_data<ApiContentStorySummary[]>('/content/stories')
+    },
+
+    async get_story(id: number): Promise<ApiContentStoryDetail> {
+      return request_data<ApiContentStoryDetail>(`/content/stories/${encodeURIComponent(id)}`)
+    },
+
+    async create_story(markdown: string): Promise<ApiContentStoryCreated> {
+      return request_data<ApiContentStoryCreated>('/content/stories', {
+        method: 'POST',
+        body: { markdown },
+      })
+    },
+
+    async update_story(id: number, payload: { markdown: string, delete_files?: string[] }): Promise<void> {
+      await request(`/content/stories/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: payload,
+      })
+    },
+
+    async delete_story(id: number): Promise<void> {
+      await request(`/content/stories/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      })
+    },
+
+    async upload_attachment(
+      id: number,
+      file: File,
+      on_progress?: (progress: number) => void,
+      signal?: AbortSignal,
+    ): Promise<ApiContentStoryAttachment> {
+      const form = new FormData()
+      form.append('file', file)
+
+      return upload_data<ApiContentStoryAttachment>(`/content/stories/${encodeURIComponent(id)}/attachments`, form, on_progress, signal)
+    },
+
+    async rename_attachment(id: number, old_file_name: string, file_name: string): Promise<ApiContentStoryAttachment> {
+      return request_data<ApiContentStoryAttachment>(`/content/stories/${encodeURIComponent(id)}/attachments`, {
+        method: 'PATCH',
+        body: { old_file_name, file_name },
+      })
+    },
+
+    async delete_attachment(id: number, file_name: string, markdown: string): Promise<void> {
+      await request(`/content/stories/${encodeURIComponent(id)}/attachments`, {
+        method: 'DELETE',
+        body: { file_name, markdown },
+      })
+    },
+  }
+
   return {
     request,
     request_data,
     auth,
     profile,
     admin,
+    content,
   }
 }

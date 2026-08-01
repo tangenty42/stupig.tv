@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
 
   await verify_captcha({ lot_number, captcha_output, pass_token, gen_time })
 
-  const identity_token = event.context.identity_token !
+  const identity_token = event.context.identity_token!
 
   // For change_password / verify_old_phone, use the authenticated user's phone
   if (rest.purpose === 'change_password' || rest.purpose === 'verify_old_phone') {

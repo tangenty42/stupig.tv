@@ -645,7 +645,7 @@ export function useDataSync() {
         listeners.set(resource, new Set())
       }
 
-      listeners.get(resource) !.add(listener)
+      listeners.get(resource)!.add(listener)
 
       if (is_new_resource) {
         if (mqtt_client?.connected) {
@@ -660,7 +660,7 @@ export function useDataSync() {
       const unsubscribe = () => {
         listeners.get(resource)?.delete(listener)
 
-        if (listeners.get(resource) && ! listeners.get(resource) !.size) {
+        if (listeners.get(resource) && ! listeners.get(resource)!.size) {
           listeners.delete(resource)
           if (mqtt_client?.connected) {
             update_mqtt_subscriptions([], [resource])
