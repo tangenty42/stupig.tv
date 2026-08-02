@@ -30,7 +30,7 @@ export const file_icon_names = [
   'sheet',
 ] as const
 
-export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'>): typeof file_icon_names[number] {
+export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'>) {
   const mime_type = attachment.mime_type ?? ''
   const extension = attachment.file_name.split('.').pop()?.toLowerCase() ?? ''
   if (mime_type.startsWith('image/'))

@@ -13,4 +13,4 @@ applyTo: "**/*.sql"
 - Timestamps are `TIMESTAMP` stored in UTC (`created_at`, `updated_at` with `DEFAULT CURRENT_TIMESTAMP` / `ON UPDATE CURRENT_TIMESTAMP`).
 - MySQL timezone is forced to UTC on every connection (`SET time_zone = "+00:00"`).
 - Always include safe rollbacks or reversibility where possible. Avoid destructive changes without explicit user approval.
-- If a migration requires environment changes, update `.env`, `.env.example`, and `server/config/env.ts` together.
+- If a migration requires environment changes, update `.env`, `.env.example`, and `server/shared/env.ts` together.

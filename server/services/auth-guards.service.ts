@@ -1,4 +1,3 @@
-import type { AuthUser } from '@server/types/auth'
 import type { H3Event } from 'h3'
 import type { RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
@@ -19,7 +18,7 @@ interface SessionVerificationRecord extends RowDataPacket {
   is_expired: number
 }
 
-export async function require_auth_user(event: H3Event): Promise<AuthUser> {
+export async function require_auth_user(event: H3Event) {
   const token = get_auth_token_from_cookie(event)
   if (! token) {
     throw new ApiError(401, '请先登录')
@@ -94,7 +93,7 @@ export async function require_auth_user(event: H3Event): Promise<AuthUser> {
   }
 }
 
-export async function require_admin_user(event: H3Event): Promise<AuthUser> {
+export async function require_admin_user(event: H3Event) {
   const user = await require_auth_user(event)
   if (! user.is_admin) {
     throw new ApiError(403, '需要管理员权限')
@@ -102,7 +101,7 @@ export async function require_admin_user(event: H3Event): Promise<AuthUser> {
   return user
 }
 
-export async function resolve_operate_target(event: H3Event, operate_for?: number | null): Promise<{ auth_user: AuthUser, target_id: number }> {
+export async function resolve_operate_target(event: H3Event, operate_for?: number | null) {
   const auth_user = await require_auth_user(event)
 
   if (operate_for === undefined || operate_for === null || operate_for === auth_user.id) {

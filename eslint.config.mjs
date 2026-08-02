@@ -14,6 +14,8 @@ export default antfu(
         // (`ts-non-null` is exempt: the TS non-null assertion postfix must
         // hug its operand — `obj!.foo`, not `obj !.foo`)
         '@stylistic/space-unary-ops': ['error', { words: true, nonwords: true, overrides: { 'ts-non-null': false } }],
+        // Space after rest and spread operators: `... statement`
+        '@stylistic/rest-spread-spacing': ['error', 'always'],
         // No padding inside template placeholders: `${statement}`
         '@stylistic/template-curly-spacing': ['error', 'never'],
       },

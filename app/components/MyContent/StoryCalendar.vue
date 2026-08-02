@@ -1,13 +1,13 @@
 <template>
   <div>
     <div class="mb-3 flex items-center justify-between">
-      <Button text rounded size="small" aria-label="上个月" @click="shift_month(- 1)">
+      <Button text size="small" aria-label="上个月" @click="shift_month(- 1)">
         <template #icon>
           <MyIcon name="lucide:chevron-left" />
         </template>
       </Button>
       <span class="font-medium">{{ month_label }}</span>
-      <Button text rounded size="small" aria-label="下个月" @click="shift_month(1)">
+      <Button text size="small" aria-label="下个月" @click="shift_month(1)">
         <template #icon>
           <MyIcon name="lucide:chevron-right" />
         </template>
@@ -97,10 +97,10 @@
 </template>
 
 <script setup lang="ts">
-import type { ApiContentStorySummary } from '~/composables/useApi'
+import type { ContentStorySummary } from '@shared/types/content'
 
 const props = defineProps<{
-  stories: ApiContentStorySummary[]
+  stories: ContentStorySummary[]
 }>()
 
 const week_labels = ['一', '二', '三', '四', '五', '六', '日']
@@ -111,7 +111,7 @@ const selected_date = ref<string | null>(localize_date().format('YYYY-MM-DD'))
 const month_label = computed(() => displayed_month.value.format('YYYY 年 M 月'))
 
 const day_story_map = computed(() => {
-  const map = new Map<string, ApiContentStorySummary[]>()
+  const map = new Map<string, ContentStorySummary[]>()
   for (const story of props.stories) {
     if (story.event_precision !== 'day')
       continue

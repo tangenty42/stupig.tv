@@ -34,12 +34,12 @@
           v-if="stored && ! stored.referenced"
           class="mt-1.5 inline-flex flex-wrap items-center gap-2 text-xs text-red-600 dark:text-red-400"
         >
-          <span>未引用，保存时将删除</span>
+          <span>未引用，保存时将删除，或</span>
           <Button
             size="small"
             severity="danger"
             label="立即删除"
-            class="shrink-0 !px-1 !py-0.5 !text-xs"
+            class="shrink-0 !px-1.5 !py-1 !text-xs"
             :loading="props.delete_pending"
             :disabled="props.delete_disabled"
             @click="emit('delete', $event)"
@@ -51,7 +51,7 @@
           <Button
             v-if="stored.is_image"
             text
-            size="small"
+            severity="secondary"
             aria-label="预览"
             @click="emit('preview', static_url(stored.url))"
           >
@@ -59,14 +59,14 @@
               <MyIcon name="lucide:eye" />
             </template>
           </Button>
-          <Button text size="small" aria-label="重命名" @click="emit('rename')">
+          <Button text severity="secondary" aria-label="重命名" @click="emit('rename')">
             <template #icon>
               <MyIcon name="lucide:pencil" />
             </template>
           </Button>
           <Button
             text
-            size="small"
+            severity="secondary"
             as="a"
             :href="static_url(stored.url)"
             target="_blank"
@@ -83,7 +83,7 @@
           <Button
             v-if="upload.status === 'error'"
             text
-            size="small"
+            severity="secondary"
             aria-label="重试上传"
             :disabled="props.retry_disabled"
             @click="emit('retry')"
@@ -95,7 +95,6 @@
           <Button
             v-if="upload.status === 'queued' || upload.status === 'uploading'"
             text
-            size="small"
             severity="secondary"
             aria-label="取消上传"
             @click="emit('cancel')"
@@ -107,7 +106,6 @@
           <Button
             v-else
             text
-            size="small"
             severity="secondary"
             aria-label="移除上传任务"
             @click="emit('remove')"
@@ -198,6 +196,10 @@ function on_dragstart(event: DragEvent) {
 }
 
 .attachment-card-actions {
-  @apply flex shrink-0 items-center gap-1;
+  @apply flex shrink-0 items-center;
+}
+
+.attachment-card-actions :deep(.iconify) {
+  @apply text-slate-400 dark:text-slate-500;
 }
 </style>

@@ -13,7 +13,8 @@
   --p-button-raised-shadow:
     0 1px 1px 0 rgb(0 0 0 / 0.1),
     0 1px 1px -1px rgb(0 0 0 / 0.1);
-  
+  --p-button-border-radius: var(--p-button-rounded-border-radius);
+
   --p-paginator-background: none;
 
   --p-datepicker-buttonbar-padding: .5rem 0 .25rem 0;
@@ -60,8 +61,8 @@
   animation: card-out 0.15s ease-in;
 }
 
-.p-datepicker-calendar-container {
-  padding-bottom: .5rem;
+.p-datepicker-buttonbar {
+  margin-top: .5rem;
 }
 
 /* Paginator — compact, card-friendly styling */

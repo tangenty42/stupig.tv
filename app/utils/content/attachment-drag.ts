@@ -13,7 +13,7 @@ export function set_content_attachment_drag_data(event: DragEvent, attachment: C
   event.dataTransfer.setData(content_attachment_drag_type, JSON.stringify(attachment))
 }
 
-export function get_content_attachment_drag_data(data_transfer: DataTransfer | null): ContentAttachmentDragData | null {
+export function get_content_attachment_drag_data(data_transfer: DataTransfer | null) {
   const raw = data_transfer?.getData(content_attachment_drag_type)
   if (! raw)
     return null
@@ -33,6 +33,6 @@ export function get_content_attachment_drag_data(data_transfer: DataTransfer | n
   }
 }
 
-export function content_attachment_markdown(attachment: ContentAttachmentDragData): string {
+export function content_attachment_markdown(attachment: ContentAttachmentDragData) {
   return `${attachment.is_image ? '!' : ''}[${attachment.file_name}](${attachment_markdown_path(attachment.file_name)})`
 }

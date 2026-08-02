@@ -8,7 +8,7 @@ interface UseSyncedDataOptions {
 }
 
 interface UseSyncedDataProxy<T> {
-  value: T | null
+  fetched_value: T | null
   loading: boolean
   // Whether the proxy has completed at least one successful fetch. A proxy
   // created with `immediate: false` holds a meaningless `null` until then,
@@ -179,7 +179,7 @@ export async function useSyncedData<T>(
     }
 
     if (universal) {
-      const updater: UseSyncedDataUpdater<T> = {
+      const updater = {
         set_loading: (value: boolean) => {
           loading.value = value
         },
@@ -192,9 +192,9 @@ export async function useSyncedData<T>(
       let proxy = shared_proxies.get(key) as UseSyncedDataProxy<T> | undefined
 
       if (! proxy) {
-        let default_unsubscribe: () => void = () => {}
+        let default_unsubscribe = () => {}
         proxy = {
-          value: null,
+          fetched_value: null,
           loading: false,
           fetched: false,
           fetch_task: null,
@@ -210,7 +210,7 @@ export async function useSyncedData<T>(
             const task = (async () => {
               try {
                 const value = await fetcher()
-                proxy!.value = value
+                proxy!.fetched_value = value
                 proxy!.fetched = true
                 last_fetch_at = Date.now()
                 for (const u of proxy!.updaters) {
@@ -257,7 +257,7 @@ export async function useSyncedData<T>(
         if (proxy.fetched) {
           // Sync the latest shared state into this instance immediately.
           loading.value = proxy.loading
-          data.value = proxy.value
+          data.value = proxy.fetched_value
         }
         else if (immediate) {
           // The shared proxy has no data yet (it was created with

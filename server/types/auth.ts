@@ -39,5 +39,5 @@ export interface AuthSendOtpInput {
 
 export interface AuthOtpCooldownInput {
   identity_token: string
-  phone: string
+  phone?: string
 }

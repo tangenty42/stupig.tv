@@ -81,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import type { ApiContentStorySummary } from '~/composables/useApi'
+import type { ContentStorySummary } from '@shared/types/content'
 import { sync_resource } from '@shared/types/sync'
 
 const { content } = useApi()
@@ -90,10 +90,10 @@ const runtime_config = useRuntimeConfig()
 
 const is_admin = computed(() => Boolean(user.value?.is_admin))
 
-const stories = useState<ApiContentStorySummary[] | null>('content_stories', () => null)
+const stories = useState<ContentStorySummary[] | null>('content_stories', () => null)
 const loading = useState('content_stories_loading', () => false)
 
-await useSyncedData<ApiContentStorySummary[]>(
+await useSyncedData<ContentStorySummary[]>(
   computed(() => sync_resource('content_stories', 'all')),
   () => content.list_stories(),
   stories,
@@ -103,7 +103,7 @@ await useSyncedData<ApiContentStorySummary[]>(
   },
 )
 
-function format_event_entries(story: ApiContentStorySummary): string[] {
+function format_event_entries(story: ContentStorySummary) {
   return story.event_dates.map((date) => {
     if (story.event_precision === 'month') {
       const [year, month] = date.split('-')

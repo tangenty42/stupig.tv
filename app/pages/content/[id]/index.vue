@@ -9,7 +9,7 @@
       <MyHeightSection tag="section" class="section-card-collapse">
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div class="flex items-center gap-3">
-            <Button text rounded aria-label="返回" @click="navigateTo('/content')">
+            <Button text aria-label="返回" @click="navigateTo('/content')">
               <template #icon>
                 <MyIcon name="lucide:arrow-left" />
               </template>
@@ -58,13 +58,13 @@
     </template>
 
     <div v-else class="section-card py-12 text-center text-slate-500 dark:text-slate-400">
-      档案不存在或已被删除。
+      档案不存在或已被删除
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import type { ApiContentStoryDetail } from '~/composables/useApi'
+import type { ContentStoryDetail } from '@shared/types/content'
 import { sync_resource } from '@shared/types/sync'
 
 const route = useRoute()
@@ -75,10 +75,10 @@ const runtime_config = useRuntimeConfig()
 const story_id = computed(() => Number(route.params.id))
 const is_admin = computed(() => Boolean(user.value?.is_admin))
 
-const story = useState<ApiContentStoryDetail | null>(`content_story_view_${String(route.params.id)}`, () => null)
+const story = useState<ContentStoryDetail | null>(`content_story_view_${String(route.params.id)}`, () => null)
 const loading = useState(`content_story_view_loading_${String(route.params.id)}`, () => false)
 
-await useSyncedData<ApiContentStoryDetail>(
+await useSyncedData<ContentStoryDetail>(
   computed(() => {
     const id = story_id.value
     return Number.isInteger(id) && id > 0 ? sync_resource('content_story', id) : null

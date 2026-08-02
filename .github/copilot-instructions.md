@@ -9,8 +9,8 @@
 
 ## External Services
 
-- The app talks to a MySQL server running on the same host machine in a separate Docker container. Configuration lives in `.env` / `.env.example` and `server/config/env.ts`.
-- Aliyun services are used (DYPNS, SMS, CAPTCHA). Refer to `.env.example` and `server/config/env.ts` for required keys and endpoints.
+- The app talks to a MySQL server running on the same host machine in a separate Docker container. Configuration lives in `.env` / `.env.example` and `server/shared/env.ts`.
+- Aliyun services are used (DYPNS, SMS, CAPTCHA). Refer to `.env.example` and `server/shared/env.ts` for required keys and endpoints.
 - MQTT/EMQX is used for real-time synchronization. The server publishes events via `server/lib/mqtt.ts` (topics are prefixed with `MQTT_TOPIC_PREFIX`), and the browser client receives those events through `app/composables/useDataSync.ts`. Only one active tab per browser maintains a unique WebSocket connection; background tabs disconnect via `visibilitychange` to save resources. When server-side state changes (e.g., profile updates, role changes, session invalidation), emit the appropriate refresh event via `server/lib/sync.ts` using `publish_refresh({ resource: sync_resource('<type>', <id>) })` so connected clients can reload the affected data.
 - The same browser uses a `BroadcastChannel` for cross-tab transport. When `useDataSync` receives an MQTT event on the active tab, it posts the event to the BroadcastChannel so other tabs (including background tabs) are notified. `BroadcastChannel` is also the dedicated channel for cross-tab login/logout broadcasts. When implementing features that mutate shared user or admin state, emit the appropriate refresh event via `server/lib/sync.ts` so both MQTT clients and same-browser tabs stay in sync.
 - If `.env` is not accessible, ask the user before proceeding with any task that requires secrets.
@@ -23,7 +23,7 @@
 
 ## Workflow Standards
 
-- Always externalize configurable settings: change `.env`, `.env.example`, and `server/config/env.ts` together. Read these files thoroughly before proposing environment changes.
+- Always externalize configurable settings: change `.env`, `.env.example`, and `server/shared/env.ts` together. Read these files thoroughly before proposing environment changes.
 - Plan first, then wait for user approval before executing **structural or environmental changes** (e.g., new dependencies, schema changes, config/env changes, major refactors). For small, safe code edits, you may proceed directly.
 - Ask follow-up questions when something is unclear; the user is welcome to clarify.
 - Do not make changes without approval when approval is required.
@@ -41,10 +41,10 @@
 - Icons are rendered via `<MyIcon name="lucide:..." />`.
 - Use `useMyToast()` for toast notifications and `useApi()` for API calls.
 - `useMyToast()` and `useAuth()` require a Vue inject context (they call PrimeVue `useToast()` eagerly) — call them synchronously in component setup only. In async paths without inject (fetch error handlers, BroadcastChannel/poll callbacks), use Nuxt-context APIs (`useCookie`, `useRuntimeConfig`, `navigateTo`) directly. `useApi()` is created in setup and captures `logout()` for its 401 handling, so it never needs inject in its async error path.
-- Forms use `@primevue/forms` with Zod resolvers; shared validation helpers live in `server/shared/validate.ts`.
-- Back-end: Nitro API routes return `ok(data)` or `fail(message)` from `server/types/response.ts`. Throw `ApiError` for failures. Keep DB access in `server/services/`.
+- Forms use `@primevue/forms` with Zod resolvers. Frontend form schemas and defaults live in `server/shared/schemas.ts`; full procedure input schemas live in `server/trpc/schemas.ts` and reuse those form contracts where applicable.
+- Back-end: expose application operations through domain routers in `server/trpc/`; the Nitro catch-all route only adapts HTTP to `app_router`. Procedures validate with Zod, delegate business operations to `server/services/`, and return their data directly. Throw `ApiError` for expected failures; the tRPC middleware maps it to the matching transport status.
 - Server code should use the `@server` alias.
-- `server/lib/` holds low-level, stateless infrastructure and external integrations (e.g., `db.ts`, `mqtt.ts`, `session.ts`, `sms.ts`, `captcha.ts`, `sync.ts`). API routes should not call `lib` directly for business operations; instead they call `server/services/`, which orchestrate `lib` and other services. `lib` should not depend on `services`.
+- `server/lib/` holds low-level, stateless infrastructure and external integrations (e.g., `db.ts`, `mqtt.ts`, `session.ts`, `sms.ts`, `captcha.ts`, `sync.ts`). tRPC procedures should not call `lib` directly for business operations; instead they call `server/services/`, which orchestrate `lib` and other services. `lib` should not depend on `services`.
 - Define server-side public/API-facing types in `server/types/` (e.g., `api.ts`, `auth.ts`, `sync.ts`). Keep internal service-specific types (e.g., row mappers, input shapes) near the service that owns them.
 - Validate input with Zod. Map error messages to user-facing Chinese text where appropriate.
 - Date handling: use `dayjs` with `dayjs.extend(utc)`; store UTC, display local. MySQL timezone is forced to UTC on every connection.

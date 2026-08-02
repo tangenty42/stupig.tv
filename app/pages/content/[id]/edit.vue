@@ -4,7 +4,7 @@
       <MyHeightSection tag="section" class="section-card-collapse">
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div class="flex items-center gap-3">
-            <Button text rounded aria-label="返回" @click="navigateTo('/content')">
+            <Button text aria-label="返回" @click="navigateTo('/content')">
               <template #icon>
                 <MyIcon name="lucide:arrow-left" />
               </template>
@@ -35,7 +35,28 @@
           :story-id="is_edit ? story!.id : null"
           :attachments="story?.attachments ?? []"
           @files-dropped="on_editor_files_dropped"
-        />
+        >
+          <template #toolbar-start>
+            <div
+              class="flex text-xs items-center gap-1"
+              :class="draft_storage_error ? 'text-red-500 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'"
+            >
+              <MyIcon :name="draft_storage_error ? 'lucide:circle-alert' : 'lucide:cloud-check'" class="mr-1 align-text-bottom" />
+              <span>{{ draft_status_label }}</span>
+              <Button
+                v-if="is_edit && draft_dirty"
+                label="舍弃"
+                size="small"
+                text
+                severity="danger"
+                class="!px-1.5 !py-1 !text-xs"
+                :loading="discard_draft_pending"
+                :disabled="discard_draft_pending"
+                @click="confirm_abandon_draft"
+              />
+            </div>
+          </template>
+        </MyContentMarkdownEditor>
       </MyHeightSection>
 
       <MyHeightSection
@@ -127,8 +148,32 @@
     </div>
 
     <div v-else class="section-card py-12 text-center text-slate-500 dark:text-slate-400">
-      档案不存在或已被删除。
+      档案不存在或已被删除
     </div>
+
+    <MyDialog
+      v-model:visible="draft_conflict_visible"
+      header="版本冲突"
+    >
+      <div class="space-y-3 text-sm text-slate-600 dark:text-slate-300">
+        <p>这份自动保存的草稿基于较早的数据库版本，继续编辑可能覆盖其他人已保存的修改！</p>
+        <p v-if="pending_conflict_draft" class="text-xs text-slate-500 dark:text-slate-400">
+          （本地草稿保存于 {{ datetime_format(pending_conflict_draft.saved_at) }}）
+        </p>
+      </div>
+
+      <template #footer>
+        <div class="flex flex-wrap justify-end gap-2">
+          <Button label="取消" severity="secondary" text @click="draft_conflict_visible = false" />
+          <Button label="使用数据库最新版" severity="secondary" text @click="use_database_version" />
+          <Button label="继续使用本地草稿" severity="warn" @click="restore_conflicting_draft">
+            <template #icon>
+              <MyIcon name="lucide:git-branch" />
+            </template>
+          </Button>
+        </div>
+      </template>
+    </MyDialog>
 
     <MyDialog
       v-if="is_edit"
@@ -138,7 +183,7 @@
       :closable="! save_pending"
     >
       <p class="mb-4 text-sm text-slate-600 dark:text-slate-400">
-        保存后将从服务器上永久删除，不可恢复。
+        保存后将从服务器上永久删除，不可恢复
       </p>
       <ul class="mb-4 list-inside list-disc text-sm">
         <li v-for="a in pending_delete_files" :key="a">
@@ -165,7 +210,7 @@
       :pending="rename_pending"
       :closable="! rename_pending"
     >
-      <form id="rename-attachment-form" class="space-y-2" @submit.prevent="rename_attachment">
+      <Form id="rename-attachment-form" class="space-y-2" @submit="rename_attachment">
         <label for="rename-attachment-name" class="block text-sm font-medium">文件名</label>
         <InputText
           id="rename-attachment-name"
@@ -175,7 +220,7 @@
           autofocus
           :disabled="rename_pending"
         />
-      </form>
+      </Form>
 
       <template #footer>
         <div class="flex justify-end gap-2">
@@ -201,10 +246,13 @@
 </template>
 
 <script setup lang="ts">
+import type { ContentStoryAttachment, ContentStoryDetail } from '@shared/types/content'
 import type MyContentMarkdownEditor from '~/components/MyContent/MarkdownEditor.vue'
-import type { ApiContentStoryAttachment, ApiContentStoryDetail } from '~/composables/useApi'
+import type { ContentDraftRecord } from '~/stores/contentDraft'
 import type { AttachmentCardData, AttachmentUploadStatus } from '~/utils/content/attachment'
 import { extract_attachment_names, parse_story_markdown, rename_attachment_references, story_markdown_template } from '@shared/content-markdown'
+import { storeToRefs } from 'pinia'
+import { useContentDraftStore } from '~/stores/contentDraft'
 import { content_attachment_markdown } from '~/utils/content/attachment-drag'
 
 interface PendingAttachmentUpload {
@@ -221,7 +269,7 @@ type AttachmentListItem = {
   key: string
   card: AttachmentCardData
 } & (
-  | { kind: 'stored', attachment: ApiContentStoryAttachment }
+  | { kind: 'stored', attachment: ContentStoryAttachment }
   | { kind: 'upload', task: PendingAttachmentUpload }
 )
 
@@ -234,22 +282,30 @@ const { content } = useApi()
 const { ok, error } = useMyToast()
 const { confirm_require } = useMyConfirm()
 const runtime_config = useRuntimeConfig()
+const content_markdown_config = useContentMarkdownConfig()
+const draft_store = useContentDraftStore()
+const {
+  markdown,
+  base_updated_at,
+  draft_saved_at,
+  autosave_pending: draft_autosave_pending,
+  storage_error: draft_storage_error,
+  dirty: draft_dirty,
+} = storeToRefs(draft_store)
 
 const raw_id = computed(() => route.params.id as string)
 const is_edit = computed(() => raw_id.value !== 'new')
 const story_id = computed(() => is_edit.value ? Number(raw_id.value) : 0)
 
-const story = useState<ApiContentStoryDetail | null>('content_story_detail', () => null)
+const story = useState<ContentStoryDetail | null>('content_story_detail', () => null)
 
-const markdown = ref('')
-const markdown_loaded = ref(false)
 const save_pending = ref(false)
 const delete_pending = ref(false)
 const pending_delete_files = ref<string[]>([])
 const confirm_delete_visible = ref(false)
 const rename_visible = ref(false)
 const rename_pending = ref(false)
-const rename_target = ref<ApiContentStoryAttachment | null>(null)
+const rename_target = ref<ContentStoryAttachment | null>(null)
 const rename_file_name = ref('')
 const delete_attachment_pending = ref<string | null>(null)
 const attachment_file_input = ref<HTMLInputElement>()
@@ -257,6 +313,9 @@ const attachment_drag_over = ref(false)
 const markdown_editor = ref<InstanceType<typeof MyContentMarkdownEditor>>()
 const pending_uploads = ref<PendingAttachmentUpload[]>([])
 const upload_busy = ref(false)
+const draft_conflict_visible = ref(false)
+const pending_conflict_draft = ref<ContentDraftRecord | null>(null)
+const discard_draft_pending = ref(false)
 let next_upload_id = 1
 
 const preview_visible = ref(false)
@@ -264,6 +323,17 @@ const preview_images = ref<string[]>([])
 
 const active_upload_count = computed(() => pending_uploads.value.filter(upload => upload.status === 'queued' || upload.status === 'uploading').length)
 const failed_upload_count = computed(() => pending_uploads.value.filter(upload => upload.status === 'error').length)
+const draft_status_label = computed(() => {
+  if (draft_storage_error.value)
+    return '草稿保存失败'
+  if (draft_autosave_pending.value)
+    return '正在保存...'
+  if (draft_dirty.value && draft_saved_at.value)
+    return '草稿已保存'
+  if (draft_dirty.value)
+    return '草稿待保存'
+  return ''
+})
 
 const referenced_files = computed(() => {
   if (! story.value || ! is_edit.value)
@@ -287,7 +357,7 @@ const attachment_items = computed<AttachmentListItem[]>(() => {
         key: `stored:${attachment.file_name}`,
         kind: 'stored',
         attachment,
-        card: { ...attachment, kind: 'stored', referenced: referenced.has(attachment.file_name) },
+        card: { ... attachment, kind: 'stored', referenced: referenced.has(attachment.file_name) },
       })
     }
   }
@@ -310,7 +380,7 @@ const attachment_items = computed<AttachmentListItem[]>(() => {
   return items
 })
 
-async function fetch_story(): Promise<ApiContentStoryDetail | null> {
+async function fetch_story() {
   if (! is_edit.value)
     return null
   return await content.get_story(story_id.value)
@@ -319,21 +389,98 @@ async function fetch_story(): Promise<ApiContentStoryDetail | null> {
 // Avoid useSyncedData for such a edit page. We don't want to overwrite the editing content.
 story.value = await fetch_story()
 
-watch([story, is_edit], () => {
-  if (markdown_loaded.value)
+const initial_markdown = is_edit.value
+  ? (story.value?.markdown ?? '')
+  : story_markdown_template(content_markdown_config)
+const initial_updated_at = is_edit.value ? (story.value?.updated_at ?? null) : null
+const draft_story_id = is_edit.value ? story_id.value : null
+
+draft_store.initialize(draft_story_id, initial_markdown, initial_updated_at)
+
+onMounted(() => {
+  window.addEventListener('pagehide', persist_draft_on_page_hide)
+
+  if (is_edit.value && ! story.value)
     return
 
-  if (! is_edit.value) {
-    markdown.value = story_markdown_template()
-    markdown_loaded.value = true
+  const draft = draft_store.read_persisted(draft_story_id)
+  if (! draft)
     return
-  }
 
-  if (story.value) {
-    markdown.value = story.value.markdown
-    markdown_loaded.value = true
+  draft_store.restore(draft, initial_markdown)
+  ok('已恢复自动保存的本地草稿')
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', persist_draft_on_page_hide)
+  draft_store.persist_now()
+})
+
+function persist_draft_on_page_hide() {
+  draft_store.persist_now()
+}
+
+function use_database_version() {
+  pending_conflict_draft.value = null
+  draft_conflict_visible.value = false
+  draft_store.discard()
+  draft_store.initialize(draft_story_id, story.value?.markdown ?? initial_markdown, story.value?.updated_at ?? initial_updated_at)
+}
+
+function confirm_abandon_draft(event: Event) {
+  if (! is_edit.value || discard_draft_pending.value)
+    return
+
+  confirm_require(event, '确定要舍弃本地草稿，并恢复为数据库最新版本吗？', abandon_draft)
+}
+
+async function abandon_draft() {
+  if (! is_edit.value || discard_draft_pending.value)
+    return
+
+  discard_draft_pending.value = true
+  try {
+    const latest_story = await fetch_story()
+    if (latest_story)
+      story.value = latest_story
+
+    use_database_version()
+    ok('已舍弃本地草稿')
   }
-}, { immediate: true })
+  catch (ex) {
+    error(ex)
+  }
+  finally {
+    discard_draft_pending.value = false
+  }
+}
+
+function restore_conflicting_draft() {
+  const draft = pending_conflict_draft.value
+  if (! draft)
+    return
+
+  draft_store.restore(
+    draft,
+    story.value?.markdown ?? initial_markdown,
+    story.value?.updated_at ?? initial_updated_at,
+  )
+  pending_conflict_draft.value = null
+  draft_conflict_visible.value = false
+}
+
+async function show_save_conflict() {
+  draft_store.persist_now()
+  const draft = draft_store.read_persisted(draft_story_id)
+  const latest_story = await fetch_story()
+  if (! draft || ! latest_story)
+    return false
+
+  story.value = latest_story
+  pending_conflict_draft.value = draft
+  draft_conflict_visible.value = true
+  return true
+}
 
 function process_files_for_upload(files: File[], insert_position?: number | null) {
   if (! files.length)
@@ -365,20 +512,20 @@ function process_files_for_upload(files: File[], insert_position?: number | null
     controller: null,
     insert_position: insert_position ?? null,
   }))
-  pending_uploads.value.push(...uploads)
+  pending_uploads.value.push(... uploads)
   void upload_queue(uploads)
 }
 
 function on_attachment_files_picked(event: Event) {
   const input = event.target as HTMLInputElement
-  const files = [...(input.files ?? [])]
+  const files = [... (input.files ?? [])]
   input.value = ''
   process_files_for_upload(files)
 }
 
 function on_attachment_drop(event: DragEvent) {
   attachment_drag_over.value = false
-  const files = event.dataTransfer?.files ? [...event.dataTransfer.files] : []
+  const files = event.dataTransfer?.files ? [... event.dataTransfer.files] : []
   process_files_for_upload(files)
 }
 
@@ -416,8 +563,8 @@ async function upload_attachment(upload: PendingAttachmentUpload) {
     await new Promise(resolve => setTimeout(resolve, 250))
     if (story.value && ! story.value.attachments.some(item => item.file_name === attachment.file_name)) {
       story.value = {
-        ...story.value,
-        attachments: [...story.value.attachments, attachment],
+        ... story.value,
+        attachments: [... story.value.attachments, attachment],
       }
     }
     if (upload.insert_position !== null) {
@@ -462,7 +609,7 @@ function remove_upload(id: number) {
   pending_uploads.value = pending_uploads.value.filter(upload => upload.id !== id)
 }
 
-function is_referenced(file_name: string): boolean {
+function is_referenced(file_name: string) {
   return referenced_files.value.includes(file_name)
 }
 
@@ -471,7 +618,7 @@ function preview_image(url: string) {
   preview_visible.value = true
 }
 
-function open_rename_dialog(attachment: ApiContentStoryAttachment) {
+function open_rename_dialog(attachment: ContentStoryAttachment) {
   rename_target.value = attachment
   rename_file_name.value = attachment.file_name
   rename_visible.value = true
@@ -493,6 +640,9 @@ async function rename_attachment() {
     await content.rename_attachment(story_id.value, target.file_name, file_name)
     markdown.value = rename_attachment_references(markdown.value, target.file_name, file_name)
     story.value = await fetch_story()
+    if (story.value) {
+      draft_store.advance_base(story.value.markdown, story.value.updated_at)
+    }
     rename_visible.value = false
     ok('附件已重命名')
   }
@@ -504,7 +654,7 @@ async function rename_attachment() {
   }
 }
 
-function confirm_delete_attachment(event: Event, attachment: ApiContentStoryAttachment) {
+function confirm_delete_attachment(event: Event, attachment: ContentStoryAttachment) {
   if (is_referenced(attachment.file_name))
     return
 
@@ -515,22 +665,26 @@ function confirm_delete_attachment(event: Event, attachment: ApiContentStoryAtta
   })
 }
 
-async function delete_attachment(attachment: ApiContentStoryAttachment) {
+async function delete_attachment(attachment: ContentStoryAttachment) {
   if (is_referenced(attachment.file_name))
     return
 
   delete_attachment_pending.value = attachment.file_name
   try {
-    await content.delete_attachment(story_id.value, attachment.file_name, markdown.value)
+    if (! base_updated_at.value) {
+      throw new Error('缺少档案基础版本，请刷新页面后重试')
+    }
+    await content.delete_attachment(story_id.value, attachment.file_name, markdown.value, base_updated_at.value)
+    story.value = await fetch_story()
     if (story.value) {
-      story.value = {
-        ...story.value,
-        attachments: story.value.attachments.filter(item => item.file_name !== attachment.file_name),
-      }
+      draft_store.advance_base(story.value.markdown, story.value.updated_at)
     }
     ok('附件已删除')
   }
   catch (ex) {
+    if (get_error_status(ex) === 409 && await show_save_conflict()) {
+      return
+    }
     error(ex)
   }
   finally {
@@ -539,7 +693,7 @@ async function delete_attachment(attachment: ApiContentStoryAttachment) {
 }
 
 function on_save_click() {
-  const { meta, issues } = parse_story_markdown(markdown.value)
+  const { meta, issues } = parse_story_markdown(markdown.value, content_markdown_config)
   if (! meta) {
     error(issues[0]?.message ?? '档案格式不正确')
     return
@@ -565,6 +719,7 @@ async function do_create() {
   try {
     const result = await content.create_story(markdown.value)
 
+    draft_store.discard()
     ok('档案已创建')
     await navigateTo(`/content/${result.id}/edit`)
   }
@@ -579,17 +734,27 @@ async function do_create() {
 async function do_save(delete_files: string[]) {
   save_pending.value = true
   try {
+    if (! base_updated_at.value) {
+      throw new Error('缺少档案基础版本，请刷新页面后重试')
+    }
     await content.update_story(story_id.value, {
       markdown: markdown.value,
       delete_files,
+      base_updated_at: base_updated_at.value,
     })
 
     confirm_delete_visible.value = false
-    ok('档案已保存')
-
     story.value = await fetch_story()
+    if (story.value) {
+      draft_store.mark_saved(story.value.markdown, story.value.updated_at)
+    }
+    ok('档案已保存')
   }
   catch (ex) {
+    if (get_error_status(ex) === 409 && await show_save_conflict()) {
+      confirm_delete_visible.value = false
+      return
+    }
     error(ex)
   }
   finally {
@@ -602,10 +767,11 @@ function confirm_delete_story(event: Event) {
   if (! story.value)
     return
 
-  confirm_require(event, '确定要删除整个档案吗？所有附件都会一起消失。', async () => {
+  confirm_require(event, '确定要删除整个档案吗？所有附件都会一起消失', async () => {
     delete_pending.value = true
     try {
       await content.delete_story(story_id.value)
+      draft_store.discard()
       ok('档案已删除')
       await navigateTo('/content')
     }

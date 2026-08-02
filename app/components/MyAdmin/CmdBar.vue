@@ -38,7 +38,6 @@
           <Button
             severity="secondary"
             variant="text"
-            rounded
             class="!p-1 !text-slate-400"
             aria-label="清空"
             @click="clear"
@@ -49,7 +48,6 @@
         <Button
           severity="secondary"
           variant="text"
-          rounded
           class="shrink-0 !p-1 !text-slate-400 hover:!text-sky-600 dark:hover:!text-sky-400"
           aria-label="执行"
           @click="execute"
@@ -124,7 +122,7 @@ try {
   const meta = await admin.get_keywords()
   fields.value = meta.fields
   sql_keywords.value = meta.keywords
-  commands.value = [...meta.commands, 'VERIFY', 'UNVERIFY', 'PROMOTE', 'DEMOTE']
+  commands.value = [... meta.commands, 'VERIFY', 'UNVERIFY', 'PROMOTE', 'DEMOTE']
 }
 catch {
   commands.value = ['BAN', 'UNBAN', 'KICK', 'ALL', 'VERIFY', 'UNVERIFY', 'PROMOTE', 'DEMOTE']
@@ -142,12 +140,12 @@ watch(cmd, (newVal, oldVal) => {
 }, { flush: 'sync' })
 
 const all_suggestions = computed(() => [
-  ...fields.value,
-  ...sql_keywords.value,
-  ...commands.value,
+  ... fields.value,
+  ... sql_keywords.value,
+  ... commands.value,
 ])
 
-function suggestion_icon(sug: string): string {
+function suggestion_icon(sug: string) {
   if (commands.value.includes(sug)) {
     return 'lucide:zap'
   }
@@ -157,7 +155,7 @@ function suggestion_icon(sug: string): string {
   return 'lucide:code'
 }
 
-function suggestion_desc(sug: string): string {
+function suggestion_desc(sug: string) {
   if (commands.value.includes(sug)) {
     return '命令'
   }
@@ -167,7 +165,7 @@ function suggestion_desc(sug: string): string {
   return '关键字'
 }
 
-function last_token(text: string): string {
+function last_token(text: string) {
   if (text.endsWith(' ')) {
     return ''
   }

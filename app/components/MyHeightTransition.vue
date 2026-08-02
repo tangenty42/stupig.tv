@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   active: true,
   duration: 300,
-  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+  easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
   threshold: 0.5,
   keepExplicitHeight: true,
 })
@@ -28,7 +28,6 @@ const containerRef = ref<HTMLElement | null>(null)
 const innerRef = ref<HTMLElement | null>(null)
 
 let observer: ResizeObserver | null = null
-let frameId: number | null = null
 let cleanupTimer: ReturnType<typeof setTimeout> | null = null
 let removeTransitionEndListener: (() => void) | null = null
 let isAnimating = false
@@ -40,14 +39,6 @@ function stopCleanupTimer() {
 
   clearTimeout(cleanupTimer)
   cleanupTimer = null
-}
-
-function stopAnimationFrame() {
-  if (frameId === null)
-    return
-
-  cancelAnimationFrame(frameId)
-  frameId = null
 }
 
 function stopObserver() {
@@ -137,7 +128,6 @@ function animateToHeight(container: HTMLElement, nextHeight: number) {
 
 function stopAll() {
   stopObserver()
-  stopAnimationFrame()
   stopCleanupTimer()
   removeTransitionListener()
   isAnimating = false
@@ -167,15 +157,8 @@ function startObserving() {
     if (Math.abs(nextHeight - targetHeight) < props.threshold)
       return
 
-    stopAnimationFrame()
-    frameId = requestAnimationFrame(() => {
-      const currentContainer = containerRef.value
-      if (currentContainer)
-        animateToHeight(currentContainer, nextHeight)
-      frameId = null
-    })
-
     targetHeight = nextHeight
+    animateToHeight(container, nextHeight)
   })
 
   observer.observe(inner)

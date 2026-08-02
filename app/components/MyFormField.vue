@@ -93,8 +93,8 @@
 <script lang="ts" setup>
 import type { useFormReturn } from '@primevue/forms/useform'
 import { FormField } from '@primevue/forms'
+import { phone_schema } from '@shared/schemas'
 import { sync_resource } from '@shared/types/sync'
-import { phone_schema } from '@shared/validate'
 import { useApi } from '~/composables/useApi'
 
 interface MyFormFieldOtpSendOptions {
@@ -177,8 +177,18 @@ async function on_otp_send() {
 }
 
 if (props.otpSend) {
+  // POV: Great material for testing AI coding capabilities in fixing such weird bugs.
+  /**
+   * [Possible prompt]
+   * fix an existing bug. steps to reproduce:
+   * 1. click "发送" in "旧手机号验证码" field.
+   * 2. click the switch mode button to show "手机验证码" field in "修改密码" section.
+   * 3. click "发送" in the newly showed "手机验证码" field.
+   * 4. observe the "发送" button in "旧手机号验证码" field is NOT disabled and NOT counting down as expected.
+   */
+
   const otp_target_phone = computed(() => {
-    const phone = props.otpSend!.targetPhone.trim()
+    const phone = props.otpSend!.targetPhone
     return phone_schema.safeParse(phone).success ? phone : null
   })
 
@@ -190,7 +200,23 @@ if (props.otpSend) {
     }
 
     try {
-      const data = await auth_api.get_otp_cooldown({ phone: target_phone, purpose: props.otpSend!.purpose })
+      const data = await auth_api.get_otp_cooldown({ phone: target_phone })
+
+      const next_available_at = data?.next_available_at
+      if (! next_available_at) {
+        return null
+      }
+
+      return next_available_at
+    }
+    catch {
+      return null
+    }
+  }
+
+  async function sync_otp_cooldown_by_identity() {
+    try {
+      const data = await auth_api.get_otp_cooldown()
 
       const next_available_at = data?.next_available_at
       if (! next_available_at) {
@@ -222,11 +248,19 @@ if (props.otpSend) {
   }, { immediate: true, flush: 'sync' })
 
   const otp_sync_source = computed(() => {
-    if (otp_sync_source_has_error.value || otp_target_phone.value === null) {
+    if (otp_sync_source_has_error.value || ! otp_target_phone.value) {
       return null
     }
 
     return sync_resource('otp_cooldown', otp_target_phone.value)
+  })
+
+  const otp_sync_by_identity_source = computed(() => {
+    if (otp_sync_source_has_error.value || ! otp_target_phone.value || ! identity_token.value) {
+      return null
+    }
+
+    return sync_resource('otp_cooldown_by_identity', identity_token.value)
   })
 
   await useSyncedData<string | null>(
@@ -235,15 +269,13 @@ if (props.otpSend) {
     otp_cooldown_until,
     otp_sync_loading,
   )
-  if (identity_token.value) {
-    await useSyncedData<string | null>(
-      computed(() => sync_resource('otp_cooldown_by_identity', identity_token.value!)),
-      sync_otp_cooldown,
-      otp_cooldown_until,
-      otp_sync_loading,
-      { immediate: false },
-    )
-  }
+  await useSyncedData<string | null>(
+    otp_sync_by_identity_source,
+    sync_otp_cooldown_by_identity,
+    otp_cooldown_until,
+    otp_sync_loading,
+    { immediate: false },
+  )
 
   watch(otp_sync_source_has_error, (new_val) => {
     if (new_val) {

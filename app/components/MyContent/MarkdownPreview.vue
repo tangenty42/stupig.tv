@@ -72,8 +72,8 @@ const alert_labels: Record<AlertType, string> = {
 }
 
 const compiled_icons = [
-  ...file_icon_names.map(icon => `lucide:${icon}`),
-  ...Object.values(alert_icons).map(icon => `lucide:${icon}`),
+  ... file_icon_names.map(icon => `lucide:${icon}`),
+  ... Object.values(alert_icons).map(icon => `lucide:${icon}`),
   'lucide:external-link',
   'lucide:chevron-left',
   'lucide:chevron-right',
@@ -84,14 +84,14 @@ const body_markdown = computed(() => strip_front_matter(props.markdown))
 const preview_visible = ref(false)
 const preview_index = ref(0)
 
-function absolutize(url: string): string {
+function absolutize(url: string) {
   if (props.storyId && ! url.includes('/') && ! url.startsWith('#') && ! /^[a-z][\w+.-]*:/i.test(url)) {
     return static_url(`/content/${props.storyId}/${url}`)
   }
   return url
 }
 
-function local_file_name(url: string): string | null {
+function local_file_name(url: string) {
   if (! url || url.includes('/') || url.startsWith('#') || /^[a-z][\w+.-]*:/i.test(url)) {
     return null
   }
@@ -133,7 +133,7 @@ md.core.ruler.after('block', 'severity_blockquotes', (state) => {
     }
 
     opening.meta = {
-      ...opening.meta,
+      ... opening.meta,
       alert_type: match[1] as AlertType,
       alert_title: match[2]?.trim() || null,
     }
@@ -152,7 +152,7 @@ md.core.ruler.after('inline', 'image_carousels', (state) => {
   const clone_token = (token: InstanceType<typeof state.Token>) => Object.assign(
     new state.Token(token.type, token.tag, token.nesting),
     token,
-    { attrs: token.attrs?.map(attribute => [...attribute]) ?? null },
+    { attrs: token.attrs?.map(attribute => [... attribute]) ?? null },
   )
 
   for (let index = 0; index < state.tokens.length - 2;) {
@@ -224,7 +224,7 @@ md.core.ruler.after('inline', 'image_carousels', (state) => {
       content.children = segment.children
       return [opening, content, closing]
     })
-    state.tokens.splice(index, 3, ...replacement)
+    state.tokens.splice(index, 3, ... replacement)
     index += replacement.length
   }
 
@@ -252,15 +252,15 @@ md.core.ruler.after('inline', 'image_carousels', (state) => {
     }
 
     paragraph.paragraph_open.attrJoin('class', 'image-carousel')
-    paragraph.paragraph_open.meta = { ...paragraph.paragraph_open.meta, carousel: true }
-    paragraph.paragraph_close.meta = { ...paragraph.paragraph_close.meta, carousel: true }
+    paragraph.paragraph_open.meta = { ... paragraph.paragraph_open.meta, carousel: true }
+    paragraph.paragraph_close.meta = { ... paragraph.paragraph_close.meta, carousel: true }
     for (const child of paragraph.inline.children ?? []) {
       if (is_break(child.type)) {
         child.type = 'text'
         child.content = ''
       }
       else if (child.type === 'image') {
-        child.meta = { ...child.meta, carousel: true }
+        child.meta = { ... child.meta, carousel: true }
       }
     }
   }
@@ -354,7 +354,7 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
       // the right edge check looks past link_close instead of the label.
       apply_chip_gaps(token!, tokens, idx, idx + 2, 'card')
       token!.meta = {
-        ...token?.meta,
+        ... token?.meta,
         file_card: {
           icon: file_icon(attachment ?? { file_name, mime_type: null }),
           size: attachment ? format_bytes(attachment.file_size) : '未知大小',
@@ -362,7 +362,7 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
       }
       const closing = tokens[idx + 2]
       if (closing?.type === 'link_close') {
-        closing.meta = { ...closing.meta, file_card: token?.meta.file_card }
+        closing.meta = { ... closing.meta, file_card: token?.meta.file_card }
       }
     }
   }
@@ -455,7 +455,7 @@ function update_carousel_navs(carousel: HTMLElement) {
 
 // The fade width lives in CSS (--carousel-fade-width on .carousel-shell);
 // resolve it to px here so nav jumps share that single source.
-function carousel_fade_width(shell: HTMLElement): number {
+function carousel_fade_width(shell: HTMLElement) {
   const raw = getComputedStyle(shell).getPropertyValue('--carousel-fade-width').trim()
   if (raw.endsWith('rem')) {
     return parseFloat(raw) * parseFloat(getComputedStyle(document.documentElement).fontSize)
@@ -479,11 +479,11 @@ function setup_carousel(carousel: HTMLElement) {
     const max_left = carousel.scrollWidth - carousel.clientWidth
     const fade = carousel_fade_width(shell)
     const pivot = carousel.scrollLeft + (carousel.scrollLeft > 1 ? fade : 0)
-    const offsets = [...carousel.children].map(child =>
+    const offsets = [... carousel.children].map(child =>
       (child as HTMLElement).offsetLeft - carousel.offsetLeft)
     const target = direction > 0
       ? offsets.find(offset => offset > pivot + 1)
-      : [...offsets].reverse().find(offset => offset < pivot - 1)
+      : [... offsets].reverse().find(offset => offset < pivot - 1)
     const left = target === undefined
       ? (direction > 0 ? max_left : 0)
       : Math.max(target - fade, 0)
@@ -529,7 +529,7 @@ onMounted(() => {
   nextTick(refresh_carousel_navs)
 })
 
-function preview_image_from_event(event: Event): HTMLImageElement | null {
+function preview_image_from_event(event: Event) {
   if (! (event.target instanceof HTMLElement)) {
     return null
   }

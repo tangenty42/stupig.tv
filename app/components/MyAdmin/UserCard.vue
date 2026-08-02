@@ -67,7 +67,7 @@
 
       <div class="mt-4 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-slate-100 pt-4 dark:border-slate-800">
         <NuxtLink target="_blank" :to="profile_link" @click.stop>
-          <Button size="small" text rounded label="修改信息">
+          <Button size="small" text label="修改信息">
             <template #icon>
               <MyIcon name="lucide:square-pen" />
             </template>
@@ -78,7 +78,6 @@
           size="small"
           :severity="user.is_banned ? 'success' : 'danger'"
           text
-          rounded
           :loading="disable_pending"
           :label="user.is_banned ? '解封' : '封禁'"
           @click.stop="toggle_disabled"
@@ -88,7 +87,7 @@
           </template>
         </Button>
 
-        <Button size="small" severity="secondary" text rounded :loading="logout_pending" label="强制下线" @click.stop="force_logout">
+        <Button size="small" severity="secondary" text :loading="logout_pending" label="强制下线" @click.stop="force_logout">
           <template #icon>
             <MyIcon name="lucide:log-out" />
           </template>
@@ -98,7 +97,6 @@
           size="small"
           :severity="user.is_verified ? 'secondary' : 'success'"
           text
-          rounded
           :label="user.is_verified ? '移除认证' : '授予认证'"
           @click.stop="toggle_verified"
         >
@@ -111,7 +109,6 @@
           size="small"
           :severity="user.is_admin ? 'secondary' : 'warn'"
           text
-          rounded
           :label="user.is_admin ? '移除管理员' : '设为管理员'"
           @click.stop="toggle_admin"
         >
@@ -125,20 +122,20 @@
 </template>
 
 <script setup lang="ts">
-import type { ApiAdminUser } from '~/composables/useApi'
+import type { AdminUser } from '@shared/types/user'
 
 const props = defineProps<{
-  user: ApiAdminUser
+  user: AdminUser
   selected?: boolean
   disable_pending?: boolean
   logout_pending?: boolean
 }>()
 
 const emit = defineEmits<{
-  (e: 'toggle-disabled', user: ApiAdminUser): void
-  (e: 'force-logout', user: ApiAdminUser): void
-  (e: 'toggle-verified', user: ApiAdminUser): void
-  (e: 'toggle-admin', user: ApiAdminUser): void
+  (e: 'toggle-disabled', user: AdminUser): void
+  (e: 'force-logout', user: AdminUser): void
+  (e: 'toggle-verified', user: AdminUser): void
+  (e: 'toggle-admin', user: AdminUser): void
   (e: 'toggle-select', id: number): void
 }>()
 

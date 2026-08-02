@@ -66,7 +66,7 @@ interface CheckOtpSmsInput {
   code: string
 }
 
-export async function check_otp_sms(input: CheckOtpSmsInput): Promise<void> {
+export async function check_otp_sms(input: CheckOtpSmsInput) {
   if (env.OTP_DEBUG) {
     return
   }

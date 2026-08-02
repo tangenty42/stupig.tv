@@ -1,4 +1,4 @@
-export function format_bytes(bytes: number, options: { decimals?: number, separator?: string } = {}): string {
+export function format_bytes(bytes: number, options: { decimals?: number, separator?: string } = {}) {
   const { decimals = 1, separator = ' ' } = options
 
   if (! Number.isFinite(bytes) || bytes === 0) {
