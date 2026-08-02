@@ -1,9 +1,13 @@
 import type { AuthUser } from '@server/types/auth'
-import type { Profile } from '@shared/types/api'
 import type { RowDataPacket } from 'mysql2/promise'
+import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import { extname, join } from 'node:path'
 import { ApiError } from '@server/errors/ApiError'
 
+import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
+import { check_otp_sms } from '@server/lib/sms'
+import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
 import { env } from '@shared/env'
 import bcrypt from 'bcryptjs'
@@ -44,11 +48,35 @@ interface SessionUserIdRow extends RowDataPacket {
   user_id: number
 }
 
-export function is_profile_editable(viewer: AuthUser | null, target_id: number): boolean {
+interface CaptchaInput {
+  lot_number?: string
+  captcha_output?: string
+  pass_token?: string
+  gen_time?: string
+}
+
+interface AvatarUploadOptions {
+  max_size_mb: number
+  static_root: string
+}
+
+const mime_to_ext: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+}
+const allowed_avatar_ext = new Set(['.jpg', '.jpeg', '.png', '.webp'])
+
+function publish_profile_refresh(id: number) {
+  publish_refresh({ resource: sync_resource('profile', id) })
+  publish_refresh({ resource: sync_resource('auth_user', id) })
+}
+
+export function is_profile_editable(viewer: AuthUser | null, target_id: number) {
   return Boolean(viewer?.is_admin) || viewer?.id === target_id
 }
 
-export function format_profile_row(viewer: AuthUser | null, user: UserRow, target_id: number): Profile {
+export function format_profile_row(viewer: AuthUser | null, user: UserRow, target_id: number) {
   const editable = is_profile_editable(viewer, target_id)
 
   return {
@@ -81,7 +109,7 @@ export const select_profile_row_sql = `
   FROM users u
 `
 
-export async function get_profile(viewer: AuthUser | null, target_id: number): Promise<Profile> {
+export async function get_profile(viewer: AuthUser | null, target_id: number) {
   const [rows] = await db.execute<UserRow[]>(
     `${select_profile_row_sql} WHERE u.id = ?`,
     [env.ONLINE_TIMEOUT_SECONDS, target_id],
@@ -95,20 +123,23 @@ export async function get_profile(viewer: AuthUser | null, target_id: number): P
   return format_profile_row(viewer, user, target_id)
 }
 
-export async function update_profile(user_id: number, payload: { birthday: string | null }): Promise<void> {
+export async function update_profile(user_id: number, payload: { birthday: string | null }) {
   await db.execute(
     'UPDATE users SET birthday = ? WHERE id = ?',
     [payload.birthday ? dayjs.utc(payload.birthday).toDate() : null, user_id],
   )
+  publish_profile_refresh(user_id)
 }
 
-interface ChangePasswordInput {
+interface ChangePasswordInput extends CaptchaInput {
   old_password: string
   new_password: string
   confirm_new_password: string
 }
 
-export async function change_profile_password(user_id: number, payload: ChangePasswordInput): Promise<void> {
+export async function change_profile_password(user_id: number, payload: ChangePasswordInput) {
+  await verify_captcha(payload)
+
   const [rows] = await db.execute<PasswordHashRow[]>(
     'SELECT password_hash FROM users WHERE id = ?',
     [user_id],
@@ -128,41 +159,52 @@ export async function change_profile_password(user_id: number, payload: ChangePa
     'UPDATE users SET password_hash = ? WHERE id = ?',
     [new_hash, user_id],
   )
+  publish_refresh({ resource: sync_resource('auth_user', user_id) })
 }
 
-interface ChangePasswordByOtpInput {
+interface ChangePasswordByOtpInput extends CaptchaInput {
   otp: string
   new_password: string
   confirm_new_password: string
 }
 
-export async function change_profile_password_by_otp(user_id: number, payload: ChangePasswordByOtpInput): Promise<void> {
+export async function change_profile_password_by_otp(auth_user: AuthUser, payload: ChangePasswordByOtpInput) {
+  await verify_captcha(payload)
+  await check_otp_sms({ phone: auth_user.phone, code: payload.otp })
+
   if (payload.new_password !== payload.confirm_new_password) {
     throw new ApiError(400, '两次输入的密码不一致')
   }
 
-  await reset_profile_password(user_id, payload.new_password)
+  await reset_profile_password(auth_user.id, payload.new_password)
 }
 
-export async function reset_profile_password(user_id: number, new_password: string): Promise<void> {
+export async function reset_profile_password(user_id: number, new_password: string) {
   const new_hash = await bcrypt.hash(new_password, env.BCRYPT_ROUNDS)
   await db.execute(
     'UPDATE users SET password_hash = ? WHERE id = ?',
     [new_hash, user_id],
   )
+  publish_refresh({ resource: sync_resource('auth_user', user_id) })
 }
 
-interface ChangePhoneInput {
+interface ChangePhoneInput extends CaptchaInput {
   new_phone: string
   old_otp: string
   new_otp: string
 }
 
-export async function change_profile_phone(user_id: number, payload: ChangePhoneInput): Promise<void> {
-  await set_profile_phone(user_id, payload.new_phone)
+export async function change_profile_phone(auth_user: AuthUser, payload: ChangePhoneInput) {
+  await verify_captcha(payload)
+  if (! auth_user.phone) {
+    throw new ApiError(400, '当前账号未绑定手机号，无法验证原手机号')
+  }
+  await check_otp_sms({ phone: auth_user.phone, code: payload.old_otp })
+  await check_otp_sms({ phone: payload.new_phone, code: payload.new_otp })
+  await set_profile_phone(auth_user.id, payload.new_phone)
 }
 
-export async function set_profile_phone(user_id: number, new_phone: string): Promise<void> {
+export async function set_profile_phone(user_id: number, new_phone: string) {
   const [existing] = await db.execute<UserIdRow[]>(
     'SELECT id FROM users WHERE phone = ? AND id != ? LIMIT 1',
     [new_phone, user_id],
@@ -175,9 +217,10 @@ export async function set_profile_phone(user_id: number, new_phone: string): Pro
     'UPDATE users SET phone = ? WHERE id = ?',
     [new_phone, user_id],
   )
+  publish_profile_refresh(user_id)
 }
 
-export async function update_profile_avatar(user_id: number, avatar_file: string): Promise<{ previous_file: string | null }> {
+async function update_profile_avatar(user_id: number, avatar_file: string) {
   const [rows] = await db.execute<UserAvatarRow[]>(
     'SELECT avatar_file FROM users WHERE id = ?',
     [user_id],
@@ -192,7 +235,7 @@ export async function update_profile_avatar(user_id: number, avatar_file: string
   return { previous_file }
 }
 
-export async function delete_profile_avatar(user_id: number): Promise<{ previous_file: string | null }> {
+export async function delete_profile_avatar(user_id: number, static_root: string) {
   const [rows] = await db.execute<UserAvatarRow[]>(
     'SELECT avatar_file FROM users WHERE id = ?',
     [user_id],
@@ -208,10 +251,11 @@ export async function delete_profile_avatar(user_id: number): Promise<{ previous
     [user_id],
   )
 
-  return { previous_file }
+  await unlink(join(static_root, 'avatar', previous_file)).catch(() => {})
+  publish_profile_refresh(user_id)
 }
 
-export async function force_logout_session(user_id: number, session_id: number): Promise<void> {
+export async function force_logout_session(user_id: number, session_id: number) {
   const [rows] = await db.execute<SessionUserIdRow[]>(
     'SELECT user_id FROM user_login_sessions WHERE id = ?',
     [session_id],
@@ -222,4 +266,38 @@ export async function force_logout_session(user_id: number, session_id: number):
   }
 
   await logout_session(session_id)
+  publish_refresh({ resource: sync_resource('auth_user', user_id) })
+  publish_refresh({ resource: sync_resource('profile', user_id) })
+  publish_refresh({ resource: sync_resource('profile_sessions', user_id) })
+}
+
+export async function upload_profile_avatar(user_id: number, input: FormData, get_options: () => AvatarUploadOptions) {
+  const avatar = input.get('avatar')
+  if (! (avatar instanceof Blob) || avatar.size === 0) {
+    throw new ApiError(400, '请先选择头像文件')
+  }
+
+  const file_data = Buffer.from(await avatar.arrayBuffer())
+  const options = get_options()
+  if (file_data.length > options.max_size_mb * 1024 * 1024) {
+    throw new ApiError(413, `头像文件太大了，不能超过 ${options.max_size_mb} MB`)
+  }
+
+  const file_name = 'name' in avatar && typeof avatar.name === 'string' ? avatar.name : ''
+  const ext_from_name = extname(file_name).toLowerCase()
+  const file_ext = mime_to_ext[avatar.type]
+    || (allowed_avatar_ext.has(ext_from_name) ? (ext_from_name === '.jpeg' ? '.jpg' : ext_from_name) : '')
+  if (! file_ext) {
+    throw new ApiError(415, '只支持 JPG / PNG / WebP')
+  }
+
+  const avatar_file_name = `${user_id}_${Date.now().toString(36)}${file_ext}`
+  const { previous_file } = await update_profile_avatar(user_id, avatar_file_name)
+  const avatar_dir = join(options.static_root, 'avatar')
+  await mkdir(avatar_dir, { recursive: true })
+  await writeFile(join(avatar_dir, avatar_file_name), file_data)
+  if (previous_file && previous_file !== avatar_file_name) {
+    await unlink(join(avatar_dir, previous_file)).catch(() => {})
+  }
+  publish_profile_refresh(user_id)
 }

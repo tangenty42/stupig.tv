@@ -1,3 +1,5 @@
+import type { AuthResult } from '@shared/types/auth'
+
 export interface LoginUser {
   id: number
   username: string
@@ -23,9 +25,9 @@ export function useAuth() {
     maxAge: config.cookie_max_age,
   })
 
-  function normalize_login_user(input: LoginUser): LoginUser {
+  function normalize_login_user(input: LoginUser) {
     return {
-      ...input,
+      ... input,
       is_admin: Boolean(input.is_admin),
     }
   }
@@ -40,7 +42,7 @@ export function useAuth() {
       && Boolean(left.is_admin) === Boolean(right.is_admin)
   }
 
-  function apply_auth(result: ApiAuthResult) {
+  function apply_auth(result: AuthResult) {
     const next_user = normalize_login_user(result.user)
 
     if (! is_same_login_user(user.value, next_user)) {
@@ -66,7 +68,11 @@ export function useAuth() {
     }
 
     try {
-      await $fetch(`${config.api_base}/auth/logout`, { method: 'POST', credentials: 'include' })
+      await $fetch(`${config.api_base}/trpc/auth.logout`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
     catch {
       // Ignore errors — clear local state regardless

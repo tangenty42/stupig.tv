@@ -66,7 +66,7 @@ const props = withDefaults(defineProps<{
 
 const static_url = useStaticUrl()
 
-function build_avatar_url(file: string | null): string | null {
+function build_avatar_url(file: string | null) {
   if (! file) {
     return null
   }

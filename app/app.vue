@@ -31,13 +31,13 @@
         </NuxtLink>
 
         <div class="absolute right-2 top-2 z-30 flex items-center gap-2">
-          <Button aria-label="切换浅色 / 深色模式" text rounded severity="secondary" @click="toggle_color_mode">
+          <Button aria-label="切换浅色 / 深色模式" text severity="secondary" @click="toggle_color_mode">
             <template #icon>
               <MyIcon :name="my_color_mode === 'dark' ? 'lucide:sun' : 'lucide:moon'" />
             </template>
           </Button>
           <MyProfileHoverCard v-if="!! user" :profile="user" @logout="logout" />
-          <Button v-else label="登录 / 注册" size="small" severity="secondary" rounded text @click="lor_modal = true">
+          <Button v-else label="登录 / 注册" size="small" severity="secondary" text @click="lor_modal = true">
             <template #icon>
               <MyIcon name="lucide:user" />
             </template>
@@ -120,6 +120,7 @@
                 <KeepAlive>
                   <Form
                     v-if="lor_login_with === 'password'"
+                    id="login-password-form"
                     key="login-password"
                     ref="form_login_pwd"
                     :resolver="resolver_login_pwd"
@@ -135,6 +136,7 @@
 
                   <Form
                     v-else
+                    id="login-phone-form"
                     key="login-phone"
                     ref="form_login_phone"
                     :resolver="resolver_login_phone"
@@ -163,6 +165,7 @@
           <TabPanel value="register">
             <KeepAlive>
               <Form
+                id="register-form"
                 key="register"
                 ref="form_register"
                 :resolver="resolver_register"
@@ -195,14 +198,20 @@
           <!-- eslint-disable-next-line vue/require-toggle-inside-transition -- toggle is on the nested divs -->
           <div class="mt-4">
             <div v-if="lor === 'login'" key="login" class="flex gap-2">
-              <Button rounded label="立即登录" :loading="lor_pending" :disabled="lor_pending" @click="submit_active_login_form">
+              <Button
+                type="submit"
+                :form="lor_login_with === 'password' ? 'login-password-form' : 'login-phone-form'"
+                label="立即登录"
+                :loading="lor_pending"
+                :disabled="lor_pending"
+              >
                 <template #icon>
                   <MyIcon name="lucide:check" />
                 </template>
               </Button>
             </div>
             <div v-else key="register" class="flex gap-2">
-              <Button rounded label="立即注册" :loading="lor_pending" :disabled="lor_pending" @click="form_register?.submit()">
+              <Button type="submit" form="register-form" label="立即注册" :loading="lor_pending" :disabled="lor_pending">
                 <template #icon>
                   <MyIcon name="lucide:check" />
                 </template>
@@ -219,8 +228,8 @@
 import type { FormInstance, FormSubmitEvent } from '@primevue/forms'
 import { Form } from '@primevue/forms'
 import { zodResolver } from '@primevue/forms/resolvers/zod'
+import { form_default, form_schema } from '@shared/schemas'
 import { sync_resource } from '@shared/types/sync'
-import { form_default, schema } from '@shared/validate'
 
 const static_url = useStaticUrl()
 const { error, ok, info } = useMyToast()
@@ -295,9 +304,9 @@ const lor_modal = ref(false)
 const lor = ref<'login' | 'register'>('login')
 const lor_login_with = ref<'password' | 'phone'>('password')
 
-const resolver_login_pwd = zodResolver(schema.login_with_password)
-const resolver_login_phone = zodResolver(schema.login_with_phone)
-const resolver_register = zodResolver(schema.register)
+const resolver_login_pwd = zodResolver(form_schema.login_with_password)
+const resolver_login_phone = zodResolver(form_schema.login_with_phone)
+const resolver_register = zodResolver(form_schema.register)
 
 const login_pwd_fields = [
   { name: 'username_or_phone', label: '用户名 / 手机号', icon: 'lucide:user', autocomplete: 'username' },
@@ -337,15 +346,6 @@ const register_otp_phone = computed(() => form_register.value?.getFieldState('ph
 
 function toggle_color_mode() {
   color_mode.preference = color_mode.value === 'dark' ? 'light' : 'dark'
-}
-
-function submit_active_login_form() {
-  if (lor_login_with.value === 'password') {
-    form_login_pwd.value?.submit()
-  }
-  else {
-    form_login_phone.value?.submit()
-  }
 }
 
 async function sync_current_user() {
@@ -402,7 +402,7 @@ async function lor_send_otp(target: 'login' | 'register') {
   try {
     const captcha = await captcha_verify()
 
-    await auth_api.send_otp({ phone, purpose, ...captcha })
+    await auth_api.send_otp({ phone, purpose, ... captcha })
 
     info('验证码发送成功！')
   }
@@ -418,15 +418,15 @@ async function on_submit_login_pwd(e: FormSubmitEvent) {
   if (! e.valid)
     return
 
+  const values = form_schema.login_with_password.parse(e.values)
   lor_pending.value = true
 
   try {
     const captcha = await captcha_verify()
 
     const data = await auth_api.login_with_password({
-      username_or_phone: String(e.values.username_or_phone),
-      password: String(e.values.password),
-      ...captcha,
+      ... values,
+      ... captcha,
     })
 
     apply_auth(data)
@@ -445,16 +445,13 @@ async function on_submit_login_phone(e: FormSubmitEvent) {
   if (! e.valid)
     return
 
+  const values = form_schema.login_with_phone.parse(e.values)
   lor_pending.value = true
 
   try {
-    const captcha = await captcha_verify()
+    await captcha_verify()
 
-    const data = await auth_api.login_with_phone({
-      phone: String(e.values.phone),
-      otp: String(e.values.otp),
-      ...captcha,
-    })
+    const data = await auth_api.login_with_phone(values)
 
     apply_auth(data)
     lor_modal.value = false
@@ -472,12 +469,13 @@ async function on_submit_register(e: FormSubmitEvent) {
   if (! e.valid)
     return
 
+  const values = form_schema.register.parse(e.values)
   lor_pending.value = true
 
   try {
-    const captcha = await captcha_verify()
+    await captcha_verify()
 
-    const data = await auth_api.register({ ...e.values, ...captcha })
+    const data = await auth_api.register(values)
 
     apply_auth(data)
     lor_modal.value = false
@@ -495,11 +493,5 @@ async function on_submit_register(e: FormSubmitEvent) {
 <style scoped>
 .breadcrumb-row {
   padding-inline-end: calc(1rem + 9rem * var(--header-shift-progress));
-}
-
-@media (min-width: 640px) {
-  .breadcrumb-row {
-    padding-inline-end: calc(1rem + 17rem * var(--header-shift-progress));
-  }
 }
 </style>

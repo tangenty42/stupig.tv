@@ -1,4 +1,4 @@
-export function useMyColorMode(): Ref<'light' | 'dark'> {
+export function useMyColorMode() {
   const my_color_mode = useState<'light' | 'dark' | null>('my-color-mode', () => null)
   const real_color_mode = useColorMode()
   const config = useRuntimeConfig().public

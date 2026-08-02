@@ -12,11 +12,16 @@ ESLint is the sole formatter for this project — **no Prettier**. Config lives 
 
 - 2-space indent (never tabs), single quotes, no semicolons, trailing commas — all auto-fixed.
 - Space after **all** unary operators: `! x`, `- x`, `typeof x`, `void x` (`@stylistic/space-unary-ops`).
+- Space after rest and spread operators: `... statement` (`@stylistic/rest-spread-spacing: always`).
 - No padding inside template placeholders: `` `${statement}` `` (`@stylistic/template-curly-spacing: never`).
 - Template props are kebab-case: `<tag prop-name />` (`vue/attribute-hyphenation: always`).
 - SFC block order: `template` → `script` → `style`.
 - Imports are sorted and unused imports are removed automatically (`perfectionist` + `unused-imports`).
 - Unused variables/args must be removed or prefixed with `_`.
+- Omit function return type annotations when TypeScript can infer the intended type. Specify one only when it defines a deliberate contract or inference cannot express the required type.
+- Omit variable type annotations when the initializer already infers the intended type. Specify one only when it constrains, widens, or otherwise changes the inferred type.
+- Never hardcode configurable identifiers, limits, intervals, delays, schema versions, or storage keys/prefixes. Define them in `.env` and `.env.example`, validate them in `server/shared/env.ts`, and expose client-visible values through Nuxt public runtime config.
+- Before adding a local helper or calling a platform formatting/parsing API directly, search `app/utils/`, shared modules, and existing composables for the project-owned equivalent. Reuse and extend the owning utility instead of duplicating behavior in a page, component, store, service, or router.
 
 ## Project conventions the linter is configured to allow (do not "fix" these)
 

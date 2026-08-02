@@ -2,7 +2,7 @@ import { UAParser } from 'ua-parser-js'
 
 const UNKNOWN_DEVICE_LABEL = '未知设备'
 
-export function ua_label(user_agent: string | null | undefined): string {
+export function ua_label(user_agent: string | null | undefined) {
   if (! user_agent) {
     return UNKNOWN_DEVICE_LABEL
   }

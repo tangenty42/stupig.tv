@@ -1,7 +1,6 @@
 import type { UserRow } from '@server/services/profile.service'
 
 import type { AuthUser } from '@server/types/auth'
-import type { AdminUserList } from '@shared/types/api'
 import type { H3Event } from 'h3'
 import type { RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
@@ -16,33 +15,39 @@ interface CountRow extends RowDataPacket {
   total: number
 }
 
-export async function force_logout_user(target_id: number): Promise<void> {
+function publish_user_refresh(id: number) {
+  publish_refresh({ resource: sync_resource('profile', id) })
+  publish_refresh({ resource: sync_resource('auth_user', id) })
+}
+
+export async function force_logout_user(target_id: number) {
   await logout_all_user_sessions(target_id, null)
   publish_refresh({ resource: sync_resource('auth_user', target_id) })
   publish_refresh({ resource: sync_resource('profile_sessions', target_id) })
 }
 
-export async function ban_user(target_id: number): Promise<void> {
+export async function ban_user(target_id: number) {
   await db.execute(
     'UPDATE users SET is_banned = 1 WHERE id = ?',
     [target_id],
   )
   await logout_all_user_sessions(target_id, null)
-  publish_refresh({ resource: sync_resource('auth_user', target_id) })
   publish_refresh({ resource: sync_resource('profile_sessions', target_id) })
+  publish_user_refresh(target_id)
 }
 
-export async function unban_user(target_id: number): Promise<void> {
+export async function unban_user(target_id: number) {
   await db.execute(
     'UPDATE users SET is_banned = 0 WHERE id = ?',
     [target_id],
   )
+  publish_user_refresh(target_id)
 }
 
 export async function list_users(
   viewer: AuthUser,
   options: { page: number, page_size: number, filter?: string },
-): Promise<AdminUserList> {
+) {
   const { page, page_size } = options
   const offset = (page - 1) * page_size
 
@@ -61,7 +66,7 @@ export async function list_users(
      WHERE ${where_clause}
      ORDER BY u.id DESC
      LIMIT ? OFFSET ?`,
-    [env.ONLINE_TIMEOUT_SECONDS, ...params, String(page_size), String(offset)],
+    [env.ONLINE_TIMEOUT_SECONDS, ... params, String(page_size), String(offset)],
   )
 
   return {
@@ -86,21 +91,23 @@ export async function list_users(
   }
 }
 
-export async function set_user_admin_role(target_id: number, is_admin: boolean): Promise<void> {
+export async function set_user_admin_role(target_id: number, is_admin: boolean) {
   await db.execute(
     'UPDATE users SET is_admin = ? WHERE id = ?',
     [is_admin ? 1 : 0, target_id],
   )
+  publish_user_refresh(target_id)
 }
 
-export async function set_profile_verification(target_id: number, is_verified: boolean, verified_note?: string | null): Promise<void> {
+export async function set_profile_verification(target_id: number, is_verified: boolean, verified_note?: string | null) {
   await db.execute(
     'UPDATE users SET is_verified = ?, verified_note = ? WHERE id = ?',
     [is_verified ? 1 : 0, verified_note ?? null, target_id],
   )
+  publish_user_refresh(target_id)
 }
 
-export async function require_admin_user(event: H3Event): Promise<AuthUser> {
+export async function require_admin_user(event: H3Event) {
   const user = await require_auth_user(event)
   if (! user.is_admin) {
     throw new ApiError(403, '需要管理员权限')

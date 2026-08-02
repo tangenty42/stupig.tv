@@ -33,16 +33,17 @@ export interface StoryMarkdownParseResult {
   issues: ContentLintIssue[]
 }
 
+export interface ContentMarkdownConfig {
+  title_max_length: number
+  rating_min: number
+  rating_max: number
+}
+
 const fm_key_line = /^([A-Z_]\w*)\s*:(.*)$/i
 const day_entry = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/
 const month_entry = /^(\d{4})\/(\d{1,2})$/
 
-// TODO: make these configurable
-export const story_title_max_length = 60
-export const story_rating_min = 1
-export const story_rating_max = 5
-
-function is_real_date(year: number, month: number, day: number): boolean {
+function is_real_date(year: number, month: number, day: number) {
   const date = new Date(Date.UTC(year, month - 1, day))
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
@@ -51,19 +52,19 @@ function push_issue(issues: ContentLintIssue[], line: number, message: string) {
   issues.push({ line, message })
 }
 
-function padded_number(value: number): string {
+function padded_number(value: number) {
   return String(value).padStart(2, '0')
 }
 
-function day_string(year: number, month: number, day: number): string {
+function day_string(year: number, month: number, day: number) {
   return `${year}-${padded_number(month)}-${padded_number(day)}`
 }
 
-function month_string(year: number, month: number): string {
+function month_string(year: number, month: number) {
   return `${year}-${padded_number(month)}`
 }
 
-function expand_day_range(start: string, end: string): string[] {
+function expand_day_range(start: string, end: string) {
   const [year, month, day] = start.split('-').map(Number) as [number, number, number]
   const cursor = new Date(0)
   cursor.setUTCHours(0, 0, 0, 0)
@@ -81,7 +82,7 @@ function expand_day_range(start: string, end: string): string[] {
   return entries
 }
 
-function expand_month_range(start: string, end: string): string[] {
+function expand_month_range(start: string, end: string) {
   const [start_year, start_month] = start.split('-').map(Number) as [number, number]
   const [end_year, end_month] = end.split('-').map(Number) as [number, number]
   const end_index = end_year * 12 + end_month - 1
@@ -94,7 +95,7 @@ function expand_month_range(start: string, end: string): string[] {
 }
 
 /** Parse and validate the front matter of a story markdown document. */
-export function parse_story_markdown(markdown: string): StoryMarkdownParseResult {
+export function parse_story_markdown(markdown: string, config: ContentMarkdownConfig) {
   const issues: ContentLintIssue[] = []
   const lines = markdown.split('\n')
 
@@ -148,8 +149,8 @@ export function parse_story_markdown(markdown: string): StoryMarkdownParseResult
         if (! value) {
           push_issue(issues, line_no, '标题不能为空')
         }
-        else if ([...value].length > story_title_max_length) {
-          push_issue(issues, line_no, `标题太长了，最多 ${story_title_max_length} 个字符`)
+        else if ([... value].length > config.title_max_length) {
+          push_issue(issues, line_no, `标题太长了，最多 ${config.title_max_length} 个字符`)
         }
         else {
           title = value
@@ -158,8 +159,8 @@ export function parse_story_markdown(markdown: string): StoryMarkdownParseResult
       }
       case 'rating': {
         const parsed = Number(value)
-        if (! Number.isInteger(parsed) || parsed < story_rating_min || parsed > story_rating_max) {
-          push_issue(issues, line_no, `评分必须是 ${story_rating_min}~${story_rating_max} 的整数`)
+        if (! Number.isInteger(parsed) || parsed < config.rating_min || parsed > config.rating_max) {
+          push_issue(issues, line_no, `评分必须是 ${config.rating_min}~${config.rating_max} 的整数`)
         }
         else {
           rating = parsed
@@ -264,12 +265,13 @@ export function parse_story_markdown(markdown: string): StoryMarkdownParseResult
 }
 
 /** Skeleton inserted into the editor when creating a new story. */
-export function story_markdown_template(): string {
+export function story_markdown_template(config: ContentMarkdownConfig) {
   const [year, month, day] = new Date().toISOString().slice(0, 10).split('-').map(Number)
+  const default_rating = Math.round((config.rating_min + config.rating_max) / 2)
   return [
     '---',
     'title: ',
-    'rating: 3',
+    `rating: ${default_rating}`,
     `time: ${year}/${month}/${day}`,
     '---',
     '',
@@ -277,7 +279,7 @@ export function story_markdown_template(): string {
 }
 
 /** Remove the front matter block, leaving only the markdown body. */
-export function strip_front_matter(markdown: string): string {
+export function strip_front_matter(markdown: string) {
   const lines = markdown.split('\n')
   if (lines[0]?.trim() !== '---') {
     return markdown
@@ -291,18 +293,18 @@ export function strip_front_matter(markdown: string): string {
 }
 
 /** Root-relative URL path for an attachment (the static host prefixes it at render time). */
-export function attachment_url_path(story_id: number, file_name: string): string {
+export function attachment_url_path(story_id: number, file_name: string) {
   return `/content/${story_id}/${encodeURIComponent(file_name)}`
 }
 
 /** Story-local URL used inside Markdown attachment links. */
-export function attachment_markdown_path(file_name: string): string {
+export function attachment_markdown_path(file_name: string) {
   return encodeURIComponent(file_name)
 }
 
 const markdown_link = /(!?\[[^\]]*\]\(\s*<?)([^)\s<>]+)(>?(?:\s+"[^"]*")?\s*\))/g
 
-function attachment_name_from_url(url: string): string | null {
+function attachment_name_from_url(url: string) {
   if (url.includes('/') || url.startsWith('#') || /^[a-z][\w+.-]*:/i.test(url)) {
     return null
   }
@@ -320,7 +322,7 @@ function attachment_name_from_url(url: string): string | null {
 }
 
 /** Extract attachment file names referenced from the markdown body for a story. */
-export function extract_attachment_names(markdown: string): string[] {
+export function extract_attachment_names(markdown: string) {
   const names = new Set<string>()
 
   for (const match of markdown.matchAll(markdown_link)) {
@@ -331,11 +333,11 @@ export function extract_attachment_names(markdown: string): string[] {
     }
   }
 
-  return [...names]
+  return [... names]
 }
 
 /** Rename matching attachment URLs and default link labels without touching custom labels. */
-export function rename_attachment_references(markdown: string, old_file_name: string, new_file_name: string): string {
+export function rename_attachment_references(markdown: string, old_file_name: string, new_file_name: string) {
   const new_local_path = attachment_markdown_path(new_file_name)
 
   return markdown.replace(markdown_link, (link, prefix: string, url: string, suffix: string) => {

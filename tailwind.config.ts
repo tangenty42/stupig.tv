@@ -15,7 +15,7 @@ export default {
   theme: {
     extend: {
       borderRadius: {
-        DEFAULT: '1rem',
+        DEFAULT: '0.4rem',
         sm: '0.4rem',
         md: '0.8rem',
       },

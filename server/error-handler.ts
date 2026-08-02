@@ -1,5 +1,4 @@
 import { ApiError } from '@server/errors/ApiError'
-import { fail } from '@server/types/response'
 import { defineNitroErrorHandler } from 'nitropack/runtime'
 import { ZodError } from 'zod'
 
@@ -28,7 +27,7 @@ export default defineNitroErrorHandler(async (error, event) => {
   if (event.path?.startsWith('/api')) {
     send(
       event,
-      JSON.stringify(fail(message)),
+      JSON.stringify({ message }),
     )
     setResponseStatus(event, statusCode)
     setResponseHeaders(event, { 'content-type': 'application/json' })

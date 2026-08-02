@@ -15,20 +15,20 @@
       <template #footer>
         <div class="flex w-full items-center justify-between gap-2">
           <div class="flex items-center gap-2">
-            <Button aria-label="向左旋转" rounded severity="secondary" :disabled="pending" @click="rotate_left">
+            <Button aria-label="向左旋转" severity="secondary" :disabled="pending" @click="rotate_left">
               <template #icon>
                 <MyIcon name="lucide:rotate-ccw" />
               </template>
             </Button>
-            <Button aria-label="向右旋转" rounded severity="secondary" :disabled="pending" @click="rotate_right">
+            <Button aria-label="向右旋转" severity="secondary" :disabled="pending" @click="rotate_right">
               <template #icon>
                 <MyIcon name="lucide:rotate-cw" />
               </template>
             </Button>
           </div>
           <div class="flex items-center gap-2">
-            <Button label="取消" severity="secondary" text rounded :disabled="pending" @click="close_crop_modal" />
-            <Button rounded label="确定" :loading="pending" :disabled="pending" @click="submit_avatar">
+            <Button label="取消" severity="secondary" text :disabled="pending" @click="close_crop_modal" />
+            <Button label="确定" :loading="pending" :disabled="pending" @click="submit_avatar">
               <template #icon>
                 <MyIcon name="lucide:check" />
               </template>

@@ -1,7 +1,7 @@
 /** Messages matching this pattern are Zod/technical debug output — never show them. */
 const debug_message_re = /^(?:Invalid input|Expected|Received)\b/i
 
-export function error_message(error: unknown): string {
+export function error_message(error: unknown) {
   if (typeof error === 'string') {
     return debug_message_re.test(error) ? '输入格式不正确' : error
   }

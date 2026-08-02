@@ -48,7 +48,7 @@
               控制台
             </NuxtLink>
           </div>
-          <Button aria-label="退出登录" text rounded severity="secondary" @click="$emit('logout')">
+          <Button aria-label="退出登录" text severity="secondary" @click="$emit('logout')">
             <template #icon>
               <MyIcon name="lucide:log-out" />
             </template>

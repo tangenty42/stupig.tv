@@ -37,7 +37,7 @@ let broadcast_channel: BroadcastChannel | null = null
 let collected_resources = new Set<string>()
 let resource_gather_promise: Promise<Set<string>> | null = null
 
-function get_broadcast_channel(): BroadcastChannel | null {
+function get_broadcast_channel() {
   if (import.meta.server) {
     return null
   }
@@ -55,7 +55,7 @@ function get_broadcast_channel(): BroadcastChannel | null {
   return broadcast_channel
 }
 
-function sync_client_id(): string {
+function sync_client_id() {
   if (import.meta.server) {
     return ''
   }
@@ -69,7 +69,7 @@ function sync_client_id(): string {
   return id
 }
 
-function sync_connection_id(): string {
+function sync_connection_id() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
 
@@ -114,7 +114,7 @@ function notify_listeners(event: DataSyncEvent) {
   })
 }
 
-function is_duplicate(id: string): boolean {
+function is_duplicate(id: string) {
   if (id && id === last_seen_id) {
     return true
   }
@@ -123,7 +123,7 @@ function is_duplicate(id: string): boolean {
   return false
 }
 
-function next_event_id(): string {
+function next_event_id() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
 
@@ -176,7 +176,7 @@ export function broadcast_login(user_id: number) {
   broadcast_event(event)
 }
 
-function broker_ws_url(): string {
+function broker_ws_url() {
   const config = useRuntimeConfig().public
   const host = config.mqtt_ws_host
   const is_secure = typeof location !== 'undefined' && location.protocol === 'https:'
@@ -185,7 +185,7 @@ function broker_ws_url(): string {
   return `${protocol}://${host}:${port}/mqtt`
 }
 
-function broker_client_id(): string {
+function broker_client_id() {
   const config = useRuntimeConfig().public
   if (! current_client_id) {
     current_client_id = `${config.mqtt_client_id_prefix_web}_${sync_client_id()}_${sync_connection_id()}`
@@ -316,7 +316,7 @@ function sync_mqtt_subscriptions() {
     return
   }
 
-  const all_resources = Array.from(new Set([...listeners.keys(), ...collected_resources]))
+  const all_resources = Array.from(new Set([... listeners.keys(), ... collected_resources]))
   const topics = all_resources.map(resource => `${config.mqtt_topic_prefix}/${resource}`)
   if (topics.length) {
     const client = mqtt_client
@@ -470,17 +470,17 @@ async function collect_resources() {
   }
 }
 
-function gather_resources(): Promise<Set<string>> {
+function gather_resources() {
   const channel = get_broadcast_channel()
   if (! channel) {
-    return Promise.resolve(new Set())
+    return Promise.resolve(new Set<string>())
   }
 
   if (resource_gather_promise) {
     return resource_gather_promise
   }
 
-  resource_gather_promise = new Promise((resolve) => {
+  resource_gather_promise = new Promise<Set<string>>((resolve) => {
     const request_id = next_event_id()
     const collected = new Set<string>()
 

@@ -16,7 +16,6 @@
             v-if="active_filter"
             severity="secondary"
             variant="text"
-            rounded
             class="!p-1"
             aria-label="清空约束"
             @click="clear_filter"
@@ -32,12 +31,12 @@
         <h2>用户列表</h2>
 
         <div class="flex flex-wrap gap-2">
-          <Button v-if="selected_count" severity="secondary" text rounded label="清空已选" size="small" @click="clear_selection">
+          <Button v-if="selected_count" severity="secondary" text label="清空已选" size="small" @click="clear_selection">
             <template #icon>
               <MyIcon name="lucide:trash-2" />
             </template>
           </Button>
-          <Button severity="secondary" text rounded :loading="users_loading" label="刷新" size="small" @click="reload_users('manual')">
+          <Button severity="secondary" text :loading="users_loading" label="刷新" size="small" @click="reload_users('manual')">
             <template #icon>
               <MyIcon name="lucide:refresh-cw" />
             </template>
@@ -47,7 +46,6 @@
 
       <div class="mb-2 flex flex-wrap gap-2">
         <Button
-          rounded
           :variant="current_page_all_selected ? undefined : 'text'"
           :label="current_page_all_selected ? '取消全选' : '全选本页'"
           size="small"
@@ -62,7 +60,6 @@
           :key="shortcut.key"
           :severity="shortcut.severity"
           text
-          rounded
           :loading="batch_pending_command === shortcut.key"
           :disabled="batch_busy"
           :label="shortcut.label"
@@ -152,7 +149,7 @@
 </template>
 
 <script setup lang="ts">
-import type { ApiAdminUser, ApiAdminUserList } from '~/composables/useApi'
+import type { AdminUser, AdminUserList } from '@shared/types/user'
 
 definePageMeta({
   middleware: 'require-admin-auth',
@@ -183,7 +180,7 @@ const active_filter = ref('')
 const page = ref(1)
 const page_size = ref(rows_per_page_options[0]!)
 
-const users_result = ref<ApiAdminUserList | null>(null)
+const users_result = ref<AdminUserList | null>(null)
 const users_loading = ref(false)
 const selected_ids = ref(new Set<number>())
 
@@ -201,17 +198,17 @@ const last_sync_reason = ref<RefreshReason>('initial')
 let poll_timer: ReturnType<typeof setInterval> | null = null
 let reload_serial = 0
 
-const users = computed<ApiAdminUser[]>(() => users_result.value?.users ?? [])
+const users = computed<AdminUser[]>(() => users_result.value?.users ?? [])
 const total = computed(() => users_result.value?.total ?? 0)
 const selected_count = computed(() => selected_ids.value.size)
 const first_record_index = computed(() => Math.max(0, (page.value - 1) * page_size.value))
 const current_page_all_selected = computed(() => {
-  return users.value.length > 0 && users.value.every((user: ApiAdminUser) => selected_ids.value.has(user.id))
+  return users.value.length > 0 && users.value.every((user: AdminUser) => selected_ids.value.has(user.id))
 })
 const batch_busy = computed(() => batch_pending_command.value !== null)
 const verify_note_pending = computed(() => batch_pending_command.value === 'VERIFY')
 
-function next_set_with(ids: Set<number>, target_id: number, enabled: boolean): Set<number> {
+function next_set_with(ids: Set<number>, target_id: number, enabled: boolean) {
   const next = new Set(ids)
   if (enabled) {
     next.add(target_id)
@@ -235,7 +232,7 @@ function remove_pending(set_ref: Ref<Set<number>>, ids: number[]) {
 }
 
 function prune_selection() {
-  const visible_ids = new Set(users.value.map((user: ApiAdminUser) => user.id))
+  const visible_ids = new Set(users.value.map((user: AdminUser) => user.id))
   selected_ids.value = new Set(Array.from(selected_ids.value).filter(id => visible_ids.has(id)))
 }
 
@@ -398,7 +395,7 @@ function request_verification_note(ids: number[]) {
     return
   }
 
-  verify_target_ids.value = [...ids]
+  verify_target_ids.value = [... ids]
   verify_note_value.value = ids.length === 1
     ? (users.value.find(user => user.id === ids[0])?.verified_note ?? '')
     : ''
@@ -412,7 +409,7 @@ async function submit_verification_note() {
     return
   }
 
-  const ids = [...verify_target_ids.value]
+  const ids = [... verify_target_ids.value]
   const success = await perform_command('VERIFY', ids, note)
   if (success) {
     reset_verify_note_dialog()
@@ -430,7 +427,7 @@ function handle_command(command: string) {
     return
   }
 
-  const ids: number[] = Array.from((selected_ids.value as Set<number>).values())
+  const ids = Array.from((selected_ids.value as Set<number>).values())
   if (! ids.length) {
     return
   }
@@ -443,15 +440,15 @@ function handle_command(command: string) {
   void perform_command(command as BatchCommand, ids)
 }
 
-function toggle_disabled(user: ApiAdminUser) {
+function toggle_disabled(user: AdminUser) {
   void perform_command(user.is_banned ? 'UNBAN' : 'BAN', [user.id])
 }
 
-function force_logout(user: ApiAdminUser) {
+function force_logout(user: AdminUser) {
   void perform_command('KICK', [user.id])
 }
 
-function toggle_verified(user: ApiAdminUser) {
+function toggle_verified(user: AdminUser) {
   if (user.is_verified) {
     void perform_command('UNVERIFY', [user.id])
     return
@@ -460,7 +457,7 @@ function toggle_verified(user: ApiAdminUser) {
   request_verification_note([user.id])
 }
 
-function toggle_admin(user: ApiAdminUser) {
+function toggle_admin(user: AdminUser) {
   void perform_command(user.is_admin ? 'DEMOTE' : 'PROMOTE', [user.id])
 }
 

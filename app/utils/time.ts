@@ -46,15 +46,15 @@ const SECOND_MS = 1000
 // and can be called from any context (timers, MQTT callbacks, etc.).
 let display_timezone = 'UTC'
 
-export function get_display_timezone(): string {
+export function get_display_timezone() {
   return display_timezone
 }
 
-export function set_display_timezone(tz: string | null | undefined): void {
+export function set_display_timezone(tz: string | null | undefined) {
   display_timezone = tz || 'UTC'
 }
 
-export function localize_date(input?: DateLike): Dayjs {
+export function localize_date(input?: DateLike) {
   const tz = get_display_timezone()
   if (input === null || input === undefined) {
     return dayjs().tz(tz)
@@ -65,7 +65,7 @@ export function localize_date(input?: DateLike): Dayjs {
   return dayjs(input).tz(tz)
 }
 
-export function duration_between(start_date: DateLike, end_date: DateLike): SimpleDuration {
+export function duration_between(start_date: DateLike, end_date: DateLike) {
   let start = localize_date(start_date)
   let end = localize_date(end_date)
 
@@ -83,7 +83,7 @@ export function duration_between(start_date: DateLike, end_date: DateLike): Simp
   }
 }
 
-export function duration_read(duration: Durationlike): SimpleDuration {
+export function duration_read(duration: Durationlike) {
   if (typeof duration === 'number') {
     let remaining = Math.abs(duration)
     const year = Math.floor(remaining / YEAR_MS)

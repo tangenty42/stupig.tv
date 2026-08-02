@@ -7,10 +7,10 @@ export function useMyConfirm() {
   function confirm_require(event: Event, message: string, accept: () => void, options: ConfirmationOptions = {}) {
     confirm.require({
       target: event.currentTarget as HTMLElement,
-      ...options,
+      ... options,
       message,
-      rejectProps: { severity: 'secondary', outlined: true, ...options.rejectProps },
-      acceptProps: { severity: 'contrast', ...options.acceptProps },
+      rejectProps: { severity: 'secondary', outlined: true, ... options.rejectProps },
+      acceptProps: { severity: 'contrast', ... options.acceptProps },
       accept,
     })
   }

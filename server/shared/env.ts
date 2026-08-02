@@ -45,6 +45,12 @@ const env_schema = z.object({
   SYNC_CLIENT_ID_STORAGE_KEY: z.string().min(1),
   MAX_AVATAR_SIZE_MB: z.coerce.number(),
   MAX_CONTENT_ATTACHMENT_SIZE_MB: z.coerce.number(),
+  CONTENT_STORY_TITLE_MAX_LENGTH: z.coerce.number().int().min(1).max(120),
+  CONTENT_STORY_RATING_MIN: z.coerce.number().int().min(1).max(255),
+  CONTENT_STORY_RATING_MAX: z.coerce.number().int().min(1).max(255),
+  CONTENT_DRAFT_SCHEMA_VERSION: z.coerce.number().int().positive(),
+  CONTENT_DRAFT_STORAGE_PREFIX: z.string().min(1),
+  CONTENT_DRAFT_AUTOSAVE_DELAY_MS: z.coerce.number().int().min(0).max(60_000),
   STATIC_ROOT: z.string().min(1),
   STATIC_BASE_URL: z.string(),
   ONLINE_TIMEOUT_SECONDS: z.coerce.number(),
@@ -61,6 +67,14 @@ const env_schema = z.object({
   MQTT_TOPIC_PREFIX: z.string().min(1),
   MQTT_CLIENT_ID_PREFIX_SERVER: z.string().min(1),
   MQTT_CLIENT_ID_PREFIX_WEB: z.string().min(1),
+}).superRefine((config, ctx) => {
+  if (config.CONTENT_STORY_RATING_MIN > config.CONTENT_STORY_RATING_MAX) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'CONTENT_STORY_RATING_MIN must not exceed CONTENT_STORY_RATING_MAX',
+      path: ['CONTENT_STORY_RATING_MIN'],
+    })
+  }
 })
 
 const parsed_env = env_schema.safeParse(process.env)

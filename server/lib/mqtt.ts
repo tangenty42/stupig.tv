@@ -1,11 +1,11 @@
 import mqtt from 'mqtt'
 import { env } from '../shared/env'
 
-function server_client_id(): string {
+function server_client_id() {
   return `${env.MQTT_CLIENT_ID_PREFIX_SERVER}_${process.pid}_${Date.now()}`
 }
 
-function broker_url(): string {
+function broker_url() {
   const auth = env.MQTT_USERNAME && env.MQTT_PASSWORD
     ? `${encodeURIComponent(env.MQTT_USERNAME)}:${encodeURIComponent(env.MQTT_PASSWORD)}@`
     : ''
@@ -14,7 +14,7 @@ function broker_url(): string {
 
 let client: mqtt.MqttClient | null = null
 
-export function get_mqtt_client(): mqtt.MqttClient | null {
+export function get_mqtt_client() {
   if (client) {
     return client
   }
@@ -48,7 +48,7 @@ export function get_mqtt_client(): mqtt.MqttClient | null {
   }
 }
 
-export function sync_topic(resource: string): string {
+export function sync_topic(resource: string) {
   return `${env.MQTT_TOPIC_PREFIX}/${resource}`
 }
 
@@ -69,6 +69,6 @@ function publish_when_ready(resource: string, payload: string, attempts: number 
   }
 }
 
-export function publish_sync(resource: string, payload: string): void {
+export function publish_sync(resource: string, payload: string) {
   publish_when_ready(resource, payload)
 }

@@ -1,6 +1,5 @@
 import type { NitroApp } from 'nitropack'
 import { ApiError } from '@server/errors/ApiError'
-import { fail } from '@server/types/response'
 import { ZodError } from 'zod'
 
 export default defineNitroPlugin((nitroApp: NitroApp) => {
@@ -26,7 +25,7 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
       message = error.message
     }
 
-    return new Response(JSON.stringify(fail(message)), {
+    return new Response(JSON.stringify({ message }), {
       status: statusCode,
       headers: { 'Content-Type': 'application/json' },
     })

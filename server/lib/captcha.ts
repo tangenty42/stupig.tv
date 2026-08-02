@@ -3,13 +3,13 @@ import { ApiError } from '@server/errors/ApiError'
 import { env } from '@shared/env'
 
 interface CaptchaParams {
-  lot_number: string
-  captcha_output: string
-  pass_token: string
-  gen_time: string
+  lot_number?: string
+  captcha_output?: string
+  pass_token?: string
+  gen_time?: string
 }
 
-export async function verify_captcha(params: CaptchaParams | undefined): Promise<void> {
+export async function verify_captcha(params: CaptchaParams | undefined) {
   if (! env.CAPTCHA_APP_ID) {
     return
   }

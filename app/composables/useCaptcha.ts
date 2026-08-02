@@ -103,7 +103,7 @@ function bind_captcha_events(obj: CaptchaObj) {
     })
 }
 
-function get_captcha_obj(captcha_id: string): Promise<CaptchaObj> {
+function get_captcha_obj(captcha_id: string) {
   if (captcha_obj) {
     return Promise.resolve(captcha_obj)
   }
@@ -142,7 +142,7 @@ export function useCaptcha() {
   const captcha_id = config.public.captcha_app_id
   const showing = get_captcha_showing_state()
 
-  async function verify(): Promise<CaptchaResult> {
+  async function verify() {
     if (import.meta.server) {
       throw new Error('verify() cannot run on the server')
     }
@@ -153,7 +153,7 @@ export function useCaptcha() {
 
     const obj = await get_captcha_obj(captcha_id)
 
-    return new Promise((resolve, reject) => {
+    return new Promise<CaptchaResult>((resolve, reject) => {
       captcha_verify_pending = { resolve, reject }
 
       if (captcha_ready) {

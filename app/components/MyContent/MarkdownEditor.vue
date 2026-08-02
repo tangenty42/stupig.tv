@@ -1,6 +1,7 @@
 <template>
   <div class="space-y-2">
-    <div class="flex flex-wrap items-center justify-end gap-2">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <slot name="toolbar-start" />
       <div class="flex items-center gap-3">
         <SelectButton
           v-model="editor_mode"
@@ -18,20 +19,16 @@
             </span>
           </template>
         </SelectButton>
-        <span
-          class="text-xs"
-          :class="issues.length ? 'text-red-500 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'"
-        >
-          <MyIcon :name="issues.length ? 'lucide:circle-alert' : 'lucide:circle-check'" class="mr-1 align-text-bottom" />
-          {{ issues.length ? `${issues.length} 个 lint 问题` : 'lint 通过' }}
-        </span>
       </div>
     </div>
 
     <div
       v-show="editor_mode === 'edit'"
       class="overflow-hidden rounded-sm border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
-      :class="{ 'border-dashed border-brand-400 dark:border-brand-600': drag_over }"
+      :class="{
+        'border-dashed border-brand-400 dark:border-brand-600': drag_over,
+        'editor-mode-enter': mode_has_switched && editor_mode === 'edit',
+      }"
       @dragover.prevent="on_drag_over"
       @dragleave.prevent="drag_over = false"
       @drop.prevent="on_drop"
@@ -46,11 +43,79 @@
         ref="editor_host"
         :class="{ hidden: ! editor_ready }"
       />
+
+      <div
+        v-if="search_open"
+        class="relative flex flex-col gap-y-2 border-t border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden"
+      >
+        <Button
+          text
+          rounded
+          severity="secondary"
+          aria-label="关闭查找替换"
+          class="!absolute -right-2 -top-2"
+          @click="close_search"
+        >
+          <template #icon>
+            <MyIcon name="lucide:x" class="text-xl" />
+          </template>
+        </Button>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2 pr-8">
+          <InputText
+            ref="search_input"
+            v-model="search_query"
+            size="small"
+            placeholder="查找"
+            aria-label="查找"
+            class="min-w-[10rem] flex-1"
+            @keydown="on_find_input_keydown"
+            @keydown.esc.prevent="close_search"
+          />
+          <span class="min-w-[3.5rem] text-right font-mono text-xs text-slate-400 dark:text-slate-500" aria-live="polite">
+            {{ match_status_text }}
+          </span>
+          <div class="flex items-center gap-1">
+            <Button size="small" severity="secondary" outlined label="上一个" :disabled="! match_count" @click="find_previous" />
+            <Button size="small" severity="secondary" outlined label="下一个" :disabled="! match_count" @click="find_next" />
+            <Button size="small" severity="secondary" outlined label="全部选中" :disabled="! match_count" @click="select_all_matches" />
+          </div>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+            <label class="flex items-center gap-1.5">
+              <Checkbox v-model="match_case" binary size="small" />
+              区分大小写
+            </label>
+            <label class="flex items-center gap-1.5">
+              <Checkbox v-model="match_regexp" binary size="small" />
+              正则
+            </label>
+            <label class="flex items-center gap-1.5">
+              <Checkbox v-model="match_word" binary size="small" />
+              全词匹配
+            </label>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <InputText
+            v-model="replace_query"
+            size="small"
+            placeholder="替换为"
+            aria-label="替换为"
+            class="min-w-[10rem] flex-1"
+            @keydown.enter.prevent="replace_current"
+            @keydown.esc.prevent="close_search"
+          />
+          <div class="flex items-center gap-1">
+            <Button size="small" severity="secondary" outlined label="替换" :disabled="! match_count" @click="replace_current" />
+            <Button size="small" severity="secondary" outlined label="全部替换" :disabled="! match_count" @click="replace_all" />
+          </div>
+        </div>
+      </div>
     </div>
 
     <div
       v-show="editor_mode === 'preview'"
       class="min-h-80 overflow-hidden rounded-sm border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900"
+      :class="{ 'editor-mode-enter': mode_has_switched && editor_mode === 'preview' }"
     >
       <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" empty-text="暂无可预览内容" />
     </div>
@@ -74,12 +139,13 @@
 <script setup lang="ts">
 import type { Diagnostic } from '@codemirror/lint'
 import type { Text } from '@codemirror/state'
+import type { DecorationSet } from '@codemirror/view'
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { markdown as markdown_lang } from '@codemirror/lang-markdown'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { linter, lintGutter } from '@codemirror/lint'
-import { Compartment, EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField } from '@codemirror/state'
+import { Decoration, EditorView, keymap } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import { parse_story_markdown } from '@shared/content-markdown'
 import { basicSetup } from 'codemirror'
@@ -111,17 +177,29 @@ const emit = defineEmits<{
 const model = defineModel<string>({ default: '' })
 
 const color_mode = useMyColorMode()
+const content_markdown_config = useContentMarkdownConfig()
 
 const editor_host = ref<HTMLElement>()
 const editor_ready = ref(false)
 const drag_over = ref(false)
 const issues = ref<LintListItem[]>([])
 const editor_mode = ref<'edit' | 'preview'>('edit')
+const mode_has_switched = ref(false)
 
 const editor_modes = [
   { label: '编辑', value: 'edit', icon: 'lucide:pencil' },
   { label: '预览', value: 'preview', icon: 'lucide:eye' },
 ]
+
+const search_open = ref(false)
+const search_query = ref('')
+const replace_query = ref('')
+const match_case = ref(false)
+const match_regexp = ref(false)
+const match_word = ref(false)
+const match_count = ref(0)
+const match_active = ref(- 1)
+const search_input = ref<{ $el: HTMLInputElement } | null>(null)
 
 let view: EditorView | null = null
 const theme_compartment = new Compartment()
@@ -138,10 +216,10 @@ const markdownlint_config = {
 }
 const front_matter_pattern = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/
 
-function build_diagnostics(doc_text: string, doc: Text): Diagnostic[] {
+function build_diagnostics(doc_text: string, doc: Text) {
   const diagnostics: Diagnostic[] = []
 
-  for (const issue of parse_story_markdown(doc_text).issues) {
+  for (const issue of parse_story_markdown(doc_text, content_markdown_config).issues) {
     const line = doc.line(Math.min(issue.line, doc.lines))
     diagnostics.push({
       from: line!.from,
@@ -179,7 +257,7 @@ function build_diagnostics(doc_text: string, doc: Text): Diagnostic[] {
   return diagnostics
 }
 
-function diagnostics_to_items(diagnostics: Diagnostic[], doc: Text): LintListItem[] {
+function diagnostics_to_items(diagnostics: Diagnostic[], doc: Text) {
   return diagnostics.map(diagnostic => ({
     from: diagnostic.from,
     line: doc.lineAt(diagnostic.from).number,
@@ -262,6 +340,290 @@ function theme_extensions(mode: 'light' | 'dark') {
     : [light_theme, syntaxHighlighting(light_highlight)]
 }
 
+interface SearchSpec {
+  query: string
+  case_sensitive: boolean
+  regexp: boolean
+  whole_word: boolean
+}
+
+interface SearchMatch {
+  from: number
+  to: number
+}
+
+interface SearchFieldValue {
+  spec: SearchSpec | null
+  matches: SearchMatch[]
+  active: number
+  decorations: DecorationSet
+}
+
+const set_search_spec_effect = StateEffect.define<SearchSpec | null>()
+const search_match_mark = Decoration.mark({ class: 'cm-search-hit' })
+const search_active_mark = Decoration.mark({ class: 'cm-search-hit-active' })
+
+function escape_regexp_source(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function build_search_source(spec: SearchSpec) {
+  if (! spec.query)
+    return null
+  let source = spec.regexp ? spec.query : escape_regexp_source(spec.query)
+  if (spec.whole_word) {
+    if (/^\w/.test(source))
+      source = `\\b${source}`
+    if (/\w$/.test(source))
+      source = `${source}\\b`
+  }
+  return source
+}
+
+function build_search_regex(spec: SearchSpec) {
+  const source = build_search_source(spec)
+  if (! source)
+    return null
+  try {
+    return new RegExp(source, spec.case_sensitive ? 'g' : 'gi')
+  }
+  catch {
+    return null
+  }
+}
+
+function collect_search_matches(spec: SearchSpec, state: EditorState) {
+  const matches: SearchMatch[] = []
+  const regex = build_search_regex(spec)
+  if (! regex)
+    return matches
+  const text = state.doc.toString()
+  for (;;) {
+    const result = regex.exec(text)
+    if (result === null)
+      break
+    matches.push({ from: result.index, to: result.index + result[0].length })
+    if (result[0].length === 0)
+      regex.lastIndex += 1
+  }
+  return matches
+}
+
+const search_field = StateField.define<SearchFieldValue>({
+  create: () => ({ spec: null, matches: [], active: - 1, decorations: Decoration.none }),
+  update(value, tr) {
+    let spec = value.spec
+    for (const effect of tr.effects) {
+      if (effect.is(set_search_spec_effect))
+        spec = effect.value
+    }
+    if (! spec)
+      return { spec: null, matches: [], active: - 1, decorations: Decoration.none }
+    if (spec === value.spec && ! tr.docChanged && tr.newSelection === tr.startState.selection)
+      return value
+    const matches = collect_search_matches(spec, tr.state)
+    const head = tr.state.selection.main.head
+    let active = matches.findIndex(match => match.from <= head && head <= match.to)
+    if (active === - 1)
+      active = matches.findIndex(match => match.from >= head)
+    const marks = matches.flatMap((match, index) => {
+      if (match.to === match.from)
+        return []
+      return [(index === active ? search_active_mark : search_match_mark).range(match.from, match.to)]
+    })
+    return { spec, matches, active, decorations: Decoration.set(marks, true) }
+  },
+  provide: field => EditorView.decorations.from(field, value => value.decorations),
+})
+
+function current_search_spec() {
+  return {
+    query: search_query.value,
+    case_sensitive: match_case.value,
+    regexp: match_regexp.value,
+    whole_word: match_word.value,
+  }
+}
+
+const search_regex_invalid = computed(() => {
+  if (! search_query.value || ! match_regexp.value)
+    return false
+  return build_search_regex(current_search_spec()) === null
+})
+
+const match_status_text = computed(() => {
+  if (! search_query.value)
+    return ''
+  if (search_regex_invalid.value)
+    return '正则表达式无效'
+  if (! match_count.value)
+    return '无结果'
+  if (match_active.value < 0)
+    return `共 ${match_count.value} 处`
+  return `${match_active.value + 1}/${match_count.value}`
+})
+
+function sync_search_spec() {
+  if (! view || ! search_open.value)
+    return
+  view.dispatch({ effects: set_search_spec_effect.of(current_search_spec()) })
+}
+
+watch([search_query, match_case, match_regexp, match_word], sync_search_spec)
+
+watch(editor_mode, (mode) => {
+  mode_has_switched.value = true
+  if (mode !== 'edit')
+    close_search()
+})
+
+function open_search() {
+  search_open.value = true
+  if (view) {
+    const selection = view.state.selection.main
+    if (! selection.empty) {
+      const selected = view.state.sliceDoc(selection.from, selection.to)
+      if (! selected.includes('\n'))
+        search_query.value = selected
+    }
+  }
+  sync_search_spec()
+  void nextTick(() => search_input.value?.$el.select())
+}
+
+function close_search() {
+  if (! search_open.value)
+    return
+  search_open.value = false
+  match_count.value = 0
+  match_active.value = - 1
+  view?.dispatch({ effects: set_search_spec_effect.of(null) })
+  view?.focus()
+}
+
+function select_match(match: SearchMatch) {
+  view?.dispatch({
+    selection: { anchor: match.from, head: match.to },
+    effects: EditorView.scrollIntoView(EditorSelection.range(match.from, match.to), { y: 'center' }),
+    userEvent: 'select.search',
+  })
+}
+
+function step_match(direction: 1 | - 1) {
+  if (! view)
+    return
+  const { matches } = view.state.field(search_field)
+  if (! matches.length)
+    return
+  const selection = view.state.selection.main
+  let index: number
+  if (direction === 1) {
+    const start = selection.empty ? selection.head : selection.from + 1
+    index = matches.findIndex(match => match.from >= start)
+    if (index === - 1)
+      index = 0
+  }
+  else {
+    const start = selection.empty ? selection.head : selection.to - 1
+    index = matches.length - 1
+    while (index >= 0 && matches[index]!.to > start)
+      index -= 1
+    if (index < 0)
+      index = matches.length - 1
+  }
+  select_match(matches[index]!)
+}
+
+function find_next() {
+  step_match(1)
+}
+
+function find_previous() {
+  step_match(- 1)
+}
+
+function select_all_matches() {
+  if (! view)
+    return
+  const { matches } = view.state.field(search_field)
+  if (! matches.length)
+    return
+  view.dispatch({
+    selection: EditorSelection.create(matches.map(match => EditorSelection.range(match.from, match.to))),
+    userEvent: 'select.search.all',
+  })
+}
+
+function replacement_text(spec: SearchSpec, matched: string) {
+  if (! spec.regexp)
+    return replace_query.value
+  const source = build_search_source(spec)
+  if (! source)
+    return null
+  try {
+    return matched.replace(new RegExp(`^(?:${source})$`, spec.case_sensitive ? '' : 'i'), replace_query.value)
+  }
+  catch {
+    return null
+  }
+}
+
+function replace_current() {
+  if (! view)
+    return
+  const field_value = view.state.field(search_field)
+  const spec = field_value.spec
+  if (! spec)
+    return
+  const selection = view.state.selection.main
+  const match = field_value.matches.find(item => item.from === selection.from && item.to === selection.to)
+  if (! match) {
+    find_next()
+    return
+  }
+  const replacement = replacement_text(spec, view.state.sliceDoc(match.from, match.to))
+  if (replacement === null)
+    return
+  view.dispatch({
+    changes: { from: match.from, to: match.to, insert: replacement },
+    selection: { anchor: match.from + replacement.length },
+    userEvent: 'input.replace',
+  })
+  find_next()
+}
+
+function replace_all() {
+  if (! view)
+    return
+  const field_value = view.state.field(search_field)
+  const spec = field_value.spec
+  if (! spec || ! field_value.matches.length)
+    return
+  const changes: { from: number, to: number, insert: string }[] = []
+  for (const match of field_value.matches) {
+    const replacement = replacement_text(spec, view.state.sliceDoc(match.from, match.to))
+    if (replacement === null)
+      return
+    changes.push({ from: match.from, to: match.to, insert: replacement })
+  }
+  view.dispatch({ changes, userEvent: 'input.replace.all' })
+}
+
+function on_find_input_keydown(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+    event.preventDefault()
+    search_input.value?.$el.select()
+    return
+  }
+  if (event.key !== 'Enter')
+    return
+  event.preventDefault()
+  if (event.shiftKey)
+    find_previous()
+  else
+    find_next()
+}
+
 onMounted(() => {
   view = new EditorView({
     parent: editor_host.value!,
@@ -269,14 +631,38 @@ onMounted(() => {
       doc: model.value,
       extensions: [
         basicSetup,
+        Prec.highest(keymap.of([
+          {
+            key: 'Mod-f',
+            run: () => {
+              open_search()
+              return true
+            },
+          },
+          {
+            key: 'Escape',
+            run: () => {
+              if (! search_open.value)
+                return false
+              close_search()
+              return true
+            },
+          },
+        ])),
         markdown_lang({ extensions: { remove: ['SetextHeading'] } }),
         lint_source,
         lintGutter(),
+        search_field,
         theme_compartment.of(theme_extensions(color_mode.value)),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             model.value = update.state.doc.toString()
+          }
+          if (search_open.value) {
+            const field_value = update.state.field(search_field)
+            match_count.value = field_value.matches.length
+            match_active.value = field_value.active
           }
         }),
         EditorView.contentAttributes.of({ 'aria-label': '档案内容 Markdown 编辑器' }),
@@ -346,7 +732,7 @@ defineExpose({
 
 function on_drop(event: DragEvent) {
   drag_over.value = false
-  const dropped_files = event.dataTransfer?.files ? [...event.dataTransfer.files] : []
+  const dropped_files = event.dataTransfer?.files ? [... event.dataTransfer.files] : []
   if (dropped_files.length) {
     const position = view ? (view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.from) : null
     emit('files-dropped', dropped_files, position)
@@ -383,5 +769,34 @@ function on_drag_over(event: DragEvent) {
 
 :deep(.cm-tooltip) {
   @apply rounded-sm overflow-hidden border border-slate-200 bg-white text-xs text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200;
+}
+
+:deep(.cm-search-hit) {
+  @apply rounded-sm bg-amber-200/70 dark:bg-amber-500/30;
+}
+
+:deep(.cm-search-hit-active) {
+  @apply bg-amber-300 dark:bg-amber-400/50;
+}
+
+/* basicSetup's selection-match marks would double-highlight search hits */
+:deep(.cm-selectionMatch) {
+  @apply !bg-transparent;
+}
+
+.editor-mode-enter {
+  animation: editor-mode-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes editor-mode-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-mode-enter {
+    animation: none;
+  }
 }
 </style>

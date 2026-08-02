@@ -1,4 +1,3 @@
-import type { SessionOverview } from '@shared/types/api'
 import type { H3Event } from 'h3'
 import type { RowDataPacket } from 'mysql2/promise'
 
@@ -39,7 +38,7 @@ interface ReusableSessionRow extends RowDataPacket {
   is_reusable: number
 }
 
-export function get_request_device_context(event: H3Event): DeviceContext {
+export function get_request_device_context(event: H3Event) {
   const user_agent = getHeader(event, 'user-agent') ?? null
   const ip = get_client_ip(event)
 
@@ -55,7 +54,7 @@ export async function create_login_session(
   token_hash: string,
   identity_token: string,
   device: DeviceContext,
-): Promise<void> {
+) {
   const expires_at = dayjs().utc().add(env.SESSION_MAX_AGE_DAYS, 'day')
     .toDate()
 
@@ -115,7 +114,7 @@ export async function create_login_session(
 export async function get_login_sessions(
   user_id: number,
   current_token_hash: string | null,
-): Promise<SessionOverview> {
+) {
   const [rows] = await db.execute<SessionRow[]>(
     `SELECT
        id,
@@ -147,7 +146,7 @@ export async function get_login_sessions(
   )
 
   const records = rows.map(row => ({
-    ...row,
+    ... row,
     is_logged_out: Boolean(row.is_logged_out),
     is_expired: Boolean(row.is_expired),
     is_online: Boolean(row.is_online),
@@ -157,21 +156,21 @@ export async function get_login_sessions(
   return { records }
 }
 
-export async function logout_session(id: number): Promise<void> {
+export async function logout_session(id: number) {
   await db.execute(
     'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE id = ?',
     [id],
   )
 }
 
-export async function logout_session_by_token_hash(token_hash: string): Promise<void> {
+export async function logout_session_by_token_hash(token_hash: string) {
   await db.execute(
     'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE token_hash = ?',
     [token_hash],
   )
 }
 
-export async function logout_all_user_sessions(user_id: number, except_token_hash?: string | null): Promise<void> {
+export async function logout_all_user_sessions(user_id: number, except_token_hash?: string | null) {
   if (except_token_hash) {
     await db.execute(
       'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE user_id = ? AND token_hash != ?',
