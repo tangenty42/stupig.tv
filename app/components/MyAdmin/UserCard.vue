@@ -1,28 +1,19 @@
 <template>
   <Card
     class="admin-user-card"
-    :class="selected ? '!border-primary-400 dark:!border-primary-400' : ''"
+    :class="selected ? '!border-primary-400 dark:!border-primary-500' : ''"
     @click="emit('toggle-select', user.id)"
   >
     <template #content>
       <div class="flex items-start gap-5">
         <div class="shrink-0">
-          <ClientOnly>
-            <OverlayBadge :severity="user.is_online ? 'success' : 'secondary'" class="avatar-online-badge">
-              <MyAvatar
-                :user="{ id: user.id, username: user.username, avatar_file: user.avatar_file }"
-                size="large"
-                previewable
-              />
-            </OverlayBadge>
-            <template #fallback>
-              <MyAvatar
-                :user="{ id: user.id, username: user.username, avatar_file: user.avatar_file }"
-                size="large"
-                previewable
-              />
-            </template>
-          </ClientOnly>
+          <OverlayBadge :severity="user.is_online ? 'success' : 'secondary'" class="avatar-online-badge">
+            <MyAvatar
+              :user="{ id: user.id, username: user.username, avatar_file: user.avatar_file }"
+              size="large"
+              previewable
+            />
+          </OverlayBadge>
         </div>
 
         <div class="min-w-0 flex-1">

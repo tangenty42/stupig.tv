@@ -49,3 +49,28 @@ export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' |
     return 'sheet'
   return 'file'
 }
+
+/**
+ * Resolve a front matter `cover` link the same way the markdown preview resolves
+ * attachment URLs: bare file names point at the story's attachment directory
+ * (story_id null means the new-story editor, whose orphan uploads live under content/0/).
+ */
+export function story_front_cover_url(cover: string, story_id: number | null) {
+  if (! cover.includes('/') && ! cover.startsWith('#') && ! /^[a-z][\w+.-]*:/i.test(cover)) {
+    const static_url = useStaticUrl()
+    return static_url(`/content/${story_id ?? 0}/${cover}`)
+  }
+  return cover
+}
+
+/**
+ * Alt text for a cover image: the markdown label (`![label](file.jpg)`) when
+ * present, otherwise the cover's file name.
+ */
+export function cover_alt(cover: string | null | undefined, cover_label: string | null | undefined, fallback: string) {
+  const label = cover_label?.trim()
+  if (label) {
+    return label
+  }
+  return cover?.split('/').pop() || fallback
+}

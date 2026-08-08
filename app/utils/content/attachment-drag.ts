@@ -34,5 +34,6 @@ export function get_content_attachment_drag_data(data_transfer: DataTransfer | n
 }
 
 export function content_attachment_markdown(attachment: ContentAttachmentDragData) {
-  return `${attachment.is_image ? '!' : ''}[${attachment.file_name}](${attachment_markdown_path(attachment.file_name)})`
+  // Label-off: the preview renders the file name itself (card / caption-off).
+  return `${attachment.is_image ? '!' : ''}[](${attachment_markdown_path(attachment.file_name)})`
 }

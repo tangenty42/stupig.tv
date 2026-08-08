@@ -1,39 +1,37 @@
 <template>
-  <div class="space-y-6 pb-12 pt-8">
-    <div v-if="! is_edit || story" class="space-y-6">
-      <MyHeightSection tag="section" class="section-card-collapse">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-          <div class="flex items-center gap-3">
-            <Button text aria-label="返回" @click="navigateTo('/content')">
-              <template #icon>
-                <MyIcon name="lucide:arrow-left" />
-              </template>
-            </Button>
-            <h1>{{ is_edit ? story!.title : '新建档案' }}</h1>
-          </div>
-          <div v-if="is_edit" class="flex items-center gap-2">
-            <Button
-              severity="danger"
-              text
-              size="small"
-              label="删除档案"
-              :loading="delete_pending"
-              @click="confirm_delete_story"
-            >
-              <template #icon>
-                <MyIcon name="lucide:trash-2" />
-              </template>
-            </Button>
-          </div>
-        </div>
-      </MyHeightSection>
+  <div class="space-y-12 pb-12 pt-8">
+    <div v-if="! is_edit || story">
+      <div class="flex items-start gap-3">
+        <Button class="aspect-square" outlined aria-label="返回" @click="router.back()">
+          <template #icon>
+            <MyIcon name="lucide:arrow-left" />
+          </template>
+        </Button>
+        <Button
+          v-if="is_edit"
+          class="ml-auto"
+          severity="danger"
+          text
+          size="small"
+          label="删除档案"
+          :loading="delete_pending"
+          @click="confirm_delete_story"
+        >
+          <template #icon>
+            <MyIcon name="lucide:trash-2" />
+          </template>
+        </Button>
+      </div>
 
-      <MyHeightSection tag="section" class="section-card-collapse">
+      <MyContentStoryHeader class="mt-4" :invalid="! header_meta" :title="header_title" :labels="header_labels" :desc="header_desc" :cover="header_cover" :cover-label="header_cover_label" :date="header_date" :story-id="is_edit ? story_id : null" />
+
+      <MyHeightSection tag="section" class="section-card-collapse mt-6">
         <MyContentMarkdownEditor
           ref="markdown_editor"
           v-model="markdown"
           :story-id="is_edit ? story!.id : null"
-          :attachments="story?.attachments ?? []"
+          :attachments="stored_attachments"
+          :stories="existing_stories ?? []"
           @files-dropped="on_editor_files_dropped"
         >
           <template #toolbar-start>
@@ -44,7 +42,7 @@
               <MyIcon :name="draft_storage_error ? 'lucide:circle-alert' : 'lucide:cloud-check'" class="mr-1 align-text-bottom" />
               <span>{{ draft_status_label }}</span>
               <Button
-                v-if="is_edit && draft_dirty"
+                v-if="draft_dirty"
                 label="舍弃"
                 size="small"
                 text
@@ -59,59 +57,62 @@
         </MyContentMarkdownEditor>
       </MyHeightSection>
 
+      <MyDivider class="mt-12">
+        附件
+      </MyDivider>
+
       <MyHeightSection
-        v-if="is_edit && story"
+        v-show="markdown_editor?.editor_mode !== 'preview'"
         tag="section"
-        class="section-card-collapse transition-colors"
+        class="section-card-collapse transition-colors mt-6"
         @dragover.prevent="attachment_drag_over = true"
         @dragleave.prevent="attachment_drag_over = false"
         @drop.prevent="on_attachment_drop"
       >
-        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2>附件</h2>
-          <div class="flex items-center gap-3">
-            <span class="text-xs text-slate-500 dark:text-slate-400">
-              共 {{ story.attachments.length }} 个
-              <span v-if="active_upload_count">
-                ，{{ active_upload_count }} 个待上传
-              </span>
-              <span v-if="failed_upload_count">
-                ，{{ failed_upload_count }} 个失败
-              </span>
+        <div class="w-full flex justify-end items-center gap-3">
+          <span class="text-xs text-slate-500 dark:text-slate-400">
+            共 {{ stored_attachments.length }} 个
+            <span v-if="active_upload_count">
+              ，{{ active_upload_count }} 个待上传
             </span>
-            <input
-              ref="attachment_file_input"
-              type="file"
-              multiple
-              class="hidden"
-              @change="on_attachment_files_picked"
-            >
-            <Button
-              size="small"
-              severity="secondary"
-              text
-              label="上传图片 / 附件"
-              :loading="upload_busy"
-              :disabled="upload_busy"
-              @click="attachment_file_input?.click()"
-            >
-              <template #icon>
-                <MyIcon name="lucide:paperclip" />
-              </template>
-            </Button>
-          </div>
+            <span v-if="failed_upload_count">
+              ，{{ failed_upload_count }} 个失败
+            </span>
+          </span>
+          <input
+            ref="attachment_file_input"
+            type="file"
+            multiple
+            class="hidden"
+            @change="on_attachment_files_picked"
+          >
+          <Button
+            size="small"
+            severity="secondary"
+            text
+            label="上传图片 / 附件"
+            :loading="upload_busy"
+            :disabled="upload_busy"
+            @click="attachment_file_input?.click()"
+          >
+            <template #icon>
+              <MyIcon name="lucide:paperclip" />
+            </template>
+          </Button>
         </div>
 
-        <div v-if="attachment_items.length" class="columns-1 gap-3 md:columns-2">
+        <div v-if="attachment_items.length" class="mt-4 columns-1 gap-3 md:columns-2">
           <MyContentAttachmentCard
             v-for="item in attachment_items"
             :key="item.key"
             :file="item.card"
-            :delete-pending="item.kind === 'stored' && delete_attachment_pending === item.card.file_name"
-            :delete-disabled="delete_attachment_pending !== null"
-            :retry-disabled="upload_busy"
+            :delete_pending="item.kind === 'stored' && delete_attachment_pending === item.card.file_name"
+            :delete_disabled="delete_attachment_pending !== null"
+            :rename_disabled="! is_edit"
+            :retry_disabled="upload_busy"
             @preview="preview_image"
-            @rename="item.kind === 'stored' && open_rename_dialog(item.attachment)"
+            @copy="item.kind === 'stored' && copy_attachment_code(item.attachment)"
+            @rename="item.kind === 'stored' && is_edit && open_rename_dialog(item.attachment)"
             @delete="item.kind === 'stored' && confirm_delete_attachment($event, item.attachment)"
             @retry="item.kind === 'upload' && retry_upload(item.task)"
             @cancel="item.kind === 'upload' && cancel_upload(item.task)"
@@ -124,7 +125,11 @@
         </div>
       </MyHeightSection>
 
-      <MyHeightSection tag="section" class="section-card-collapse">
+      <MyHeightSection
+        v-show="markdown_editor?.editor_mode !== 'preview'"
+        tag="section"
+        class="section-card-collapse mt-12"
+      >
         <div class="flex justify-end gap-3">
           <Button
             severity="secondary"
@@ -147,7 +152,7 @@
       </MyHeightSection>
     </div>
 
-    <div v-else class="section-card py-12 text-center text-slate-500 dark:text-slate-400">
+    <div v-else class="section-card-collapse py-12 text-center text-slate-500 dark:text-slate-400">
       档案不存在或已被删除
     </div>
 
@@ -156,7 +161,7 @@
       header="版本冲突"
     >
       <div class="space-y-3 text-sm text-slate-600 dark:text-slate-300">
-        <p>这份自动保存的草稿基于较早的数据库版本，继续编辑可能覆盖其他人已保存的修改！</p>
+        <p>这份自动保存的草稿基于较旧的数据库版本，继续编辑可能覆盖其他人已保存的修改！</p>
         <p v-if="pending_conflict_draft" class="text-xs text-slate-500 dark:text-slate-400">
           （本地草稿保存于 {{ datetime_format(pending_conflict_draft.saved_at) }}）
         </p>
@@ -177,34 +182,6 @@
 
     <MyDialog
       v-if="is_edit"
-      v-model:visible="confirm_delete_visible"
-      header="确认永久删除以下附件？"
-      :pending="save_pending"
-      :closable="! save_pending"
-    >
-      <p class="mb-4 text-sm text-slate-600 dark:text-slate-400">
-        保存后将从服务器上永久删除，不可恢复
-      </p>
-      <ul class="mb-4 list-inside list-disc text-sm">
-        <li v-for="a in pending_delete_files" :key="a">
-          {{ a }}
-        </li>
-      </ul>
-
-      <template #footer>
-        <div class="flex justify-end gap-2">
-          <Button label="取消" severity="secondary" text :disabled="save_pending" @click="confirm_delete_visible = false" />
-          <Button label="确认保存并删除" :loading="save_pending" :disabled="save_pending" @click="() => do_save(pending_delete_files)">
-            <template #icon>
-              <MyIcon name="lucide:trash-2" />
-            </template>
-          </Button>
-        </div>
-      </template>
-    </MyDialog>
-
-    <MyDialog
-      v-if="is_edit"
       v-model:visible="rename_visible"
       header="重命名附件"
       :pending="rename_pending"
@@ -212,9 +189,10 @@
     >
       <Form id="rename-attachment-form" class="space-y-2" @submit="rename_attachment">
         <label for="rename-attachment-name" class="block text-sm font-medium">文件名</label>
-        <InputText
+        <MyFilteredInput
           id="rename-attachment-name"
           v-model="rename_file_name"
+          :filter="link_file_name_illegal_chars"
           fluid
           maxlength="120"
           autofocus
@@ -236,7 +214,6 @@
 
     <ClientOnly>
       <MyImagePreview
-        v-if="is_edit"
         v-model:visible="preview_visible"
         :images="preview_images"
         :initial-index="0"
@@ -246,14 +223,19 @@
 </template>
 
 <script setup lang="ts">
-import type { ContentStoryAttachment, ContentStoryDetail } from '@shared/types/content'
+import type { ContentStoryMeta } from '@shared/content-markdown'
+import type { ContentStoryAttachment, ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
 import type MyContentMarkdownEditor from '~/components/MyContent/MarkdownEditor.vue'
 import type { ContentDraftRecord } from '~/stores/contentDraft'
 import type { AttachmentCardData, AttachmentUploadStatus } from '~/utils/content/attachment'
-import { extract_attachment_names, parse_story_markdown, rename_attachment_references, story_markdown_template } from '@shared/content-markdown'
+import { extract_attachment_names, link_file_name_illegal_chars, parse_story_markdown, rename_attachment_references, story_markdown_template } from '@shared/content-markdown'
+import { sync_resource } from '@shared/types/sync'
 import { storeToRefs } from 'pinia'
 import { useContentDraftStore } from '~/stores/contentDraft'
 import { content_attachment_markdown } from '~/utils/content/attachment-drag'
+import { format_event_range } from '~/utils/content/event'
+
+// TODO: fix: attachment process is not reactive at all
 
 interface PendingAttachmentUpload {
   id: number
@@ -278,11 +260,22 @@ definePageMeta({
 })
 
 const route = useRoute()
+const router = useRouter()
 const { content } = useApi()
 const { ok, error } = useMyToast()
 const { confirm_require } = useMyConfirm()
-const runtime_config = useRuntimeConfig()
-const content_markdown_config = useContentMarkdownConfig()
+const config = useRuntimeConfig().public
+// Known stories for `@story` completion, duplicate-title and dead-reference
+// lints; kept in sync via the shared content_stories resource without touching
+// the editing content.
+const existing_stories = useState<ContentStorySummary[] | null>('content_stories', () => null)
+const existing_stories_loading = useState('content_stories_loading', () => false)
+await useSyncedData<ContentStorySummary[]>(
+  computed(() => sync_resource('content_stories', 'all')),
+  () => content.list_stories(),
+  existing_stories,
+  existing_stories_loading,
+)
 const draft_store = useContentDraftStore()
 const {
   markdown,
@@ -299,10 +292,45 @@ const story_id = computed(() => is_edit.value ? Number(raw_id.value) : 0)
 
 const story = useState<ContentStoryDetail | null>('content_story_detail', () => null)
 
+// Existing titles must reach the save/header validation too, or every `@ref`
+// is flagged as dead (undefined existing_titles → `! undefined?.some()` is true).
+const content_markdown_config = computed(() => ({
+  title_max_length: config.content_story_title_max_length,
+  label_max_bytes: config.content_story_label_max_bytes,
+  desc_max_bytes: config.content_story_desc_max_bytes,
+  cover_max_bytes: config.content_story_cover_max_bytes,
+  markdown_max_bytes: config.content_story_markdown_max_bytes,
+  existing_titles: (existing_stories.value ?? [])
+    .filter(story => story.id !== story_id.value)
+    .map(story => ({ id: story.id, title: story.title })),
+}))
+
+const page_meta = computed(() => parse_story_markdown(markdown.value, content_markdown_config.value).meta)
+
+// The header keeps the last valid front-matter status: a transient lint error
+// nulls the current parse, and without this fallback the header would collapse
+// blank mid-edit instead of staying on the last legal title/labels/date.
+// `immediate` snapshots the initial valid state (e.g. the SSR/hydrated one)
+// before any edit or draft restore can null it.
+const last_valid_meta = ref<ContentStoryMeta | null>(null)
+watch(page_meta, (meta) => {
+  if (meta) {
+    last_valid_meta.value = meta
+  }
+}, { immediate: true })
+const header_meta = computed(() => page_meta.value ?? last_valid_meta.value)
+const header_title = computed(() => header_meta.value?.title ?? '')
+const header_labels = computed(() => header_meta.value?.labels ?? [])
+const header_desc = computed(() => header_meta.value?.desc ?? null)
+const header_cover = computed(() => header_meta.value?.cover ?? null)
+const header_cover_label = computed(() => header_meta.value?.cover_label ?? null)
+const header_date = computed(() => {
+  const meta = header_meta.value
+  return meta ? format_event_range(meta.event_precision, meta.event_entries) : null
+})
+
 const save_pending = ref(false)
 const delete_pending = ref(false)
-const pending_delete_files = ref<string[]>([])
-const confirm_delete_visible = ref(false)
 const rename_visible = ref(false)
 const rename_pending = ref(false)
 const rename_target = ref<ContentStoryAttachment | null>(null)
@@ -336,30 +364,25 @@ const draft_status_label = computed(() => {
 })
 
 const referenced_files = computed(() => {
-  if (! story.value || ! is_edit.value)
+  if (is_edit.value && ! story.value)
     return []
   return extract_attachment_names(markdown.value)
 })
 
-const trash_attachments = computed(() => {
-  if (! story.value || ! is_edit.value)
-    return []
-  const set = new Set(referenced_files.value)
-  return story.value.attachments.filter(a => ! set.has(a.file_name))
-})
+/** Attachments uploaded from the new-story editor (story_id NULL until create). */
+const new_attachments = ref<ContentStoryAttachment[]>([])
+const stored_attachments = computed(() => story.value?.attachments ?? new_attachments.value)
 
 const attachment_items = computed<AttachmentListItem[]>(() => {
   const items: AttachmentListItem[] = []
-  if (story.value) {
-    const referenced = new Set(referenced_files.value)
-    for (const attachment of story.value.attachments) {
-      items.push({
-        key: `stored:${attachment.file_name}`,
-        kind: 'stored',
-        attachment,
-        card: { ... attachment, kind: 'stored', referenced: referenced.has(attachment.file_name) },
-      })
-    }
+  const referenced = new Set(referenced_files.value)
+  for (const attachment of stored_attachments.value) {
+    items.push({
+      key: `stored:${attachment.file_name}`,
+      kind: 'stored',
+      attachment,
+      card: { ... attachment, kind: 'stored', referenced: referenced.has(attachment.file_name) },
+    })
   }
   for (const task of pending_uploads.value) {
     items.push({
@@ -386,12 +409,21 @@ async function fetch_story() {
   return await content.get_story(story_id.value)
 }
 
+try {
 // Avoid useSyncedData for such a edit page. We don't want to overwrite the editing content.
-story.value = await fetch_story()
+  story.value = await fetch_story()
+}
+catch {
+  error('获取档案信息失败')
+}
+
+// Restore unclaimed uploads from previous visits to the new-story editor.
+if (! is_edit.value)
+  new_attachments.value = await content.list_orphan_attachments()
 
 const initial_markdown = is_edit.value
   ? (story.value?.markdown ?? '')
-  : story_markdown_template(content_markdown_config)
+  : story_markdown_template(datetime_build_string(null, '{YYYY}/{M}/{D}'))
 const initial_updated_at = is_edit.value ? (story.value?.updated_at ?? null) : null
 const draft_story_id = is_edit.value ? story_id.value : null
 
@@ -399,6 +431,7 @@ draft_store.initialize(draft_story_id, initial_markdown, initial_updated_at)
 
 onMounted(() => {
   window.addEventListener('pagehide', persist_draft_on_page_hide)
+  window.addEventListener('keydown', on_save_hotkey)
 
   if (is_edit.value && ! story.value)
     return
@@ -413,11 +446,20 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('pagehide', persist_draft_on_page_hide)
+  window.removeEventListener('keydown', on_save_hotkey)
   draft_store.persist_now()
 })
 
 function persist_draft_on_page_hide() {
   draft_store.persist_now()
+}
+
+function on_save_hotkey(event: KeyboardEvent) {
+  if (! (event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's')
+    return
+  event.preventDefault()
+  if (! save_pending.value)
+    on_save_click()
 }
 
 function use_database_version() {
@@ -428,14 +470,17 @@ function use_database_version() {
 }
 
 function confirm_abandon_draft(event: Event) {
-  if (! is_edit.value || discard_draft_pending.value)
+  if (discard_draft_pending.value)
     return
 
-  confirm_require(event, '确定要舍弃本地草稿，并恢复为数据库最新版本吗？', abandon_draft)
+  const message = is_edit.value
+    ? '确定要舍弃本地草稿，并恢复为数据库最新版本吗？'
+    : '确定要舍弃本地草稿，并恢复为初始模板吗？'
+  confirm_require(event, message, abandon_draft)
 }
 
 async function abandon_draft() {
-  if (! is_edit.value || discard_draft_pending.value)
+  if (discard_draft_pending.value)
     return
 
   discard_draft_pending.value = true
@@ -467,6 +512,8 @@ function restore_conflicting_draft() {
   )
   pending_conflict_draft.value = null
   draft_conflict_visible.value = false
+
+  on_save_click()
 }
 
 async function show_save_conflict() {
@@ -486,12 +533,7 @@ function process_files_for_upload(files: File[], insert_position?: number | null
   if (! files.length)
     return
 
-  if (! is_edit.value) {
-    error('请先保存新建档案，再上传附件')
-    return
-  }
-
-  const max_size_mb = runtime_config.public.max_content_attachment_size_mb as number
+  const max_size_mb = config.max_content_attachment_size_mb
   const max_bytes = max_size_mb * 1024 * 1024
   const accepted: File[] = []
   for (const file of files) {
@@ -503,7 +545,7 @@ function process_files_for_upload(files: File[], insert_position?: number | null
   if (! accepted.length)
     return
 
-  const uploads = accepted.map(file => ({
+  const uploads: PendingAttachmentUpload[] = accepted.map(file => ({
     id: next_upload_id ++,
     file,
     progress: 0,
@@ -514,6 +556,16 @@ function process_files_for_upload(files: File[], insert_position?: number | null
   }))
   pending_uploads.value.push(... uploads)
   void upload_queue(uploads)
+}
+
+function insert_attachment_markdown(file_name: string, is_image: boolean, position: number | null) {
+  const text = content_attachment_markdown({ file_name, is_image, url: '' })
+  if (position !== null && markdown_editor.value) {
+    markdown_editor.value.insert_at_position(text, position)
+    return
+  }
+  const needs_newline = markdown.value.length > 0 && ! markdown.value.endsWith('\n')
+  markdown.value += `${needs_newline ? '\n' : ''}${text}`
 }
 
 function on_attachment_files_picked(event: Event) {
@@ -561,23 +613,22 @@ async function upload_attachment(upload: PendingAttachmentUpload) {
     upload.progress = 100
     upload.status = 'completed'
     await new Promise(resolve => setTimeout(resolve, 250))
-    if (story.value && ! story.value.attachments.some(item => item.file_name === attachment.file_name)) {
-      story.value = {
-        ... story.value,
-        attachments: [... story.value.attachments, attachment],
+    if (story.value) {
+      if (! story.value.attachments.some(item => item.file_name === attachment.file_name)) {
+        story.value = {
+          ... story.value,
+          attachments: [... story.value.attachments, attachment],
+        }
       }
+    }
+    else {
+      new_attachments.value.push(attachment)
     }
     if (upload.insert_position !== null) {
-      const text = content_attachment_markdown(attachment)
-      if (markdown_editor.value) {
-        markdown_editor.value.insert_at_position(text, upload.insert_position)
-      }
-      else {
-        const needs_newline = markdown.value.length > 0 && ! markdown.value.endsWith('\n')
-        markdown.value += `${needs_newline ? '\n' : ''}${text}`
-      }
+      insert_attachment_markdown(attachment.file_name, attachment.is_image, upload.insert_position)
     }
     remove_upload(upload.id)
+    ok(`「${attachment.file_name}」上传成功`)
   }
   catch (ex) {
     if (controller.signal.aborted) {
@@ -616,6 +667,16 @@ function is_referenced(file_name: string) {
 function preview_image(url: string) {
   preview_images.value = [url]
   preview_visible.value = true
+}
+
+async function copy_attachment_code(attachment: ContentStoryAttachment) {
+  try {
+    await navigator.clipboard.writeText(content_attachment_markdown(attachment))
+    ok('已复制附件 Markdown 代码')
+  }
+  catch (ex) {
+    error(ex)
+  }
 }
 
 function open_rename_dialog(attachment: ContentStoryAttachment) {
@@ -671,6 +732,12 @@ async function delete_attachment(attachment: ContentStoryAttachment) {
 
   delete_attachment_pending.value = attachment.file_name
   try {
+    if (! is_edit.value) {
+      await content.delete_orphan_attachment(attachment.file_name)
+      new_attachments.value = new_attachments.value.filter(item => item.file_name !== attachment.file_name)
+      ok('附件已删除')
+      return
+    }
     if (! base_updated_at.value) {
       throw new Error('缺少档案基础版本，请刷新页面后重试')
     }
@@ -693,9 +760,10 @@ async function delete_attachment(attachment: ContentStoryAttachment) {
 }
 
 function on_save_click() {
-  const { meta, issues } = parse_story_markdown(markdown.value, content_markdown_config)
-  if (! meta) {
-    error(issues[0]?.message ?? '档案格式不正确')
+  const { issues } = parse_story_markdown(markdown.value, content_markdown_config.value)
+  if (issues.some(issue => issue.severity === 'error')) {
+    const first_error = issues.find(issue => issue.severity === 'error')
+    error(first_error?.message ? `第 ${first_error.line} 行：${first_error.message}` : 'Markdown 代码存在未知错误')
     return
   }
 
@@ -704,20 +772,14 @@ function on_save_click() {
     return
   }
 
-  const trash = trash_attachments.value.map(a => a.file_name)
-  if (trash.length) {
-    pending_delete_files.value = trash
-    confirm_delete_visible.value = true
-  }
-  else {
-    void do_save([])
-  }
+  void do_save()
 }
 
 async function do_create() {
   save_pending.value = true
   try {
-    const result = await content.create_story(markdown.value)
+    const claim_files = new_attachments.value.map(attachment => attachment.file_name)
+    const result = await content.create_story(markdown.value, claim_files)
 
     draft_store.discard()
     ok('档案已创建')
@@ -731,7 +793,7 @@ async function do_create() {
   }
 }
 
-async function do_save(delete_files: string[]) {
+async function do_save() {
   save_pending.value = true
   try {
     if (! base_updated_at.value) {
@@ -739,11 +801,9 @@ async function do_save(delete_files: string[]) {
     }
     await content.update_story(story_id.value, {
       markdown: markdown.value,
-      delete_files,
       base_updated_at: base_updated_at.value,
     })
 
-    confirm_delete_visible.value = false
     story.value = await fetch_story()
     if (story.value) {
       draft_store.mark_saved(story.value.markdown, story.value.updated_at)
@@ -752,14 +812,12 @@ async function do_save(delete_files: string[]) {
   }
   catch (ex) {
     if (get_error_status(ex) === 409 && await show_save_conflict()) {
-      confirm_delete_visible.value = false
       return
     }
     error(ex)
   }
   finally {
     save_pending.value = false
-    pending_delete_files.value = []
   }
 }
 

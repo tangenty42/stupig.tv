@@ -46,8 +46,12 @@ const env_schema = z.object({
   MAX_AVATAR_SIZE_MB: z.coerce.number(),
   MAX_CONTENT_ATTACHMENT_SIZE_MB: z.coerce.number(),
   CONTENT_STORY_TITLE_MAX_LENGTH: z.coerce.number().int().min(1).max(120),
-  CONTENT_STORY_RATING_MIN: z.coerce.number().int().min(1).max(255),
-  CONTENT_STORY_RATING_MAX: z.coerce.number().int().min(1).max(255),
+  CONTENT_LINK_FILE_NAME_MAX_BYTES: z.coerce.number().int().min(1).max(255),
+  CONTENT_STORY_LABEL_MAX_BYTES: z.coerce.number().int().min(1).max(255),
+  CONTENT_STORY_DESC_MAX_BYTES: z.coerce.number().int().min(1).max(500),
+  CONTENT_STORY_COVER_MAX_BYTES: z.coerce.number().int().min(1).max(255),
+  // `markdown` is a mediumtext column (max 16,777,215 bytes).
+  CONTENT_STORY_MARKDOWN_MAX_BYTES: z.coerce.number().int().min(1).max(16_777_215),
   CONTENT_DRAFT_SCHEMA_VERSION: z.coerce.number().int().positive(),
   CONTENT_DRAFT_STORAGE_PREFIX: z.string().min(1),
   CONTENT_DRAFT_AUTOSAVE_DELAY_MS: z.coerce.number().int().min(0).max(60_000),
@@ -67,14 +71,6 @@ const env_schema = z.object({
   MQTT_TOPIC_PREFIX: z.string().min(1),
   MQTT_CLIENT_ID_PREFIX_SERVER: z.string().min(1),
   MQTT_CLIENT_ID_PREFIX_WEB: z.string().min(1),
-}).superRefine((config, ctx) => {
-  if (config.CONTENT_STORY_RATING_MIN > config.CONTENT_STORY_RATING_MAX) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'CONTENT_STORY_RATING_MIN must not exceed CONTENT_STORY_RATING_MAX',
-      path: ['CONTENT_STORY_RATING_MIN'],
-    })
-  }
 })
 
 const parsed_env = env_schema.safeParse(process.env)

@@ -1,5 +1,5 @@
 <template>
-  <div class="grid grid-cols-1 gap-x-0 lg:gap-x-24 gap-y-4 pt-12 md:grid-cols-2">
+  <div class="grid grid-cols-1 gap-x-0 lg:gap-x-24 gap-y-4 md:grid-cols-2">
     <div class="flex flex-col items-stretch">
       <div class="text-7xl lg:mt-12">
         <div class="text-[45%] lg:text-[55%] text-center lg:text-end text-slate-700 dark:text-slate-300">
@@ -27,13 +27,16 @@
             <div><MySpacedText text="2026届" /></div>
             <div><MySpacedText text="高三1班" /></div>
           </div>
+          <NuxtLink class="link self-center lg:self-end text-[70%] mt-8" to="/contact">
+            联系我们这帮「全能型人才」
+          </NuxtLink>
         </div>
       </div>
     </div>
     <div class="card-x-super-pro-max flex flex-col items-center gap-4">
       <img class="max-w-lg dark:invert" :src="static_url('/imgs/whats_up.svg')" alt="Stupig Chant">
-      <NuxtLink class="link" to="/contact">
-        联系我们这帮「全能型人才」
+      <NuxtLink class="link" to="/content">
+        查看「蠢猪档案」，了解我们
       </NuxtLink>
       <div class="pt-[200vh] text-xs text-slate-500 dark:text-slate-400">
         蠢人，你在期待什么？

@@ -4,6 +4,13 @@
 
 :root {
   color-scheme: light;
+
+  /* MyDivider theme hooks (layer 1, global). Override these pairs anywhere to
+     restyle dividers in that subtree; they follow the active color scheme. */
+  --divider-line-color-light: rgb(203 213 225 / 0.5);
+  --divider-line-color-dark: rgb(71 85 105 / 0.5);
+  --divider-label-color-light: rgb(148 163 184);
+  --divider-label-color-dark: rgb(100 116 139);
 }
 
 .dark {
@@ -32,20 +39,11 @@
   }
 
   body {
-    @apply font-sans text-slate-900 antialiased;
-    background-color: #ffffff;
-    background-image:
-      radial-gradient(circle at top left, rgba(217, 29, 201, 0.02), transparent 22%),
-      radial-gradient(circle at 82% 10%, rgba(44, 134, 244, 0.04), transparent 26%);
+    @apply font-sans text-slate-900 antialiased bg-white;
   }
 
   .dark body {
-    @apply text-slate-50;
-    background-color: #111827;
-    background-image:
-      radial-gradient(circle at top left, rgba(217, 108, 29, 0.22), transparent 26%),
-      radial-gradient(circle at 82% 8%, rgba(44, 134, 244, 0.22), transparent 24%),
-      linear-gradient(180deg, #111827 0%, #020617 100%);
+    @apply text-slate-50 bg-slate-900;
   }
 
   img {
@@ -97,10 +95,10 @@
   }
 
   .section-card {
-    @apply border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur-lg dark:border-slate-700 dark:bg-slate-900/80 rounded-sm;
+    @apply border border-slate-200 bg-white/90 p-4 shadow-sm backdrop-blur-lg dark:border-slate-700 dark:bg-slate-900/80 rounded-sm;
   }
   .section-card-collapse {
-    @apply bg-transparent px-0 py-4;
+    @apply bg-transparent p-0;
   }
 
   .muted {

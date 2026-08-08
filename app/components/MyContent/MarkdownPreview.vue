@@ -28,10 +28,12 @@
 </template>
 
 <script setup lang="ts">
-import type { ContentStoryAttachment } from '@shared/types/content'
+import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import { strip_front_matter } from '@shared/content-markdown'
+import { story_rating } from '@shared/types/content'
 import MarkdownIt from 'markdown-it'
 import { file_icon, file_icon_names } from '~/utils/content/attachment'
+import { html_no_markdown_tags } from '~/utils/content/html'
 
 type AlertType = 'NOTE' | 'TIP' | 'IMPORTANT' | 'WARNING' | 'CAUTION'
 
@@ -42,6 +44,15 @@ interface RenderEnvironment {
 interface FileCardData {
   icon: string
   size: string
+  /** Set when the link has no label; the card then renders the file name itself. */
+  name: string | null
+}
+
+interface StoryCardMeta {
+  /** Rating tier text ('夯') when the referenced story exists. */
+  tier: string | null
+  title: string
+  dead: boolean
 }
 
 const props = withDefaults(defineProps<{
@@ -49,10 +60,13 @@ const props = withDefaults(defineProps<{
   storyId?: number | null
   attachments?: ContentStoryAttachment[]
   emptyText?: string
+  /** Known stories so `[](@title)` references render as story cards. */
+  stories?: ContentStorySummary[]
 }>(), {
   storyId: null,
   attachments: () => [],
   emptyText: '',
+  stories: () => [],
 })
 
 const alert_icons: Record<AlertType, string> = {
@@ -75,6 +89,7 @@ const compiled_icons = [
   ... file_icon_names.map(icon => `lucide:${icon}`),
   ... Object.values(alert_icons).map(icon => `lucide:${icon}`),
   'lucide:external-link',
+  'lucide:circle-alert',
   'lucide:chevron-left',
   'lucide:chevron-right',
 ]
@@ -84,15 +99,26 @@ const body_markdown = computed(() => strip_front_matter(props.markdown))
 const preview_visible = ref(false)
 const preview_index = ref(0)
 
+/** Case-insensitive title -> story lookup for `[](@title)` cards. */
+const story_by_title = computed(() => {
+  const map = new Map<string, ContentStorySummary>()
+  for (const story of props.stories) {
+    map.set(story.title.toLocaleLowerCase(), story)
+  }
+  return map
+})
+
 function absolutize(url: string) {
-  if (props.storyId && ! url.includes('/') && ! url.startsWith('#') && ! /^[a-z][\w+.-]*:/i.test(url)) {
-    return static_url(`/content/${props.storyId}/${url}`)
+  // storyId null means the new-story editor, whose orphan uploads live under content/0/.
+  // `@title` destinations are story references resolved by the link renderer.
+  if (! url.startsWith('@') && ! url.includes('/') && ! url.startsWith('#') && ! /^[a-z][\w+.-]*:/i.test(url)) {
+    return static_url(`/content/${props.storyId ?? 0}/${url}`)
   }
   return url
 }
 
 function local_file_name(url: string) {
-  if (! url || url.includes('/') || url.startsWith('#') || /^[a-z][\w+.-]*:/i.test(url)) {
+  if (! url || url.startsWith('@') || url.includes('/') || url.startsWith('#') || /^[a-z][\w+.-]*:/i.test(url)) {
     return null
   }
   try {
@@ -104,7 +130,17 @@ function local_file_name(url: string) {
   }
 }
 
-const md = new MarkdownIt({ html: false, linkify: false })
+/** The markdown-it normalized `@title` destination is percent-encoded (e.g. `@%E6%96%B0...`); decode it back for title lookup. */
+function decode_story_title(encoded: string) {
+  try {
+    return decodeURIComponent(encoded)
+  }
+  catch {
+    return encoded
+  }
+}
+
+const md = new MarkdownIt({ html: true, linkify: false })
 // Marker line: `[!NOTE]`, optionally followed by a custom title on the same
 // line (trimmed in the rule below, so no leading-space handling here).
 const alert_pattern = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](.*)$/
@@ -318,7 +354,7 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
     token!.attrSet('data-preview-index', String(preview_image_index))
     token!.attrSet('role', 'button')
     token!.attrSet('tabindex', '0')
-    token!.attrSet('aria-label', `预览图片：${token?.content || '图片'}`)
+    token!.attrSet('aria-label', `预览图片：${token?.content || local_file_name(src) || '图片'}`)
   }
   const rendered_image = default_image_rule(tokens, idx, options, env, self)
   if (! token?.meta?.carousel) {
@@ -326,8 +362,10 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
   }
   // Carousel images carry their alt text as a visible caption below the
   // image. The wrapper must be a span, not <figure>: the carousel is a
-  // <p>, and a figure would force the browser to close it early.
-  const caption = token.content
+  // <p>, and a figure would force the browser to close it early. An empty
+  // alt (the insertion default) or one repeating the file name is not a
+  // real caption — skip it.
+  const caption = token.content && token.content !== (src ? local_file_name(src) : null)
     ? `<span class="carousel-caption">${md.utils.escapeHtml(token.content)}</span>`
     : ''
   return `<span class="carousel-item">${rendered_image}${caption}</span>`
@@ -337,30 +375,72 @@ const default_link_rule = md.renderer.rules.link_open
   ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const token = tokens[idx]
-  const href = token?.attrGet('href')
+  let href = token?.attrGet('href')
   if (href) {
-    const label = tokens[idx + 1]?.type === 'text' && tokens[idx + 2]?.type === 'link_close'
-      ? tokens[idx + 1]?.content
-      : null
+    const has_text_label = tokens[idx + 1]?.type === 'text' && tokens[idx + 2]?.type === 'link_close'
+    const close_index = has_text_label ? idx + 2 : (tokens[idx + 1]?.type === 'link_close' ? idx + 1 : - 1)
+
+    // `[](@title)` (label-off) renders as a compact story card; a labeled
+    // `[text](@title)` keeps the normal-link rendering with the story URL
+    // resolved, so it looks like any other link.
+    if (href.startsWith('@')) {
+      const story_title = decode_story_title(href.slice(1))
+      const story = story_by_title.value.get(story_title.toLocaleLowerCase())
+      if (has_text_label) {
+        if (story) {
+          href = `/content/${story.id}`
+        }
+      }
+      else {
+        apply_chip_gaps(token!, tokens, idx, close_index, 'card')
+        if (story) {
+          token!.attrSet('href', `/content/${story.id}`)
+          token!.attrSet('target', '_blank')
+          token!.attrSet('rel', 'noopener noreferrer')
+          token!.attrJoin('class', 'link-card story-card')
+          const tier = story_rating(story.labels)
+          token!.meta = { ... token?.meta, story_card: { tier, title: story.title, dead: false } satisfies StoryCardMeta }
+          const rendered_link = default_link_rule(tokens, idx, options, env, self)
+          return `${rendered_link}<span class="story-card-rating rating-${tier}">${tier}</span><span class="story-card-title">${md.utils.escapeHtml(story.title)}</span>`
+        }
+        // Dead reference: the target story is gone; render a muted placeholder.
+        token!.meta = { ... token?.meta, story_card: { tier: null, title: story_title, dead: true } satisfies StoryCardMeta }
+        return `<span class="link-card story-card story-card-dead"><span class="story-card-title">${md.utils.escapeHtml(story_title)}</span>`
+      }
+    }
+
+    // A label-off link (`[](file.sql)`) has no text token: link_close
+    // follows link_open directly and the card renders the file name itself.
+    const label = has_text_label ? tokens[idx + 1]!.content : null
     const file_name = local_file_name(href)
     token!.attrSet('href', absolutize(href))
     token!.attrSet('target', '_blank')
     token!.attrSet('rel', 'noopener noreferrer')
-    token!.attrJoin('class', 'link')
-    if (file_name && label === file_name) {
+    token!.attrJoin('class', 'link link-card')
+    if (file_name && close_index !== - 1 && (label === null || label === file_name)) {
       const attachment = props.attachments.find(item => item.file_name === file_name)
-      token!.attrJoin('class', 'file-card')
-      // The card is the whole link (link_open, text label, link_close), so
-      // the right edge check looks past link_close instead of the label.
-      apply_chip_gaps(token!, tokens, idx, idx + 2, 'card')
+      if (! attachment && label === null) {
+        // Label-off link to a file this story doesn't have: render nothing.
+        token!.meta = { ... token?.meta, silent_link: true }
+        const closing = tokens[close_index]
+        if (closing?.type === 'link_close') {
+          closing.meta = { ... closing.meta, silent_link: true }
+        }
+        return ''
+      }
+      token!.attrJoin('class', 'link-card file-card')
+      // The card is the whole link (link_open, optional text label,
+      // link_close), so the right edge check looks past link_close.
+      apply_chip_gaps(token!, tokens, idx, close_index, 'card')
       token!.meta = {
         ... token?.meta,
         file_card: {
           icon: file_icon(attachment ?? { file_name, mime_type: null }),
           size: attachment ? format_bytes(attachment.file_size) : '未知大小',
+          name: label === null ? file_name : null,
         } satisfies FileCardData,
       }
-      const closing = tokens[idx + 2]
+      const closing = tokens[close_index]
       if (closing?.type === 'link_close') {
         closing.meta = { ... closing.meta, file_card: token?.meta.file_card }
       }
@@ -369,21 +449,30 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const rendered_link = default_link_rule(tokens, idx, options, env, self)
   const file_card = token?.meta?.file_card as FileCardData | undefined
   if (! file_card) {
-    // Plain link: the external-link icon is appended after the text in
-    // link_close, so it sits at the END of the label.
-    return rendered_link
+    // Plain link: wrap the label so it can truncate; link_close closes the
+    // span and appends the out icon at the END of the label.
+    return `${rendered_link}<span class="link-card-label">`
   }
-  return `${rendered_link}<span class="file-card-icon iconify i-lucide:${file_card.icon}" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">`
+  return `${rendered_link}<span class="file-card-icon iconify i-lucide:${file_card.icon}" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">${file_card.name ? md.utils.escapeHtml(file_card.name) : ''}`
 }
 
 const default_link_close_rule = md.renderer.rules.link_close
   ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
 md.renderer.rules.link_close = (tokens, idx, options, env, self) => {
+  if (tokens[idx]?.meta?.silent_link) {
+    return ''
+  }
+  const story_card = tokens[idx]?.meta?.story_card as StoryCardMeta | undefined
+  if (story_card) {
+    const icon = story_card.dead ? 'circle-alert' : 'external-link'
+    const closing = story_card.dead ? '</span>' : default_link_close_rule(tokens, idx, options, env, self)
+    return `<span class="link-card-open iconify i-lucide:${icon}" aria-hidden="true"></span>${closing}`
+  }
   const file_card = tokens[idx]?.meta?.file_card as FileCardData | undefined
   if (! file_card) {
-    return `<span class="md-link-icon iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
+    return `</span><span class="link-card-open iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
   }
-  return `</span><span class="file-card-size">${file_card.size}</span></span><span class="file-card-open iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
+  return `</span><span class="file-card-size">${file_card.size}</span></span><span class="link-card-open iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
 }
 
 const default_code_inline_rule = md.renderer.rules.code_inline
@@ -426,6 +515,49 @@ md.renderer.rules.fence = (tokens, idx) => {
 
 md.renderer.rules.code_block = (tokens, idx) =>
   `<pre><div class="code-scroll"><code>${md.utils.escapeHtml(tokens[idx]!.content)}</code></div></pre>\n`
+
+// HTML wrappers that are allowed to contain markdown: every element except
+// raw-text/code/embedded ones. Mirror of the editor's nested-language list.
+
+// A wrapper whose content is entirely markdown (no blank lines, or the block
+// parser would have split it): `<tag ...>...</tag>` in one html_block token.
+const html_wrapper_pattern = /^<([a-z][\w-]*)\b([^>]*)>([\s\S]*?)<\/\1>\s*$/i
+
+// HTML wrapper indentation is cosmetic whitespace, not markdown structure.
+// Without this, `    [](tmp.jpg)` inside a wrapper would parse as an indented
+// code block instead of a link/file card.
+function dedent_html_inner(text: string) {
+  const lines = text.split('\n')
+  let min_indent = Infinity
+  for (const line of lines) {
+    if (! line.trim()) {
+      continue
+    }
+    const leading = /^[ \t]*/.exec(line)![0].length
+    min_indent = Math.min(min_indent, leading)
+  }
+  if (! Number.isFinite(min_indent) || min_indent === 0) {
+    return text.trim()
+  }
+  return lines.map(line => line.slice(min_indent)).join('\n').trim()
+}
+
+const default_html_block_rule = md.renderer.rules.html_block
+  ?? ((tokens, idx) => tokens[idx]!.content)
+md.renderer.rules.html_block = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]!
+  const wrapper = html_wrapper_pattern.exec(token.content)
+  if (wrapper && ! html_no_markdown_tags.has(wrapper[1]!.toLowerCase())) {
+    const tag = wrapper[1]!
+    const attrs = wrapper[2]!
+    const inner = wrapper[3]!
+    // Reuse the same env so nested markdown (images, cards) feeds the
+    // preview lightbox through the shared images array.
+    const inner_html = md.render(dedent_html_inner(inner), env)
+    return `<${tag}${attrs}>${inner_html}</${tag}>\n`
+  }
+  return default_html_block_rule(tokens, idx, options, env, self)
+}
 
 const render_result = computed(() => {
   const environment: RenderEnvironment = { images: [] }
@@ -566,51 +698,56 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 <style scoped>
 .story-body {
-  @apply text-sm leading-6 text-slate-700 dark:text-slate-300;
+  @apply leading-7 text-slate-700 [overflow-wrap:anywhere] dark:text-slate-300;
 }
 
-.story-body :deep(h1),
-.story-body :deep(h2) {
-  @apply mb-3 mt-6 text-lg font-bold text-slate-800 dark:text-slate-100;
-}
-
-.story-body :deep(h3) {
-  @apply mb-2 mt-5 text-base font-bold text-slate-800 dark:text-slate-100;
-}
-
-.story-body :deep(h4),
-.story-body :deep(h5),
-.story-body :deep(h6) {
-  @apply mb-2 mt-4 font-bold text-slate-800 dark:text-slate-100;
+.story-body :deep(h1, h2, h3, h4, h5, h6) {
+  @apply my-8 font-bold text-slate-800 dark:text-slate-100;
 }
 
 .story-body :deep(p) {
   @apply my-2;
 }
 
+.story-body :deep(> p) {
+  @apply my-6;
+}
+
+/* Abstract card chrome shared by plain links, file cards and story cards:
+   dashed border, tinted background, small line height so the card embeds
+   into the text line, and a hover state that highlights the border and the
+   trailing "out" icon in primary. flex-nowrap + min-w-0 let every card
+   truncate instead of overflowing. */
+.story-body :deep(.link-card) {
+  @apply my-1 inline-flex min-w-0 max-w-full flex-nowrap items-center gap-2 rounded-sm border border-dashed border-slate-300 bg-slate-50/60 px-2.5 py-1 align-middle text-sm leading-5 shadow-none transition-colors dark:border-slate-600 dark:bg-slate-800/40;
+}
+
+.story-body :deep(.link-card:not(.story-card-dead):hover),
+.story-body :deep(.link-card:not(.story-card-dead):focus-visible) {
+  @apply border-primary;
+}
+
+.story-body :deep(.link-card:not(.story-card-dead):hover) .link-card-open,
+.story-body :deep(.link-card:not(.story-card-dead):focus-visible) .link-card-open {
+  @apply text-primary;
+}
+
+.story-body :deep(.link-card-open) {
+  @apply shrink-0 text-slate-400 transition-colors dark:text-slate-500;
+}
+
+.story-body :deep(.link-card-label) {
+  @apply min-w-0 truncate;
+}
+
+/* File card: the roomier variant — larger padding, a leading file icon and
+   a two-line name/size column. */
 .story-body :deep(.file-card) {
-  @apply my-1 inline-flex min-w-0 items-center gap-3 rounded-sm border border-slate-200 p-3 align-middle text-sm transition-colors dark:border-slate-700;
-  /* .link's underline-grow uses box-shadow; on the card it renders as a hard
-     dark band, so strip it here. */
-  @apply leading-[unset] shadow-none;
+  @apply gap-3 p-3;
 }
 
 .story-body :deep(.file-card-icon) {
   @apply shrink-0 text-3xl text-slate-400 dark:text-slate-500;
-}
-
-.story-body :deep(.link:hover),
-.story-body :deep(.link:active) {
-  @apply text-primary;
-}
-
-.story-body :deep(.link:hover) .md-link-icon,
-.story-body :deep(.link:active) .md-link-icon {
-  @apply text-primary;
-}
-
-.story-body :deep(.md-link-icon) {
-  @apply inline-block text-slate-400 dark:text-slate-500 transition-colors;
 }
 
 .story-body :deep(.file-card-content) {
@@ -625,22 +762,26 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply text-xs text-slate-500 dark:text-slate-400;
 }
 
-.story-body :deep(.file-card-open) {
-  @apply ml-1 shrink-0 text-base text-slate-400 dark:text-slate-500 transition-colors;
+/* Story card: compact variant. Dead references (target story gone) render
+   muted and skip the interactive hover state. */
+.story-body :deep(.story-card-dead) {
+  @apply text-slate-400 dark:text-slate-500;
 }
 
-.story-body :deep(.file-card:hover),
-.story-body :deep(.file-card:focus-visible) {
-  @apply border-primary;
+.story-body :deep(.story-card-rating) {
+  @apply inline-flex shrink-0 items-center rounded-tl-full rounded-br-full px-2.5 py-0.5 text-xs font-bold text-white;
 }
 
-.story-body :deep(.file-card:hover) .file-card-open,
-.story-body :deep(.file-card:focus-visible) .file-card-open {
-  @apply text-primary;
+.story-body :deep(.story-card-title) {
+  @apply min-w-0 truncate;
 }
 
 .story-body :deep(img) {
-  @apply my-4 max-w-full max-h-72 cursor-zoom-in rounded-sm;
+  @apply max-w-full max-h-72 cursor-zoom-in rounded-sm transition-[filter] duration-300;
+}
+
+.story-body :deep(img:hover) {
+  @apply brightness-90;
 }
 
 .story-body :deep(.carousel-shell) {

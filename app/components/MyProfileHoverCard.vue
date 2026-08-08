@@ -23,7 +23,7 @@
         tag="div"
         role="region"
         aria-label="用户菜单"
-        class="section-card pt-5 pb-3 absolute right-0 top-full z-20 w-72 mt-4"
+        class="section-card pt-5 pb-3 absolute right-0 top-full z-20 mt-4 w-72 max-w-[calc(100vw-1rem)]"
         @click.stop
       >
         <div class="mb-4 flex items-center gap-3.5">

@@ -121,13 +121,19 @@ export const useContentDraftStore = defineStore('content-draft', () => {
   }
 
   function schedule_persist() {
+    const had_pending = autosave_pending.value
     clear_timer()
     if (! initialized.value || ! import.meta.client) {
       return
     }
 
+    // This watcher also fires right after initialize(); only purge a stored
+    // draft for edits made during this session, or revisiting a page would
+    // wipe the draft before onMounted can restore it.
     if (! dirty.value) {
-      remove_persisted()
+      if (had_pending || draft_saved_at.value) {
+        remove_persisted()
+      }
       return
     }
 
