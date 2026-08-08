@@ -235,12 +235,12 @@ import { useContentDraftStore } from '~/stores/contentDraft'
 import { content_attachment_markdown } from '~/utils/content/attachment-drag'
 import { format_event_range } from '~/utils/content/event'
 
-// TODO: fix: attachment process is not reactive at all
-
 interface PendingAttachmentUpload {
   id: number
   file: File
   progress: number
+  /** Measured upload speed in bytes per second. */
+  speed: number
   status: AttachmentUploadStatus
   message: string | null
   controller: AbortController | null
@@ -396,6 +396,7 @@ const attachment_items = computed<AttachmentListItem[]>(() => {
         file_size: task.file.size,
         status: task.status,
         progress: task.progress,
+        speed: task.speed,
         message: task.message,
       },
     })
@@ -428,6 +429,29 @@ const initial_updated_at = is_edit.value ? (story.value?.updated_at ?? null) : n
 const draft_story_id = is_edit.value ? story_id.value : null
 
 draft_store.initialize(draft_story_id, initial_markdown, initial_updated_at)
+
+// Adopt a newer DB version of this story into the editor when it changes
+// elsewhere (another admin/tab editing the same story) — but only if the
+// editor hasn't diverged from the last known DB base (no local unsaved edits),
+// so a remote update never clobbers in-progress work.
+if (import.meta.client && is_edit.value) {
+  const { subscribe } = useDataSync()
+  const unsubscribe = subscribe(sync_resource('content_story', story_id.value), async () => {
+    if (draft_dirty.value)
+      return
+    try {
+      const latest_story = await fetch_story()
+      if (! latest_story)
+        return
+      story.value = latest_story
+      draft_store.mark_saved(latest_story.markdown, latest_story.updated_at)
+    }
+    catch {
+      // transient sync fetch failure — keep the current editor state
+    }
+  })
+  onUnmounted(unsubscribe)
+}
 
 onMounted(() => {
   window.addEventListener('pagehide', persist_draft_on_page_hide)
@@ -545,10 +569,11 @@ function process_files_for_upload(files: File[], insert_position?: number | null
   if (! accepted.length)
     return
 
-  const uploads: PendingAttachmentUpload[] = accepted.map(file => ({
+  const uploads: PendingAttachmentUpload[] = accepted.map(file => reactive({
     id: next_upload_id ++,
     file,
     progress: 0,
+    speed: 0,
     status: 'queued' as const,
     message: null,
     controller: null,
@@ -603,12 +628,24 @@ async function upload_attachment(upload: PendingAttachmentUpload) {
   const controller = new AbortController()
   upload.status = 'uploading'
   upload.progress = 0
+  upload.speed = 0
   upload.message = null
   upload.controller = controller
 
+  // Track bytes/time deltas to report a live transfer rate.
+  let last_loaded = 0
+  let last_stamp = performance.now()
+
   try {
-    const attachment = await content.upload_attachment(story_id.value, upload.file, (progress) => {
+    const attachment = await content.upload_attachment(story_id.value, upload.file, (progress, loaded) => {
       upload.progress = progress
+      const now = performance.now()
+      const elapsed = (now - last_stamp) / 1000
+      if (elapsed >= 0.3 && loaded >= last_loaded) {
+        upload.speed = (loaded - last_loaded) / elapsed
+        last_loaded = loaded
+        last_stamp = now
+      }
     }, controller.signal)
     upload.progress = 100
     upload.status = 'completed'

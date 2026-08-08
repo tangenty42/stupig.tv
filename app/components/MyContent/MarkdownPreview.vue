@@ -283,7 +283,7 @@ md.core.ruler.after('inline', 'image_carousels', (state) => {
 
   for (let index = 0; index < state.tokens.length - 2; index ++) {
     const paragraph = image_paragraph_at(index)
-    if (! paragraph || paragraph.image_count < 2) {
+    if (! paragraph || paragraph.image_count < 1) {
       continue
     }
 
@@ -368,7 +368,8 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
   const caption = token.content && token.content !== (src ? local_file_name(src) : null)
     ? `<span class="carousel-caption">${md.utils.escapeHtml(token.content)}</span>`
     : ''
-  return `<span class="carousel-item">${rendered_image}${caption}</span>`
+  const captioned = caption ? ' carousel-item-captioned' : ''
+  return `<span class="carousel-item${captioned}">${rendered_image}${caption}</span>`
 }
 
 const default_link_rule = md.renderer.rules.link_open
@@ -864,11 +865,17 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 .story-body :deep(.carousel-item) {
-  @apply flex w-max min-w-0 max-w-[100%-10rem] shrink-0 flex-col gap-1;
+  @apply flex w-max min-w-0 max-w-[100%-10rem] shrink-0 flex-col;
 }
 
 .story-body :deep(.carousel-caption) {
-  @apply w-0 min-w-full whitespace-normal break-words text-xs text-slate-500 dark:text-slate-400;
+  @apply w-0 min-w-full whitespace-normal break-words rounded-b-sm bg-slate-200/80 px-2 py-1 text-xs text-slate-600 dark:bg-slate-800/80 dark:text-slate-300;
+}
+
+/* With a caption the image's bottom corners turn square so the caption bar
+   contacts it cleanly (the caption carries the bottom rounding). */
+.story-body :deep(.carousel-item-captioned img) {
+  @apply rounded-b-none;
 }
 
 .story-body :deep(.image-carousel img) {

@@ -120,7 +120,7 @@ export function useTrpcClient() {
   async function upload<Path extends keyof UploadOutputByPath>(
     path: Path,
     form: FormData,
-    on_progress?: (progress: number) => void,
+    on_progress?: (progress: number, loaded: number, total: number) => void,
     signal?: AbortSignal,
   ) {
     type Output = UploadOutputByPath[Path]
@@ -136,13 +136,15 @@ export function useTrpcClient() {
         const xhr = new XMLHttpRequest()
         const abort = () => xhr.abort()
         const cleanup = () => signal?.removeEventListener('abort', abort)
+        let total = 0
 
         xhr.open('POST', `${trpc_url}/${path}`)
         xhr.withCredentials = true
         xhr.setRequestHeader('Accept', 'application/json')
         xhr.upload.addEventListener('progress', (event) => {
           if (event.lengthComputable) {
-            on_progress?.(Math.max(1, Math.round(event.loaded / event.total * 95)))
+            total = event.total
+            on_progress?.(Math.max(1, Math.round(event.loaded / event.total * 95)), event.loaded, event.total)
           }
         })
         xhr.addEventListener('load', () => {
@@ -170,7 +172,7 @@ export function useTrpcClient() {
             return
           }
 
-          on_progress?.(100)
+          on_progress?.(100, total, total)
           resolve(response.result.data as Output)
         })
         xhr.addEventListener('error', () => {
@@ -188,7 +190,7 @@ export function useTrpcClient() {
         }
 
         signal?.addEventListener('abort', abort, { once: true })
-        on_progress?.(0)
+        on_progress?.(0, 0, 0)
         xhr.send(form)
       })
     }

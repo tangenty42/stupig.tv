@@ -5,7 +5,7 @@ import { extname, join } from 'node:path'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { attachment_url_path, extract_attachment_names, extract_story_reference_titles, parse_story_markdown, rename_attachment_references, sanitize_attachment_file_name } from '@shared/content-markdown'
+import { attachment_url_path, extract_attachment_names, extract_story_reference_titles, parse_story_markdown, rename_attachment_references, rename_story_references, sanitize_attachment_file_name } from '@shared/content-markdown'
 import { env } from '@shared/env'
 
 interface StoryRow extends RowDataPacket {
@@ -300,11 +300,14 @@ export async function update_story(id: number, markdown: string, delete_files: s
         [String(id), id],
       )
       for (const referrer of referrers) {
-        // TODO: This is a naive string replacement; it could be improved to only replace valid `[](@title)` references, not arbitrary text that happens to match.
-        const rewritten = referrer.markdown.replaceAll(`(@${old_title})`, `(@${new_title})`)
+        const rewritten = rename_story_references(referrer.markdown, old_title, new_title)
         if (rewritten !== referrer.markdown) {
+          // Keep `updated_at` intact: a mechanical reference rewrite must not
+          // invalidate an in-progress editor's base version (that would raise
+          // a false version-conflict on save; the stale `@oldtitle` is instead
+          // surfaced by the dead-reference lint).
           await connection.execute(
-            'UPDATE content_stories SET markdown = ? WHERE id = ?',
+            'UPDATE content_stories SET markdown = ?, updated_at = updated_at WHERE id = ?',
             [rewritten, referrer.id],
           )
           rewritten_referrers.push(referrer.id)
