@@ -16,6 +16,8 @@ export type AttachmentCardData
     file_size: number
     status: AttachmentUploadStatus
     progress: number
+    /** Live upload speed in bytes per second. */
+    speed: number
     message: string | null
   }
 

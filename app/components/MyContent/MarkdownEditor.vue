@@ -425,6 +425,10 @@ function diagnostics_to_items(diagnostics: Diagnostic[], doc: Text) {
 const initial_doc = EditorState.create({ doc: model.value }).doc
 issues.value = diagnostics_to_items(build_diagnostics(model.value, initial_doc), initial_doc)
 
+// Dispatched on an otherwise-no-op transaction when `props.stories` changes so
+// the lint plugin re-schedules a run (its `force()` is a no-op while idle).
+const stories_changed_effect = StateEffect.define<null>()
+
 const lint_source = linter((editor_view) => {
   const diagnostics = build_diagnostics(editor_view.state.doc.toString(), editor_view.state.doc)
 
@@ -435,16 +439,20 @@ const lint_source = linter((editor_view) => {
   }
 
   return diagnostics
-}, { delay: 400 })
+}, {
+  delay: 400,
+  needsRefresh: update => update.transactions.some(tr => tr.effects.some(effect => effect.is(stories_changed_effect))),
+})
 
 // `@` story completion: `[](@query` completes to `[](@title)`, a bare `@query`
-// to a wrapped `[](@title)`. Titles cannot contain spaces or `@`, so the
-// destination is a single clean token.
+// to a wrapped `[](@title)`. The token charset mirrors the shared reference
+// regex (`[^)\s<>]`): titles may contain CJK punctuation like `，`, so the
+// token must not be restricted to word characters.
 const story_at_patterns = {
-  link: /\((@[\p{L}\p{N}_]*)$/u,
-  bare: /(?:^|[\s(])(@[\p{L}\p{N}_]*)$/u,
+  link: /\((@[^)\s<>]*)$/u,
+  bare: /(?:^|[\s(])(@[^)\s<>]*)$/u,
 }
-const story_at_valid = /^@[\p{L}\p{N}_]*$/u
+const story_at_valid = /^@[^)\s<>]*$/u
 
 function story_completion_source(context: CompletionContext): CompletionResult | null {
   const before = context.state.sliceDoc(0, context.pos)
@@ -1149,7 +1157,10 @@ watch(model, (value) => {
 
 watch(() => props.stories, () => {
   // Re-run duplicate-title / dead-reference lints when the story list changes (e.g. after a sync refresh).
+  // `forceLinting` alone is a no-op while the linter is idle, so first mark the
+  // linter dirty via `needsRefresh` (a doc-change-free transaction), then force it.
   if (view) {
+    view.dispatch({ effects: stories_changed_effect.of(null) })
     forceLinting(view)
   }
 })

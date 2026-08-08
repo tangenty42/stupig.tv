@@ -568,3 +568,15 @@ export function extract_story_reference_titles(markdown: string) {
   }
   return [... titles]
 }
+
+// A real `[](@title)` story reference link (image or text label), whose
+// destination is a bare `@title` token. Distinguishes links from arbitrary
+// `(@title)` text so a title rename only rewrites actual references.
+const story_reference_markdown = /(!?\[[^\]]*\]\(\s*)(@[^)\s<>]+)(\s*\))/g
+
+/** Rename `[](@old_title)` story references to `@new_title`; other text is left untouched. */
+export function rename_story_references(markdown: string, old_title: string, new_title: string) {
+  return markdown.replace(story_reference_markdown, (link, prefix: string, destination: string, suffix: string) => {
+    return destination === `@${old_title}` ? `${prefix}@${new_title}${suffix}` : link
+  })
+}

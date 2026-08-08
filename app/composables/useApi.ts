@@ -162,7 +162,7 @@ export function useApi() {
     async upload_attachment(
       id: number,
       file: File,
-      on_progress?: (progress: number) => void,
+      on_progress?: (progress: number, loaded: number, total: number) => void,
       signal?: AbortSignal,
     ) {
       const form = new FormData()

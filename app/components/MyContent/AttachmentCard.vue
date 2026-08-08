@@ -12,9 +12,12 @@
       />
       <div class="attachment-card-details">
         <span class="truncate font-mono text-sm font-semibold" :title="props.file.file_name">{{ props.file.file_name }}</span>
-        <span class="text-xs text-slate-500 dark:text-slate-400">
-          {{ format_bytes(props.file.file_size) }}
-        </span>
+        <div class="text-xs text-slate-500 dark:text-slate-400 inline-flex justify-between">
+          <span>{{ format_bytes(props.file.file_size) }}</span>
+          <span v-if="upload?.status === 'uploading' && upload.speed > 0" class="text-slate-400 dark:text-slate-500">
+            {{ format_speed(upload.speed) }}
+          </span>
+        </div>
 
         <div v-if="upload && upload.status !== 'error'" class="mt-2 flex items-center gap-2">
           <ProgressBar
@@ -154,6 +157,7 @@
 import type { AttachmentCardData } from '~/utils/content/attachment'
 import { file_icon } from '~/utils/content/attachment'
 import { set_content_attachment_drag_data } from '~/utils/content/attachment-drag'
+import { format_speed } from '~/utils/size'
 
 interface Props {
   file: AttachmentCardData
