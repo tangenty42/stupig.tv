@@ -18,6 +18,9 @@ const visible = defineModel<boolean>('visible', { default: false })
 
 const viewer_container = ref<HTMLElement | null>(null)
 let viewer: Viewer | null = null
+// Image-set signature the current viewer instance was built with; used to
+// rebuild on open when the set changed in the same tick as `visible`.
+let built_joined = ''
 // True while a viewerjs show/hide callback is writing back to the model, so
 // the model watcher doesn't echo the same transition back into the viewer
 // (which would race the open/close transition and tear the overlay).
@@ -38,6 +41,7 @@ function create_viewer() {
     viewer.destroy()
     viewer = null
   }
+  built_joined = props.images.join('')
 
   viewer = new Viewer(viewer_container.value, {
     inline: false,
@@ -120,7 +124,13 @@ watch(visible, (is_visible) => {
       return
     }
     if (is_visible) {
-      viewer.view(props.initialIndex)
+      // The set may have changed in the same tick as `visible` (e.g. parent
+      // assigns images then flips the model), leaving the viewer built from
+      // the old DOM; rebuild before showing.
+      if (props.images.join('') !== built_joined) {
+        create_viewer()
+      }
+      viewer?.view(props.initialIndex)
     }
     else {
       viewer.hide()

@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-6 pb-12 pt-8">
+  <div class="space-y-12 pb-12 pt-8">
     <MyHeightSection tag="section" class="section-card-collapse">
       <div class="mb-4">
         <MyAdminCmdBar
@@ -158,7 +158,7 @@ definePageMeta({
 type RefreshReason = 'initial' | 'query' | 'manual' | 'polling' | 'mutation'
 type BatchCommand = 'BAN' | 'UNBAN' | 'KICK' | 'VERIFY' | 'UNVERIFY' | 'PROMOTE' | 'DEMOTE'
 
-const rows_per_page_options = [1, 10, 50, 100, 154800]
+const rows_per_page_options = [10, 50, 100, 154800]
 const runtime_config = useRuntimeConfig()
 const poll_interval_seconds = runtime_config.public.poll_interval_seconds
 const poll_interval_ms = poll_interval_seconds * 1000

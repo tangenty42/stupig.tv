@@ -1,12 +1,6 @@
 <template>
-  <div class="space-y-6 pb-12 pt-8">
-    <div v-if="loading" class="section-card-collapse">
-      <Skeleton width="50%" height="2rem" class="mb-4" />
-      <Skeleton width="100%" height="1rem" class="mb-2" />
-      <Skeleton width="80%" height="1rem" />
-    </div>
-
-    <template v-else-if="profile">
+  <div class="space-y-12 pb-12 pt-8">
+    <template v-if="profile">
       <MyHeightSection tag="section" class="section-card-collapse">
         <div class="w-full flex flex-wrap justify-between gap-y-6">
           <OverlayBadge :severity="avatar_badge_severity" :value="avatar_badge_label" class="avatar-online-badge">
@@ -369,7 +363,6 @@ const { verify: captcha_verify } = useCaptcha()
 const { confirm_require } = useMyConfirm()
 const date_now = useReactiveDateNow()
 
-const loading = useState('loading', () => false)
 const sync_loading = useState('sync_loading', () => false)
 const profile = useState<Profile | null>('profile', () => null)
 

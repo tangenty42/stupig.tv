@@ -1,8 +1,10 @@
 import {
   create_story,
   delete_attachment,
+  delete_orphan_attachment,
   delete_story,
   get_story,
+  list_orphan_attachments,
   list_stories,
   rename_attachment,
   update_story,
@@ -10,6 +12,7 @@ import {
 } from '@server/services/content.service'
 import { admin_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
+import * as z from 'zod'
 
 export const content_router = router({
   listStories: public_procedure.query(() => list_stories()),
@@ -18,10 +21,12 @@ export const content_router = router({
     .input(api_schema.content.get_story)
     .query(({ input }) => get_story(input.id)),
 
+  listOrphanAttachments: admin_procedure.query(() => list_orphan_attachments()),
+
   createStory: admin_procedure
     .input(api_schema.content.create_story)
     .mutation(async ({ ctx, input }) => ({
-      id: await create_story(ctx.auth_user.id, input.markdown),
+      id: await create_story(ctx.auth_user.id, input.markdown, input.claim_files, useRuntimeConfig(ctx.event).static_root),
     })),
 
   updateStory: admin_procedure
@@ -43,8 +48,8 @@ export const content_router = router({
   uploadAttachment: admin_procedure
     .input(api_schema.content.upload_attachment)
     .mutation(async ({ ctx, input }) => {
-      const { id } = api_schema.content.get_story.parse({ id: input.get('story_id') })
-      return upload_attachment(id, input, () => {
+      const raw_id = z.coerce.number().int().min(0).parse(input.get('story_id'))
+      return upload_attachment(raw_id || null, input, () => {
         const config = useRuntimeConfig(ctx.event)
         return {
           max_size_mb: config.public.max_content_attachment_size_mb as number,
@@ -69,6 +74,13 @@ export const content_router = router({
       input.file_name,
       input.markdown,
       input.base_updated_at,
+      useRuntimeConfig(ctx.event).static_root,
+    )),
+
+  deleteOrphanAttachment: admin_procedure
+    .input(api_schema.content.delete_orphan_attachment)
+    .mutation(({ ctx, input }) => delete_orphan_attachment(
+      input.file_name,
       useRuntimeConfig(ctx.event).static_root,
     )),
 })

@@ -147,8 +147,8 @@ export function useApi() {
       return trpc_call(trpc.content.getStory.query({ id }))
     },
 
-    async create_story(markdown: string) {
-      return trpc_call(trpc.content.createStory.mutate({ markdown }))
+    async create_story(markdown: string, claim_files: string[] = []) {
+      return trpc_call(trpc.content.createStory.mutate({ markdown, claim_files }))
     },
 
     async update_story(id: number, payload: { markdown: string, base_updated_at: string, delete_files?: string[] }) {
@@ -178,6 +178,14 @@ export function useApi() {
 
     async delete_attachment(id: number, file_name: string, markdown: string, base_updated_at: string) {
       await trpc_call(trpc.content.deleteAttachment.mutate({ id, file_name, markdown, base_updated_at }))
+    },
+
+    async delete_orphan_attachment(file_name: string) {
+      await trpc_call(trpc.content.deleteOrphanAttachment.mutate({ file_name }))
+    },
+
+    async list_orphan_attachments() {
+      return trpc_call(trpc.content.listOrphanAttachments.query())
     },
   }
 

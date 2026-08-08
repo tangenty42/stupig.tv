@@ -1,5 +1,11 @@
+import { link_file_name_byte_length, link_file_name_illegal_chars, link_file_name_reserved_base } from '@shared/content-markdown'
+import { env } from '@shared/env'
 import { form_schema, phone_schema } from '@shared/schemas'
 import * as z from 'zod'
+
+const markdown_input = z.string()
+  .min(1, '内容不能为空')
+  .refine(value => link_file_name_byte_length(value) <= env.CONTENT_STORY_MARKDOWN_MAX_BYTES, '内容太长了')
 
 const captcha_input = z.object({
   lot_number: z.string().optional(),
@@ -17,7 +23,7 @@ const public_id_input = z.object({
 })
 
 const content_story_update = z.object({
-  markdown: z.string().min(1, '内容不能为空').max(1024 * 1024, '内容太长了'),
+  markdown: markdown_input,
   delete_files: z.array(z.string().min(1).max(255)).max(500).optional().default([]),
   base_updated_at: z.string().min(1),
 })
@@ -76,7 +82,9 @@ export const api_schema = {
   content: {
     get_story: public_id_input,
     create_story: z.object({
-      markdown: z.string().min(1, '内容不能为空').max(1024 * 1024, '内容太长了'),
+      markdown: markdown_input,
+      /** Orphan attachment file names (story_id NULL) to adopt into the new story. */
+      claim_files: z.array(z.string().min(1).max(255)).max(200).default([]),
     }),
     update_story: public_id_input.extend(content_story_update.shape),
     delete_story: public_id_input,
@@ -88,12 +96,18 @@ export const api_schema = {
         .min(1, '文件名不能为空')
         .max(120, '文件名不能超过 120 个字符')
         .refine(name => ! name.startsWith('.'), '文件名不能以点开头')
-        .refine(name => ! [... name].some(char => '/\\<>:"?*|()[]'.includes(char)), '文件名包含不支持的字符'),
+        .refine(name => ! name.endsWith('.'), '文件名不能以点结尾')
+        .refine(name => ! name.match(link_file_name_illegal_chars), '文件名包含不支持的字符')
+        .refine(name => link_file_name_byte_length(name) <= env.CONTENT_LINK_FILE_NAME_MAX_BYTES, '文件名太长')
+        .refine(name => ! link_file_name_reserved_base.test(name.split('.')[0] ?? ''), '文件名是系统保留名称'),
     }),
     delete_attachment: public_id_input.extend({
       file_name: z.string().min(1).max(120),
-      markdown: z.string().min(1, '内容不能为空').max(1024 * 1024, '内容太长了'),
+      markdown: markdown_input,
       base_updated_at: z.string().min(1),
+    }),
+    delete_orphan_attachment: z.object({
+      file_name: z.string().min(1).max(255),
     }),
   },
 }

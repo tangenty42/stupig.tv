@@ -232,7 +232,7 @@ import { form_default, form_schema } from '@shared/schemas'
 import { sync_resource } from '@shared/types/sync'
 
 const static_url = useStaticUrl()
-const { error, ok, info } = useMyToast()
+const { error, ok, info, clear: clear_toasts } = useMyToast()
 const { auth: auth_api, profile: profile_api } = useApi()
 const { user, token, apply_auth, update_user, logout } = useAuth()
 const { verify: captcha_verify, showing: captcha_showing } = useCaptcha()
@@ -254,6 +254,15 @@ const breadcrumb_items = computed(() => {
   }
   if (route.path === '/admin') {
     return [{ label: '控制台' }]
+  }
+  if (route.path === '/content') {
+    return [{ label: '蠢猪档案' }]
+  }
+  if (route.path.startsWith('/content/')) {
+    return [
+      { label: '蠢猪档案', route: '/content' },
+      { label: route.path.endsWith('/edit') ? '编辑' : '详情' },
+    ]
   }
   if (route.path.startsWith('/u/')) {
     return [{ label: `用户主页 #${route.params.id}` }]
@@ -292,12 +301,18 @@ const breadcrumb_row_style = computed(() => ({
 function on_scroll() {
   header_shift_progress.value = Math.min(Math.max(window.scrollY / header_shift_distance, 0), 1)
 }
+function on_escape_key(event: KeyboardEvent) {
+  if (event.key === 'Escape')
+    clear_toasts()
+}
 onMounted(() => {
   on_scroll()
   window.addEventListener('scroll', on_scroll, { passive: true })
+  window.addEventListener('keydown', on_escape_key)
 })
 onUnmounted(() => {
   window.removeEventListener('scroll', on_scroll)
+  window.removeEventListener('keydown', on_escape_key)
 })
 
 const lor_modal = ref(false)
@@ -492,6 +507,31 @@ async function on_submit_register(e: FormSubmitEvent) {
 
 <style scoped>
 .breadcrumb-row {
+  overflow-x: auto;
+  scrollbar-width: none;
   padding-inline-end: calc(1rem + 9rem * var(--header-shift-progress));
+  /* Fade overflowing items out before they slide under the right-side buttons. */
+  mask-image: linear-gradient(
+    to right,
+    black calc(100% - (1rem + 9rem * var(--header-shift-progress))),
+    transparent calc(100% + 1rem - 9rem * var(--header-shift-progress))
+  );
+}
+
+.breadcrumb-row::-webkit-scrollbar {
+  display: none;
+}
+
+.breadcrumb-row :deep(.p-breadcrumb) {
+  flex-shrink: 0;
+}
+
+.breadcrumb-row :deep(.p-breadcrumb-list) {
+  flex-wrap: nowrap;
+}
+
+.breadcrumb-row :deep(.p-breadcrumb-list li) {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 </style>

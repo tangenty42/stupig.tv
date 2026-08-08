@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 1Panel-mysql
--- Generation Time: Jul 27, 2026 at 09:00 AM
+-- Generation Time: Aug 08, 2026 at 02:13 PM
 -- Server version: 8.4.8
 -- PHP Version: 8.3.30
 
@@ -30,9 +30,13 @@ SET time_zone = "+00:00";
 CREATE TABLE `content_stories` (
   `id` bigint UNSIGNED NOT NULL,
   `title` varchar(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
-  `rating` tinyint UNSIGNED NOT NULL,
+  `label` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `description` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `cover` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `cover_label` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `event_precision` enum('day','month') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `event_dates` json NOT NULL,
+  `related_story_ids` json DEFAULT NULL,
   `markdown` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `created_by` bigint UNSIGNED DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -47,7 +51,7 @@ CREATE TABLE `content_stories` (
 
 CREATE TABLE `content_story_attachments` (
   `id` bigint UNSIGNED NOT NULL,
-  `story_id` bigint UNSIGNED NOT NULL,
+  `story_id` bigint UNSIGNED DEFAULT NULL,
   `file_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `mime_type` varchar(127) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `file_size` bigint UNSIGNED NOT NULL DEFAULT '0',
@@ -123,6 +127,7 @@ CREATE TABLE `user_login_sessions` (
 --
 ALTER TABLE `content_stories`
   ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_content_stories_title` (`title`),
   ADD KEY `idx_content_stories_updated_at` (`updated_at`),
   ADD KEY `idx_content_stories_created_by` (`created_by`);
 

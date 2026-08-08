@@ -50,10 +50,15 @@ export function useMyToast() {
     deadly = true
   }
 
+  function clear() {
+    toast.removeAllGroups()
+  }
+
   return {
     error,
     ok,
     info,
     dead,
+    clear,
   }
 }

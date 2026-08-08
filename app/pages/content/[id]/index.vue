@@ -1,76 +1,65 @@
 <template>
-  <div class="space-y-6 pb-12 pt-8">
-    <div v-if="loading && ! story" class="space-y-4">
-      <Skeleton height="2rem" width="50%" />
-      <Skeleton height="16rem" />
-    </div>
+  <div class="pb-12 pt-8">
+    <template v-if="story">
+      <div class="flex items-start gap-3">
+        <Button class="aspect-square" outlined aria-label="返回" @click="router.back()">
+          <template #icon>
+            <MyIcon name="lucide:arrow-left" />
+          </template>
+        </Button>
+        <Button
+          v-if="is_admin"
+          class="ml-auto"
+          size="small"
+          severity="secondary"
+          text
+          label="编辑"
+          @click="navigateTo(`/content/${story.id}/edit`)"
+        >
+          <template #icon>
+            <MyIcon name="lucide:pencil" />
+          </template>
+        </Button>
+      </div>
 
-    <template v-else-if="story">
-      <MyHeightSection tag="section" class="section-card-collapse">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-          <div class="flex items-center gap-3">
-            <Button text aria-label="返回" @click="navigateTo('/content')">
-              <template #icon>
-                <MyIcon name="lucide:arrow-left" />
-              </template>
-            </Button>
-            <h1>{{ story.title }}</h1>
-          </div>
-          <Button
-            v-if="is_admin"
-            size="small"
-            severity="secondary"
-            text
-            label="编辑"
-            @click="navigateTo(`/content/${story.id}/edit`)"
-          >
-            <template #icon>
-              <MyIcon name="lucide:pencil" />
-            </template>
-          </Button>
-        </div>
+      <MyContentStoryHeader class="mt-4" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :date="format_event_range(story.event_precision, story.event_dates)" :story-id="story.id" />
 
-        <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 pl-12 text-sm text-slate-500 dark:text-slate-400">
-          <span class="flex items-center text-amber-400" :title="`评分 ${story.rating}`">
-            <MyIcon
-              v-for="star in story.rating"
-              :key="star"
-              name="lucide:star"
-              class="fill-amber-400"
-            />
-          </span>
-          <span class="flex flex-wrap gap-1">
-            <span
-              v-for="entry in event_entries"
-              :key="entry"
-              class="rounded-full bg-slate-100 px-2 py-0.5 text-xs dark:bg-slate-800"
-            >
-              {{ entry }}
-            </span>
-          </span>
-          <span class="text-xs"><ClientOnly>更新于 {{ datetime_format(story.updated_at) }}</ClientOnly></span>
-        </div>
+      <MyDivider class="mt-12">
+        正文
+      </MyDivider>
+
+      <MyHeightSection tag="section" class="section-card-collapse mt-6">
+        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="story.attachments" :stories="stories ?? []" />
       </MyHeightSection>
 
-      <MyHeightSection tag="section" class="section-card">
-        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="story.attachments" />
+      <MyDivider class="mt-12">
+        事件日历
+      </MyDivider>
+
+      <MyHeightSection tag="section" class="section-card-collapse mt-6">
+        <MyContentStoryCalendar
+          :stories="stories ?? []"
+          :highlight_id="story.id"
+          :initial_month="story.event_dates[0]?.slice(0, 7) ?? null"
+        />
       </MyHeightSection>
     </template>
 
-    <div v-else class="section-card py-12 text-center text-slate-500 dark:text-slate-400">
+    <div v-else class="section-card-collapse py-12 text-center text-slate-500 dark:text-slate-400">
       档案不存在或已被删除
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import type { ContentStoryDetail } from '@shared/types/content'
+import type { ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
 import { sync_resource } from '@shared/types/sync'
+import { format_event_range } from '~/utils/content/event'
 
 const route = useRoute()
+const router = useRouter()
 const { content } = useApi()
 const { user } = useAuth()
-const runtime_config = useRuntimeConfig()
 
 const story_id = computed(() => Number(route.params.id))
 const is_admin = computed(() => Boolean(user.value?.is_admin))
@@ -86,20 +75,15 @@ await useSyncedData<ContentStoryDetail>(
   () => content.get_story(story_id.value),
   story,
   loading,
-  {
-    polling_interval: runtime_config.public.poll_interval_seconds * 1000,
-  },
 )
 
-const event_entries = computed(() => {
-  if (! story.value)
-    return []
-  return story.value.event_dates.map((date) => {
-    const [year, month, day] = date.split('-')
-    if (story.value!.event_precision === 'month') {
-      return `${Number(year)} 年 ${Number(month)} 月`
-    }
-    return `${Number(year)} 年 ${Number(month)} 月 ${Number(day)} 日`
-  })
-})
+const stories = useState<ContentStorySummary[] | null>('content_stories', () => null)
+const stories_loading = useState('content_stories_loading', () => false)
+
+await useSyncedData<ContentStorySummary[]>(
+  computed(() => sync_resource('content_stories', 'all')),
+  () => content.list_stories(),
+  stories,
+  stories_loading,
+)
 </script>

@@ -32,24 +32,28 @@
 
         <span
           v-if="stored && ! stored.referenced"
-          class="mt-1.5 inline-flex flex-wrap items-center gap-2 text-xs text-red-600 dark:text-red-400"
+          class="mt-1.5 text-xs text-red-600 dark:text-red-400"
         >
-          <span>未引用，保存时将删除，或</span>
-          <Button
-            size="small"
-            severity="danger"
-            label="立即删除"
-            class="shrink-0 !px-1.5 !py-1 !text-xs"
-            :loading="props.delete_pending"
-            :disabled="props.delete_disabled"
-            @click="emit('delete', $event)"
-          />
+          {{ props.unreferenced_hint }}
         </span>
       </div>
       <div class="attachment-card-actions">
         <template v-if="stored">
           <Button
+            v-if="! props.rename_disabled"
+            class="aspect-square"
+            text
+            severity="secondary"
+            aria-label="重命名"
+            @click="emit('rename')"
+          >
+            <template #icon>
+              <MyIcon name="lucide:pencil" />
+            </template>
+          </Button>
+          <Button
             v-if="stored.is_image"
+            class="aspect-square"
             text
             severity="secondary"
             aria-label="预览"
@@ -59,12 +63,9 @@
               <MyIcon name="lucide:eye" />
             </template>
           </Button>
-          <Button text severity="secondary" aria-label="重命名" @click="emit('rename')">
-            <template #icon>
-              <MyIcon name="lucide:pencil" />
-            </template>
-          </Button>
           <Button
+            v-else
+            class="aspect-square"
             text
             severity="secondary"
             as="a"
@@ -77,11 +78,38 @@
               <MyIcon name="lucide:external-link" />
             </template>
           </Button>
+          <Button
+            class="aspect-square"
+            text
+            severity="secondary"
+            as="a"
+            aria-label="复制 Markdown 代码"
+            @click="emit('copy', static_url(stored.url))"
+          >
+            <template #icon>
+              <MyIcon name="lucide:copy" />
+            </template>
+          </Button>
+          <Button
+            v-if="! stored.referenced"
+            class="aspect-square attachment-delete"
+            text
+            severity="danger"
+            aria-label="删除"
+            :loading="props.delete_pending"
+            :disabled="props.delete_disabled"
+            @click="emit('delete', $event)"
+          >
+            <template #icon>
+              <MyIcon name="lucide:trash-2" />
+            </template>
+          </Button>
         </template>
 
         <template v-else-if="upload">
           <Button
             v-if="upload.status === 'error'"
+            class="aspect-square"
             text
             severity="secondary"
             aria-label="重试上传"
@@ -94,6 +122,7 @@
           </Button>
           <Button
             v-if="upload.status === 'queued' || upload.status === 'uploading'"
+            class="aspect-square"
             text
             severity="secondary"
             aria-label="取消上传"
@@ -105,9 +134,10 @@
           </Button>
           <Button
             v-else
+            class="aspect-square"
             text
             severity="secondary"
-            aria-label="移除上传任务"
+            aria-label="取消上传"
             @click="emit('remove')"
           >
             <template #icon>
@@ -129,17 +159,22 @@ interface Props {
   file: AttachmentCardData
   delete_pending?: boolean
   delete_disabled?: boolean
+  rename_disabled?: boolean
   retry_disabled?: boolean
+  unreferenced_hint?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
   delete_pending: false,
   delete_disabled: false,
+  rename_disabled: false,
   retry_disabled: false,
+  unreferenced_hint: '未引用',
 })
 
 const emit = defineEmits<{
   preview: [url: string]
+  copy: [url: string]
   rename: []
   delete: [event: MouseEvent]
   retry: []
@@ -199,7 +234,11 @@ function on_dragstart(event: DragEvent) {
   @apply flex shrink-0 items-center;
 }
 
-.attachment-card-actions :deep(.iconify) {
+.attachment-card-actions :deep(*) {
   @apply text-slate-400 dark:text-slate-500;
+}
+
+.attachment-card-actions :deep(.attachment-delete *) {
+  @apply text-red-500 dark:text-red-400;
 }
 </style>

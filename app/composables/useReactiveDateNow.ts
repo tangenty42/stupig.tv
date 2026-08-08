@@ -1,4 +1,3 @@
-import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 
 let clock_interval: ReturnType<typeof setInterval> | null = null
@@ -9,7 +8,7 @@ export function useReactiveDateNow(interval_ms = 1000) {
     return ref(localize_date(dayjs()))
   }
 
-  const clock = useState<Dayjs>('reactive_date_now', () => dayjs())
+  const clock = useState('reactive_date_now', () => dayjs())
 
   if (clock_interval !== null) {
     return clock

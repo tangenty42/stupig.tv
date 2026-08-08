@@ -54,15 +54,15 @@ export function set_display_timezone(tz: string | null | undefined) {
   display_timezone = tz || 'UTC'
 }
 
-export function localize_date(input?: DateLike) {
+export function localize_date(input?: DateLike, keep_local?: boolean) {
   const tz = get_display_timezone()
   if (input === null || input === undefined) {
-    return dayjs().tz(tz)
+    return dayjs().tz(tz, keep_local ?? false)
   }
   if (typeof input === 'string' || typeof input === 'number') {
-    return dayjs.utc(input).tz(tz)
+    return dayjs.utc(input).tz(tz, keep_local ?? false)
   }
-  return dayjs(input).tz(tz)
+  return dayjs(input).tz(tz, keep_local ?? false)
 }
 
 export function duration_between(start_date: DateLike, end_date: DateLike) {

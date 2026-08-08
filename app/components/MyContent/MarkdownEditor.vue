@@ -1,5 +1,11 @@
 <template>
   <div class="space-y-2">
+    <!-- Preload the lucide icons used as completion-type icons so the
+         injected `iconify` spans in the autocomplete list render. -->
+    <div class="hidden" aria-hidden="true">
+      <MyIcon v-for="icon in completion_icon_names" :key="icon" :name="icon" />
+    </div>
+
     <div class="flex flex-wrap items-center justify-between gap-2">
       <slot name="toolbar-start" />
       <div class="flex items-center gap-3">
@@ -49,9 +55,7 @@
         class="relative flex flex-col gap-y-2 border-t border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden"
       >
         <Button
-          text
-          rounded
-          severity="secondary"
+          link
           aria-label="关闭查找替换"
           class="!absolute -right-2 -top-2"
           @click="close_search"
@@ -114,43 +118,52 @@
 
     <div
       v-show="editor_mode === 'preview'"
-      class="min-h-80 overflow-hidden rounded-sm border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900"
+      class="section-card-collapse"
       :class="{ 'editor-mode-enter': mode_has_switched && editor_mode === 'preview' }"
     >
-      <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" empty-text="暂无可预览内容" />
+      <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" :stories="stories" empty-text="暂无可预览内容" />
     </div>
 
-    <div v-if="editor_mode === 'edit' && issues.length" class="rounded-sm border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800/50">
-      <button
-        v-for="(issue, index) in issues"
-        :key="index"
-        type="button"
-        class="flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-700/50"
-        @click="jump_to_line(issue.from)"
-      >
-        <span class="shrink-0 font-mono text-slate-400">第 {{ issue.line }} 行</span>
-        <span class="text-slate-600 dark:text-slate-300">{{ issue.message }}</span>
-        <span v-if="issue.source" class="ml-auto shrink-0 font-mono text-slate-400">{{ issue.source }}</span>
-      </button>
+    <div v-if="editor_mode === 'edit' && issues.length" class="rounded-sm border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden">
+      <div class="overflow-y-auto max-h-64 p-2">
+        <button
+          v-for="(issue, index) in issues"
+          :key="index"
+          type="button"
+          class="flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs transition-[background-color] hover:bg-slate-100 dark:hover:bg-slate-700/50"
+          @click="jump_to_line(issue.from)"
+        >
+          <span class="shrink-0 font-mono text-slate-400">第 {{ issue.line }} 行</span>
+          <span class="text-slate-600 dark:text-slate-300">{{ issue.message }}</span>
+          <span v-if="issue.source" class="ml-auto shrink-0 font-mono text-slate-400">{{ issue.source }}</span>
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import type { Diagnostic } from '@codemirror/lint'
 import type { Text } from '@codemirror/state'
-import type { DecorationSet } from '@codemirror/view'
-import type { ContentStoryAttachment } from '@shared/types/content'
-import { markdown as markdown_lang } from '@codemirror/lang-markdown'
+import type { DecorationSet, ViewUpdate } from '@codemirror/view'
+import type { ContentMarkdownConfig } from '@shared/content-markdown'
+import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
+import type { Configuration as MarkdownlintConfiguration } from 'markdownlint'
+import { autocompletion, startCompletion } from '@codemirror/autocomplete'
+import { html as html_lang, htmlLanguage } from '@codemirror/lang-html'
+import { markdown as markdown_lang, markdownLanguage } from '@codemirror/lang-markdown'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { linter, lintGutter } from '@codemirror/lint'
+import { forceLinting, linter, lintGutter } from '@codemirror/lint'
 import { Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField } from '@codemirror/state'
-import { Decoration, EditorView, keymap } from '@codemirror/view'
+import { Decoration, EditorView, keymap, MatchDecorator, ViewPlugin } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import { parse_story_markdown } from '@shared/content-markdown'
+import { content_rating_tiers, pinned_label, rating_label, story_rating } from '@shared/types/content'
 import { basicSetup } from 'codemirror'
 import { lint as markdownlint } from 'markdownlint/sync'
 import { content_attachment_markdown, get_content_attachment_drag_data } from '~/utils/content/attachment-drag'
+import { html_markdown_wrapper_tags } from '~/utils/content/html'
 
 interface LintListItem {
   from: number
@@ -159,14 +172,17 @@ interface LintListItem {
   source: string | null
 }
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   storyId?: number | null
   attachments?: ContentStoryAttachment[]
   placeholder?: string
+  /** Known stories for `@story` completion, dead-reference linting and preview cards. */
+  stories?: ContentStorySummary[]
 }>(), {
   storyId: null,
   attachments: () => [],
   placeholder: '',
+  stories: () => [],
 })
 
 const emit = defineEmits<{
@@ -177,7 +193,7 @@ const emit = defineEmits<{
 const model = defineModel<string>({ default: '' })
 
 const color_mode = useMyColorMode()
-const content_markdown_config = useContentMarkdownConfig()
+const { public: public_config } = useRuntimeConfig()
 
 const editor_host = ref<HTMLElement>()
 const editor_ready = ref(false)
@@ -204,31 +220,171 @@ const search_input = ref<{ $el: HTMLInputElement } | null>(null)
 let view: EditorView | null = null
 const theme_compartment = new Compartment()
 
-const markdownlint_config = {
-  default: true,
-  // Chinese prose wraps poorly with a line-length rule; title lives in front
-  // matter (MD025 enforces no repeated H1 in the body) so MD041 is off too.
-  // Plain fenced code blocks without a language are common in stories.
+const markdownlint_config: MarkdownlintConfiguration = {
+  default: 'error',
   MD013: false,
+  MD025: false,
   MD033: false,
-  MD040: false,
-  MD041: false,
+  MD045: false,
 }
 const front_matter_pattern = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/
+
+// True when the HTML parse of `region_text` still has an element open (its
+// last child is the OpenTag, not a CloseTag). Used to group adjacent HTML
+// nodes: a wrapper split by a blank line (`<center>` ... `</center>`) stays
+// in one region until its close tag arrives.
+function html_region_has_unclosed(region_text: string) {
+  const tree = htmlLanguage.parser.parse(region_text)
+  let unclosed = false
+  tree.iterate({ enter: (n) => {
+    if (n.type.name === 'Element') {
+      const last = n.node.lastChild
+      if (last && last.type.name === 'OpenTag') {
+        unclosed = true
+      }
+    }
+  } })
+  return unclosed
+}
+
+// Grammar-check the HTML blocks/tags in the markdown body with the lezer HTML
+// parser, reporting malformed open tags (unclosed quote / missing `>`),
+// mismatched close tags, and elements missing their close tag. Only tag
+// structure is checked — text content (markdown) is never treated as HTML.
+function build_html_diagnostics(doc_text: string): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  const tree = markdownLanguage.parser.parse(doc_text)
+  const html_nodes: { from: number, to: number }[] = []
+  tree.iterate({ enter: (n) => {
+    if (n.type.name === 'HTMLBlock' || n.type.name === 'HTMLTag') {
+      html_nodes.push({ from: n.from, to: n.to })
+    }
+  } })
+  if (! html_nodes.length) {
+    return diagnostics
+  }
+
+  // Group adjacent HTML nodes into regions: keep absorbing nodes while the
+  // accumulated text still has unclosed elements, so a wrapper split by a
+  // blank line rejoins into a single region before linting.
+  const regions: { from: number, to: number }[][] = []
+  let current: { from: number, to: number }[] = []
+  for (let i = 0; i < html_nodes.length; i ++) {
+    current.push(html_nodes[i]!)
+    const region_text = current.map(n => doc_text.slice(n.from, n.to)).join('\n')
+    if (! html_region_has_unclosed(region_text) || i === html_nodes.length - 1) {
+      regions.push(current)
+      current = []
+    }
+  }
+
+  for (const region_nodes of regions) {
+    // Concatenate the node texts and remember each region offset's doc offset,
+    // so diagnostics found in the region can be mapped back to the document.
+    const parts: string[] = []
+    const map: number[] = []
+    for (let i = 0; i < region_nodes.length; i ++) {
+      const node = region_nodes[i]!
+      if (i > 0) {
+        parts.push('\n')
+        map.push(- 1)
+      }
+      for (let p = node.from; p < node.to; p ++) {
+        parts.push(doc_text[p]!)
+        map.push(p)
+      }
+    }
+    const region_text = parts.join('')
+    const to_doc = (region_from: number, region_to: number) => {
+      const from = map[region_from] ?? - 1
+      const to = region_to > region_from ? (map[region_to - 1] ?? - 1) + 1 : from + 1
+      return { from, to }
+    }
+
+    const ht = htmlLanguage.parser.parse(region_text)
+    ht.iterate({ enter: (n) => {
+      const name = n.type.name
+      if (name === 'OpenTag' && ! n.node.getChild('EndTag')) {
+        // Unclosed open tag: a missing `>` or an unterminated attribute quote.
+        const tag = n.node.getChild('TagName')
+        const { from, to } = to_doc(tag?.from ?? n.from, tag?.to ?? n.to)
+        if (from >= 0) {
+          diagnostics.push({
+            from,
+            to: Math.max(to, from + 1),
+            severity: 'error',
+            message: 'HTML 标签未正确闭合（属性引号或 > 缺失）',
+            source: 'html',
+          })
+        }
+      }
+      else if (name === 'MismatchedCloseTag') {
+        const parent_tag = n.node.parent?.getChild('OpenTag')?.getChild('TagName')
+        const expected = parent_tag ? region_text.slice(parent_tag.from, parent_tag.to) : null
+        const close_text = region_text.slice(n.from, n.to)
+        const { from, to } = to_doc(n.from, n.to)
+        if (from >= 0) {
+          diagnostics.push({
+            from,
+            to: Math.max(to, from + 1),
+            severity: 'error',
+            message: expected
+              ? `闭合标签 ${close_text} 与 <${expected}> 不匹配，应为 </${expected}>`
+              : `多余的闭合标签 ${close_text}`,
+            source: 'html',
+          })
+        }
+      }
+      else if (name === 'Element') {
+        const open = n.node.getChild('OpenTag')
+        const close = n.node.getChild('CloseTag')
+        const last = n.node.lastChild
+        if (open && open.getChild('EndTag') && ! close && last?.type.name !== 'MismatchedCloseTag') {
+          const tag = open.getChild('TagName')
+          const tag_name = tag ? region_text.slice(tag.from, tag.to) : '?'
+          const { from, to } = to_doc(tag?.from ?? open.from, tag?.to ?? open.to)
+          if (from >= 0) {
+            diagnostics.push({
+              from,
+              to: Math.max(to, from + 1),
+              severity: 'error',
+              message: `缺少闭合标签 </${tag_name}>`,
+              source: 'html',
+            })
+          }
+        }
+      }
+    } })
+  }
+
+  return diagnostics
+}
 
 function build_diagnostics(doc_text: string, doc: Text) {
   const diagnostics: Diagnostic[] = []
 
+  const content_markdown_config: ContentMarkdownConfig = {
+    title_max_length: public_config.content_story_title_max_length,
+    label_max_bytes: public_config.content_story_label_max_bytes,
+    desc_max_bytes: public_config.content_story_desc_max_bytes,
+    cover_max_bytes: public_config.content_story_cover_max_bytes,
+    markdown_max_bytes: public_config.content_story_markdown_max_bytes,
+    existing_titles: props.stories
+      .filter(story => story.id !== props.storyId)
+      .map(story => ({ id: story.id, title: story.title })),
+  }
   for (const issue of parse_story_markdown(doc_text, content_markdown_config).issues) {
     const line = doc.line(Math.min(issue.line, doc.lines))
     diagnostics.push({
       from: line!.from,
       to: line.to,
-      severity: 'error',
+      severity: issue.severity,
       message: issue.message,
-      source: 'front-matter',
+      source: issue.source,
     })
   }
+
+  diagnostics.push(... build_html_diagnostics(doc_text))
 
   try {
     const results = markdownlint({
@@ -281,6 +437,227 @@ const lint_source = linter((editor_view) => {
   return diagnostics
 }, { delay: 400 })
 
+// `@` story completion: `[](@query` completes to `[](@title)`, a bare `@query`
+// to a wrapped `[](@title)`. Titles cannot contain spaces or `@`, so the
+// destination is a single clean token.
+const story_at_patterns = {
+  link: /\((@[\p{L}\p{N}_]*)$/u,
+  bare: /(?:^|[\s(])(@[\p{L}\p{N}_]*)$/u,
+}
+const story_at_valid = /^@[\p{L}\p{N}_]*$/u
+
+function story_completion_source(context: CompletionContext): CompletionResult | null {
+  const before = context.state.sliceDoc(0, context.pos)
+  const link_match = story_at_patterns.link.exec(before)
+  const bare_match = link_match ? null : story_at_patterns.bare.exec(before)
+  const match = link_match ?? bare_match
+  if (! match) {
+    return null
+  }
+  const in_link = Boolean(link_match)
+  const options: Completion[] = props.stories
+    .filter(story => story.id !== props.storyId)
+    .map(story => ({
+      // The label carries the `@` prefix so CodeMirror's built-in filter can
+      // match the `@query` token; `displayLabel` keeps the `@` out of the list.
+      label: `@${story.title}`,
+      displayLabel: story.title,
+      detail: story_rating(story.labels),
+      type: 'story',
+      // Inside `[](@` the user already typed the parens (closeBrackets adds
+      // the closing `)`), so only the `@title` token is replaced; a bare `@`
+      // wraps into a full `[](@title)` link.
+      apply: in_link ? `@${story.title}` : `[](@${story.title})`,
+    }))
+  return {
+    // Replace the `@query` token (never the leading whitespace/`(`), so the
+    // surrounding `[](` / closeBrackets `)` stay put. The built-in filter
+    // scores prefix matches first; `validFor` keeps the result alive while
+    // the user types inside the `@token` so the list narrows in place.
+    from: match.index + match[0].indexOf('@'),
+    to: context.pos,
+    options,
+    validFor: story_at_valid,
+  }
+}
+
+// Custom completion types render a lucide icon in the list (including
+// `keyword`, replacing CodeMirror's built-in glyph). The iconify classes are
+// preloaded by the hidden MyIcon row above so the injected spans display.
+const completion_icon_by_type: Record<string, string> = {
+  story: 'lucide:book-open',
+  file: 'lucide:file',
+  image: 'lucide:image',
+  keyword: 'lucide:tag',
+}
+const completion_icon_names = [... new Set(Object.values(completion_icon_by_type))]
+
+// Injects the type icon into an autocomplete option; returns null for types
+// without a custom icon so their default glyph stays.
+function completion_icon_renderer(completion: Completion): Node | null {
+  const icon = completion.type ? completion_icon_by_type[completion.type] : undefined
+  if (! icon) {
+    return null
+  }
+  const span = document.createElement('span')
+  span.className = `completion-type-icon iconify i-${icon}`
+  span.setAttribute('aria-hidden', 'true')
+  return span
+}
+
+const autocomplete_ext = autocompletion({
+  override: [story_completion_source, attachment_completion_source, label_completion_source, alert_marker_completion_source],
+  addToOptions: [{
+    render: completion_icon_renderer,
+    position: 20,
+  }],
+})
+
+// Attachment file-name completion: offered inside a link destination `[](` /
+// `![](` before any `/`, scheme, `@`, `#` or `)` is typed, so it only fires for
+// bare story-relative file names. Options carry the file name; the built-in
+// filter narrows as the user types.
+const attachment_dest_pattern = /!?\[[^\]]*\]\(\s*([^)\s<>]*)$/
+const attachment_dest_valid = /^[^/@#:)\s<>]*$/
+
+function attachment_completion_source(context: CompletionContext): CompletionResult | null {
+  const before = context.state.sliceDoc(0, context.pos)
+  const match = attachment_dest_pattern.exec(before)
+  if (! match) {
+    return null
+  }
+  const query = match[1] ?? ''
+  if (! attachment_dest_valid.test(query)) {
+    return null
+  }
+  const options: Completion[] = props.attachments.map(attachment => ({
+    label: attachment.file_name,
+    detail: attachment.is_image ? '图片' : '附件',
+    type: attachment.is_image ? 'image' : 'file',
+    apply: attachment.file_name,
+  }))
+  return {
+    from: context.pos - query.length,
+    to: context.pos,
+    options,
+    validFor: attachment_dest_valid,
+  }
+}
+
+// Special `#`-prefixed labels (rating tiers + pin) on the front-matter `label:`
+// line, so a bare `#` lists the allowed hidden tags.
+const special_labels = [... content_rating_tiers.map(rating_label), pinned_label]
+// Ordinary (non-`#`) labels already in use across OTHER stories (the story
+// being edited is excluded — its DB labels are already on its own label line),
+// deduplicated, so typing a plain label word can reuse an existing tag.
+const existing_labels = computed(() => {
+  const labels = new Set<string>()
+  for (const story of props.stories) {
+    if (story.id === props.storyId) {
+      continue
+    }
+    for (const label of story.labels) {
+      if (! label.startsWith('#')) {
+        labels.add(label)
+      }
+    }
+  }
+  return [... labels].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+const label_line_pattern = /^label\s*:/i
+// The first label token follows the `label:` colon directly (no space needed),
+// so the boundary accepts line start, whitespace, or the colon itself.
+const label_token_pattern = /(?:^|[\s:])(#[^#\s]*|[^#\s]*)$/
+// Shape-specific validFor: `#`-prefixed queries keep only `#…` results alive,
+// plain queries keep only plain `…`. The old `#?`-optional pattern matched BOTH
+// forms, so typing `#` while a plain-label result was active never invalidated
+// it — CodeMirror kept the stale result instead of re-querying the source.
+const label_hash_valid = /^#[\p{L}\p{N}_]*$/u
+const label_plain_valid = /^[\p{L}\p{N}_]*$/u
+
+function label_completion_source(context: CompletionContext): CompletionResult | null {
+  const before = context.state.sliceDoc(0, context.pos)
+  const line_start = before.lastIndexOf('\n') + 1
+  const line = before.slice(line_start)
+  if (! label_line_pattern.test(line)) {
+    return null
+  }
+  const token_match = label_token_pattern.exec(line)
+  if (! token_match) {
+    return null
+  }
+  const query = token_match[1] ?? ''
+  const is_hash = query.startsWith('#')
+  const candidates = is_hash ? special_labels : existing_labels.value
+  if (! candidates.length) {
+    return null
+  }
+  const options: Completion[] = candidates.map(label => ({
+    label,
+    type: 'keyword',
+    apply: label,
+  }))
+  return {
+    from: context.pos - query.length,
+    to: context.pos,
+    options,
+    validFor: is_hash ? label_hash_valid : label_plain_valid,
+  }
+}
+
+// Blockquote alert markers `> [!NOTE]` etc. complete the marker after `[!`.
+// Requires at least one `>` so the marker is suggested only where it will
+// actually render as an alert (markdown-it needs a blockquote).
+const alert_marker_pattern = /^[ \t]*(?:>[ \t]?)+\[![a-z]*$/i
+const alert_marker_valid = /^\[![a-z]*$/i
+const alert_markers = ['NOTE', 'TIP', 'IMPORTANT', 'WARNING', 'CAUTION'] as const
+const alert_labels_map: Record<(typeof alert_markers)[number], string> = {
+  NOTE: '提示',
+  TIP: 'TIP',
+  IMPORTANT: '重要提示',
+  WARNING: '警告',
+  CAUTION: '注意',
+}
+
+// Typing `[!` makes closeBrackets insert a `]` right after the cursor, so the
+// marker's own `]` would stack into `[!NOTE]]`. Consume that auto-inserted `]`
+// when the apply runs.
+function apply_alert_marker(view: EditorView, completion: Completion, from: number, to: number) {
+  const marker = completion.label
+  const trailing_bracket = view.state.doc.sliceString(to, to + 1) === ']'
+  const end = trailing_bracket ? to + 1 : to
+  view.dispatch({
+    changes: { from, to: end, insert: marker },
+    selection: { anchor: from + marker.length },
+    userEvent: 'input.complete',
+  })
+}
+
+function alert_marker_completion_source(context: CompletionContext): CompletionResult | null {
+  const before = context.state.sliceDoc(0, context.pos)
+  // Match against the current line only: `^` would otherwise anchor to the
+  // document start and never fire after the front matter or other content.
+  const line_start = before.lastIndexOf('\n') + 1
+  const line = before.slice(line_start)
+  const match = alert_marker_pattern.exec(line)
+  if (! match) {
+    return null
+  }
+  const marker_from = line_start + line.lastIndexOf('[!')
+  const options: Completion[] = alert_markers.map(marker => ({
+    label: `[!${marker}]`,
+    detail: alert_labels_map[marker],
+    type: 'keyword',
+    apply: apply_alert_marker,
+  }))
+  return {
+    from: marker_from,
+    to: context.pos,
+    options,
+    validFor: alert_marker_valid,
+  }
+}
+
 const light_theme = EditorView.theme({
   '&': { backgroundColor: 'transparent', color: '#1e293b', height: '100%' },
   '.cm-gutters': { backgroundColor: 'transparent', color: '#94a3b8', border: 'none' },
@@ -290,6 +667,12 @@ const light_theme = EditorView.theme({
   '.cm-cursor': { borderLeftColor: '#0f172a' },
   '.cm-lintRange-error': { textDecorationColor: '#ef4444' },
   '.cm-lintRange-warning': { textDecorationColor: '#f59e0b' },
+  '.cm-alert-marker': { fontWeight: 'bold' },
+  '.cm-alert-marker-note': { color: '#0369a1' },
+  '.cm-alert-marker-tip': { color: '#047857' },
+  '.cm-alert-marker-important': { color: '#4338ca' },
+  '.cm-alert-marker-warning': { color: '#b45309' },
+  '.cm-alert-marker-caution': { color: '#b91c1c' },
 }, { dark: false })
 
 const dark_theme = EditorView.theme({
@@ -301,6 +684,12 @@ const dark_theme = EditorView.theme({
   '.cm-cursor': { borderLeftColor: '#f8fafc' },
   '.cm-lintRange-error': { textDecorationColor: '#f87171' },
   '.cm-lintRange-warning': { textDecorationColor: '#fbbf24' },
+  '.cm-alert-marker': { fontWeight: 'bold' },
+  '.cm-alert-marker-note': { color: '#38bdf8' },
+  '.cm-alert-marker-tip': { color: '#34d399' },
+  '.cm-alert-marker-important': { color: '#818cf8' },
+  '.cm-alert-marker-warning': { color: '#fbbf24' },
+  '.cm-alert-marker-caution': { color: '#f87171' },
 }, { dark: true })
 
 // basicSetup's defaultHighlightStyle is light-oriented (#219 urls, #a11
@@ -318,6 +707,10 @@ const light_highlight = HighlightStyle.define([
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: [tags.escape, tags.character], color: '#b45309' },
   { tag: tags.comment, color: '#94a3b8' },
+  { tag: tags.tagName, color: '#b45309' },
+  { tag: tags.attributeName, color: '#0f766e' },
+  { tag: tags.attributeValue, color: '#15803d' },
+  { tag: tags.angleBracket, color: '#94a3b8' },
 ])
 
 const dark_highlight = HighlightStyle.define([
@@ -332,12 +725,65 @@ const dark_highlight = HighlightStyle.define([
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: [tags.escape, tags.character], color: '#fbbf24' },
   { tag: tags.comment, color: '#64748b' },
+  { tag: tags.tagName, color: '#fbbf24' },
+  { tag: tags.attributeName, color: '#5eead4' },
+  { tag: tags.attributeValue, color: '#86efac' },
+  { tag: tags.angleBracket, color: '#64748b' },
 ])
 
 function theme_extensions(mode: 'light' | 'dark') {
   return mode === 'dark'
     ? [dark_theme, syntaxHighlighting(dark_highlight)]
     : [light_theme, syntaxHighlighting(light_highlight)]
+}
+
+// Highlights `[!NOTE]`-style alert markers at the start of blockquote lines;
+// colors mirror the preview's markdown-alert palette.
+const alert_marker_decorator = new MatchDecorator({
+  regexp: /^[ \t]*(?:>[ \t]?)+\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/gm,
+  decorate: (add, from, to, match) => {
+    const marker_from = from + match[0].indexOf('[!')
+    add(marker_from, to, Decoration.mark({ class: `cm-alert-marker cm-alert-marker-${match[1]!.toLowerCase()}` }))
+  },
+})
+
+const alert_marker_plugin = ViewPlugin.fromClass(class {
+  decorations: DecorationSet
+
+  constructor(view: EditorView) {
+    this.decorations = alert_marker_decorator.createDeco(view)
+  }
+
+  update(update: ViewUpdate) {
+    this.decorations = alert_marker_decorator.updateDeco(update, this.decorations)
+  }
+}, { decorations: value => value.decorations })
+
+// Markdown written inside HTML elements is parsed as markdown (emphasis,
+// links, lists, ...), matching the preview renderer: every element except the
+// raw-text/code/embedded blocklist.
+//
+// The nested parser must itself recognize nested HTML elements, so the
+// markdown and html languages are wired to each other: the html language
+// nests this same markdown language, which in turn nests the html language
+// again, so `<center><center>...</center></center>` keeps recursing. The
+// parser fields are filled in after both languages exist (configureNesting
+// reads them lazily).
+const markdown_inside_html_tags: { tag: string, parser: typeof markdownLanguage.parser }[]
+  = html_markdown_wrapper_tags.map(tag => ({ tag, parser: markdownLanguage.parser }))
+
+const editor_html_lang = html_lang({
+  matchClosingTags: false,
+  nestedLanguages: markdown_inside_html_tags,
+})
+
+const editor_markdown_lang = markdown_lang({
+  extensions: { remove: ['SetextHeading'] },
+  htmlTagLanguage: editor_html_lang,
+})
+
+for (const entry of markdown_inside_html_tags) {
+  entry.parser = editor_markdown_lang.language.parser
 }
 
 interface SearchSpec {
@@ -649,10 +1095,12 @@ onMounted(() => {
             },
           },
         ])),
-        markdown_lang({ extensions: { remove: ['SetextHeading'] } }),
+        editor_markdown_lang,
         lint_source,
         lintGutter(),
+        autocomplete_ext,
         search_field,
+        alert_marker_plugin,
         theme_compartment.of(theme_extensions(color_mode.value)),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
@@ -663,6 +1111,13 @@ onMounted(() => {
             const field_value = update.state.field(search_field)
             match_count.value = field_value.matches.length
             match_active.value = field_value.active
+          }
+          // Backspacing alone never re-activates completion (CodeMirror only
+          // re-queries on typing), so after a backward delete reopen it — the
+          // source returns null when there's no `@` token, leaving the popup
+          // closed in unrelated edits.
+          if (update.transactions.some(tr => tr.isUserEvent('delete.backward'))) {
+            startCompletion(update.view)
           }
         }),
         EditorView.contentAttributes.of({ 'aria-label': '档案内容 Markdown 编辑器' }),
@@ -689,6 +1144,13 @@ watch(model, (value) => {
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
     })
+  }
+})
+
+watch(() => props.stories, () => {
+  // Re-run duplicate-title / dead-reference lints when the story list changes (e.g. after a sync refresh).
+  if (view) {
+    forceLinting(view)
   }
 })
 
@@ -727,6 +1189,7 @@ function insert_at_position(text: string, from: number, to = from) {
 }
 
 defineExpose({
+  editor_mode,
   insert_at_position,
 })
 
@@ -769,6 +1232,43 @@ function on_drag_over(event: DragEvent) {
 
 :deep(.cm-tooltip) {
   @apply rounded-sm overflow-hidden border border-slate-200 bg-white text-xs text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200;
+}
+
+:deep(.cm-tooltip-autocomplete) {
+  @apply p-1;
+}
+
+:deep(.cm-tooltip-autocomplete > ul > li) {
+  @apply flex items-center gap-1.5 rounded-sm px-2 py-1 transition-colors;
+}
+
+:deep(.cm-tooltip-autocomplete > ul > li:not([aria-selected]):hover) {
+  @apply bg-slate-100 dark:bg-slate-700/60;
+}
+
+:deep(.cm-tooltip-autocomplete > ul > li[aria-selected]) {
+  @apply bg-primary dark:bg-primary-700 text-white dark:text-white;
+}
+
+:deep(.cm-completionMatchedText) {
+  @apply font-bold text-white/50 no-underline;
+}
+
+:deep(.cm-completionDetail) {
+  @apply ml-2 text-xs not-italic text-white/50;
+}
+
+/* Custom completion types render a lucide icon via addToOptions; hide the
+   default glyph so only our icon shows. */
+:deep(.cm-completionIcon-story),
+:deep(.cm-completionIcon-file),
+:deep(.cm-completionIcon-image),
+:deep(.cm-completionIcon-keyword) {
+  display: none;
+}
+
+:deep(.completion-type-icon) {
+  @apply h-4 w-4 shrink-0 text-white/50;
 }
 
 :deep(.cm-search-hit) {
