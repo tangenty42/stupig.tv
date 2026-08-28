@@ -177,7 +177,7 @@ async function on_otp_send() {
 }
 
 if (props.otpSend) {
-  // POV: Great material for testing AI coding capabilities in fixing such weird bugs.
+  // POV: Great material for testing AI's coding capability in fixing such weird bugs.
   /**
    * [Possible prompt]
    * fix an existing bug. steps to reproduce:

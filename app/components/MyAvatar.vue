@@ -47,6 +47,8 @@
 </template>
 
 <script setup lang="ts">
+import { avatar_url } from '~/utils/avatar'
+
 export interface AvatarUser {
   id: number
   username: string
@@ -66,15 +68,7 @@ const props = withDefaults(defineProps<{
 
 const static_url = useStaticUrl()
 
-function build_avatar_url(file: string | null) {
-  if (! file) {
-    return null
-  }
-
-  return static_url(`/avatar/${file}`)
-}
-
-const image_url = ref<string | undefined>(props.lazy ? undefined : (build_avatar_url(props.user.avatar_file) || undefined))
+const image_url = ref<string | undefined>(props.lazy ? undefined : (avatar_url(static_url, props.user.avatar_file) ?? undefined))
 const loaded = ref(false)
 const error = ref(false)
 const fallback = computed(() => props.user.username.slice(0, 1).toUpperCase())
@@ -94,7 +88,7 @@ const size_computed = computed(() => {
 })
 
 watchEffect(() => {
-  const next_image_url = build_avatar_url(props.user.avatar_file) || undefined
+  const next_image_url = avatar_url(static_url, props.user.avatar_file) ?? undefined
 
   if (image_url.value !== next_image_url) {
     image_url.value = next_image_url

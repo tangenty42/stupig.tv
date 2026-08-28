@@ -1,145 +1,202 @@
 <template>
-  <div class="space-y-2">
-    <!-- Preload the lucide icons used as completion-type icons so the
+  <!-- Teleported to body in fullscreen so fixed positioning is immune to any
+       transformed/filtered ancestor. Scoped styles still apply (data attrs). -->
+  <Teleport to="body" :disabled="! fullscreen">
+    <!-- Inline var (not scoped CSS): the teleported overlay sits at body level
+         and must not pick up the app header height for preview pinning. -->
+    <div
+      :class="fullscreen ? 'editor-fullscreen fixed inset-0 z-[60] flex flex-col gap-2 bg-white p-3 dark:bg-slate-900' : 'flex flex-col gap-2'"
+      :style="fullscreen ? { '--app-header-height': '0px' } : undefined"
+    >
+      <!-- Preload the lucide icons used as completion-type icons so the
          injected `iconify` spans in the autocomplete list render. -->
-    <div class="hidden" aria-hidden="true">
-      <MyIcon v-for="icon in completion_icon_names" :key="icon" :name="icon" />
-    </div>
-
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <slot name="toolbar-start" />
-      <div class="flex items-center gap-3">
-        <SelectButton
-          v-model="editor_mode"
-          :options="editor_modes"
-          option-label="label"
-          option-value="value"
-          :allow-empty="false"
-          aria-label="编辑器模式"
-          size="small"
-        >
-          <template #option="{ option }">
-            <span class="flex items-center gap-1.5">
-              <MyIcon :name="option.icon" />
-              <span>{{ option.label }}</span>
-            </span>
-          </template>
-        </SelectButton>
+      <div class="hidden" aria-hidden="true">
+        <MyIcon v-for="icon in completion_icon_names" :key="icon" :name="icon" />
       </div>
-    </div>
 
-    <div
-      v-show="editor_mode === 'edit'"
-      class="overflow-hidden rounded-sm border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
-      :class="{
-        'border-dashed border-brand-400 dark:border-brand-600': drag_over,
-        'editor-mode-enter': mode_has_switched && editor_mode === 'edit',
-      }"
-      @dragover.prevent="on_drag_over"
-      @dragleave.prevent="drag_over = false"
-      @drop.prevent="on_drop"
-    >
-      <div
-        v-if="! editor_ready"
-        class="flex min-h-80 max-h-[60vh] items-center justify-center text-sm text-slate-400 dark:text-slate-500"
-      >
-        代码编辑器加载中...
-      </div>
-      <div
-        ref="editor_host"
-        :class="{ hidden: ! editor_ready }"
-      />
-
-      <div
-        v-if="search_open"
-        class="relative flex flex-col gap-y-2 border-t border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden"
-      >
-        <Button
-          link
-          aria-label="关闭查找替换"
-          class="!absolute -right-2 -top-2"
-          @click="close_search"
-        >
-          <template #icon>
-            <MyIcon name="lucide:x" class="text-xl" />
-          </template>
-        </Button>
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-2 pr-8">
-          <InputText
-            ref="search_input"
-            v-model="search_query"
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <slot name="toolbar-start" />
+        <div class="flex items-center gap-3">
+          <SelectButton
+            v-if="! fullscreen"
+            v-model="editor_mode"
+            :options="editor_modes"
+            option-label="label"
+            option-value="value"
+            :allow-empty="false"
+            aria-label="编辑器模式"
             size="small"
-            placeholder="查找"
-            aria-label="查找"
-            class="min-w-[10rem] flex-1"
-            @keydown="on_find_input_keydown"
-            @keydown.esc.prevent="close_search"
-          />
-          <span class="min-w-[3.5rem] text-right font-mono text-xs text-slate-400 dark:text-slate-500" aria-live="polite">
-            {{ match_status_text }}
-          </span>
-          <div class="flex items-center gap-1">
-            <Button size="small" severity="secondary" outlined label="上一个" :disabled="! match_count" @click="find_previous" />
-            <Button size="small" severity="secondary" outlined label="下一个" :disabled="! match_count" @click="find_next" />
-            <Button size="small" severity="secondary" outlined label="全部选中" :disabled="! match_count" @click="select_all_matches" />
-          </div>
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
-            <label class="flex items-center gap-1.5">
-              <Checkbox v-model="match_case" binary size="small" />
-              区分大小写
-            </label>
-            <label class="flex items-center gap-1.5">
-              <Checkbox v-model="match_regexp" binary size="small" />
-              正则
-            </label>
-            <label class="flex items-center gap-1.5">
-              <Checkbox v-model="match_word" binary size="small" />
-              全词匹配
-            </label>
-          </div>
-        </div>
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <InputText
-            v-model="replace_query"
-            size="small"
-            placeholder="替换为"
-            aria-label="替换为"
-            class="min-w-[10rem] flex-1"
-            @keydown.enter.prevent="replace_current"
-            @keydown.esc.prevent="close_search"
-          />
-          <div class="flex items-center gap-1">
-            <Button size="small" severity="secondary" outlined label="替换" :disabled="! match_count" @click="replace_current" />
-            <Button size="small" severity="secondary" outlined label="全部替换" :disabled="! match_count" @click="replace_all" />
-          </div>
+          >
+            <template #option="{ option }">
+              <span class="flex items-center gap-1.5">
+                <MyIcon :name="option.icon" />
+                <span>{{ option.label }}</span>
+              </span>
+            </template>
+          </SelectButton>
+          <Button
+            text
+            severity="secondary"
+            :aria-label="fullscreen ? '退出全屏' : '全屏编辑'"
+            @click="toggle_fullscreen"
+          >
+            <template #icon>
+              <MyIcon :name="fullscreen ? 'lucide:minimize' : 'lucide:maximize'" />
+            </template>
+          </Button>
         </div>
       </div>
-    </div>
 
-    <div
-      v-show="editor_mode === 'preview'"
-      class="section-card-collapse"
-      :class="{ 'editor-mode-enter': mode_has_switched && editor_mode === 'preview' }"
-    >
-      <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" :stories="stories" empty-text="暂无可预览内容" />
-    </div>
-
-    <div v-if="editor_mode === 'edit' && issues.length" class="rounded-sm border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden">
-      <div class="overflow-y-auto max-h-64 p-2">
-        <button
-          v-for="(issue, index) in issues"
-          :key="index"
-          type="button"
-          class="flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs transition-[background-color] hover:bg-slate-100 dark:hover:bg-slate-700/50"
-          @click="jump_to_line(issue.from)"
+      <div :class="fullscreen ? 'flex min-h-0 flex-1 gap-2' : 'flex flex-col gap-2'">
+        <div
+          v-if="fullscreen"
+          ref="attachments_pane"
+          class="shrink-0 overflow-hidden rounded-sm border border-slate-200 dark:border-slate-700"
+          :style="{ width: `${attachments_width}px` }"
         >
-          <span class="shrink-0 font-mono text-slate-400">第 {{ issue.line }} 行</span>
-          <span class="text-slate-600 dark:text-slate-300">{{ issue.message }}</span>
-          <span v-if="issue.source" class="ml-auto shrink-0 font-mono text-slate-400">{{ issue.source }}</span>
-        </button>
+          <!-- Inner scroller: the scrollbar ends stay inside the pane's
+               rounded corners (a scrollbar isn't clipped by border-radius). -->
+          <div class="h-full overflow-y-auto p-2">
+            <slot name="attachments" />
+          </div>
+        </div>
+
+        <div
+          v-if="fullscreen"
+          class="w-1.5 shrink-0 cursor-col-resize self-stretch rounded-full bg-slate-200 transition-colors hover:bg-brand-400 dark:bg-slate-700 dark:hover:bg-brand-600"
+          role="separator"
+          aria-orientation="vertical"
+          @mousedown.prevent="start_attachments_divider_drag"
+        />
+
+        <div
+          v-show="fullscreen || editor_mode === 'edit'"
+          class="overflow-hidden rounded-sm border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
+          :class="{
+            'border-dashed border-brand-400 dark:border-brand-600': drag_over,
+            'editor-mode-enter': ! fullscreen && mode_has_switched && editor_mode === 'edit',
+            'flex min-w-0 flex-col': fullscreen,
+          }"
+          :style="fullscreen ? { flex: `${split_ratio} 1 0%` } : undefined"
+          @dragover.prevent="on_drag_over"
+          @dragleave.prevent="drag_over = false"
+          @drop.prevent="on_drop"
+        >
+          <div
+            v-if="! editor_ready"
+            class="flex min-h-80 max-h-[60vh] items-center justify-center text-sm text-slate-400 dark:text-slate-500"
+          >
+            代码编辑器加载中...
+          </div>
+          <div
+            ref="editor_host"
+            :class="[{ hidden: ! editor_ready }, { 'flex min-h-0 flex-1 flex-col': fullscreen }]"
+          />
+
+          <div
+            v-if="search_open"
+            class="relative flex flex-col gap-y-2 border-t border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden"
+          >
+            <Button
+              link
+              aria-label="关闭查找替换"
+              class="!absolute -right-2 -top-2"
+              @click="close_search"
+            >
+              <template #icon>
+                <MyIcon name="lucide:x" class="text-xl" />
+              </template>
+            </Button>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2 pr-8">
+              <InputText
+                ref="search_input"
+                v-model="search_query"
+                size="small"
+                placeholder="查找"
+                aria-label="查找"
+                class="min-w-[10rem] flex-1"
+                @keydown="on_find_input_keydown"
+                @keydown.esc.prevent="close_search"
+              />
+              <span class="min-w-[3.5rem] text-right font-mono text-xs text-slate-400 dark:text-slate-500" aria-live="polite">
+                {{ match_status_text }}
+              </span>
+              <div class="flex items-center gap-1">
+                <Button size="small" severity="secondary" outlined label="上一个" :disabled="! match_count" @click="find_previous" />
+                <Button size="small" severity="secondary" outlined label="下一个" :disabled="! match_count" @click="find_next" />
+                <Button size="small" severity="secondary" outlined label="全部选中" :disabled="! match_count" @click="select_all_matches" />
+              </div>
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+                <label class="flex items-center gap-1.5">
+                  <Checkbox v-model="match_case" binary size="small" />
+                  区分大小写
+                </label>
+                <label class="flex items-center gap-1.5">
+                  <Checkbox v-model="match_regexp" binary size="small" />
+                  正则
+                </label>
+                <label class="flex items-center gap-1.5">
+                  <Checkbox v-model="match_word" binary size="small" />
+                  全词匹配
+                </label>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <InputText
+                v-model="replace_query"
+                size="small"
+                placeholder="替换为"
+                aria-label="替换为"
+                class="min-w-[10rem] flex-1"
+                @keydown.enter.prevent="replace_current"
+                @keydown.esc.prevent="close_search"
+              />
+              <div class="flex items-center gap-1">
+                <Button size="small" severity="secondary" outlined label="替换" :disabled="! match_count" @click="replace_current" />
+                <Button size="small" severity="secondary" outlined label="全部替换" :disabled="! match_count" @click="replace_all" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="fullscreen"
+          class="w-1.5 shrink-0 cursor-col-resize self-stretch rounded-full bg-slate-200 transition-colors hover:bg-brand-400 dark:bg-slate-700 dark:hover:bg-brand-600"
+          role="separator"
+          aria-orientation="vertical"
+          @mousedown.prevent="start_divider_drag"
+        />
+
+        <div
+          v-show="fullscreen || editor_mode === 'preview'"
+          ref="preview_pane"
+          :class="[
+            fullscreen ? 'min-w-0 overflow-y-auto rounded-sm border border-slate-200 px-3 pb-3 dark:border-slate-700' : 'section-card-collapse',
+            { 'editor-mode-enter': ! fullscreen && mode_has_switched && editor_mode === 'preview' },
+          ]"
+          :style="fullscreen ? { flex: `${1 - split_ratio} 1 0%` } : undefined"
+        >
+          <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" :stories="stories" empty-text="暂无可预览内容" />
+        </div>
+      </div>
+
+      <div v-if="editor_mode === 'edit' && issues.length" class="rounded-sm border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden">
+        <div class="overflow-y-auto max-h-64 p-2">
+          <button
+            v-for="(issue, index) in issues"
+            :key="index"
+            type="button"
+            class="flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs transition-[background-color] hover:bg-slate-100 dark:hover:bg-slate-700/50"
+            @click="jump_to_line(issue.from)"
+          >
+            <span class="shrink-0 font-mono text-slate-400">第 {{ issue.line }} 行</span>
+            <span class="text-slate-600 dark:text-slate-300">{{ issue.message }}</span>
+            <span v-if="issue.source" class="ml-auto shrink-0 font-mono text-slate-400">{{ issue.source }}</span>
+          </button>
+        </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -151,14 +208,16 @@ import type { ContentMarkdownConfig } from '@shared/content-markdown'
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import type { Configuration as MarkdownlintConfiguration } from 'markdownlint'
 import { autocompletion, startCompletion } from '@codemirror/autocomplete'
-import { html as html_lang, htmlLanguage } from '@codemirror/lang-html'
+import { indentWithTab } from '@codemirror/commands'
+import { html as html_lang } from '@codemirror/lang-html'
 import { markdown as markdown_lang, markdownLanguage } from '@codemirror/lang-markdown'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { forceLinting, linter, lintGutter } from '@codemirror/lint'
 import { Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField } from '@codemirror/state'
-import { Decoration, EditorView, keymap, MatchDecorator, ViewPlugin } from '@codemirror/view'
+import { Decoration, EditorView, keymap, MatchDecorator, scrollPastEnd, ViewPlugin } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
-import { parse_story_markdown } from '@shared/content-markdown'
+import { front_matter_line_count, parse_story_markdown } from '@shared/content-markdown'
+import { build_html_diagnostics } from '@shared/html-lint'
 import { content_rating_tiers, pinned_label, rating_label, story_rating } from '@shared/types/content'
 import { basicSetup } from 'codemirror'
 import { lint as markdownlint } from 'markdownlint/sync'
@@ -168,6 +227,7 @@ import { html_markdown_wrapper_tags } from '~/utils/content/html'
 interface LintListItem {
   from: number
   line: number
+  severity: Diagnostic['severity']
   message: string
   source: string | null
 }
@@ -195,6 +255,10 @@ const model = defineModel<string>({ default: '' })
 const color_mode = useMyColorMode()
 const { public: public_config } = useRuntimeConfig()
 
+let view: EditorView | null = null
+const theme_compartment = new Compartment()
+const overscroll_compartment = new Compartment()
+
 const editor_host = ref<HTMLElement>()
 const editor_ready = ref(false)
 const drag_over = ref(false)
@@ -207,6 +271,227 @@ const editor_modes = [
   { label: '预览', value: 'preview', icon: 'lucide:eye' },
 ]
 
+// Fullscreen split view: attachments pane | editor | draggable divider | preview.
+const fullscreen = ref(false)
+const split_ratio = ref(0.5)
+const attachments_width = ref(256)
+const attachments_pane = ref<HTMLElement>()
+const preview_pane = ref<HTMLElement>()
+
+function toggle_fullscreen() {
+  fullscreen.value = ! fullscreen.value
+}
+
+function start_attachments_divider_drag(event: MouseEvent) {
+  const start_x = event.clientX
+  const start_width = attachments_width.value
+  const on_move = (move: MouseEvent) => {
+    attachments_width.value = Math.min(384, Math.max(160, start_width + move.clientX - start_x))
+  }
+  const on_up = () => {
+    window.removeEventListener('mousemove', on_move)
+    window.removeEventListener('mouseup', on_up)
+  }
+  window.addEventListener('mousemove', on_move)
+  window.addEventListener('mouseup', on_up)
+}
+
+function start_divider_drag(event: MouseEvent) {
+  const container = (event.currentTarget as HTMLElement).parentElement
+  if (! container) {
+    return
+  }
+  const container_rect = container.getBoundingClientRect()
+  const pane_right = attachments_pane.value?.getBoundingClientRect().right ?? container_rect.left
+  const available = container_rect.right - pane_right
+  if (available <= 0) {
+    return
+  }
+  const on_move = (move: MouseEvent) => {
+    split_ratio.value = Math.min(0.8, Math.max(0.2, (move.clientX - pane_right) / available))
+  }
+  const on_up = () => {
+    window.removeEventListener('mousemove', on_move)
+    window.removeEventListener('mouseup', on_up)
+  }
+  window.addEventListener('mousemove', on_move)
+  window.addEventListener('mouseup', on_up)
+}
+
+// VSCode-style scroll sync: preview blocks carry data-line anchors (their
+// body line), and both directions interpolate between the anchors bracketing
+// the scroll position instead of mapping raw scroll ratios.
+interface ScrollAnchor {
+  /** Editor-document line (0-based, front matter offset applied). */
+  line: number
+  /** Document-space y inside the preview pane. */
+  y: number
+}
+
+function collect_scroll_anchors(): ScrollAnchor[] {
+  const pane = preview_pane.value
+  if (! pane) {
+    return []
+  }
+  const line_offset = front_matter_line_count(model.value)
+  const pane_top = pane.getBoundingClientRect().top
+  const scroll_top = pane.scrollTop
+  // Virtual start anchor: the front matter renders nothing in the preview,
+  // so without a (line 0, y 0) anchor both directions clamp at the first body
+  // element — the editor's front matter scroll sticks the preview, and the
+  // preview's scroll-to-top maps to the first body line instead of line 0.
+  const anchors: ScrollAnchor[] = [{ line: 0, y: 0 }]
+  // A pinned sticky heading reports its pinned position, which tracks the
+  // scroll offset itself and corrupts the anchor order — suspend stickiness
+  // while measuring. The synchronous block never paints the static state.
+  const body = pane.querySelector('.story-body')
+  body?.classList.add('measuring')
+  try {
+    for (const element of pane.querySelectorAll<HTMLElement>('[data-line]')) {
+      const line = Number(element.dataset.line)
+      if (! Number.isFinite(line)) {
+        continue
+      }
+      anchors.push({ line: line + line_offset, y: element.getBoundingClientRect().top - pane_top + scroll_top })
+    }
+  }
+  finally {
+    body?.classList.remove('measuring')
+  }
+  anchors.sort((a, b) => a.line - b.line || a.y - b.y)
+  return anchors
+}
+
+/** Map one anchor axis to the other, interpolating between bracketing anchors. */
+function interpolate_anchors(anchors: ScrollAnchor[], key: 'line' | 'y', value: number) {
+  const other = key === 'line' ? 'y' : 'line'
+  const first = anchors[0]!
+  const last = anchors[anchors.length - 1]!
+  if (value <= first[key]) {
+    return first[other]
+  }
+  if (value >= last[key]) {
+    return last[other]
+  }
+  for (let i = 1; i < anchors.length; i ++) {
+    const next = anchors[i]!
+    if (next[key] >= value) {
+      const prev = anchors[i - 1]!
+      const span = next[key] - prev[key]
+      if (span <= 0) {
+        return prev[other]
+      }
+      return prev[other] + ((value - prev[key]) / span) * (next[other] - prev[other])
+    }
+  }
+  return last[other]
+}
+
+/** Fractional 0-based line at the top of the editor viewport. */
+function editor_top_line() {
+  if (! view) {
+    return null
+  }
+  // Document-space math only: posAtCoords/coordsAtPos mix in CodeMirror's
+  // cached scroll position, which lags behind programmatic scrollTop writes
+  // (CM re-measures on rAF) and breaks the mapping while syncing.
+  const doc_height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
+  const block = view.lineBlockAtHeight(doc_height)
+  const line = view.state.doc.lineAt(block.from).number - 1
+  const ratio = block.height > 0
+    ? Math.min(Math.max((doc_height - block.top) / block.height, 0), 1)
+    : 0
+  return line + ratio
+}
+
+/** Scroll the editor so the fractional 0-based line sits at the viewport top. */
+function scroll_editor_to_line(fractional_line: number) {
+  if (! view) {
+    return
+  }
+  const doc = view.state.doc
+  const line_index = Math.min(Math.max(Math.floor(fractional_line), 0), doc.lines - 1)
+  const block = view.lineBlockAt(doc.line(line_index + 1).from)
+  const scroller = view.scrollDOM
+  scroller.scrollTop = scroller.scrollTop
+    + (view.documentTop + block.top - scroller.getBoundingClientRect().top)
+    + (fractional_line - line_index) * block.height
+}
+
+// Echo detection breaks the scroll-event feedback loop without rAF timing
+// races: a scroll event landing (within rounding) on the target we just set
+// programmatically is our own echo, not user input.
+let expected_editor_scroll: number | null = null
+let expected_preview_scroll: number | null = null
+
+function on_editor_scrolled() {
+  if (! view || ! preview_pane.value) {
+    return
+  }
+  if (expected_editor_scroll !== null) {
+    const echo = Math.abs(view.scrollDOM.scrollTop - expected_editor_scroll) < 2
+    expected_editor_scroll = null
+    if (echo) {
+      return
+    }
+  }
+  const line = editor_top_line()
+  const anchors = collect_scroll_anchors()
+  if (line === null || ! anchors.length) {
+    return
+  }
+  preview_pane.value.scrollTop = interpolate_anchors(anchors, 'line', line)
+  expected_preview_scroll = preview_pane.value.scrollTop
+}
+
+function on_preview_scrolled() {
+  if (! view || ! preview_pane.value) {
+    return
+  }
+  if (expected_preview_scroll !== null) {
+    const echo = Math.abs(preview_pane.value.scrollTop - expected_preview_scroll) < 2
+    expected_preview_scroll = null
+    if (echo) {
+      return
+    }
+  }
+  const anchors = collect_scroll_anchors()
+  if (! anchors.length) {
+    return
+  }
+  scroll_editor_to_line(interpolate_anchors(anchors, 'y', preview_pane.value.scrollTop))
+  expected_editor_scroll = view.scrollDOM.scrollTop
+}
+
+function on_fullscreen_keydown(event: KeyboardEvent) {
+  // defaultPrevented means the editor consumed the key (e.g. closing search).
+  if (event.key === 'Escape' && ! event.defaultPrevented) {
+    fullscreen.value = false
+  }
+}
+
+watch(fullscreen, async (active) => {
+  document.documentElement.style.overflow = active ? 'hidden' : ''
+  // Overscroll (editor: past-end padding, preview: CSS bottom padding) lets
+  // both sides reach the sync target near the end of the document.
+  view?.dispatch({ effects: overscroll_compartment.reconfigure(active ? scrollPastEnd() : []) })
+  if (active) {
+    window.addEventListener('keydown', on_fullscreen_keydown)
+    await nextTick()
+    view?.scrollDOM.addEventListener('scroll', on_editor_scrolled, { passive: true })
+    preview_pane.value?.addEventListener('scroll', on_preview_scrolled, { passive: true })
+  }
+  else {
+    expected_editor_scroll = null
+    expected_preview_scroll = null
+    window.removeEventListener('keydown', on_fullscreen_keydown)
+    view?.scrollDOM.removeEventListener('scroll', on_editor_scrolled)
+    preview_pane.value?.removeEventListener('scroll', on_preview_scrolled)
+  }
+  // The editor's box changed shape; CodeMirror must re-measure.
+  view?.requestMeasure()
+})
+
 const search_open = ref(false)
 const search_query = ref('')
 const replace_query = ref('')
@@ -217,148 +502,19 @@ const match_count = ref(0)
 const match_active = ref(- 1)
 const search_input = ref<{ $el: HTMLInputElement } | null>(null)
 
-let view: EditorView | null = null
-const theme_compartment = new Compartment()
-
 const markdownlint_config: MarkdownlintConfiguration = {
   default: 'error',
+  MD012: false,
   MD013: false,
   MD025: false,
+  MD026: false,
+  MD028: false,
   MD033: false,
+  MD040: false,
   MD045: false,
+  MD060: false,
 }
 const front_matter_pattern = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/
-
-// True when the HTML parse of `region_text` still has an element open (its
-// last child is the OpenTag, not a CloseTag). Used to group adjacent HTML
-// nodes: a wrapper split by a blank line (`<center>` ... `</center>`) stays
-// in one region until its close tag arrives.
-function html_region_has_unclosed(region_text: string) {
-  const tree = htmlLanguage.parser.parse(region_text)
-  let unclosed = false
-  tree.iterate({ enter: (n) => {
-    if (n.type.name === 'Element') {
-      const last = n.node.lastChild
-      if (last && last.type.name === 'OpenTag') {
-        unclosed = true
-      }
-    }
-  } })
-  return unclosed
-}
-
-// Grammar-check the HTML blocks/tags in the markdown body with the lezer HTML
-// parser, reporting malformed open tags (unclosed quote / missing `>`),
-// mismatched close tags, and elements missing their close tag. Only tag
-// structure is checked — text content (markdown) is never treated as HTML.
-function build_html_diagnostics(doc_text: string): Diagnostic[] {
-  const diagnostics: Diagnostic[] = []
-  const tree = markdownLanguage.parser.parse(doc_text)
-  const html_nodes: { from: number, to: number }[] = []
-  tree.iterate({ enter: (n) => {
-    if (n.type.name === 'HTMLBlock' || n.type.name === 'HTMLTag') {
-      html_nodes.push({ from: n.from, to: n.to })
-    }
-  } })
-  if (! html_nodes.length) {
-    return diagnostics
-  }
-
-  // Group adjacent HTML nodes into regions: keep absorbing nodes while the
-  // accumulated text still has unclosed elements, so a wrapper split by a
-  // blank line rejoins into a single region before linting.
-  const regions: { from: number, to: number }[][] = []
-  let current: { from: number, to: number }[] = []
-  for (let i = 0; i < html_nodes.length; i ++) {
-    current.push(html_nodes[i]!)
-    const region_text = current.map(n => doc_text.slice(n.from, n.to)).join('\n')
-    if (! html_region_has_unclosed(region_text) || i === html_nodes.length - 1) {
-      regions.push(current)
-      current = []
-    }
-  }
-
-  for (const region_nodes of regions) {
-    // Concatenate the node texts and remember each region offset's doc offset,
-    // so diagnostics found in the region can be mapped back to the document.
-    const parts: string[] = []
-    const map: number[] = []
-    for (let i = 0; i < region_nodes.length; i ++) {
-      const node = region_nodes[i]!
-      if (i > 0) {
-        parts.push('\n')
-        map.push(- 1)
-      }
-      for (let p = node.from; p < node.to; p ++) {
-        parts.push(doc_text[p]!)
-        map.push(p)
-      }
-    }
-    const region_text = parts.join('')
-    const to_doc = (region_from: number, region_to: number) => {
-      const from = map[region_from] ?? - 1
-      const to = region_to > region_from ? (map[region_to - 1] ?? - 1) + 1 : from + 1
-      return { from, to }
-    }
-
-    const ht = htmlLanguage.parser.parse(region_text)
-    ht.iterate({ enter: (n) => {
-      const name = n.type.name
-      if (name === 'OpenTag' && ! n.node.getChild('EndTag')) {
-        // Unclosed open tag: a missing `>` or an unterminated attribute quote.
-        const tag = n.node.getChild('TagName')
-        const { from, to } = to_doc(tag?.from ?? n.from, tag?.to ?? n.to)
-        if (from >= 0) {
-          diagnostics.push({
-            from,
-            to: Math.max(to, from + 1),
-            severity: 'error',
-            message: 'HTML 标签未正确闭合（属性引号或 > 缺失）',
-            source: 'html',
-          })
-        }
-      }
-      else if (name === 'MismatchedCloseTag') {
-        const parent_tag = n.node.parent?.getChild('OpenTag')?.getChild('TagName')
-        const expected = parent_tag ? region_text.slice(parent_tag.from, parent_tag.to) : null
-        const close_text = region_text.slice(n.from, n.to)
-        const { from, to } = to_doc(n.from, n.to)
-        if (from >= 0) {
-          diagnostics.push({
-            from,
-            to: Math.max(to, from + 1),
-            severity: 'error',
-            message: expected
-              ? `闭合标签 ${close_text} 与 <${expected}> 不匹配，应为 </${expected}>`
-              : `多余的闭合标签 ${close_text}`,
-            source: 'html',
-          })
-        }
-      }
-      else if (name === 'Element') {
-        const open = n.node.getChild('OpenTag')
-        const close = n.node.getChild('CloseTag')
-        const last = n.node.lastChild
-        if (open && open.getChild('EndTag') && ! close && last?.type.name !== 'MismatchedCloseTag') {
-          const tag = open.getChild('TagName')
-          const tag_name = tag ? region_text.slice(tag.from, tag.to) : '?'
-          const { from, to } = to_doc(tag?.from ?? open.from, tag?.to ?? open.to)
-          if (from >= 0) {
-            diagnostics.push({
-              from,
-              to: Math.max(to, from + 1),
-              severity: 'error',
-              message: `缺少闭合标签 </${tag_name}>`,
-              source: 'html',
-            })
-          }
-        }
-      }
-    } })
-  }
-
-  return diagnostics
-}
 
 function build_diagnostics(doc_text: string, doc: Text) {
   const diagnostics: Diagnostic[] = []
@@ -417,6 +573,7 @@ function diagnostics_to_items(diagnostics: Diagnostic[], doc: Text) {
   return diagnostics.map(diagnostic => ({
     from: diagnostic.from,
     line: doc.lineAt(diagnostic.from).number,
+    severity: diagnostic.severity,
     message: diagnostic.message,
     source: diagnostic.source ?? null,
   }))
@@ -767,6 +924,67 @@ const alert_marker_plugin = ViewPlugin.fromClass(class {
   }
 }, { decorations: value => value.decorations })
 
+// lezer-markdown's built-in HTMLBlock looks for the blank line that ends a
+// type-6 block in the RAW line text, so inside a blockquote a `>`-only line
+// never ends the block and the html language swallows the rest of the quote,
+// killing markdown highlight after e.g. `<hr />`. This replacement is the same
+// parser except the blank-line test runs on the content after container
+// markers. Styles mirror @lezer/markdown's HTMLBlockStyle table.
+const html_empty_line = /^[ \t]*$/
+const html_comment_end = /-->/
+const html_processing_end = /\?>/
+const html_block_style: [RegExp, RegExp][] = [
+  [/^<(?:script|pre|style)(?:\s|>|$)/i, /<\/(?:script|pre|style)>/i],
+  [/^\s*<!--/, html_comment_end],
+  [/^\s*<\?/, html_processing_end],
+  [/^\s*<![A-Z]/, />/],
+  [/^\s*<!\[CDATA\[/, /\]\]>/],
+  [/^\s*<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|section|source|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|\/?>|$)/i, html_empty_line],
+  [/^\s*(?:<\/[a-z][\w-]*\s*>|<[a-z][\w-]*(\s+[a-z:_][-\w.]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*>)\s*$/i, html_empty_line],
+]
+
+type MarkdownExtensionConfig = Exclude<NonNullable<NonNullable<Parameters<typeof markdown_lang>[0]>['extensions']>, readonly unknown[]>
+
+const container_aware_html_block: MarkdownExtensionConfig = {
+  parseBlock: [{
+    name: 'ContainerAwareHTMLBlock',
+    before: 'HTMLBlock',
+    parse(cx, line) {
+      let type = - 1
+      if (line.text.charCodeAt(line.pos) === 60) // '<'
+        type = html_block_style.findIndex(([start]) => start.test(line.text.slice(line.pos)))
+      if (type < 0)
+        return false
+      const from = cx.lineStart + line.pos
+      const end = html_block_style[type]![1]
+      const at_end = () => end === html_empty_line
+        ? html_empty_line.test(line.text.slice(line.pos))
+        : end.test(line.text)
+      const marks: typeof line.markers = []
+      let trailing = end !== html_empty_line
+      while (! at_end()) {
+        if (! cx.nextLine())
+          break
+        // Line.depth is internal (untyped) but is the only container-exit signal.
+        if ((line as typeof line & { depth: number }).depth < cx.depth) {
+          trailing = false
+          break
+        }
+        // The terminating blank line belongs to the container, not the block.
+        if (end === html_empty_line && at_end())
+          break
+        for (const mark of line.markers)
+          marks.push(mark)
+      }
+      if (trailing)
+        cx.nextLine()
+      const node_name = end === html_comment_end ? 'CommentBlock' : end === html_processing_end ? 'ProcessingInstructionBlock' : 'HTMLBlock'
+      cx.addElement(cx.elt(node_name, from, cx.prevLineEnd(), marks))
+      return true
+    },
+  }],
+}
+
 // Markdown written inside HTML elements is parsed as markdown (emphasis,
 // links, lists, ...), matching the preview renderer: every element except the
 // raw-text/code/embedded blocklist.
@@ -785,14 +1003,31 @@ const editor_html_lang = html_lang({
   nestedLanguages: markdown_inside_html_tags,
 })
 
-const editor_markdown_lang = markdown_lang({
-  extensions: { remove: ['SetextHeading'] },
+// Markdown nested inside HTML elements must not treat indented HTML (e.g. the
+// `<td>` cells of a table) as indented code blocks, which would stop the
+// nested highlight recursion — so this parser drops IndentedCode.
+const editor_nested_markdown_lang = markdown_lang({
+  extensions: [container_aware_html_block, { remove: ['SetextHeading', 'IndentedCode'] }],
   htmlTagLanguage: editor_html_lang,
 })
 
 for (const entry of markdown_inside_html_tags) {
-  entry.parser = editor_markdown_lang.language.parser
+  entry.parser = editor_nested_markdown_lang.language.parser
 }
+
+// The top-level editor markdown keeps IndentedCode (real code blocks at the
+// document level), sharing the same html language so HTML it contains re-nests
+// into the nested markdown parser above.
+const editor_markdown_lang = markdown_lang({
+  extensions: [container_aware_html_block, { remove: ['SetextHeading'] }],
+  htmlTagLanguage: editor_html_lang,
+})
+
+// closeBrackets (from basicSetup) reads this language data: backtick joins the
+// default pairs, so a selection wraps in `...` and an empty cursor auto-closes.
+// Registered globally so it also reaches HTML regions nested in the markdown.
+const editor_close_brackets = EditorState.languageData.of(() =>
+  [{ closeBrackets: { brackets: ['(', '[', '{', '\'', '"', '`'] } }])
 
 interface SearchSpec {
   query: string
@@ -839,7 +1074,8 @@ function build_search_regex(spec: SearchSpec) {
   if (! source)
     return null
   try {
-    return new RegExp(source, spec.case_sensitive ? 'g' : 'gi')
+    // The `u` flag enables Unicode property escapes (`\p{Emoji}`, ...).
+    return new RegExp(source, spec.case_sensitive ? 'gu' : 'giu')
   }
   catch {
     return null
@@ -1015,7 +1251,7 @@ function replacement_text(spec: SearchSpec, matched: string) {
   if (! source)
     return null
   try {
-    return matched.replace(new RegExp(`^(?:${source})$`, spec.case_sensitive ? '' : 'i'), replace_query.value)
+    return matched.replace(new RegExp(`^(?:${source})$`, spec.case_sensitive ? 'u' : 'iu'), replace_query.value)
   }
   catch {
     return null
@@ -1085,6 +1321,7 @@ onMounted(() => {
       doc: model.value,
       extensions: [
         basicSetup,
+        keymap.of([indentWithTab]),
         Prec.highest(keymap.of([
           {
             key: 'Mod-f',
@@ -1104,13 +1341,28 @@ onMounted(() => {
           },
         ])),
         editor_markdown_lang,
+        editor_close_brackets,
         lint_source,
         lintGutter(),
         autocomplete_ext,
         search_field,
         alert_marker_plugin,
         theme_compartment.of(theme_extensions(color_mode.value)),
+        overscroll_compartment.of([]),
         EditorView.lineWrapping,
+        // Ctrl+V of an image/file uploads it as an attachment (the parent
+        // handles the upload) and inserts the reference at the cursor.
+        EditorView.domEventHandlers({
+          paste: (event, editor_view) => {
+            const files = event.clipboardData?.files ? [... event.clipboardData.files] : []
+            if (! files.length) {
+              return false
+            }
+            event.preventDefault()
+            emit('files-dropped', files, editor_view.state.selection.main.from)
+            return true
+          },
+        }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             model.value = update.state.doc.toString()
@@ -1137,6 +1389,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  document.documentElement.style.overflow = ''
+  window.removeEventListener('keydown', on_fullscreen_keydown)
   view?.destroy()
   view = null
 })
@@ -1202,6 +1456,16 @@ function insert_at_position(text: string, from: number, to = from) {
 defineExpose({
   editor_mode,
   insert_at_position,
+  // Synchronous copy of the full combined lint (front matter + HTML grammar +
+  // markdownlint) on the current doc, so save can block on the same errors the
+  // editor displays without waiting for the debounced lint pass.
+  validate() {
+    if (! view) {
+      return [] as LintListItem[]
+    }
+    const doc = view.state.doc
+    return diagnostics_to_items(build_diagnostics(doc.toString(), doc), doc)
+  },
 })
 
 function on_drop(event: DragEvent) {
@@ -1233,6 +1497,44 @@ function on_drag_over(event: DragEvent) {
   @apply min-h-80 max-h-[60vh] text-sm;
 }
 
+/* In fullscreen the editor pane fills the split instead of the 60vh cap. */
+.editor-fullscreen :deep(.cm-editor) {
+  @apply min-h-0 max-h-none;
+}
+
+/* The fullscreen attachments pane is narrow: force the card actions onto
+   their own row (width:100% wraps the flex line) so the file name and size
+   keep the full card width, and drop the per-card bottom margin in favor of
+   the pane's gap. */
+.editor-fullscreen :deep(.attachment-card) {
+  @apply mb-0;
+}
+
+.editor-fullscreen :deep(.attachment-card-content) {
+  @apply flex-wrap;
+}
+
+.editor-fullscreen :deep(.attachment-card-actions) {
+  @apply w-full justify-end;
+}
+
+/* The frosted heading bars bleed to 100vw on the detail page; inside the
+   fullscreen pane that overflows the pane horizontally, so they span only
+   the content column here. */
+.editor-fullscreen :deep(.story-body :is(h1, h2, h3, h4, h5, h6)) {
+  margin-inline: 0;
+  padding-inline: 0;
+}
+
+/* Sticky headings pin to the pane's content-box edge, so the pane itself
+   keeps no top padding: the story body's own top padding scrolls away with
+   the content instead of leaving a crisp strip above the pinned band. The
+   bottom padding is VSCode-style overscroll so the last block can still
+   scroll to the pane top for scroll sync. */
+.editor-fullscreen :deep(.story-body) {
+  @apply pt-3 pb-[calc(100vh-6rem)];
+}
+
 :deep(.cm-scroller) {
   @apply overflow-auto font-mono leading-relaxed;
 }
@@ -1262,11 +1564,11 @@ function on_drag_over(event: DragEvent) {
 }
 
 :deep(.cm-completionMatchedText) {
-  @apply font-bold text-white/50 no-underline;
+  @apply font-bold text-slate-500 no-underline dark:text-slate-400;
 }
 
 :deep(.cm-completionDetail) {
-  @apply ml-2 text-xs not-italic text-white/50;
+  @apply ml-2 text-xs not-italic text-slate-400 dark:text-slate-500;
 }
 
 /* Custom completion types render a lucide icon via addToOptions; hide the
@@ -1279,7 +1581,12 @@ function on_drag_over(event: DragEvent) {
 }
 
 :deep(.completion-type-icon) {
-  @apply h-4 w-4 shrink-0 text-white/50;
+  @apply h-4 w-4 shrink-0 text-slate-400 dark:text-slate-500 transition;
+}
+
+/* On the selected (primary) row the muted accents would vanish. */
+:deep(.cm-tooltip-autocomplete > ul > li[aria-selected]) :is(.cm-completionMatchedText, .cm-completionDetail, .completion-type-icon) {
+  @apply text-white/70;
 }
 
 :deep(.cm-search-hit) {

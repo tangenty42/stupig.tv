@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen overflow-x-clip">
+  <div class="min-h-screen overflow-x-clip" :style="header_height_var">
     <Toast position="center" />
     <ConfirmPopup>
       <template #message="{ message }">
@@ -11,6 +11,7 @@
     </ConfirmPopup>
 
     <header
+      ref="app_header"
       class="fixed inset-x-0 top-0 z-50 isolate transition-all duration-200 before:pointer-events-none before:absolute before:inset-0 before:opacity-0 before:backdrop-blur-[16px] before:transition-opacity before:duration-200"
       :class="scrolled ? 'border-b border-slate-200 bg-white/80 shadow-sm dark:border-slate-700 dark:bg-gray-900/80 before:opacity-100' : 'border-b border-transparent bg-transparent'"
     >
@@ -274,6 +275,27 @@ const breadcrumb_items = computed(() => {
     .map(segment => ({ label: decodeURIComponent(segment) }))
 })
 
+// Document title follows the breadcrumb trail (首页 excluded); pages with
+// richer data (story/user titles) override it with their own useHead.
+const document_title = computed(() => {
+  const parts = breadcrumb_items.value.map(item => item.label)
+  return parts.length ? parts.join(' - ') : undefined
+})
+useHead({ title: document_title })
+
+const site_url = useRuntimeConfig().public.site_url
+
+useSeoMeta({
+  description: '蠢猪小组（Stupig）官方网站：蠢猪档案与成员主页。',
+  ogSiteName: 'Stupig 蠢猪小组',
+  ogType: 'website',
+  ogUrl: computed(() => `${site_url}${route.path}`),
+})
+
+useHead({
+  link: computed(() => [{ rel: 'canonical', href: `${site_url}${route.path}` }]),
+})
+
 const header_shift_distance = 80
 const header_shift_progress = ref(0)
 const scrolled = computed(() => header_shift_progress.value > 0)
@@ -298,6 +320,18 @@ const breadcrumb_row_style = computed(() => ({
   'height': `${2.25 + 1.25 * header_shift_progress.value}rem`,
 }))
 
+// Live total height of the fixed header (logo spacer + breadcrumb row), so
+// sticky content (story headings) can pin right below it. The measured px
+// value tracks the header's shrink animation frame-by-frame; the rem formula
+// is only the SSR / pre-measurement fallback.
+const app_header = useTemplateRef<HTMLElement>('app_header')
+const app_header_height = ref<number | null>(null)
+const header_height_var = computed(() => ({
+  '--app-header-height': app_header_height.value === null
+    ? `${3.4 * (1 - header_shift_progress.value) + 2.25 + 1.25 * header_shift_progress.value}rem`
+    : `${app_header_height.value}px`,
+}))
+
 function on_scroll() {
   header_shift_progress.value = Math.min(Math.max(window.scrollY / header_shift_distance, 0), 1)
 }
@@ -305,14 +339,22 @@ function on_escape_key(event: KeyboardEvent) {
   if (event.key === 'Escape')
     clear_toasts()
 }
+let header_observer: ResizeObserver | null = null
 onMounted(() => {
   on_scroll()
   window.addEventListener('scroll', on_scroll, { passive: true })
   window.addEventListener('keydown', on_escape_key)
+  if (app_header.value) {
+    header_observer = new ResizeObserver(() => {
+      app_header_height.value = app_header.value?.offsetHeight ?? null
+    })
+    header_observer.observe(app_header.value)
+  }
 })
 onUnmounted(() => {
   window.removeEventListener('scroll', on_scroll)
   window.removeEventListener('keydown', on_escape_key)
+  header_observer?.disconnect()
 })
 
 const lor_modal = ref(false)

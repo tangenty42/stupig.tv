@@ -610,6 +610,12 @@ export function useDataSync() {
       broadcast_channel = null
     })
 
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) {
+        start_cross_tab_transport()
+      }
+    })
+
     const config = useRuntimeConfig().public
     const token = useCookie(config.auth_token_cookie_name)
     watch(token, () => {

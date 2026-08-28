@@ -17,6 +17,9 @@
           <span v-if="upload?.status === 'uploading' && upload.speed > 0" class="text-slate-400 dark:text-slate-500">
             {{ format_speed(upload.speed) }}
           </span>
+          <span v-else-if="replacing && replacing.speed > 0" class="text-slate-400 dark:text-slate-500">
+            {{ format_speed(replacing.speed) }}
+          </span>
         </div>
 
         <div v-if="upload && upload.status !== 'error'" class="mt-2 flex items-center gap-2">
@@ -32,6 +35,17 @@
         <span v-else-if="upload" class="mt-1.5 text-xs text-red-600 dark:text-red-400">
           上传失败：{{ upload.message }}
         </span>
+
+        <div v-if="replacing" class="mt-2 flex items-center gap-2">
+          <ProgressBar
+            :value="replacing.progress"
+            :show-value="false"
+            class="h-1.5 min-w-0 flex-1"
+          />
+          <span class="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+            {{ replace_status_text }}
+          </span>
+        </div>
 
         <span
           v-if="stored && ! stored.referenced"
@@ -52,6 +66,19 @@
           >
             <template #icon>
               <MyIcon name="lucide:pencil" />
+            </template>
+          </Button>
+          <Button
+            v-if="! props.rename_disabled"
+            class="aspect-square"
+            text
+            severity="secondary"
+            aria-label="替换文件"
+            :disabled="props.replace_disabled"
+            @click="emit('replace')"
+          >
+            <template #icon>
+              <MyIcon name="lucide:refresh-cw" />
             </template>
           </Button>
           <Button
@@ -164,6 +191,7 @@ interface Props {
   delete_pending?: boolean
   delete_disabled?: boolean
   rename_disabled?: boolean
+  replace_disabled?: boolean
   retry_disabled?: boolean
   unreferenced_hint?: string
 }
@@ -172,6 +200,7 @@ const props = withDefaults(defineProps<Props>(), {
   delete_pending: false,
   delete_disabled: false,
   rename_disabled: false,
+  replace_disabled: false,
   retry_disabled: false,
   unreferenced_hint: '未引用',
 })
@@ -180,6 +209,7 @@ const emit = defineEmits<{
   preview: [url: string]
   copy: [url: string]
   rename: []
+  replace: []
   delete: [event: MouseEvent]
   retry: []
   cancel: []
@@ -190,6 +220,7 @@ const static_url = useStaticUrl()
 
 const stored = computed(() => props.file.kind === 'stored' ? props.file : null)
 const upload = computed(() => props.file.kind === 'upload' ? props.file : null)
+const replacing = computed(() => stored.value?.replacing ?? null)
 
 const border_class = computed(() => {
   if (upload.value) {
@@ -197,6 +228,8 @@ const border_class = computed(() => {
       ? 'border-red-300 dark:border-red-800'
       : 'border-primary'
   }
+  if (replacing.value)
+    return 'border-primary'
   return stored.value?.referenced
     ? 'border-slate-200 dark:border-slate-700'
     : 'border-red-300 dark:border-red-800'
@@ -213,6 +246,13 @@ const upload_status_text = computed(() => {
   if (current.status === 'uploading')
     return current.progress >= 95 ? '服务器处理中' : `${current.progress} %`
   return ''
+})
+
+const replace_status_text = computed(() => {
+  const current = replacing.value
+  if (! current)
+    return ''
+  return current.progress >= 95 ? '服务器处理中' : `替换中 ${current.progress} %`
 })
 
 function on_dragstart(event: DragEvent) {

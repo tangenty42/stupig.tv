@@ -351,6 +351,7 @@ import { sync_resource } from '@shared/types/sync'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useCaptcha } from '~/composables/useCaptcha'
+import { avatar_url } from '~/utils/avatar'
 
 dayjs.extend(utc)
 
@@ -365,6 +366,20 @@ const date_now = useReactiveDateNow()
 
 const sync_loading = useState('sync_loading', () => false)
 const profile = useState<Profile | null>('profile', () => null)
+
+useHead({
+  title: computed(() => profile.value ? `用户主页 - ${profile.value.username}` : undefined),
+})
+
+const static_url = useStaticUrl()
+
+useSeoMeta({
+  description: computed(() => profile.value ? `蠢猪小组成员「${profile.value.username}」的主页` : undefined),
+  ogTitle: computed(() => profile.value ? `用户主页 - ${profile.value.username}` : undefined),
+  ogDescription: computed(() => profile.value ? `蠢猪小组成员「${profile.value.username}」的主页` : undefined),
+  ogType: 'profile',
+  ogImage: computed(() => (profile.value ? avatar_url(static_url, profile.value.avatar_file) : null) ?? undefined),
+})
 
 const is_operating_other = computed(() => {
   return Boolean(auth_user.value?.is_admin) && !! profile.value && profile.value.id !== auth_user.value?.id

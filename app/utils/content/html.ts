@@ -8,6 +8,13 @@ export const html_no_markdown_tags = new Set([
   'canvas', 'svg', 'math', 'video', 'audio', 'picture', 'source', 'track',
 ])
 
+// Table structure tags: re-rendering their inner markup as markdown mangles
+// rows/cells (the wrapper recursion spans sibling rows and strands closing
+// tags), so the preview passes them through as raw HTML.
+export const html_table_tags = new Set([
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col',
+])
+
 // All standard HTML element names except the no-markdown blocklist, so
 // markdown inside any wrapper element is parsed both in the editor (nested
 // language) and the preview renderer.

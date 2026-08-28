@@ -5,6 +5,7 @@ import { createTRPCClient, httpBatchLink } from '@trpc/client'
 type RouterOutputs = inferRouterOutputs<AppRouter>
 interface UploadOutputByPath {
   'content.uploadAttachment': RouterOutputs['content']['uploadAttachment']
+  'content.replaceAttachment': RouterOutputs['content']['replaceAttachment']
   'profile.uploadAvatar': RouterOutputs['profile']['uploadAvatar']
 }
 

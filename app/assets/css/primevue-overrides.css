@@ -62,6 +62,18 @@
   animation: card-out 0.15s ease-in;
 }
 
+/* Another PrimeVue bug: */
+/* ConfirmPopup measures its rect on the first enter frame to place the arrow; scale() corrupts that, so enter with fade only */
+.p-confirmpopup.p-anchored-overlay-enter-active {
+  animation: p-confirmpopup-enter 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+@keyframes p-confirmpopup-enter {
+  from {
+    opacity: 0;
+  }
+}
+
 .p-datepicker-buttonbar {
   margin-top: .5rem;
 }

@@ -127,4 +127,61 @@
     opacity: 0;
     transform: translateY(30px);
   }
+
+  /* Faint diagonal rating-badge watermark behind a block's content: one
+     oversized tiled layer rotated to run ↗, clipped by the block's
+     overflow clip and faded out at its edges. Set --watermark-url inline
+     to enable; light mode darkens the tiles so pale badges (gray 拉完了,
+     yellow 人上人) stay readable. */
+  .watermark {
+    @apply relative;
+    /* overflow:clip + a 1px clip margin lets a bleeding child (e.g. a top
+       cover) paint over the host's border, folding the border behind it. */
+    overflow: clip;
+    overflow-clip-margin: 1px;
+  }
+
+  .watermark::before {
+    content: '';
+    @apply pointer-events-none absolute opacity-[0.035] dark:opacity-[0.07] dark:brightness-125;
+    inset: -60%;
+    background-image: var(--watermark-url, none);
+    background-repeat: repeat;
+    background-size: 10rem auto;
+    transform: rotate(-30deg);
+    filter: brightness(0.1);
+    /* The layer box is 2.2× the block, so the block's edge sits at ~46% of
+       it — the mask fades the tiles out right at the block's edges. */
+    mask-image: radial-gradient(ellipse 46% 46% at 50% 50%, #000 20%, transparent 100%);
+  }
+
+  .watermark > * {
+    @apply relative;
+  }
+
+  /* Rating badge palette. Global because the story calendar's event bars use
+     these classes without rendering the Rating component. */
+  .rating-难评 {
+    @apply bg-slate-400 dark:bg-slate-500;
+  }
+
+  .rating-拉完了 {
+    @apply bg-gray-300 dark:bg-gray-700;
+  }
+
+  .rating-NPC {
+    @apply bg-sky-500;
+  }
+
+  .rating-人上人 {
+    @apply bg-violet-500;
+  }
+
+  .rating-顶级 {
+    @apply bg-amber-500;
+  }
+
+  .rating-夯 {
+    @apply bg-rose-500;
+  }
 }

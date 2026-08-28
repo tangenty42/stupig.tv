@@ -4,8 +4,8 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
-      '@server': resolve(__dirname, './server'),
-      '@shared': resolve(__dirname, './server/shared'),
+      '@server': resolve(import.meta.dirname, './server'),
+      '@shared': resolve(import.meta.dirname, './server/shared'),
     },
   },
 })

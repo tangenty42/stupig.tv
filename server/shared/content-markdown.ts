@@ -166,9 +166,6 @@ function has_attachment_illegal_char(value: string) {
   return link_file_name_illegal_chars.test(value)
 }
 
-/** Story reference destination `](@title)` inside a markdown link; titles cannot contain spaces or `@`. */
-const story_reference_link = /\(@([^)\s<>]+)\)/g
-
 /** Parse and validate the front matter of a story markdown document. */
 export function parse_story_markdown(markdown: string, config: ContentMarkdownConfig) {
   const issues: ContentLintIssue[] = []
@@ -205,29 +202,17 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
   let cover_label: string | null = null
   const seen_keys = new Set<string>()
 
+  // First body line (0-based index); broken front matter turns every line
+  // after the first into body. The body is linted after this loop, once
+  // `title` is known.
+  const body_start = front_matter_ok ? end_line + 1 : 1
+
   for (let i = 1; i < lines.length; i ++) {
     const raw = lines[i] ?? ''
     const line_no = i + 1
 
-    // Body lines: dead `[](@title)` references lint as errors; a reference to
-    // the story's own front-matter title is a self-reference and is rejected.
-    if (! front_matter_ok || i > end_line) {
-      for (const reference_match of raw.matchAll(story_reference_link)) {
-        const reference_title = reference_match[1] ?? ''
-        if (! reference_title) {
-          continue
-        }
-        const lower_title = reference_title.toLocaleLowerCase()
-        if (lower_title === (title ?? '').toLocaleLowerCase()) {
-          issues.push({ line: line_no, severity: 'error', source: 'at-story', message: '不允许自我引用' })
-        }
-        else if (! config.existing_titles?.some(item =>
-          item.title.toLocaleLowerCase() === lower_title,
-        )) {
-          issues.push({ line: line_no, severity: 'error', source: 'at-story', message: `档案「${reference_title}」不可引用` })
-        }
-      }
-      continue
+    if (i >= body_start) {
+      break
     }
     if (i === end_line || ! raw.trim()) {
       continue
@@ -263,7 +248,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
         else if (config.existing_titles?.some(item =>
           item.title.toLocaleLowerCase() === value.toLocaleLowerCase(),
         )) {
-          issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: `标题「${value}」已被使用，请换一个标题` })
+          issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: `标题『${value}』已被使用，请换一个标题` })
         }
         else {
           title = value
@@ -326,7 +311,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
 
           if (day_match) {
             if (kind === 'month') {
-              issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: '时间不能混用「某天」和「某月」两种格式' })
+              issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: '时间不能混用『某天』和『某月』两种格式' })
               failed = true
               break
             }
@@ -344,7 +329,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
           }
           else if (month_match) {
             if (kind === 'day') {
-              issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: '时间不能混用「某天」和「某月」两种格式' })
+              issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: '时间不能混用『某天』和『某月』两种格式' })
               failed = true
               break
             }
@@ -431,6 +416,29 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
     }
   }
 
+  // Body lines: dead `[](@title)` references lint as errors; a reference to
+  // the story's own front-matter title is a self-reference and is rejected.
+  const body_text = lines.slice(body_start).join('\n')
+  for_each_link_span(body_text, (span, offset) => {
+    if (! span.destination.startsWith('@')) {
+      return
+    }
+    const reference_title = span.destination.slice(1)
+    if (! reference_title) {
+      return
+    }
+    const line_no = body_start + line_number_at(body_text, offset + span.start)
+    const lower_title = reference_title.toLocaleLowerCase()
+    if (lower_title === (title ?? '').toLocaleLowerCase()) {
+      issues.push({ line: line_no, severity: 'error', source: 'at-story', message: '不允许自我引用' })
+    }
+    else if (! config.existing_titles?.some(item =>
+      item.title.toLocaleLowerCase() === lower_title,
+    )) {
+      issues.push({ line: line_no, severity: 'error', source: 'at-story', message: `档案『${reference_title}』不可引用` })
+    }
+  })
+
   if (! front_matter_ok || issues.some(issue => issue.severity === 'error') || title === null || ! event_precision || ! event_entries.length) {
     return { meta: null, issues }
   }
@@ -453,18 +461,24 @@ export function story_markdown_template(today: string) {
   ].join('\n')
 }
 
-/** Remove the front matter block, leaving only the markdown body. */
-export function strip_front_matter(markdown: string) {
+/** Lines occupied by the leading front matter block (0 when absent). */
+export function front_matter_line_count(markdown: string) {
   const lines = markdown.split('\n')
   if (lines[0]?.trim() !== '---') {
-    return markdown
+    return 0
   }
   for (let i = 1; i < lines.length; i ++) {
     if (lines[i]?.trim() === '---') {
-      return lines.slice(i + 1).join('\n')
+      return i + 1
     }
   }
-  return markdown
+  return 0
+}
+
+/** Remove the front matter block, leaving only the markdown body. */
+export function strip_front_matter(markdown: string) {
+  const count = front_matter_line_count(markdown)
+  return count ? markdown.split('\n').slice(count).join('\n') : markdown
 }
 
 /** Root-relative URL path for an attachment (the static host prefixes it at render time). */
@@ -506,7 +520,265 @@ export function attachment_markdown_path(file_name: string) {
   return file_name
 }
 
-const markdown_link = /(!?\[[^\]]*\]\(\s*<?)([^)\s<>]+)(>?(?:\s+"[^"]*")?\s*\))/g
+interface MarkdownLinkSpan {
+  /** Index of the leading `!` (images) or `[` (links). */
+  start: number
+  /** Index just past the closing `)`. */
+  end: number
+  image: boolean
+  /** Raw label source between the outer brackets (may itself contain links). */
+  label: string
+  /** Index just past the opening `[`. */
+  label_start: number
+  /** Index of the closing `]`. */
+  label_end: number
+  /** Raw destination, unwrapped from `<...>`. */
+  destination: string
+  /** Start of the raw destination within the source. */
+  dest_start: number
+  /** End of the raw destination within the source. */
+  dest_end: number
+}
+
+// Link parsing is a real scanner, not a regex: labels can nest `[...]` pairs
+// (e.g. `![alt [](a.zip)](b.jpg)`), which a `[^\]]*` class cannot survive —
+// the regex consumed the nested link and orphaned the outer destination.
+// eslint-disable-next-line regexp/no-obscure-range -- CommonMark's four ASCII punctuation ranges are obscure by definition
+const ascii_punctuation = /[!-/:-@[-`{-~]/
+
+function is_escaped(text: string, index: number) {
+  return text[index] === '\\' && index + 1 < text.length && ascii_punctuation.test(text[index + 1]!)
+}
+
+// A code span opens with a run of N backticks and closes with a run of exactly
+// N; its contents (brackets included) are literal text, never link structure.
+function code_span_end(text: string, start: number, limit: number) {
+  let i = start
+  while (i < limit && text[i] === '`') {
+    i ++
+  }
+  const ticks = i - start
+  let j = i
+  while (j < limit) {
+    if (text[j] !== '`') {
+      j ++
+      continue
+    }
+    let k = j
+    while (k < limit && text[k] === '`') {
+      k ++
+    }
+    if (k - j === ticks) {
+      return k
+    }
+    j = k
+  }
+  return - 1
+}
+
+// Fenced code blocks never render links. Line-based ranges; indented code
+// blocks (4-space) are not tracked — content there is still over-caught,
+// which only protects attachments from deletion, never the reverse.
+function fenced_code_ranges(text: string): [number, number][] {
+  const ranges: [number, number][] = []
+  let open: { marker: string, length: number, start: number } | null = null
+  let offset = 0
+  for (const line of text.split('\n')) {
+    if (! open) {
+      const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line)
+      if (fence) {
+        open = { marker: fence[1]![0]!, length: fence[1]!.length, start: offset }
+      }
+    }
+    else {
+      const fence = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line)
+      if (fence && fence[1]![0] === open.marker && fence[1]!.length >= open.length) {
+        ranges.push([open.start, offset + line.length])
+        open = null
+      }
+    }
+    offset += line.length + 1
+  }
+  if (open) {
+    ranges.push([open.start, text.length])
+  }
+  return ranges
+}
+
+/** Try to parse an inline link/image starting at `text[start]` (`!` or `[`), within [.., limit). */
+function parse_link_at(text: string, start: number, limit: number): MarkdownLinkSpan | null {
+  const image = text[start] === '!'
+  const open = image ? start + 1 : start
+
+  // Balanced label: nested brackets allowed; `\`-escapes and code spans are
+  // literal and do not count toward the balance.
+  let depth = 1
+  let i = open + 1
+  while (i < limit && depth > 0) {
+    if (text[i] === '`') {
+      const end = code_span_end(text, i, limit)
+      i = end === - 1 ? i + 1 : end
+      continue
+    }
+    if (is_escaped(text, i)) {
+      i += 2
+      continue
+    }
+    if (text[i] === '[') {
+      depth ++
+    }
+    else if (text[i] === ']') {
+      depth --
+    }
+    i ++
+  }
+  if (depth !== 0 || text[i] !== '(') {
+    return null
+  }
+  const label_start = open + 1
+  const label_end = i - 1
+  i ++
+
+  while (i < limit && /\s/.test(text[i]!)) {
+    i ++
+  }
+  let dest_start: number
+  let dest_end: number
+  if (text[i] === '<') {
+    const close = text.indexOf('>', i + 1)
+    if (close === - 1 || close >= limit) {
+      return null
+    }
+    dest_start = i + 1
+    dest_end = close
+    i = close + 1
+  }
+  else {
+    dest_start = i
+    while (i < limit && ! /[\s()<>]/.test(text[i]!)) {
+      i ++
+    }
+    dest_end = i
+    if (dest_end === dest_start) {
+      return null
+    }
+  }
+
+  while (i < limit && /\s/.test(text[i]!)) {
+    i ++
+  }
+  if (text[i] === '"') {
+    const close = text.indexOf('"', i + 1)
+    if (close === - 1 || close >= limit) {
+      return null
+    }
+    i = close + 1
+    while (i < limit && /\s/.test(text[i]!)) {
+      i ++
+    }
+  }
+  if (text[i] !== ')') {
+    return null
+  }
+  return {
+    start,
+    end: i + 1,
+    image,
+    label: text.slice(label_start, label_end),
+    label_start,
+    label_end,
+    destination: text.slice(dest_start, dest_end),
+    dest_start,
+    dest_end,
+  }
+}
+
+/** All top-level inline link/image spans; labels may contain nested links (walked separately). */
+function scan_markdown_links(text: string): MarkdownLinkSpan[] {
+  const spans: MarkdownLinkSpan[] = []
+  const fenced = fenced_code_ranges(text)
+  let fence_index = 0
+  let cursor = 0
+  // Scan the non-fenced segments one at a time so a code span can never
+  // "close" inside a fenced block and swallow it.
+  while (cursor <= text.length) {
+    while (fence_index < fenced.length && cursor >= fenced[fence_index]![1]) {
+      fence_index ++
+    }
+    const limit = fence_index < fenced.length ? fenced[fence_index]![0] : text.length
+    let i = cursor
+    while (i < limit) {
+      if (text[i] === '`') {
+        const end = code_span_end(text, i, limit)
+        i = end === - 1 ? i + 1 : end
+        continue
+      }
+      if (is_escaped(text, i)) {
+        i += 2
+        continue
+      }
+      if (text[i] === '[' || (text[i] === '!' && text[i + 1] === '[')) {
+        const span = parse_link_at(text, i, limit)
+        if (span) {
+          spans.push(span)
+          i = span.end
+          continue
+        }
+      }
+      i ++
+    }
+    if (fence_index >= fenced.length) {
+      break
+    }
+    cursor = fenced[fence_index]![1]
+  }
+  return spans
+}
+
+/** Walk every link span, including links nested inside labels (e.g. in image alt text). */
+function for_each_link_span(text: string, visit: (span: MarkdownLinkSpan, offset: number) => void, offset = 0) {
+  for (const span of scan_markdown_links(text)) {
+    visit(span, offset)
+    for_each_link_span(span.label, visit, offset + span.label_start)
+  }
+}
+
+/** 1-based line number of `index` within `text`. */
+function line_number_at(text: string, index: number) {
+  let line = 1
+  for (let i = 0; i < index; i ++) {
+    if (text[i] === '\n') {
+      line ++
+    }
+  }
+  return line
+}
+
+interface MarkdownLinkPatch {
+  label?: string
+  destination?: string
+}
+
+/** Rebuild `text` from its link spans, applying per-span label/destination patches. */
+function rewrite_markdown_links(text: string, patch: (span: MarkdownLinkSpan) => MarkdownLinkPatch | null) {
+  const spans = scan_markdown_links(text)
+  let out = ''
+  let cursor = 0
+  for (const span of spans) {
+    const change = patch(span)
+    if (! change) {
+      continue
+    }
+    out += text.slice(cursor, span.start)
+      + text.slice(span.start, span.label_start)
+      + (change.label ?? text.slice(span.label_start, span.label_end))
+      + text.slice(span.label_end, span.dest_start)
+      + (change.destination ?? text.slice(span.dest_start, span.dest_end))
+      + text.slice(span.dest_end, span.end)
+    cursor = span.end
+  }
+  return out + text.slice(cursor)
+}
 
 function attachment_name_from_url(url: string) {
   // `@title` destinations are story references, not attachments.
@@ -529,54 +801,54 @@ function attachment_name_from_url(url: string) {
 /** Extract attachment file names referenced from the markdown body for a story. */
 export function extract_attachment_names(markdown: string) {
   const names = new Set<string>()
-
-  for (const match of markdown.matchAll(markdown_link)) {
-    const url = match[2] ?? ''
-    const name = attachment_name_from_url(url)
+  for_each_link_span(markdown, (span) => {
+    const name = attachment_name_from_url(span.destination)
     if (name) {
       names.add(name)
     }
-  }
-
+  })
   return [... names]
 }
 
 /** Rename matching attachment URLs and default link labels without touching custom labels. */
-export function rename_attachment_references(markdown: string, old_file_name: string, new_file_name: string) {
+export function rename_attachment_references(markdown: string, old_file_name: string, new_file_name: string): string {
   const new_local_path = attachment_markdown_path(new_file_name)
-
-  return markdown.replace(markdown_link, (link, prefix: string, url: string, suffix: string) => {
-    if (attachment_name_from_url(url) !== old_file_name) {
-      return link
+  return rewrite_markdown_links(markdown, (span) => {
+    // Links nested inside an image label (`![alt [](a.zip)](b.jpg)`) are
+    // references too: rewrite the label recursively so they are not missed.
+    const rewritten_label = rename_attachment_references(span.label, old_file_name, new_file_name)
+    const destination = attachment_name_from_url(span.destination) === old_file_name ? new_local_path : undefined
+    let label = rewritten_label === span.label ? undefined : rewritten_label
+    if (destination && span.label === old_file_name) {
+      label = new_file_name
     }
-
-    const renamed_link = `${prefix}${new_local_path}${suffix}`
-    return renamed_link.replace(/^(!?)\[([^\]]*)\]/, (label, marker: string, text: string) => {
-      return text === old_file_name ? `${marker}[${new_file_name}]` : label
-    })
+    if (destination === undefined && label === undefined) {
+      return null
+    }
+    return { destination, label }
   })
 }
 
 /** Extract the `@story_title` titles referenced from the markdown body (deduplicated). */
 export function extract_story_reference_titles(markdown: string) {
   const titles = new Set<string>()
-  for (const match of markdown.matchAll(story_reference_link)) {
-    const title = match[1] ?? ''
-    if (title) {
-      titles.add(title)
+  for_each_link_span(markdown, (span) => {
+    if (span.destination.length > 1 && span.destination.startsWith('@')) {
+      titles.add(span.destination.slice(1))
     }
-  }
+  })
   return [... titles]
 }
 
-// A real `[](@title)` story reference link (image or text label), whose
-// destination is a bare `@title` token. Distinguishes links from arbitrary
-// `(@title)` text so a title rename only rewrites actual references.
-const story_reference_markdown = /(!?\[[^\]]*\]\(\s*)(@[^)\s<>]+)(\s*\))/g
-
 /** Rename `[](@old_title)` story references to `@new_title`; other text is left untouched. */
-export function rename_story_references(markdown: string, old_title: string, new_title: string) {
-  return markdown.replace(story_reference_markdown, (link, prefix: string, destination: string, suffix: string) => {
-    return destination === `@${old_title}` ? `${prefix}@${new_title}${suffix}` : link
+export function rename_story_references(markdown: string, old_title: string, new_title: string): string {
+  return rewrite_markdown_links(markdown, (span) => {
+    const rewritten_label = rename_story_references(span.label, old_title, new_title)
+    const label = rewritten_label === span.label ? undefined : rewritten_label
+    const destination = span.destination === `@${old_title}` ? `@${new_title}` : undefined
+    if (destination === undefined && label === undefined) {
+      return null
+    }
+    return { destination, label }
   })
 }

@@ -21,6 +21,7 @@ ESLint is the sole formatter for this project — **no Prettier**. Config lives 
 - Omit function return type annotations when TypeScript can infer the intended type. Specify one only when it defines a deliberate contract or inference cannot express the required type.
 - Omit variable type annotations when the initializer already infers the intended type. Specify one only when it constrains, widens, or otherwise changes the inferred type.
 - Never hardcode configurable identifiers, limits, intervals, delays, schema versions, or storage keys/prefixes. Define them in `.env` and `.env.example`, validate them in `server/shared/env.ts`, and expose client-visible values through Nuxt public runtime config.
+- Never call composables (`useXxx()`) inside `app/utils/` functions and never hardcode what a composable provides — utils must be pure. Capture `const xxx = useXxx()` at the top of the caller's setup block and pass it into the util as a config-like argument.
 - Before adding a local helper or calling a platform formatting/parsing API directly, search `app/utils/`, shared modules, and existing composables for the project-owned equivalent. Reuse and extend the owning utility instead of duplicating behavior in a page, component, store, service, or router.
 
 ## Project conventions the linter is configured to allow (do not "fix" these)

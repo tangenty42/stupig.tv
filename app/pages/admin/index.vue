@@ -155,6 +155,8 @@ definePageMeta({
   middleware: 'require-admin-auth',
 })
 
+useSeoMeta({ robots: 'noindex, nofollow' })
+
 type RefreshReason = 'initial' | 'query' | 'manual' | 'polling' | 'mutation'
 type BatchCommand = 'BAN' | 'UNBAN' | 'KICK' | 'VERIFY' | 'UNVERIFY' | 'PROMOTE' | 'DEMOTE'
 

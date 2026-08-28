@@ -8,6 +8,8 @@ export type AttachmentCardData
     kind: 'stored'
     /** Unreferenced stored attachments are deleted when the story is saved. */
     referenced: boolean
+    /** Live progress while this stored file is being replaced by a new upload. */
+    replacing?: { progress: number, speed: number }
   })
   | {
     kind: 'upload'
@@ -56,11 +58,12 @@ export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' |
  * Resolve a front matter `cover` link the same way the markdown preview resolves
  * attachment URLs: bare file names point at the story's attachment directory
  * (story_id null means the new-story editor, whose orphan uploads live under content/0/).
+ * A `version` is appended as `?version=` to cache-bust replaced files.
  */
-export function story_front_cover_url(cover: string, story_id: number | null) {
+export function story_front_cover_url(static_url: (path: string) => string, cover: string, story_id: number | null, version?: string | null) {
   if (! cover.includes('/') && ! cover.startsWith('#') && ! /^[a-z][\w+.-]*:/i.test(cover)) {
-    const static_url = useStaticUrl()
-    return static_url(`/content/${story_id ?? 0}/${cover}`)
+    const path = `/content/${story_id ?? 0}/${cover}`
+    return static_url(version ? `${path}?version=${version}` : path)
   }
   return cover
 }

@@ -51,45 +51,31 @@
         <Skeleton v-for="i in 3" :key="i" height="3.5rem" />
       </div>
 
-      <div v-else-if="visible_stories.length" class="flex flex-col gap-3">
-        <NuxtLink
-          v-for="story in visible_stories"
-          :key="story.id"
-          :to="`/content/${story.id}`"
-          class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 p-3.5 rounded-sm bg-slate-100/50 dark:bg-slate-800/50 transition-[filter] hover:brightness-90 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:gap-x-4"
-        >
-          <MyContentRating :rating="story.labels" />
-          <span class="min-w-0 break-words font-medium text-slate-700 dark:text-slate-200 sm:truncate">
-            <span v-if="story_pinned(story.labels)" class="inline-flex items-center gap-1 mr-2 text-slate-400 dark:text-slate-500">
-              <span>置顶</span>
-              <MyIcon name="lucide:pin" />
-            </span>
-            <span>{{ story.title }}</span>
-          </span>
-          <span v-if="visible_labels(story).length" class="col-start-2 flex flex-wrap gap-1 sm:col-start-3">
-            <MyBadge
-              v-for="label in visible_labels(story)"
-              :key="label"
-              type="info"
-              :outlined="! active_labels.has(label)"
-            >
-              {{ label }}
-            </MyBadge>
-          </span>
-          <span class="col-start-2 text-xs text-slate-400 dark:text-slate-500 text-end sm:col-start-4">
-            {{ format_event_range(story.event_precision, story.event_dates) }}
-          </span>
-          <p v-if="story.desc" class="col-start-2 min-w-0 break-words text-sm text-slate-500 dark:text-slate-400 sm:col-span-3 sm:col-start-2">
-            {{ story.desc }}
-          </p>
-          <img
-            v-if="story.cover"
-            :src="story_front_cover_url(story.cover, story.id)"
-            :alt="cover_alt(story.cover, story.cover_label, story.title)"
-            loading="lazy"
-            class="col-start-2 my-1 max-h-40 w-auto rounded-sm sm:col-span-3 sm:col-start-2"
+      <div v-else-if="visible_stories.length">
+        <div class="flex flex-col gap-4 sm:hidden">
+          <MyContentStoryCard
+            v-for="story in visible_stories"
+            :key="story.id"
+            :story="story"
+            :active_labels="active_labels"
+          />
+        </div>
+        <!-- Two independent flex columns filled alternately, so the waterfall
+             reads row-major (1|2, 3|4, …) instead of CSS columns' 1|4, 2|5. -->
+        <div class="hidden items-start gap-4 sm:grid sm:grid-cols-2">
+          <div
+            v-for="(column, index) in story_columns"
+            :key="index"
+            class="flex min-w-0 flex-col gap-4"
           >
-        </NuxtLink>
+            <MyContentStoryCard
+              v-for="story in column"
+              :key="story.id"
+              :story="story"
+              :active_labels="active_labels"
+            />
+          </div>
+        </div>
       </div>
 
       <div v-else class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
@@ -111,8 +97,6 @@
 import type { ContentStorySummary } from '@shared/types/content'
 import { story_pinned, story_rating_rank } from '@shared/types/content'
 import { sync_resource } from '@shared/types/sync'
-import { cover_alt, story_front_cover_url } from '~/utils/content/attachment'
-import { format_event_range } from '~/utils/content/event'
 
 const { content } = useApi()
 const { user } = useAuth()
@@ -170,4 +154,10 @@ function toggle_label(label: string) {
   if (! active_labels.delete(label))
     active_labels.add(label)
 }
+
+const story_columns = computed(() => {
+  const columns: ContentStorySummary[][] = [[], []]
+  visible_stories.value.forEach((story, index) => columns[index % 2]!.push(story))
+  return columns
+})
 </script>

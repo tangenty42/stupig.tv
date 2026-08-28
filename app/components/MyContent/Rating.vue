@@ -21,35 +21,17 @@ const tier = computed(() => story_rating(props.rating))
       shrink-0
       items-center
       rounded-tl-full
-      rounded-br-full
-      px-4
-      py-2
+      rounded-tr-[.2rem]
+      rounded-bl-full
+      rounded-br-[.2rem]
+      ps-[2em]
+      pe-[.8em]
+      py-[.5em]
       text-xs
       font-bold
       text-white;
   }
-  :global(.rating-难评) {
-    @apply bg-slate-400;
-  }
-  :global(.dark .rating-难评) {
-    @apply bg-slate-500;
-  }
-  :global(.rating-拉完了) {
-    @apply bg-gray-300;
-  }
-  :global(.dark .rating-拉完了) {
-    @apply bg-gray-700;
-  }
-  :global(.rating-NPC) {
-    @apply bg-sky-500;
-  }
-  :global(.rating-人上人) {
-    @apply bg-violet-500;
-  }
-  :global(.rating-顶级) {
-    @apply bg-amber-500;
-  }
-  :global(.rating-夯) {
-    @apply bg-rose-500;
-  }
+  /* The rating-* palette lives in global.css: the story calendar's event bars
+     use it without rendering this component, and scoped component CSS only
+     loads with the component. */
 </style>

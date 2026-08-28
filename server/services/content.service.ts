@@ -1,12 +1,15 @@
 import type { ContentMarkdownConfig, ContentStoryMeta } from '@shared/content-markdown'
+import type { ContentStoryDetail } from '@shared/types/content'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { link, mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
+import { random_file_token } from '@server/lib/random'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { attachment_url_path, extract_attachment_names, extract_story_reference_titles, parse_story_markdown, rename_attachment_references, rename_story_references, sanitize_attachment_file_name } from '@shared/content-markdown'
+import { attachment_url_path, extract_attachment_names, extract_story_reference_titles, link_file_name_byte_length, parse_story_markdown, rename_attachment_references, rename_story_references, sanitize_attachment_file_name } from '@shared/content-markdown'
 import { env } from '@shared/env'
+import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 
 interface StoryRow extends RowDataPacket {
   id: number
@@ -24,6 +27,7 @@ interface StoryRow extends RowDataPacket {
   markdown: string
   created_at: string
   updated_at: string
+  revision: number
 }
 
 interface StoryReferrerRow extends RowDataPacket {
@@ -35,10 +39,11 @@ interface StoryAttachmentRow extends RowDataPacket {
   file_name: string
   mime_type: string | null
   file_size: number
+  version: string
 }
 
-interface StoryVersionRow extends RowDataPacket {
-  updated_at: string | Date
+interface StoryRevisionRow extends RowDataPacket {
+  revision: number
 }
 
 const content_markdown_config = {
@@ -70,6 +75,15 @@ function parse_or_throw(markdown: string, existing_titles: ContentMarkdownConfig
   if (! meta) {
     throw new ApiError(400, issues[0]?.message ?? '档案格式不正确')
   }
+
+  // Mirror the editor's HTML grammar lint so a save can't slip past the same
+  // broken tags the editor flags.
+  const html_issue = build_html_diagnostics(markdown)[0]
+  if (html_issue) {
+    const line = html_lint_line(markdown, html_issue.from)
+    throw new ApiError(400, `第 ${line} 行：${html_issue.message}`)
+  }
+
   return meta
 }
 
@@ -89,7 +103,7 @@ async function ensure_unique_title(title: string, exclude_id: number) {
     [title, exclude_id],
   )
   if (rows.length) {
-    throw new ApiError(409, `标题「${title}」已被使用，请换一个标题`)
+    throw new ApiError(409, `标题『${title}』已被使用，请换一个标题`)
   }
 }
 
@@ -131,13 +145,19 @@ function parse_event_dates(value: string | string[]) {
   return dates.sort((a, b) => a.localeCompare(b))
 }
 
-function format_attachment(story_id: number, row: { file_name: string, mime_type: string | null, file_size: number }) {
+function new_attachment_version() {
+  return random_file_token()
+}
+
+function format_attachment(story_id: number, row: { file_name: string, mime_type: string | null, file_size: number, version: string }) {
   return {
     file_name: row.file_name,
     mime_type: row.mime_type,
     file_size: Number(row.file_size),
+    version: row.version,
     is_image: (row.mime_type ?? '').startsWith('image/'),
-    url: attachment_url_path(story_id, row.file_name),
+    // `?version=` cache-busts replaced/renamed files so browsers re-fetch them.
+    url: `${attachment_url_path(story_id, row.file_name)}?version=${row.version}`,
   }
 }
 
@@ -166,9 +186,25 @@ export async function list_stories() {
   }))
 }
 
-export async function get_story(id: number) {
+export async function get_story(id: number): Promise<ContentStoryDetail>
+export async function get_story(id: number, base_updated_at: string): Promise<ContentStoryDetail | null>
+export async function get_story(id: number, base_updated_at?: string): Promise<ContentStoryDetail | null> {
+  if (base_updated_at !== undefined) {
+    const [versions] = await db.execute<RowDataPacket[]>(
+      'SELECT updated_at FROM content_stories WHERE id = ?',
+      [id],
+    )
+    const version = versions[0]
+    if (! version) {
+      throw new ApiError(404, '档案不存在或已被删除')
+    }
+    if (new Date(version.updated_at).getTime() === new Date(base_updated_at).getTime()) {
+      return null
+    }
+  }
+
   const [stories] = await db.execute<StoryRow[]>(
-    'SELECT id, title, label, description, cover, cover_label, event_precision, event_dates, markdown, created_at, updated_at FROM content_stories WHERE id = ?',
+    'SELECT id, title, label, description, cover, cover_label, event_precision, event_dates, markdown, created_at, updated_at, revision FROM content_stories WHERE id = ?',
     [id],
   )
   const story = stories[0]
@@ -177,7 +213,7 @@ export async function get_story(id: number) {
   }
 
   const [attachments] = await db.execute<StoryAttachmentRow[]>(
-    'SELECT file_name, mime_type, file_size FROM content_story_attachments WHERE story_id = ? ORDER BY id',
+    'SELECT file_name, mime_type, file_size, version FROM content_story_attachments WHERE story_id = ? ORDER BY id',
     [id],
   )
 
@@ -191,6 +227,7 @@ export async function get_story(id: number) {
     attachments: attachments.map(row => format_attachment(story.id, row)),
     created_at: story.created_at,
     updated_at: story.updated_at,
+    revision: story.revision,
     ... format_desc_cover(story),
   }
 }
@@ -241,6 +278,7 @@ async function claim_attachments(story_id: number, file_names: string[], static_
     rename(join(staging_dir, file_name), join(story_dir, file_name)).catch(() => {}),
   ))
   publish_refresh({ resource: sync_resource('content_story', story_id) })
+  publish_refresh({ resource: sync_resource('content_orphan_attachments', 'all') })
 }
 
 /**
@@ -248,7 +286,7 @@ async function claim_attachments(story_id: number, file_names: string[], static_
  * `delete_files` (trash bin confirmation flow). Returns the accepted file
  * names for callers that need to confirm a requested deletion occurred.
  */
-export async function update_story(id: number, markdown: string, delete_files: string[], base_updated_at: string, static_root: string) {
+export async function update_story(id: number, markdown: string, delete_files: string[], base_revision: number, static_root: string) {
   const story = await get_story(id)
   const existing_titles = await existing_story_titles(id)
   const meta = parse_or_throw(markdown, existing_titles)
@@ -276,20 +314,20 @@ export async function update_story(id: number, markdown: string, delete_files: s
   const connection = await db.getConnection()
   try {
     await connection.beginTransaction()
-    const [version_rows] = await connection.execute<StoryVersionRow[]>(
-      'SELECT updated_at FROM content_stories WHERE id = ? FOR UPDATE',
+    const [version_rows] = await connection.execute<StoryRevisionRow[]>(
+      'SELECT revision FROM content_stories WHERE id = ? FOR UPDATE',
       [id],
     )
     const current_version = version_rows[0]
     if (! current_version) {
       throw new ApiError(404, '档案不存在或已被删除')
     }
-    if (new Date(current_version.updated_at).getTime() !== new Date(base_updated_at).getTime()) {
+    if (current_version.revision !== base_revision) {
       throw new ApiError(409, '档案已被其他编辑更新，请先处理版本冲突')
     }
 
     await connection.execute(
-      'UPDATE content_stories SET title = ?, label = ?, description = ?, cover = ?, cover_label = ?, event_precision = ?, event_dates = CAST(? AS JSON), related_story_ids = CAST(? AS JSON), markdown = ? WHERE id = ?',
+      'UPDATE content_stories SET title = ?, label = ?, description = ?, cover = ?, cover_label = ?, event_precision = ?, event_dates = CAST(? AS JSON), related_story_ids = CAST(? AS JSON), markdown = ?, revision = revision + 1 WHERE id = ?',
       [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', meta.event_precision, story_event_dates(meta), related_story_ids, markdown, id],
     )
 
@@ -302,12 +340,12 @@ export async function update_story(id: number, markdown: string, delete_files: s
       for (const referrer of referrers) {
         const rewritten = rename_story_references(referrer.markdown, old_title, new_title)
         if (rewritten !== referrer.markdown) {
-          // Keep `updated_at` intact: a mechanical reference rewrite must not
-          // invalidate an in-progress editor's base version (that would raise
-          // a false version-conflict on save; the stale `@oldtitle` is instead
-          // surfaced by the dead-reference lint).
+          // A mechanical reference rewrite bumps `updated_at` (ON UPDATE
+          // CURRENT_TIMESTAMP) so viewers refetch the rewritten markdown, but
+          // leaves `revision` alone so an in-progress editor's base version
+          // stays valid (no false 409 on save).
           await connection.execute(
-            'UPDATE content_stories SET markdown = ?, updated_at = updated_at WHERE id = ?',
+            'UPDATE content_stories SET markdown = ? WHERE id = ?',
             [rewritten, referrer.id],
           )
           rewritten_referrers.push(referrer.id)
@@ -346,6 +384,18 @@ export async function update_story(id: number, markdown: string, delete_files: s
 /** Deletes the story row and its attachment directory. */
 export async function delete_story(id: number, static_root: string) {
   await get_story(id)
+
+  // Refuse to delete a story that other stories `@`-reference, so dead links
+  // are never silently introduced. Point the referrers out instead.
+  const [referrers] = await db.execute<RowDataPacket[]>(
+    'SELECT id, title FROM content_stories WHERE JSON_CONTAINS(related_story_ids, ?) AND id != ? ORDER BY id',
+    [String(id), id],
+  )
+  if (referrers.length) {
+    const titles = referrers.map(row => `『${row.title}』`).join('、')
+    throw new ApiError(409, `无法删除：仍有 ${referrers.length} 个档案引用本档案（${titles}），请先移除相关引用`)
+  }
+
   await db.execute('DELETE FROM content_stories WHERE id = ?', [id])
 
   publish_refresh({ resource: sync_resource('content_stories', 'all') })
@@ -364,8 +414,10 @@ export async function add_attachment(story_id: number | null, file_name: string,
 
   if (story_id !== null)
     publish_refresh({ resource: sync_resource('content_story', story_id) })
+  else
+    publish_refresh({ resource: sync_resource('content_orphan_attachments', 'all') })
   // Orphan files live under content/0/ until claimed by a created story.
-  return format_attachment(story_id ?? 0, { file_name, mime_type, file_size })
+  return format_attachment(story_id ?? 0, { file_name, mime_type, file_size, version: new_attachment_version() })
 }
 
 /** True when a story (or the orphan pool when null) already has this file name. */
@@ -377,12 +429,39 @@ export async function attachment_name_taken(story_id: number | null, file_name: 
   return rows.length > 0
 }
 
+/**
+ * True when ANOTHER attachment row in the story already holds this name. Done
+ * in SQL because the unique index's utf8mb4_unicode_ci collation is
+ * case-insensitive — a JS `===` check misses case-variant conflicts and the
+ * row dies at the DB with a raw duplicate-entry error.
+ */
+async function attachment_name_conflicts(story_id: number, file_name: string, ignore_file_name: string) {
+  const [rows] = await db.execute<RowDataPacket[]>(
+    'SELECT 1 AS conflict FROM content_story_attachments WHERE story_id = ? AND file_name = ? AND file_name <> ? LIMIT 1',
+    [story_id, file_name, ignore_file_name],
+  )
+  return rows.length > 0
+}
+
 /** Lists unclaimed (story_id NULL) attachments staged under content/0/. */
 export async function list_orphan_attachments() {
   const [attachments] = await db.execute<StoryAttachmentRow[]>(
-    'SELECT file_name, mime_type, file_size FROM content_story_attachments WHERE story_id IS NULL ORDER BY id',
+    'SELECT file_name, mime_type, file_size, version FROM content_story_attachments WHERE story_id IS NULL ORDER BY id',
   )
   return attachments.map(row => format_attachment(0, row))
+}
+
+/** True for a MySQL duplicate-key violation (errno 1062). */
+function is_duplicate_key_error(error: unknown) {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'ER_DUP_ENTRY'
+}
+
+/** Rebuilds a taken file name with a random suffix before the extension, keeping the byte cap. */
+function suffixed_attachment_name(file_name: string, ext: string) {
+  const stem = ext ? file_name.slice(0, - ext.length) : file_name
+  const suffix = `-${random_file_token()}`
+  const stem_limit = env.CONTENT_LINK_FILE_NAME_MAX_BYTES - link_file_name_byte_length(suffix) - link_file_name_byte_length(ext)
+  return `${sanitize_attachment_file_name(stem, Math.max(stem_limit, 1))}${suffix}${ext}`
 }
 
 export async function upload_attachment(story_id: number | null, input: FormData, get_options: () => AttachmentUploadOptions) {
@@ -396,17 +475,29 @@ export async function upload_attachment(story_id: number | null, input: FormData
 
   const ext = extname(upload.name ?? '').toLowerCase()
 
-  let file_name = sanitize_attachment_file_name(upload.name ?? 'file', env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
+  const base_name = sanitize_attachment_file_name(upload.name ?? 'file', env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
+  let file_name = base_name
   if (await attachment_name_taken(story_id, file_name)) {
-    const stem = ext ? file_name.slice(0, - ext.length) : file_name
-    file_name = `${stem}-${Date.now().toString(36)}${ext}`
+    file_name = suffixed_attachment_name(base_name, ext)
   }
 
-  const attachment = await add_attachment(story_id, file_name, upload.type || null, file_data.length)
-  const dir = join(options.static_root, 'content', String(story_id ?? 0))
-  await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, file_name), file_data)
-  return attachment
+  // The unique index is the final guard: a same-name upload racing past the
+  // pre-check (or a suffix collision) retries with a fresh random suffix.
+  for (let attempt = 1; ; attempt ++) {
+    try {
+      const attachment = await add_attachment(story_id, file_name, upload.type || null, file_data.length)
+      const dir = join(options.static_root, 'content', String(story_id ?? 0))
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, file_name), file_data)
+      return attachment
+    }
+    catch (error) {
+      if (attempt >= 3 || ! is_duplicate_key_error(error)) {
+        throw error
+      }
+      file_name = suffixed_attachment_name(base_name, ext)
+    }
+  }
 }
 
 /** Deletes an unclaimed (story_id NULL) attachment and its staged file. */
@@ -418,11 +509,12 @@ export async function delete_orphan_attachment(file_name: string, static_root: s
   if (! result.affectedRows)
     throw new ApiError(404, '附件不存在或已被删除')
 
+  publish_refresh({ resource: sync_resource('content_orphan_attachments', 'all') })
   await unlink(join(static_root, 'content', '0', file_name)).catch(() => {})
 }
 
-export async function delete_attachment(story_id: number, file_name: string, markdown: string, base_updated_at: string, static_root: string) {
-  const deleted_files = await update_story(story_id, markdown, [file_name], base_updated_at, static_root)
+export async function delete_attachment(story_id: number, file_name: string, markdown: string, base_revision: number, static_root: string) {
+  const deleted_files = await update_story(story_id, markdown, [file_name], base_revision, static_root)
   if (! deleted_files.includes(file_name)) {
     throw new ApiError(404, '附件不存在或已被删除')
   }
@@ -437,7 +529,7 @@ export async function rename_attachment(story_id: number, old_file_name: string,
   if (old_file_name === new_file_name) {
     return attachment
   }
-  if (story.attachments.some(item => item.file_name === new_file_name)) {
+  if (await attachment_name_conflicts(story_id, new_file_name, old_file_name)) {
     throw new ApiError(409, '已有同名附件')
   }
 
@@ -462,12 +554,14 @@ export async function rename_attachment(story_id: number, old_file_name: string,
   const markdown = rename_attachment_references(story.markdown, old_file_name, new_file_name)
   // The front matter cover may reference the renamed file (bare name or ![](name)).
   const renamed_cover = story.cover === old_file_name ? new_file_name : (story.cover ?? '')
+  // Fresh random version so the renamed URL cache-busts too.
+  const next_version = new_attachment_version()
   const connection = await db.getConnection()
   try {
     await connection.beginTransaction()
     await connection.execute(
-      'UPDATE content_story_attachments SET file_name = ? WHERE story_id = ? AND file_name = ?',
-      [new_file_name, story_id, old_file_name],
+      'UPDATE content_story_attachments SET file_name = ?, version = ? WHERE story_id = ? AND file_name = ?',
+      [new_file_name, next_version, story_id, old_file_name],
     )
     if (markdown !== story.markdown || renamed_cover !== (story.cover ?? '')) {
       await connection.execute('UPDATE content_stories SET markdown = ?, cover = ? WHERE id = ?', [markdown, renamed_cover, story_id])
@@ -488,5 +582,106 @@ export async function rename_attachment(story_id: number, old_file_name: string,
   })
 
   publish_refresh({ resource: sync_resource('content_story', story_id) })
-  return format_attachment(story_id, { ... attachment, file_name: new_file_name })
+  return format_attachment(story_id, { ... attachment, file_name: new_file_name, version: next_version })
+}
+
+/** Compute the extension (including the dot) of a file name, or '' when absent. */
+function file_extension(file_name: string) {
+  const dot = file_name.lastIndexOf('.')
+  return dot > 0 ? file_name.slice(dot) : ''
+}
+
+function file_stem(file_name: string) {
+  const dot = file_name.lastIndexOf('.')
+  return dot > 0 ? file_name.slice(0, dot) : file_name
+}
+
+export async function replace_attachment(
+  story_id: number,
+  old_file_name: string,
+  input: FormData,
+  mode: 'keep-name' | 'new-name',
+  get_options: () => AttachmentUploadOptions,
+) {
+  const story = await get_story(story_id)
+  const attachment = story.attachments.find(item => item.file_name === old_file_name)
+  if (! attachment) {
+    throw new ApiError(404, '附件不存在或已被删除')
+  }
+
+  const upload = get_form_file(input, 'file')
+  const file_data = Buffer.from(await upload.arrayBuffer())
+  const options = get_options()
+
+  if (file_data.length > options.max_size_mb * 1024 * 1024) {
+    throw new ApiError(413, `文件太大了，不能超过 ${options.max_size_mb} MB`)
+  }
+
+  const new_name = sanitize_attachment_file_name(upload.name ?? 'file', env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
+
+  // Resolve the replacement file name. `keep-name` reuses the old stem but
+  // adopts the new file's extension; `new-name` uses the new file's name fully.
+  let file_name: string
+  if (mode === 'keep-name') {
+    const new_ext = file_extension(new_name)
+    file_name = new_ext ? `${file_stem(old_file_name)}${new_ext}` : old_file_name
+    if (await attachment_name_conflicts(story_id, file_name, old_file_name)) {
+      throw new ApiError(409, '已有同名附件')
+    }
+  }
+  else {
+    file_name = new_name
+    if (await attachment_name_conflicts(story_id, file_name, old_file_name)) {
+      file_name = suffixed_attachment_name(file_name, file_extension(file_name))
+    }
+  }
+
+  const dir = join(options.static_root, 'content', String(story_id))
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, file_name), file_data)
+
+  // Rewrite markdown/cover references only when the final name changed.
+  const markdown = file_name === old_file_name
+    ? story.markdown
+    : rename_attachment_references(story.markdown, old_file_name, file_name)
+  const renamed_cover = story.cover === old_file_name ? file_name : (story.cover ?? '')
+  // Fresh random version so the replaced URL cache-busts too.
+  const next_version = new_attachment_version()
+
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    await connection.execute(
+      'UPDATE content_story_attachments SET file_name = ?, mime_type = ?, file_size = ?, version = ? WHERE story_id = ? AND file_name = ?',
+      [file_name, upload.type || null, file_data.length, next_version, story_id, old_file_name],
+    )
+    if (markdown !== story.markdown || renamed_cover !== (story.cover ?? '')) {
+      await connection.execute('UPDATE content_stories SET markdown = ?, cover = ? WHERE id = ?', [markdown, renamed_cover, story_id])
+    }
+    await connection.commit()
+  }
+  catch (ex) {
+    await connection.rollback()
+    // Only remove a file we wrote to a new path; an in-place overwrite must
+    // keep its content (the DB row still references that name).
+    if (file_name !== old_file_name) {
+      await unlink(join(dir, file_name)).catch(() => {})
+    }
+    throw ex
+  }
+  finally {
+    connection.release()
+  }
+
+  if (file_name !== old_file_name) {
+    await unlink(join(dir, old_file_name)).catch(() => {})
+  }
+
+  publish_refresh({ resource: sync_resource('content_story', story_id) })
+  return format_attachment(story_id, {
+    file_name,
+    mime_type: upload.type || null,
+    file_size: file_data.length,
+    version: next_version,
+  })
 }
