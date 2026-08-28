@@ -1,3 +1,4 @@
+import { get_bilibili_video_cards } from '@server/services/bilibili.service'
 import {
   create_story,
   delete_attachment,
@@ -7,6 +8,7 @@ import {
   list_orphan_attachments,
   list_stories,
   rename_attachment,
+  replace_attachment,
   update_story,
   upload_attachment,
 } from '@server/services/content.service'
@@ -19,7 +21,9 @@ export const content_router = router({
 
   getStory: public_procedure
     .input(api_schema.content.get_story)
-    .query(({ input }) => get_story(input.id)),
+    .query(({ input }) => input.base_updated_at === undefined
+      ? get_story(input.id)
+      : get_story(input.id, input.base_updated_at)),
 
   listOrphanAttachments: admin_procedure.query(() => list_orphan_attachments()),
 
@@ -36,7 +40,7 @@ export const content_router = router({
         input.id,
         input.markdown,
         input.delete_files,
-        input.base_updated_at,
+        input.base_revision,
         useRuntimeConfig(ctx.event).static_root,
       )
     }),
@@ -67,13 +71,28 @@ export const content_router = router({
       useRuntimeConfig(ctx.event).static_root,
     )),
 
+  replaceAttachment: admin_procedure
+    .input(api_schema.content.replace_attachment)
+    .mutation(async ({ ctx, input }) => {
+      const raw_id = z.coerce.number().int().min(1).parse(input.get('story_id'))
+      const old_file_name = z.string().min(1).max(120).parse(input.get('old_file_name'))
+      const mode = z.enum(['keep-name', 'new-name']).parse(input.get('mode'))
+      return replace_attachment(raw_id, old_file_name, input, mode, () => {
+        const config = useRuntimeConfig(ctx.event)
+        return {
+          max_size_mb: config.public.max_content_attachment_size_mb as number,
+          static_root: config.static_root,
+        }
+      })
+    }),
+
   deleteAttachment: admin_procedure
     .input(api_schema.content.delete_attachment)
     .mutation(({ ctx, input }) => delete_attachment(
       input.id,
       input.file_name,
       input.markdown,
-      input.base_updated_at,
+      input.base_revision,
       useRuntimeConfig(ctx.event).static_root,
     )),
 
@@ -83,4 +102,8 @@ export const content_router = router({
       input.file_name,
       useRuntimeConfig(ctx.event).static_root,
     )),
+
+  getBilibiliVideoCards: public_procedure
+    .input(api_schema.content.get_bilibili_video_cards)
+    .query(({ input }) => get_bilibili_video_cards(input.hrefs)),
 })

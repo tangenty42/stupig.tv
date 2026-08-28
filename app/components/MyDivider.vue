@@ -23,8 +23,11 @@ defineProps<{
        3. instance: set vars on this component (pair vars follow the color
                     scheme automatically; a static --divider-line-color or
                     light-dark() value in --divider-line-color overrides both) */
+  /* The negative margins stretch the line segments to the viewport edges
+     (the app root clips overflow-x); the label keeps its place because the
+     page container is centered, so a viewport-wide divider stays centered. */
   .my-divider {
-    @apply flex items-center;
+    @apply -mx-[calc(50vw-50%)] flex items-center;
     gap: var(--divider-gap, .5rem);
   }
   .line {

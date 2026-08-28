@@ -31,6 +31,7 @@ export default defineNuxtConfig({
       content_draft_storage_prefix: env.CONTENT_DRAFT_STORAGE_PREFIX,
       content_draft_autosave_delay_ms: env.CONTENT_DRAFT_AUTOSAVE_DELAY_MS,
       static_base_url: env.STATIC_BASE_URL,
+      site_url: env.SITE_URL,
       mqtt_ws_host: env.MQTT_WS_HOST,
       mqtt_ws_port: env.MQTT_WS_PORT,
       mqtt_wss_port: env.MQTT_WSS_PORT,
@@ -86,7 +87,23 @@ export default defineNuxtConfig({
     '@nuxt/icon',
     '@teages/nuxt-legacy',
     '@vueuse/nuxt',
+    '@nuxtjs/sitemap',
+    '@nuxtjs/robots',
   ],
+  site: {
+    url: env.SITE_URL,
+    name: 'Stupig 蠢猪小组',
+    // Production is served by a dev-mode process, so indexing can't rely on
+    // NODE_ENV — it's an explicit switch.
+    indexable: env.SITE_INDEXABLE,
+  },
+  sitemap: {
+    sources: ['/api/_sitemap/urls'],
+    exclude: ['/admin/**', '/content/new/**', '/content/*/edit'],
+  },
+  robots: {
+    disallow: ['/admin', '/content/new', '/content/*/edit'],
+  },
   primevue: {
     options: {
       inputVariant: 'filled',

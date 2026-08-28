@@ -4,7 +4,7 @@ export interface ContentDraftRecord {
   schema_version: number
   story_id: number | null
   markdown: string
-  base_updated_at: string | null
+  base_revision: number | null
   saved_at: string
 }
 
@@ -17,7 +17,7 @@ function is_draft_record(value: unknown, story_id: number | null, schema_version
   return draft.schema_version === schema_version
     && draft.story_id === story_id
     && typeof draft.markdown === 'string'
-    && (typeof draft.base_updated_at === 'string' || draft.base_updated_at === null)
+    && (typeof draft.base_revision === 'number' || draft.base_revision === null)
     && typeof draft.saved_at === 'string'
 }
 
@@ -30,7 +30,7 @@ export const useContentDraftStore = defineStore('content-draft', () => {
   const story_id = ref<number | null>(null)
   const markdown = ref('')
   const database_markdown = ref('')
-  const base_updated_at = ref<string | null>(null)
+  const base_revision = ref<number | null>(null)
   const draft_saved_at = ref<string | null>(null)
   const initialized = ref(false)
   const autosave_pending = ref(false)
@@ -106,7 +106,7 @@ export const useContentDraftStore = defineStore('content-draft', () => {
       schema_version: draft_schema_version,
       story_id: story_id.value,
       markdown: markdown.value,
-      base_updated_at: base_updated_at.value,
+      base_revision: base_revision.value,
       saved_at,
     }
 
@@ -141,39 +141,39 @@ export const useContentDraftStore = defineStore('content-draft', () => {
     autosave_timer = setTimeout(persist_now, autosave_delay_ms)
   }
 
-  function initialize(target_story_id: number | null, current_markdown: string, current_updated_at: string | null) {
+  function initialize(target_story_id: number | null, current_markdown: string, current_revision: number | null) {
     clear_timer()
     story_id.value = target_story_id
     markdown.value = current_markdown
     database_markdown.value = current_markdown
-    base_updated_at.value = current_updated_at
+    base_revision.value = current_revision
     draft_saved_at.value = null
     storage_error.value = false
     initialized.value = true
   }
 
-  function restore(draft: ContentDraftRecord, current_markdown: string, current_updated_at = draft.base_updated_at) {
+  function restore(draft: ContentDraftRecord, current_markdown: string, current_revision = draft.base_revision) {
     clear_timer()
     story_id.value = draft.story_id
     markdown.value = draft.markdown
     database_markdown.value = current_markdown
-    base_updated_at.value = current_updated_at
+    base_revision.value = current_revision
     draft_saved_at.value = draft.saved_at
     storage_error.value = false
     initialized.value = true
   }
 
-  function advance_base(current_markdown: string, current_updated_at: string) {
+  function advance_base(current_markdown: string, current_revision: number) {
     database_markdown.value = current_markdown
-    base_updated_at.value = current_updated_at
+    base_revision.value = current_revision
     schedule_persist()
   }
 
-  function mark_saved(current_markdown: string, current_updated_at: string) {
+  function mark_saved(current_markdown: string, current_revision: number) {
     clear_timer()
     markdown.value = current_markdown
     database_markdown.value = current_markdown
-    base_updated_at.value = current_updated_at
+    base_revision.value = current_revision
     remove_persisted()
   }
 
@@ -187,7 +187,7 @@ export const useContentDraftStore = defineStore('content-draft', () => {
 
   return {
     markdown,
-    base_updated_at,
+    base_revision,
     draft_saved_at,
     initialized,
     autosave_pending,

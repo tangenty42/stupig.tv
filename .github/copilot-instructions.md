@@ -48,7 +48,7 @@
 - Define server-side public/API-facing types in `server/types/` (e.g., `api.ts`, `auth.ts`, `sync.ts`). Keep internal service-specific types (e.g., row mappers, input shapes) near the service that owns them.
 - Validate input with Zod. Map error messages to user-facing Chinese text where appropriate.
 - Date handling: use `dayjs` with `dayjs.extend(utc)`; store UTC, display local. MySQL timezone is forced to UTC on every connection.
-- Styling: Tailwind CSS 3 + PrimeVue. Use `global.css` and `primevue-overrides.css` for app-wide styles. Scoped component styles use `<style scoped>` with `@apply`.
+- Styling: Tailwind CSS 3 + PrimeVue. Use `global.css` and `primevue-overrides.css` for app-wide styles. Scoped component styles use `<style scoped>` with `@apply`. Never write PrimeVue `--p-*` CSS variables directly; reference theme values via `theme('colors.primary')`, `theme('colors.primary-emphasis')` (hover), `theme('colors.primary-contrast')`, `theme('colors.primary-500')`, etc.
 
 ## Testing & Build
 

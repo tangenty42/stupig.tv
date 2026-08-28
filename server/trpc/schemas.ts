@@ -25,7 +25,7 @@ const public_id_input = z.object({
 const content_story_update = z.object({
   markdown: markdown_input,
   delete_files: z.array(z.string().min(1).max(255)).max(500).optional().default([]),
-  base_updated_at: z.string().min(1),
+  base_revision: z.number().int().positive(),
 })
 
 export const api_schema = {
@@ -80,7 +80,9 @@ export const api_schema = {
   },
 
   content: {
-    get_story: public_id_input,
+    get_story: public_id_input.extend({
+      base_updated_at: z.string().min(1).optional(),
+    }),
     create_story: z.object({
       markdown: markdown_input,
       /** Orphan attachment file names (story_id NULL) to adopt into the new story. */
@@ -89,6 +91,7 @@ export const api_schema = {
     update_story: public_id_input.extend(content_story_update.shape),
     delete_story: public_id_input,
     upload_attachment: z.instanceof(FormData),
+    replace_attachment: z.instanceof(FormData),
     rename_attachment: public_id_input.extend({
       old_file_name: z.string().min(1).max(120),
       file_name: z.string()
@@ -104,10 +107,13 @@ export const api_schema = {
     delete_attachment: public_id_input.extend({
       file_name: z.string().min(1).max(120),
       markdown: markdown_input,
-      base_updated_at: z.string().min(1),
+      base_revision: z.number().int().positive(),
     }),
     delete_orphan_attachment: z.object({
       file_name: z.string().min(1).max(255),
+    }),
+    get_bilibili_video_cards: z.object({
+      hrefs: z.array(z.string().max(2048)).min(1).max(20),
     }),
   },
 }

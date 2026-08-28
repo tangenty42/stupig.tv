@@ -27,6 +27,8 @@ export interface ContentStoryAttachment {
   mime_type: string | null
   file_size: number
   is_image: boolean
+  /** Fresh cache-bust token, regenerated on replace/rename; rendered as `?version=`. */
+  version: string
   /** Root-relative path; prefix with the static base URL before rendering. */
   url: string
 }
@@ -34,6 +36,8 @@ export interface ContentStoryAttachment {
 export interface ContentStoryDetail extends ContentStorySummary {
   markdown: string
   attachments: ContentStoryAttachment[]
+  /** Editor optimistic-concurrency token; bumps on each confirmed submit. */
+  revision: number
 }
 
 export interface ContentStoryCreated {

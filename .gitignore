@@ -30,3 +30,6 @@ config.*
 
 # PNPM store
 .pnpm-store
+
+# Temporary agent files
+migrations/*

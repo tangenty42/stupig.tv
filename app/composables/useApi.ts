@@ -1,4 +1,5 @@
 import type { AppRouter } from '@server/trpc/router'
+import type { ContentStoryDetail } from '@shared/types/content'
 import type { inferRouterInputs } from '@trpc/server'
 
 type RouterInputs = inferRouterInputs<AppRouter>
@@ -16,6 +17,12 @@ export function get_error_status(error: unknown) {
 
 export function useApi() {
   const { call: trpc_call, client: trpc, upload: trpc_upload } = useTrpcClient()
+
+  async function get_story(id: number): Promise<ContentStoryDetail>
+  async function get_story(id: number, base_updated_at: string): Promise<ContentStoryDetail | null>
+  async function get_story(id: number, base_updated_at?: string): Promise<ContentStoryDetail | null> {
+    return trpc_call(trpc.content.getStory.query(base_updated_at === undefined ? { id } : { id, base_updated_at }))
+  }
 
   const auth = {
     async send_otp(payload: AuthInputs['sendOtp']) {
@@ -143,20 +150,22 @@ export function useApi() {
       return trpc_call(trpc.content.listStories.query())
     },
 
-    async get_story(id: number) {
-      return trpc_call(trpc.content.getStory.query({ id }))
-    },
+    get_story,
 
     async create_story(markdown: string, claim_files: string[] = []) {
       return trpc_call(trpc.content.createStory.mutate({ markdown, claim_files }))
     },
 
-    async update_story(id: number, payload: { markdown: string, base_updated_at: string, delete_files?: string[] }) {
+    async update_story(id: number, payload: { markdown: string, base_revision: number, delete_files?: string[] }) {
       await trpc_call(trpc.content.updateStory.mutate({ id, ... payload }))
     },
 
     async delete_story(id: number) {
       await trpc_call(trpc.content.deleteStory.mutate({ id }))
+    },
+
+    async get_bilibili_video_cards(hrefs: string[]) {
+      return trpc_call(trpc.content.getBilibiliVideoCards.query({ hrefs }))
     },
 
     async upload_attachment(
@@ -176,8 +185,25 @@ export function useApi() {
       return trpc_call(trpc.content.renameAttachment.mutate({ id, old_file_name, file_name }))
     },
 
-    async delete_attachment(id: number, file_name: string, markdown: string, base_updated_at: string) {
-      await trpc_call(trpc.content.deleteAttachment.mutate({ id, file_name, markdown, base_updated_at }))
+    async replace_attachment(
+      id: number,
+      old_file_name: string,
+      file: File,
+      mode: 'keep-name' | 'new-name',
+      on_progress?: (progress: number, loaded: number, total: number) => void,
+      signal?: AbortSignal,
+    ) {
+      const form = new FormData()
+      form.append('story_id', String(id))
+      form.append('old_file_name', old_file_name)
+      form.append('mode', mode)
+      form.append('file', file)
+
+      return trpc_upload('content.replaceAttachment', form, on_progress, signal)
+    },
+
+    async delete_attachment(id: number, file_name: string, markdown: string, base_revision: number) {
+      await trpc_call(trpc.content.deleteAttachment.mutate({ id, file_name, markdown, base_revision }))
     },
 
     async delete_orphan_attachment(file_name: string) {

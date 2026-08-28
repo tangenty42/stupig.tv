@@ -6,6 +6,7 @@ import { ApiError } from '@server/errors/ApiError'
 
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
+import { random_file_token } from '@server/lib/random'
 import { check_otp_sms } from '@server/lib/sms'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
@@ -121,6 +122,17 @@ export async function get_profile(viewer: AuthUser | null, target_id: number) {
   }
 
   return format_profile_row(viewer, user, target_id)
+}
+
+interface SitemapUserRow extends RowDataPacket {
+  id: number
+}
+
+export async function list_sitemap_user_ids() {
+  const [rows] = await db.execute<SitemapUserRow[]>(
+    'SELECT id FROM users WHERE is_banned = 0 ORDER BY id',
+  )
+  return rows.map(row => row.id)
 }
 
 export async function update_profile(user_id: number, payload: { birthday: string | null }) {
@@ -291,7 +303,7 @@ export async function upload_profile_avatar(user_id: number, input: FormData, ge
     throw new ApiError(415, '只支持 JPG / PNG / WebP')
   }
 
-  const avatar_file_name = `${user_id}_${Date.now().toString(36)}${file_ext}`
+  const avatar_file_name = `${user_id}_${random_file_token()}${file_ext}`
   const { previous_file } = await update_profile_avatar(user_id, avatar_file_name)
   const avatar_dir = join(options.static_root, 'avatar')
   await mkdir(avatar_dir, { recursive: true })
