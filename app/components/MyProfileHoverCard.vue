@@ -48,7 +48,7 @@
               控制台
             </NuxtLink>
           </div>
-          <Button aria-label="退出登录" text severity="secondary" @click="$emit('logout')">
+          <Button aria-label="退出登录" text severity="secondary" @click="on_logout_click($event)">
             <template #icon>
               <MyIcon name="lucide:log-out" />
             </template>
@@ -66,15 +66,36 @@ const props = defineProps<{
   profile: LoginUser
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   logout: []
 }>()
+
+const { confirm_require } = useMyConfirm()
 
 const open = ref(false)
 const root_ref = ref<HTMLElement | null>(null)
 let hide_timer: ReturnType<typeof setTimeout> | null = null
 
 const profile_link = computed(() => `/u/${props.profile.id}`)
+
+// The confirmation is anchored inside the menu, so the menu has to survive the
+// pending confirm: without this it would collapse on the next mouse-leave (or on
+// the popup's own outside-click) and leave the popup floating over a hidden
+// anchor.
+const logout_confirming = ref(false)
+
+function on_logout_click(event: MouseEvent) {
+  logout_confirming.value = true
+  const release = () => {
+    logout_confirming.value = false
+  }
+  // `reject` covers the cancel button, `onHide` the dismissals that bypass it
+  // (outside click, scroll, resize) — accept clears the flag itself.
+  confirm_require(event, '确定要退出登录吗？', () => {
+    release()
+    emit('logout')
+  }, { reject: release, onHide: release })
+}
 
 function on_enter() {
   if (hide_timer) {
@@ -85,6 +106,9 @@ function on_enter() {
 }
 
 function on_leave() {
+  if (logout_confirming.value) {
+    return
+  }
   hide_timer = setTimeout(() => {
     open.value = false
     hide_timer = null
@@ -92,7 +116,7 @@ function on_leave() {
 }
 
 function on_outside_click(event: MouseEvent | TouchEvent) {
-  if (! open.value) {
+  if (! open.value || logout_confirming.value) {
     return
   }
   if (root_ref.value && ! root_ref.value.contains(event.target as Node)) {

@@ -3,6 +3,8 @@ export interface User {
   username: string
   phone: string
   avatar_file: string | null
+  /** OSS ETag of the avatar object; rendered as `?version=` to bust the immutable cache. */
+  avatar_version: string | null
   is_verified: boolean
   is_admin: boolean
 }
@@ -12,6 +14,7 @@ export interface Profile {
   username: string
   phone: string | null
   avatar_file: string | null
+  avatar_version: string | null
   birthday: string | null
   created_at: string
   last_seen_at: string | null
@@ -28,6 +31,7 @@ export interface AdminUser {
   username: string
   phone: string | null
   avatar_file: string | null
+  avatar_version: string | null
   is_verified: boolean
   is_admin: boolean
   is_banned: boolean

@@ -1,6 +1,18 @@
+import type { Dayjs } from 'dayjs'
 import dayjs from 'dayjs'
 
-let clock_interval: ReturnType<typeof setInterval> | null = null
+interface ReactiveDateNow {
+  now: Ref<Dayjs>
+  interval_id: NodeJS.Timeout
+  /** Mounted callers sharing this clock; the interval stops when it reaches zero. */
+  refs: number
+}
+
+// Module scope rather than useState. useState hands back a reactive proxy, and a
+// proxy unwraps the Ref held inside it, so `entry.now.value = dayjs()` wrote to a
+// dead property and the clock never advanced. This clock is client-only (the
+// server returns above), so it needs no payload involvement either.
+const clocks = new Map<number, ReactiveDateNow>()
 
 export function useReactiveDateNow(interval_ms = 1000) {
   if (import.meta.server) {
@@ -8,22 +20,38 @@ export function useReactiveDateNow(interval_ms = 1000) {
     return ref(localize_date(dayjs()))
   }
 
-  const clock = useState('reactive_date_now', () => dayjs())
-
-  if (clock_interval !== null) {
-    return clock
+  let entry = clocks.get(interval_ms)
+  if (! entry) {
+    // The interval closes over this entry's ref rather than re-reading the map,
+    // so a later clock for the same interval can never be written by this one.
+    const now = ref(dayjs())
+    entry = {
+      now,
+      interval_id: setInterval(() => {
+        now.value = dayjs()
+      }, interval_ms),
+      refs: 0,
+    }
+    clocks.set(interval_ms, entry)
   }
 
-  clock_interval = setInterval(() => {
-    clock.value = dayjs()
-  }, interval_ms)
+  entry.refs ++
+  const acquired = entry
 
+  // Every caller releases, not just the one that created the clock: with a
+  // single releaser, the first component to unmount took the interval away from
+  // the components still mounted on it.
   onUnmounted(() => {
-    if (clock_interval !== null) {
-      clearInterval(clock_interval)
-      clock_interval = null
+    acquired.refs --
+    if (acquired.refs > 0)
+      return
+    clearInterval(acquired.interval_id)
+    // Only drop the entry still registered under this interval; a recreated
+    // clock for the same interval belongs to other callers.
+    if (clocks.get(interval_ms) === acquired) {
+      clocks.delete(interval_ms)
     }
   })
 
-  return clock
+  return acquired.now
 }

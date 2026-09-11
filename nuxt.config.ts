@@ -7,12 +7,110 @@ const alias = {
   '@server': resolve(__dirname, './server'),
 }
 
+// First-paint loading mask. The CSS and the markup script are inlined into the
+// SSR document so the mask covers the page from the first paint until the app is
+// hydrated; `app.vue` calls `window.__hide_app_loading_mask()` once mounted.
+const app_loading_mask_css = `
+#app-loading-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #ffffff;
+  opacity: 1;
+  animation: app-loading-mask-breath 2.6s ease-in-out infinite;
+}
+.dark #app-loading-mask {
+  background-color: #0f172a;
+}
+/* The cover layer breathes: a slow, shallow opacity pulse while the page loads,
+   handed over to the scripted fade-out when the app is ready. */
+@keyframes app-loading-mask-breath {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+#app-loading-mask .app-loading-mask__spinner {
+  width: 3rem;
+  height: 3rem;
+  border: 4px solid rgb(148 163 184 / 0.3);
+  border-top-color: #d96c1d;
+  border-radius: 9999px;
+  animation: app-loading-mask-spin 0.8s linear infinite;
+}
+@keyframes app-loading-mask-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #app-loading-mask {
+    animation: none;
+  }
+  #app-loading-mask .app-loading-mask__spinner {
+    animation-duration: 2.4s;
+  }
+}
+`
+
+const app_loading_mask_script = `
+(function () {
+  var mask_id = 'app-loading-mask'
+  if (document.getElementById(mask_id)) {
+    return
+  }
+  var mask = document.createElement('div')
+  mask.id = mask_id
+  mask.setAttribute('aria-hidden', 'true')
+  var spinner = document.createElement('span')
+  spinner.className = 'app-loading-mask__spinner'
+  mask.appendChild(spinner)
+  document.body.insertBefore(mask, document.body.firstChild)
+  var hiding = false
+  window.__hide_app_loading_mask = function () {
+    if (hiding) {
+      return
+    }
+    hiding = true
+    var fade_ms = 500
+    var fade = null
+    // Fade from the breath animation's current opacity. Forcing opacity: 0 in
+    // CSS would first snap the pulse back to its full-opacity base, so the veil
+    // would flash brighter just before disappearing; fading from the live value
+    // hands the running animation straight over to the fade.
+    if (typeof mask.animate === 'function') {
+      fade = mask.animate([{ opacity: window.getComputedStyle(mask).opacity }, { opacity: 0 }], {
+        duration: fade_ms,
+        easing: 'ease',
+        fill: 'forwards',
+      })
+    }
+    // Removal is timed rather than driven by the animation's finish event, so a
+    // suspended animation can still never strand the mask over the page.
+    window.setTimeout(function () {
+      if (fade) {
+        fade.cancel()
+      }
+      if (mask.parentNode) {
+        mask.parentNode.removeChild(mask)
+      }
+    }, fade_ms + 50)
+  }
+  // Failsafe: never leave the page covered if hydration never completes.
+  window.setTimeout(window.__hide_app_loading_mask, 15000)
+})()
+`
+
 export default defineNuxtConfig({
   compatibilityDate: '2026-06-22',
   alias,
 
   runtimeConfig: {
-    static_root: env.STATIC_ROOT,
     public: {
       api_base: env.API_BASE,
       captcha_app_id: env.CAPTCHA_APP_ID,
@@ -30,6 +128,7 @@ export default defineNuxtConfig({
       content_draft_schema_version: env.CONTENT_DRAFT_SCHEMA_VERSION,
       content_draft_storage_prefix: env.CONTENT_DRAFT_STORAGE_PREFIX,
       content_draft_autosave_delay_ms: env.CONTENT_DRAFT_AUTOSAVE_DELAY_MS,
+      content_upload_handle_storage_name: env.CONTENT_UPLOAD_HANDLE_STORAGE_NAME,
       static_base_url: env.STATIC_BASE_URL,
       site_url: env.SITE_URL,
       mqtt_ws_host: env.MQTT_WS_HOST,
@@ -39,7 +138,6 @@ export default defineNuxtConfig({
       mqtt_topic_prefix: env.MQTT_TOPIC_PREFIX,
       mqtt_client_id_prefix_web: env.MQTT_CLIENT_ID_PREFIX_WEB,
       timezone_cookie_name: env.TIMEZONE_COOKIE_NAME,
-      auth_token_cookie_name: env.AUTH_TOKEN_COOKIE_NAME,
       auth_user_cookie_name: env.AUTH_USER_COOKIE_NAME,
       sync_broadcast_channel_name: env.SYNC_BROADCAST_CHANNEL_NAME,
       sync_client_id_storage_key: env.SYNC_CLIENT_ID_STORAGE_KEY,
@@ -281,8 +379,12 @@ export default defineNuxtConfig({
       link: [
         { rel: 'icon', href: `${env.STATIC_BASE_URL}/imgs/Stupig_icon.svg` },
       ],
+      style: [
+        { key: 'app-loading-mask-style', textContent: app_loading_mask_css },
+      ],
       script: [
         { src: '/sdks/ct4.js' },
+        { key: 'app-loading-mask-script', tagPosition: 'bodyOpen', textContent: app_loading_mask_script },
       ],
     },
   },

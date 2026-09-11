@@ -1,6 +1,5 @@
 export interface SessionRecord {
   id: number
-  token_hash: string
   identity_token: string | null
   is_logged_out: boolean
   is_expired: boolean

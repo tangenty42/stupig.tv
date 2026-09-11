@@ -7,12 +7,12 @@ export interface JwtPayload {
 
 export interface AuthUser {
   id: number
+  session_id: number
   username: string
   phone: string
   avatar_file: string | null
   is_verified: boolean
   is_admin: boolean
-  token_hash: string
 }
 
 export interface AuthRegisterInput {

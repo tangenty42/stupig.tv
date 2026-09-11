@@ -28,6 +28,35 @@ const content_story_update = z.object({
   base_revision: z.number().int().positive(),
 })
 
+/** Content scope id: a story id, or 0 for the orphan staging pool (mapped to null in the service). */
+const content_scope_input = z.object({
+  id: z.coerce.number().int().min(0),
+})
+
+/** One path segment (file base name or folder name): no dots at the edges, no illegal chars, not reserved. */
+function is_valid_name_segment(name: string) {
+  return Boolean(name)
+    && ! name.startsWith('.')
+    && ! name.endsWith('.')
+    && ! name.match(link_file_name_illegal_chars)
+    && ! link_file_name_reserved_base.test(name.split('.')[0] ?? '')
+}
+
+/** A bare file name or a (possibly nested) `folder/name` path. */
+const attachment_path_input = z.string()
+  .trim()
+  .min(1, '文件名不能为空')
+  .refine(name => name.split('/').every(is_valid_name_segment), '文件名包含不支持的字符')
+  .refine(name => link_file_name_byte_length(name) <= env.CONTENT_LINK_FILE_NAME_MAX_BYTES, '文件名太长')
+
+/** A (possibly nested) folder path; null targets the root. */
+const folder_path_input = z.string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine(name => name.split('/').every(is_valid_name_segment), '文件夹路径包含不支持的字符')
+  .nullable()
+
 export const api_schema = {
   auth: {
     register: form_schema.register,
@@ -91,26 +120,53 @@ export const api_schema = {
     update_story: public_id_input.extend(content_story_update.shape),
     delete_story: public_id_input,
     upload_attachment: z.instanceof(FormData),
+    sign_attachment_upload: z.object({
+      story_id: z.coerce.number().int().min(0),
+      method: z.enum(['PUT', 'POST', 'GET', 'DELETE']),
+      key: z.string().min(1).max(512),
+      upload_id: z.string().min(1).max(256).optional(),
+      part_number: z.coerce.number().int().min(1).max(10_000).optional(),
+      content_type: z.string().max(255).nullable().optional(),
+    }),
+    confirm_attachment_upload: z.object({
+      story_id: z.coerce.number().int().min(0),
+      key: z.string().min(1).max(512),
+      file_name: z.string().min(1).max(255),
+    }),
     replace_attachment: z.instanceof(FormData),
     rename_attachment: public_id_input.extend({
-      old_file_name: z.string().min(1).max(120),
-      file_name: z.string()
-        .trim()
-        .min(1, '文件名不能为空')
-        .max(120, '文件名不能超过 120 个字符')
-        .refine(name => ! name.startsWith('.'), '文件名不能以点开头')
-        .refine(name => ! name.endsWith('.'), '文件名不能以点结尾')
-        .refine(name => ! name.match(link_file_name_illegal_chars), '文件名包含不支持的字符')
-        .refine(name => link_file_name_byte_length(name) <= env.CONTENT_LINK_FILE_NAME_MAX_BYTES, '文件名太长')
-        .refine(name => ! link_file_name_reserved_base.test(name.split('.')[0] ?? ''), '文件名是系统保留名称'),
+      old_file_name: z.string().min(1).max(255),
+      file_name: attachment_path_input,
     }),
     delete_attachment: public_id_input.extend({
-      file_name: z.string().min(1).max(120),
+      file_name: z.string().min(1).max(255),
       markdown: markdown_input,
       base_revision: z.number().int().positive(),
     }),
     delete_orphan_attachment: z.object({
       file_name: z.string().min(1).max(255),
+    }),
+    move_attachment: content_scope_input.extend({
+      file_name: z.string().min(1).max(255),
+      // Empty folders are editor-local, so the target folder is validated as a
+      // well-formed path only — the move creates the prefix implicitly.
+      target_folder: folder_path_input,
+    }),
+    move_attachments: content_scope_input.extend({
+      moves: z.array(z.object({
+        file_name: z.string().min(1).max(255),
+        target_folder: folder_path_input,
+      })).min(1).max(500),
+    }),
+    create_folder: content_scope_input.extend({
+      folder: folder_path_input.unwrap(),
+    }),
+    delete_folder: content_scope_input.extend({
+      folder: folder_path_input.unwrap(),
+    }),
+    move_folder: content_scope_input.extend({
+      source_folder: folder_path_input.unwrap(),
+      new_folder: folder_path_input.unwrap(),
     }),
     get_bilibili_video_cards: z.object({
       hrefs: z.array(z.string().max(2048)).min(1).max(20),

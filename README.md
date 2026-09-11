@@ -4,10 +4,6 @@ This is the repository for our official website, built with our custom Markdown-
 
 We are the smart `Stupig`s! Learn more about us at [Stupig.TV](https://stupig.tv).
 
-# Deployment
-
-- mount the root of the static site as `/mounted_static` (or the value of `MOUNTED_STATIC`) within the container
-
 # This is why you should always update your VSCode
 
 `POV: you click "update" in your VSCode as usual.`

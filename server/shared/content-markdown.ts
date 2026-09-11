@@ -483,7 +483,140 @@ export function strip_front_matter(markdown: string) {
 
 /** Root-relative URL path for an attachment (the static host prefixes it at render time). */
 export function attachment_url_path(story_id: number, file_name: string) {
-  return `/content/${story_id}/${encodeURIComponent(file_name)}`
+  // Folder paths (`a/b/file.png`) keep their slashes; each segment is encoded.
+  const encoded = file_name.split('/').map(encodeURIComponent).join('/')
+  return `/content/${story_id}/${encoded}`
+}
+
+/** The folder path of an attachment path (`a/b/c.png` → `a/b`), or null for root files. */
+export function attachment_folder_of(file_name: string) {
+  const slash = file_name.lastIndexOf('/')
+  return slash > 0 ? file_name.slice(0, slash) : null
+}
+
+// Extension → mime map for attachment display (icon/image detection); OSS
+// listings carry no content type, so types are derived from the file name.
+const attachment_mime_by_extension: Record<string, string> = {
+  avif: 'image/avif',
+  bmp: 'image/bmp',
+  gif: 'image/gif',
+  ico: 'image/x-icon',
+  jpeg: 'image/jpeg',
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  webp: 'image/webp',
+  avi: 'video/x-msvideo',
+  mkv: 'video/x-matroska',
+  mov: 'video/quicktime',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  aac: 'audio/aac',
+  flac: 'audio/flac',
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  ogg: 'audio/ogg',
+  wav: 'audio/wav',
+  csv: 'text/csv',
+  md: 'text/markdown',
+  txt: 'text/plain',
+  json: 'application/json',
+  pdf: 'application/pdf',
+}
+
+/** Best-effort mime type from the file extension; null when unknown. */
+export function attachment_mime_type(file_name: string) {
+  const dot = file_name.lastIndexOf('.')
+  if (dot <= 0)
+    return null
+  return attachment_mime_by_extension[file_name.slice(dot + 1).toLowerCase()] ?? null
+}
+
+/** The file name without its folder prefix. */
+export function attachment_base_name(file_name: string) {
+  return file_name.slice(file_name.lastIndexOf('/') + 1)
+}
+
+/** Join a folder and a base file name into an attachment path (null folder = root). */
+export function attachment_path_join(folder: string | null, base_name: string) {
+  return folder ? `${folder}/${base_name}` : base_name
+}
+
+/**
+ * Display order for attachment and folder paths, shared so the server and the
+ * client cannot disagree.
+ *
+ * `numeric` is what puts `2.png` before `10.png`: a plain string comparison
+ * settles on the first character, where '1' < '2', before the '0' is ever
+ * considered — so numbered files would read 1, 10, 11, 2, 3. The locale keeps
+ * Chinese names in a sensible order rather than UTF-8 code-point order.
+ */
+export function compare_attachment_names(left: string, right: string) {
+  return left.localeCompare(right, 'zh-CN', { numeric: true })
+}
+
+/** The attachment fields the folder helpers read. */
+export interface NamedAttachment {
+  file_name: string
+}
+
+export interface ImageAttachment extends NamedAttachment {
+  is_image: boolean
+}
+
+/** Destinations may be written with a trailing slash (`[](cards/)`). */
+function normalize_folder_path(folder_path: string) {
+  return folder_path.replace(/\/+$/, '').trim()
+}
+
+/**
+ * Whether a destination names a folder in this scope. Folders only exist
+ * implicitly here — the attachment list carries files, so a path is a folder
+ * exactly when something lives under it. A file with the same name wins, so
+ * `![](cards)` stays an image when `cards` really is a file.
+ */
+export function is_attachment_folder(attachments: readonly NamedAttachment[], folder_path: string) {
+  const folder = normalize_folder_path(folder_path)
+  if (! folder)
+    return false
+  if (attachments.some(item => item.file_name === folder))
+    return false
+  const prefix = `${folder}/`
+  return attachments.some(item => item.file_name.startsWith(prefix))
+}
+
+/**
+ * Images directly inside a folder, in display order, or null when the path is
+ * not a folder. Direct children only: a subfolder is a folder in its own right
+ * and can be referenced on its own.
+ */
+export function folder_images<T extends ImageAttachment>(attachments: readonly T[], folder_path: string): T[] | null {
+  if (! is_attachment_folder(attachments, folder_path))
+    return null
+  const folder = normalize_folder_path(folder_path)
+  return attachments
+    .filter(item => item.is_image && attachment_folder_of(item.file_name) === folder)
+    .sort((left, right) => compare_attachment_names(left.file_name, right.file_name))
+}
+
+/** Files at or below a folder, recursion included — the count the attachment list shows. */
+export function folder_file_count(attachments: readonly NamedAttachment[], folder_path: string) {
+  const folder = normalize_folder_path(folder_path)
+  if (! folder)
+    return 0
+  const prefix = `${folder}/`
+  return attachments.filter(item => item.file_name.startsWith(prefix)).length
+}
+
+/** All ancestor folder paths of a path, deepest last (`a/b/c.png` → ['a', 'a/b']); empty at root. */
+export function attachment_ancestor_folders(path: string) {
+  const folders: string[] = []
+  let folder = attachment_folder_of(path)
+  while (folder) {
+    folders.unshift(folder)
+    folder = attachment_folder_of(folder)
+  }
+  return folders
 }
 
 /** Windows-reserved device basenames; matched against the stem before the first dot. */
@@ -496,7 +629,7 @@ export function link_file_name_byte_length(name: string) {
 /** Normalize an uploaded file name; must match what the server stores. `max_bytes` comes from env (common filesystems cap one name at 255 bytes). */
 export function sanitize_attachment_file_name(raw: string, max_bytes: number) {
   const base = raw.replaceAll('\\', '/').split('/').pop() ?? ''
-  let cleaned = base.replace(link_file_name_illegal_chars, '_').trim().replace(/^\.+/, '').replace(/\.+$/, '')
+  let cleaned = base.replace(link_file_name_illegal_chars, '').trim().replace(/^\.+/, '').replace(/\.+$/, '')
   if (link_file_name_reserved_base.test(cleaned.split('.')[0] ?? '')) {
     cleaned = `_${cleaned}`
   }
@@ -511,6 +644,13 @@ export function sanitize_attachment_file_name(raw: string, max_bytes: number) {
     truncated += char
   }
   return truncated || 'file'
+}
+
+/** Normalize a (possibly nested) upload path (`folder/name.png`) the way the server stores it. */
+export function sanitize_attachment_path(raw: string, max_bytes: number) {
+  const segments = raw.replaceAll('\\', '/').split('/').filter(Boolean)
+    .map(segment => sanitize_attachment_file_name(segment, max_bytes))
+  return segments.join('/') || 'file'
 }
 
 /** Story-local URL used inside Markdown attachment links. */
@@ -780,9 +920,14 @@ function rewrite_markdown_links(text: string, patch: (span: MarkdownLinkSpan) =>
   return out + text.slice(cursor)
 }
 
+/** Attachment paths are bare names or folder paths (`a/b/file.png`) — no empty segments. */
+function is_attachment_path(name: string) {
+  return name.split('/').every(Boolean)
+}
+
 function attachment_name_from_url(url: string) {
   // `@title` destinations are story references, not attachments.
-  if (url.startsWith('@') || url.includes('/') || url.startsWith('#') || /^[a-z][\w+.-]*:/i.test(url)) {
+  if (url.startsWith('@') || url.startsWith('#') || /^[a-z][\w+.-]*:/i.test(url)) {
     return null
   }
 
@@ -791,10 +936,10 @@ function attachment_name_from_url(url: string) {
   }
   try {
     const decoded = decodeURIComponent(url)
-    return decoded.includes('/') ? null : decoded
+    return is_attachment_path(decoded) ? decoded : null
   }
   catch {
-    return url
+    return is_attachment_path(url) ? url : null
   }
 }
 

@@ -2,7 +2,7 @@
   <NuxtLink :to="`/content/${story.id}`" class="story-card watermark" :style="watermark_style">
     <span v-if="story.cover" class="story-card-cover">
       <img
-        :src="story_front_cover_url(static_url, story.cover, story.id)"
+        :src="story_front_cover_url(static_url, story.cover, story.cover_url)"
         :alt="cover_alt(story.cover, story.cover_label, story.title)"
         loading="lazy"
         referrerpolicy="no-referrer"

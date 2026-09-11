@@ -1,8 +1,12 @@
 import type { ContentMarkdownConfig } from './content-markdown'
 import { describe, expect, it } from 'vitest'
 import {
+  compare_attachment_names,
   extract_attachment_names,
   extract_story_reference_titles,
+  folder_file_count,
+  folder_images,
+  is_attachment_folder,
   parse_story_markdown,
   rename_attachment_references,
   rename_story_references,
@@ -24,6 +28,160 @@ function story_doc(body: string, title = '测试档案') {
   return `---\ntitle: ${title}\ntime: 2026/8/8\n---\n\n${body}`
 }
 
+describe('compare_attachment_names', () => {
+  function sorted(names: string[]) {
+    return [... names].sort(compare_attachment_names)
+  }
+
+  it('orders numbered names numerically, not character by character', () => {
+    // A plain string comparison settles on the leading digit ('1' < '2'), so
+    // this is what the `numeric` option exists for: without it the order is
+    // 1, 10, 11, 2, 3 rather than 1, 2, 3, 10, 11.
+    expect(sorted(['11.png', '2.png', '1.png', '10.png', '3.png']))
+      .toEqual(['1.png', '2.png', '3.png', '10.png', '11.png'])
+  })
+
+  it('compares the number itself, so 9 sorts before 10', () => {
+    expect(compare_attachment_names('9.png', '10.png')).toBeLessThan(0)
+    expect(compare_attachment_names('10.png', '9.png')).toBeGreaterThan(0)
+  })
+
+  it('orders numbered folders the same way', () => {
+    expect(sorted(['cards10', 'cards1', 'cards2'])).toEqual(['cards1', 'cards2', 'cards10'])
+  })
+
+  it('handles numbers embedded after Chinese text', () => {
+    expect(sorted(['纯粹gif02.gif', '纯粹gif10.gif', '纯粹gif01.gif']))
+      .toEqual(['纯粹gif01.gif', '纯粹gif02.gif', '纯粹gif10.gif'])
+  })
+
+  it('handles Chinese names without falling back to code-point order', () => {
+    // The exact order is ICU-dependent, so it is not pinned here; what is
+    // asserted is that the names come back complete, distinct and stable, and
+    // that equal inputs compare equal.
+    const chinese = ['桌子', '椅子', 'aaa', 'zzz']
+    const ordered = sorted(chinese)
+
+    expect(ordered).toHaveLength(chinese.length)
+    expect(new Set(ordered)).toEqual(new Set(chinese))
+    expect(sorted(ordered)).toEqual(ordered)
+    expect(compare_attachment_names('桌子', '桌子')).toBe(0)
+  })
+
+  it('compares full paths, so a folder groups before its own children', () => {
+    expect(sorted(['b/2.png', 'b/10.png', 'a/1.png']))
+      .toEqual(['a/1.png', 'b/2.png', 'b/10.png'])
+  })
+
+  it('is symmetric and stable for equal names', () => {
+    expect(compare_attachment_names('a/x.png', 'a/x.png')).toBe(0)
+    expect(Math.sign(compare_attachment_names('1.png', '2.png')))
+      .toBe(- Math.sign(compare_attachment_names('2.png', '1.png')))
+  })
+})
+
+describe('attachment folder helpers', () => {
+  const with_images = (names: string[]) => names.map(name => ({
+    file_name: name,
+    is_image: /\.(?:png|jpe?g|gif|webp)$/i.test(name),
+  }))
+
+  const scope = with_images([
+    'cards/1.png',
+    'cards/10.png',
+    'cards/2.png',
+    'cards/notes.txt',
+    'cards/sub/9.png',
+    '其他/x.png',
+    'solo.png',
+  ])
+
+  describe('is_attachment_folder', () => {
+    it('recognises a folder by the files living under it', () => {
+      expect(is_attachment_folder(scope, 'cards')).toBe(true)
+      expect(is_attachment_folder(scope, 'cards/sub')).toBe(true)
+      expect(is_attachment_folder(scope, '其他')).toBe(true)
+    })
+
+    it('tolerates a trailing slash', () => {
+      expect(is_attachment_folder(scope, 'cards/')).toBe(true)
+      expect(is_attachment_folder(scope, 'cards//')).toBe(true)
+    })
+
+    it('rejects a path nothing lives under', () => {
+      expect(is_attachment_folder(scope, 'nope')).toBe(false)
+      expect(is_attachment_folder(scope, 'card')).toBe(false)
+    })
+
+    it('rejects a real file, even one whose name is a folder prefix of others', () => {
+      // `cards` as a file and `cards/…` as a folder can coexist; the file wins,
+      // so an image reference stays an image.
+      const both = [... scope, ... with_images(['cards'])]
+
+      expect(is_attachment_folder(both, 'cards')).toBe(false)
+      expect(is_attachment_folder(scope, 'solo.png')).toBe(false)
+    })
+
+    it('rejects an empty path', () => {
+      expect(is_attachment_folder(scope, '')).toBe(false)
+      expect(is_attachment_folder(scope, '/')).toBe(false)
+    })
+  })
+
+  describe('folder_images', () => {
+    it('returns the folder images in natural order', () => {
+      expect(folder_images(scope, 'cards')?.map(item => item.file_name))
+        .toEqual(['cards/1.png', 'cards/2.png', 'cards/10.png'])
+    })
+
+    it('skips files that are not images', () => {
+      expect(folder_images(scope, 'cards')?.map(item => item.file_name))
+        .not.toContain('cards/notes.txt')
+    })
+
+    it('takes direct children only', () => {
+      expect(folder_images(scope, 'cards')?.map(item => item.file_name))
+        .not.toContain('cards/sub/9.png')
+      expect(folder_images(scope, 'cards/sub')?.map(item => item.file_name))
+        .toEqual(['cards/sub/9.png'])
+    })
+
+    it('is empty for a folder holding no images', () => {
+      expect(folder_images(with_images(['docs/readme.md']), 'docs')).toEqual([])
+    })
+
+    it('is null when the path is not a folder', () => {
+      expect(folder_images(scope, 'nope')).toBeNull()
+      expect(folder_images(scope, 'solo.png')).toBeNull()
+      expect(folder_images(scope, '')).toBeNull()
+    })
+
+    it('leaves the caller\'s list untouched', () => {
+      const original = scope.map(item => item.file_name)
+
+      folder_images(scope, 'cards')
+
+      expect(scope.map(item => item.file_name)).toEqual(original)
+    })
+  })
+
+  describe('folder_file_count', () => {
+    it('counts every file below the folder, recursion included', () => {
+      // 1.png, 2.png, 10.png, notes.txt and sub/9.png.
+      expect(folder_file_count(scope, 'cards')).toBe(5)
+    })
+
+    it('counts a nested folder on its own', () => {
+      expect(folder_file_count(scope, 'cards/sub')).toBe(1)
+    })
+
+    it('is zero for a path with nothing under it', () => {
+      expect(folder_file_count(scope, 'nope')).toBe(0)
+      expect(folder_file_count(scope, '')).toBe(0)
+    })
+  })
+})
+
 describe('extract_attachment_names', () => {
   it('extracts link and image destinations', () => {
     expect(extract_attachment_names('[](a.zip) and ![](b.jpg)')).toEqual(['a.zip', 'b.jpg'])
@@ -40,8 +198,12 @@ describe('extract_attachment_names', () => {
       .toEqual(['a.png', 'b.jpg', 'c.zip'].sort())
   })
 
-  it('ignores story references, anchors, paths and external URLs', () => {
-    expect(extract_attachment_names('[](@档案标题) [](#anchor) [](dir/a.jpg) [](https://example.com/x.jpg)')).toEqual([])
+  it('ignores story references, anchors and external URLs', () => {
+    expect(extract_attachment_names('[](@档案标题) [](#anchor) [](https://example.com/x.jpg)')).toEqual([])
+  })
+
+  it('accepts (possibly nested) folder paths', () => {
+    expect(extract_attachment_names('[](dir/a.jpg) [](dir/sub/b.jpg)').sort()).toEqual(['dir/a.jpg', 'dir/sub/b.jpg'].sort())
   })
 
   it('accepts angle destinations and title suffixes', () => {

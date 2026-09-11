@@ -1,5 +1,5 @@
 import type { H3Event } from 'h3'
-import type { RowDataPacket } from 'mysql2/promise'
+import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 
 import { db } from '@server/lib/db'
 import { get_client_ip } from '@server/lib/session'
@@ -18,7 +18,6 @@ export interface DeviceContext {
 interface SessionRow extends RowDataPacket {
   id: number
   user_id: number
-  token_hash: string
   identity_token: string | null
   is_logged_out: number
   is_expired: number
@@ -49,82 +48,206 @@ export function get_request_device_context(event: H3Event) {
   }
 }
 
+// Every generation the browser might still hold stays valid in
+// user_login_session_tokens (see the migration); `first_token` is the generation
+// being issued right now.
 export async function create_login_session(
   user_id: number,
-  token_hash: string,
+  first_token: { hash: string, exp: number },
   identity_token: string,
   device: DeviceContext,
 ) {
   const expires_at = dayjs().utc().add(env.SESSION_MAX_AGE_DAYS, 'day')
     .toDate()
 
-  // Reuse the latest inactive row for this device by rotating its token_hash.
-  // Active rows (not logged out, unexpired) are left alone so concurrent
-  // active tabs/devices keep their own rows.
-  const [existing] = await db.execute<ReusableSessionRow[]>(
-    `SELECT id, (is_logged_out = 1 OR expires_at <= NOW()) AS is_reusable
-     FROM user_login_sessions
-     WHERE user_id = ? AND identity_token = ?
-     ORDER BY id DESC LIMIT 1`,
-    [user_id, identity_token],
-  )
-  const reusable = existing[0]
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
 
-  if (reusable && reusable.is_reusable) {
-    await db.execute(
-      `UPDATE user_login_sessions SET
-         token_hash = ?,
-         is_logged_out = 0,
-         login_at = NOW(),
-         last_seen_at = NOW(),
-         logout_at = NULL,
-         expires_at = ?,
-         login_ip = ?,
-         last_seen_ip = ?,
-         user_agent = ?
+    // Reuse the latest inactive row for this device by reviving it. Active rows
+    // (not logged out, unexpired) are left alone so concurrent active
+    // tabs/devices keep their own rows.
+    const [existing] = await connection.execute<ReusableSessionRow[]>(
+      `SELECT id, (is_logged_out = 1 OR expires_at <= NOW()) AS is_reusable
+       FROM user_login_sessions
+       WHERE user_id = ? AND identity_token = ?
+       ORDER BY id DESC LIMIT 1`,
+      [user_id, identity_token],
+    )
+    const reusable = existing[0]
+
+    let session_id: number
+
+    if (reusable && reusable.is_reusable) {
+      await connection.execute(
+        `UPDATE user_login_sessions SET
+           is_logged_out = 0,
+           login_at = NOW(),
+           last_seen_at = NOW(),
+           logout_at = NULL,
+           expires_at = ?,
+           login_ip = ?,
+           last_seen_ip = ?,
+           user_agent = ?
+         WHERE id = ?`,
+        [
+          expires_at,
+          device.login_ip,
+          device.last_seen_ip,
+          device.user_agent,
+          reusable.id,
+        ],
+      )
+      session_id = reusable.id
+
+      // Logging in again revokes every generation this device held before.
+      await connection.execute(
+        'DELETE FROM user_login_session_tokens WHERE session_id = ?',
+        [session_id],
+      )
+    }
+    else {
+      const [inserted] = await connection.execute<ResultSetHeader>(
+        `INSERT INTO user_login_sessions
+           (user_id, identity_token, is_logged_out, login_at, last_seen_at, logout_at, expires_at, login_ip, last_seen_ip, user_agent)
+         VALUES (?, ?, 0, NOW(), NOW(), NULL, ?, ?, ?, ?)`,
+        [
+          user_id,
+          identity_token,
+          expires_at,
+          device.login_ip,
+          device.last_seen_ip,
+          device.user_agent,
+        ],
+      )
+      session_id = inserted.insertId
+    }
+
+    await connection.execute(
+      'INSERT INTO user_login_session_tokens (session_id, token_hash, expires_at) VALUES (?, ?, ?)',
+      [session_id, first_token.hash, dayjs.utc(first_token.exp * 1000).toDate()],
+    )
+
+    await connection.commit()
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
+}
+
+// Slides the session's idle expiry and, when `next` is given, appends a new
+// token generation.
+//
+// Appending is guarded by "nothing newer than the generation this request
+// presented exists": a browser stuck on an old cookie would otherwise append a
+// generation on every request, and concurrent retries would multiply those rows.
+// The guard lives on the family table because the session row no longer holds a
+// token hash to compare against; a generation that loses the race is simply not
+// written, and the browser keeps the new generation it was handed.
+//
+// Rotating does not invalidate older generations: they live in
+// user_login_session_tokens until their own JWT expires, which is what keeps an
+// in-flight request (or one whose Set-Cookie never arrived) from being 401'd.
+export async function refresh_login_session(params: {
+  session_id: number
+  presented_generation_id: number
+  next: { hash: string, exp: number } | null
+  last_seen_ip: string | null
+}) {
+  const { session_id, presented_generation_id, next, last_seen_ip } = params
+  const connection = await db.getConnection()
+
+  try {
+    await connection.beginTransaction()
+
+    await connection.execute(
+      `UPDATE user_login_sessions
+       SET last_seen_at = NOW(),
+           last_seen_ip = ?,
+           expires_at = NOW() + INTERVAL ? DAY
        WHERE id = ?`,
       [
-        token_hash,
-        expires_at,
-        device.login_ip,
-        device.last_seen_ip,
-        device.user_agent,
-        reusable.id,
+        last_seen_ip,
+        env.SESSION_MAX_AGE_DAYS,
+        session_id,
       ],
     )
-    return
-  }
 
-  await db.execute(
-    `INSERT INTO user_login_sessions
-       (user_id, token_hash, identity_token, is_logged_out, login_at, last_seen_at, logout_at, expires_at, login_ip, last_seen_ip, user_agent)
-     VALUES (?, ?, ?, 0, NOW(), NOW(), NULL, ?, ?, ?, ?)`,
-    [
-      user_id,
-      token_hash,
-      identity_token,
-      expires_at,
-      device.login_ip,
-      device.last_seen_ip,
-      device.user_agent,
-    ],
-  )
+    let applied = false
+
+    if (next) {
+      const [inserted] = await connection.execute<ResultSetHeader>(
+        `INSERT INTO user_login_session_tokens (session_id, token_hash, expires_at)
+         SELECT ?, ?, ? FROM DUAL
+         WHERE NOT EXISTS (
+           SELECT 1 FROM user_login_session_tokens WHERE session_id = ? AND id > ?
+         )`,
+        [
+          session_id,
+          next.hash,
+          dayjs.utc(next.exp * 1000).toDate(),
+          session_id,
+          presented_generation_id,
+        ],
+      )
+      applied = inserted.affectedRows === 1
+    }
+
+    // Drop generations that can no longer authenticate (they expire with their
+    // JWT), then trim to the newest SESSION_MAX_TOKEN_GENERATIONS. The trim is
+    // what bounds the family: a client whose cookie never updates is re-issued a
+    // generation on every request, otherwise growing the table without limit.
+    //
+    // The limit is inlined because MySQL rejects a placeholder there in prepared
+    // statements (ER_WRONG_ARGUMENTS); it is a validated config integer, never
+    // user input.
+    const keep_generations = Math.max(1, Math.trunc(env.SESSION_MAX_TOKEN_GENERATIONS))
+    await connection.execute(
+      `DELETE FROM user_login_session_tokens
+       WHERE session_id = ?
+         AND (
+           expires_at <= NOW()
+           OR id NOT IN (
+             SELECT id FROM (
+               SELECT id FROM user_login_session_tokens
+               WHERE session_id = ?
+               ORDER BY id DESC
+               LIMIT ${keep_generations}
+             ) AS newest
+           )
+         )`,
+      [session_id, session_id],
+    )
+
+    await connection.commit()
+    return applied
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
 }
 
 export async function get_login_sessions(
   user_id: number,
-  current_token_hash: string | null,
+  current_session_id: number | null,
 ) {
   const [rows] = await db.execute<SessionRow[]>(
     `SELECT
        id,
        user_id,
-       token_hash,
        identity_token,
        is_logged_out,
        (expires_at <= NOW()) AS is_expired,
        (is_logged_out = 0 AND expires_at > NOW() AND last_seen_at >= NOW() - INTERVAL ? SECOND) AS is_online,
-       (token_hash <=> ?) AS is_current,
+       (id <=> ?) AS is_current,
        login_at,
        last_seen_at,
        logout_at,
@@ -142,7 +265,7 @@ export async function get_login_sessions(
          ELSE 2
        END ASC,
        id DESC`,
-    [env.ONLINE_TIMEOUT_SECONDS, current_token_hash, user_id, env.ONLINE_TIMEOUT_SECONDS],
+    [env.ONLINE_TIMEOUT_SECONDS, current_session_id, user_id, env.ONLINE_TIMEOUT_SECONDS],
   )
 
   const records = rows.map(row => ({
@@ -163,24 +286,9 @@ export async function logout_session(id: number) {
   )
 }
 
-export async function logout_session_by_token_hash(token_hash: string) {
+export async function logout_all_user_sessions(user_id: number) {
   await db.execute(
-    'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE token_hash = ?',
-    [token_hash],
+    'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE user_id = ?',
+    [user_id],
   )
-}
-
-export async function logout_all_user_sessions(user_id: number, except_token_hash?: string | null) {
-  if (except_token_hash) {
-    await db.execute(
-      'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE user_id = ? AND token_hash != ?',
-      [user_id, except_token_hash],
-    )
-  }
-  else {
-    await db.execute(
-      'UPDATE user_login_sessions SET is_logged_out = 1, logout_at = NOW() WHERE user_id = ?',
-      [user_id],
-    )
-  }
 }

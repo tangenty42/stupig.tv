@@ -6,11 +6,11 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
-import { make_token_hash, sign_auth_token } from '@server/lib/session'
+import { clear_auth_token_cookie, make_token_hash, set_auth_token_cookie, sign_auth_token } from '@server/lib/session'
 import { check_otp_sms, send_otp_sms } from '@server/lib/sms'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { require_auth_user } from '@server/services/auth-guards.service'
-import { create_login_session, logout_session_by_token_hash } from '@server/services/session.service'
+import { create_login_session, logout_session } from '@server/services/session.service'
 import { env } from '@shared/env'
 import { phone_schema } from '@shared/schemas'
 import bcrypt from 'bcryptjs'
@@ -34,6 +34,7 @@ interface UserAuthRow extends RowDataPacket {
   username: string
   phone: string
   avatar_file: string | null
+  avatar_version: string | null
   is_verified: number
   is_admin: number
 }
@@ -58,7 +59,7 @@ interface SendOtpRequest extends CaptchaInput {
   purpose: AuthSendOtpInput['purpose']
 }
 
-export async function register_user(payload: AuthRegisterInput, device: DeviceContext, identity_token: string) {
+export async function register_user(event: H3Event, payload: AuthRegisterInput, device: DeviceContext, identity_token: string) {
   await check_otp_sms({ phone: payload.phone, code: payload.otp })
 
   const [existing] = await db.execute<UserIdRow[]>(
@@ -77,11 +78,10 @@ export async function register_user(payload: AuthRegisterInput, device: DeviceCo
   )
   const user_id = Number(result.insertId)
 
-  const { user, token } = await build_auth_result(user_id, device, identity_token)
-  return { user, token }
+  return build_auth_result(event, user_id, device, identity_token)
 }
 
-export async function login_with_password(payload: AuthLoginWithPasswordInput & CaptchaInput, device: DeviceContext, identity_token: string) {
+export async function login_with_password(event: H3Event, payload: AuthLoginWithPasswordInput & CaptchaInput, device: DeviceContext, identity_token: string) {
   await verify_captcha(payload)
 
   const [rows] = await db.execute<UserLoginRow[]>(
@@ -102,11 +102,10 @@ export async function login_with_password(payload: AuthLoginWithPasswordInput & 
     throw new ApiError(401, '用户名或密码错误')
   }
 
-  const { user: result_user, token } = await build_auth_result(user.id, device, identity_token)
-  return { user: result_user, token }
+  return build_auth_result(event, user.id, device, identity_token)
 }
 
-export async function login_with_phone(payload: AuthLoginWithPhoneInput, device: DeviceContext, identity_token: string) {
+export async function login_with_phone(event: H3Event, payload: AuthLoginWithPhoneInput, device: DeviceContext, identity_token: string) {
   await check_otp_sms({ phone: payload.phone, code: payload.otp })
 
   const [rows] = await db.execute<UserLoginRow[]>(
@@ -122,20 +121,21 @@ export async function login_with_phone(payload: AuthLoginWithPhoneInput, device:
     throw new ApiError(401, '账号已被禁用')
   }
 
-  const { user: result_user, token } = await build_auth_result(user.id, device, identity_token)
-  return { user: result_user, token }
+  return build_auth_result(event, user.id, device, identity_token)
 }
 
-async function build_auth_result(user_id: number, device: DeviceContext, identity_token: string) {
-  const jwt = sign_auth_token(user_id)
-  const token_hash = await make_token_hash(jwt)
-  await create_login_session(user_id, token_hash, identity_token, device)
+// The token is delivered as an httpOnly cookie and deliberately not returned:
+// keeping it out of the response body is what makes the httpOnly attribute
+// meaningful, since a body copy would be readable by any script on the page.
+async function build_auth_result(event: H3Event, user_id: number, device: DeviceContext, identity_token: string) {
+  const { token, exp } = sign_auth_token(user_id)
+  await create_login_session(user_id, { hash: await make_token_hash(token), exp }, identity_token, device)
 
   // A new device came online; refresh session lists on all clients.
   publish_refresh({ resource: sync_resource('profile_sessions', user_id) })
 
   const [rows] = await db.execute<UserAuthRow[]>(
-    'SELECT id, username, phone, avatar_file, is_verified, is_admin FROM users WHERE id = ?',
+    'SELECT id, username, phone, avatar_file, avatar_version, is_verified, is_admin FROM users WHERE id = ?',
     [user_id],
   )
   const user = rows[0]
@@ -143,16 +143,18 @@ async function build_auth_result(user_id: number, device: DeviceContext, identit
     throw new ApiError(500, '无法获取用户信息')
   }
 
+  set_auth_token_cookie(event, token)
+
   return {
     user: {
       id: user.id,
       username: user.username,
       phone: user.phone,
       avatar_file: user.avatar_file,
+      avatar_version: user.avatar_version,
       is_verified: Boolean(user.is_verified),
       is_admin: Boolean(user.is_admin),
     },
-    token: jwt,
   }
 }
 
@@ -236,8 +238,10 @@ export async function send_otp(payload: AuthSendOtpInput, meta: { identity_token
   )
 }
 
-export async function logout_user(auth_user: AuthUser) {
-  await logout_session_by_token_hash(auth_user.token_hash)
+export async function logout_user(event: H3Event, auth_user: AuthUser) {
+  await logout_session(auth_user.session_id)
+  // The client cannot clear an httpOnly cookie itself, so the server must.
+  clear_auth_token_cookie(event)
   publish_refresh({ resource: sync_resource('profile_sessions', auth_user.id) })
   publish_refresh({ resource: sync_resource('auth_user', auth_user.id) })
 }

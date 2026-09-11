@@ -44,7 +44,7 @@ export const profile_router = router({
       const { auth_user, target_id } = await resolve_operate_target(ctx.event, input?.operate_for)
       return get_login_sessions(
         target_id,
-        target_id === auth_user.id ? auth_user.token_hash : null,
+        target_id === auth_user.id ? auth_user.session_id : null,
       )
     }),
 
@@ -91,7 +91,6 @@ export const profile_router = router({
         const config = useRuntimeConfig(ctx.event)
         return {
           max_size_mb: config.public.max_avatar_size_mb as number,
-          static_root: config.static_root,
         }
       })
     }),
@@ -100,6 +99,6 @@ export const profile_router = router({
     .input(api_schema.profile.delete_avatar)
     .mutation(async ({ ctx, input }) => {
       const { target_id } = await resolve_operate_target(ctx.event, input?.operate_for)
-      await delete_profile_avatar(target_id, useRuntimeConfig(ctx.event).static_root)
+      await delete_profile_avatar(target_id)
     }),
 })

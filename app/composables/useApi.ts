@@ -1,5 +1,5 @@
 import type { AppRouter } from '@server/trpc/router'
-import type { ContentStoryDetail } from '@shared/types/content'
+import type { ContentStoryDetail, ContentUploadSignRequest } from '@shared/types/content'
 import type { inferRouterInputs } from '@trpc/server'
 
 type RouterInputs = inferRouterInputs<AppRouter>
@@ -171,14 +171,25 @@ export function useApi() {
     async upload_attachment(
       id: number,
       file: File,
+      file_name?: string,
       on_progress?: (progress: number, loaded: number, total: number) => void,
       signal?: AbortSignal,
     ) {
       const form = new FormData()
       form.append('story_id', String(id))
+      if (file_name)
+        form.append('file_name', file_name)
       form.append('file', file)
 
       return trpc_upload('content.uploadAttachment', form, on_progress, signal)
+    },
+
+    async sign_attachment_upload(payload: ContentUploadSignRequest) {
+      return trpc_call(trpc.content.signAttachmentUpload.mutate(payload))
+    },
+
+    async confirm_attachment_upload(story_id: number, key: string, file_name: string) {
+      return trpc_call(trpc.content.confirmAttachmentUpload.mutate({ story_id, key, file_name }))
     },
 
     async rename_attachment(id: number, old_file_name: string, file_name: string) {
@@ -212,6 +223,26 @@ export function useApi() {
 
     async list_orphan_attachments() {
       return trpc_call(trpc.content.listOrphanAttachments.query())
+    },
+
+    async move_attachment(id: number, file_name: string, target_folder: string | null) {
+      return trpc_call(trpc.content.moveAttachment.mutate({ id, file_name, target_folder }))
+    },
+
+    async move_attachments(id: number, moves: { file_name: string, target_folder: string | null }[]) {
+      return trpc_call(trpc.content.moveAttachments.mutate({ id, moves }))
+    },
+
+    async create_folder(id: number, folder: string) {
+      return trpc_call(trpc.content.createFolder.mutate({ id, folder }))
+    },
+
+    async delete_folder(id: number, folder: string) {
+      return trpc_call(trpc.content.deleteFolder.mutate({ id, folder }))
+    },
+
+    async move_folder(id: number, source_folder: string, new_folder: string) {
+      return trpc_call(trpc.content.moveFolder.mutate({ id, source_folder, new_folder }))
     },
   }
 
