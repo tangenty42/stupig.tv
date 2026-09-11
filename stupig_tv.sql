@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 1Panel-mysql
--- Generation Time: Aug 08, 2026 at 02:13 PM
+-- Generation Time: Sep 11, 2026 at 10:53 AM
 -- Server version: 8.4.8
 -- PHP Version: 8.3.30
 
@@ -24,6 +24,20 @@ SET time_zone = "+00:00";
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `content_operation_locks`
+--
+
+CREATE TABLE `content_operation_locks` (
+  `scope_id` bigint UNSIGNED NOT NULL,
+  `kind` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `token` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `expires_at` timestamp NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `content_stories`
 --
 
@@ -34,13 +48,15 @@ CREATE TABLE `content_stories` (
   `description` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `cover` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
   `cover_label` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+  `cover_version` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `event_precision` enum('day','month') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `event_dates` json NOT NULL,
   `related_story_ids` json DEFAULT NULL,
   `markdown` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `created_by` bigint UNSIGNED DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `revision` int UNSIGNED NOT NULL DEFAULT '1'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -52,10 +68,15 @@ CREATE TABLE `content_stories` (
 CREATE TABLE `content_story_attachments` (
   `id` bigint UNSIGNED NOT NULL,
   `story_id` bigint UNSIGNED DEFAULT NULL,
+  `scope_id` bigint UNSIGNED GENERATED ALWAYS AS (ifnull(`story_id`,0)) STORED,
+  `is_folder` tinyint(1) NOT NULL DEFAULT '0',
   `file_name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `object_key` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `mime_type` varchar(127) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `file_size` bigint UNSIGNED NOT NULL DEFAULT '0',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+  `version` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -86,6 +107,7 @@ CREATE TABLE `users` (
   `phone` char(11) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `password_hash` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `avatar_file` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `avatar_version` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `birthday` timestamp NULL DEFAULT NULL,
   `is_verified` tinyint(1) NOT NULL DEFAULT '0',
   `verified_note` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -104,7 +126,6 @@ CREATE TABLE `users` (
 CREATE TABLE `user_login_sessions` (
   `id` bigint UNSIGNED NOT NULL,
   `user_id` bigint UNSIGNED NOT NULL,
-  `token_hash` char(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `identity_token` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `is_logged_out` tinyint(1) NOT NULL DEFAULT '0',
   `login_at` timestamp NOT NULL,
@@ -118,9 +139,29 @@ CREATE TABLE `user_login_sessions` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `user_login_session_tokens`
+--
+
+CREATE TABLE `user_login_session_tokens` (
+  `id` bigint UNSIGNED NOT NULL,
+  `session_id` bigint UNSIGNED NOT NULL,
+  `token_hash` char(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `expires_at` timestamp NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 --
 -- Indexes for dumped tables
 --
+
+--
+-- Indexes for table `content_operation_locks`
+--
+ALTER TABLE `content_operation_locks`
+  ADD PRIMARY KEY (`scope_id`);
 
 --
 -- Indexes for table `content_stories`
@@ -136,7 +177,9 @@ ALTER TABLE `content_stories`
 --
 ALTER TABLE `content_story_attachments`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `uq_content_story_attachments_story_file` (`story_id`,`file_name`);
+  ADD UNIQUE KEY `uq_content_story_attachments_scope_file` (`scope_id`,`file_name`),
+  ADD UNIQUE KEY `uq_content_story_attachments_object_key` (`object_key`),
+  ADD KEY `idx_content_story_attachments_story` (`story_id`);
 
 --
 -- Indexes for table `otp_send_logs`
@@ -168,6 +211,15 @@ ALTER TABLE `user_login_sessions`
   ADD KEY `idx_user_login_sessions_user_login` (`user_id`,`login_at`),
   ADD KEY `idx_user_login_sessions_expires_at` (`expires_at`),
   ADD KEY `idx_user_login_sessions_user_logout_seen` (`user_id`,`is_logged_out`,`last_seen_at`);
+
+--
+-- Indexes for table `user_login_session_tokens`
+--
+ALTER TABLE `user_login_session_tokens`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_user_login_session_tokens_hash` (`token_hash`),
+  ADD KEY `idx_user_login_session_tokens_session` (`session_id`),
+  ADD KEY `idx_user_login_session_tokens_expires_at` (`expires_at`);
 
 --
 -- AUTO_INCREMENT for dumped tables
@@ -204,6 +256,12 @@ ALTER TABLE `user_login_sessions`
   MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `user_login_session_tokens`
+--
+ALTER TABLE `user_login_session_tokens`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
 -- Constraints for dumped tables
 --
 
@@ -214,16 +272,16 @@ ALTER TABLE `content_stories`
   ADD CONSTRAINT `fk_content_stories_creator` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
 --
--- Constraints for table `content_story_attachments`
---
-ALTER TABLE `content_story_attachments`
-  ADD CONSTRAINT `fk_content_story_attachments_story` FOREIGN KEY (`story_id`) REFERENCES `content_stories` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
---
 -- Constraints for table `user_login_sessions`
 --
 ALTER TABLE `user_login_sessions`
   ADD CONSTRAINT `fk_user_login_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+--
+-- Constraints for table `user_login_session_tokens`
+--
+ALTER TABLE `user_login_session_tokens`
+  ADD CONSTRAINT `fk_user_login_session_tokens_session` FOREIGN KEY (`session_id`) REFERENCES `user_login_sessions` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

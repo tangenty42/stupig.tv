@@ -27,16 +27,16 @@
             <div><MySpacedText text="2026届" /></div>
             <div><MySpacedText text="高三1班" /></div>
           </div>
-          <NuxtLink class="link self-center text-[70%] mt-8" to="/contact">
-            联系我们这帮『全能型人才』
+          <NuxtLink class="link self-center text-[70%] mt-8" to="/content">
+            快查看『蠢猪档案』<span>{{ archive_emoji }}</span>了解我们
           </NuxtLink>
         </div>
       </div>
     </div>
     <div class="card-x-super-pro-max flex flex-col items-center gap-4">
       <img class="max-w-lg dark:invert" :src="static_url('/imgs/whats_up.svg')" alt="Stupig Chant">
-      <NuxtLink class="link" to="/content">
-        查看『蠢猪档案』，了解我们
+      <NuxtLink class="link" to="/contact">
+        联系我们这帮『全能型人才』📞
       </NuxtLink>
       <div class="pt-[200vh] text-xs text-slate-500 dark:text-slate-400">
         蠢人，你在期待什么？
@@ -47,6 +47,23 @@
 
 <script setup lang="ts">
 const static_url = useStaticUrl()
+
+const archive_emoji = useState('home_archive_emoji', () => random_emoji())
+const emoji_rotate_ms = 100
+let emoji_timer: ReturnType<typeof setInterval> | null = null
+
+onMounted(() => {
+  emoji_timer = setInterval(() => {
+    archive_emoji.value = random_emoji()
+  }, emoji_rotate_ms)
+})
+
+onUnmounted(() => {
+  if (emoji_timer !== null) {
+    clearInterval(emoji_timer)
+    emoji_timer = null
+  }
+})
 </script>
 
 <style scoped>

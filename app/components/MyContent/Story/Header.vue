@@ -84,8 +84,8 @@ const props = withDefaults(defineProps<{
   cover?: string | null
   /** Cover alt text (`![label](file.jpg)`); falls back to the file name. */
   coverLabel?: string | null
-  /** Cache-busting version of the cover attachment, appended as `?version=`. */
-  coverVersion?: string | null
+  /** Root-relative object URL of a local-attachment cover, from the server payload. */
+  coverUrl?: string | null
   /** Pre-formatted event date text shown at the right of the labels row. */
   date?: string | null
   /** Story owning the cover attachment; null for a new story (orphan uploads). */
@@ -99,7 +99,7 @@ const props = withDefaults(defineProps<{
   desc: null,
   cover: null,
   coverLabel: null,
-  coverVersion: null,
+  coverUrl: null,
   date: null,
   storyId: null,
   back: false,
@@ -112,7 +112,7 @@ const visible_labels = computed(() => props.labels.filter(label => ! label.start
 // Rank r maps to imgs/ratings/(6-r).svg; unrated (难评) stories show no badge.
 const rating_rank = computed(() => story_rating_rank(props.labels))
 const static_url = useStaticUrl()
-const cover_src = computed(() => (props.cover ? story_front_cover_url(static_url, props.cover, props.storyId, props.coverVersion) : undefined))
+const cover_src = computed(() => (props.cover ? story_front_cover_url(static_url, props.cover, props.coverUrl) : undefined))
 
 // The markdown label (`![label](file.jpg)`) is the preferred alt text; without
 // one, fall back to the cover file name.

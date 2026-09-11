@@ -21,7 +21,7 @@ function publish_user_refresh(id: number) {
 }
 
 export async function force_logout_user(target_id: number) {
-  await logout_all_user_sessions(target_id, null)
+  await logout_all_user_sessions(target_id)
   publish_refresh({ resource: sync_resource('auth_user', target_id) })
   publish_refresh({ resource: sync_resource('profile_sessions', target_id) })
 }
@@ -31,7 +31,7 @@ export async function ban_user(target_id: number) {
     'UPDATE users SET is_banned = 1 WHERE id = ?',
     [target_id],
   )
-  await logout_all_user_sessions(target_id, null)
+  await logout_all_user_sessions(target_id)
   publish_refresh({ resource: sync_resource('profile_sessions', target_id) })
   publish_user_refresh(target_id)
 }
@@ -78,6 +78,7 @@ export async function list_users(
         username: profile.username,
         phone: profile.phone,
         avatar_file: profile.avatar_file,
+        avatar_version: profile.avatar_version,
         is_verified: profile.is_verified,
         is_admin: profile.is_admin,
         is_banned: Boolean(user.is_banned),

@@ -111,7 +111,7 @@
   }
 
   .form-error {
-    @apply mt-1 me-4 text-end block text-xs text-[var(--p-inputtext-invalid-border-color)];
+    @apply mt-1.5 me-2 text-end block text-xs text-[var(--p-inputtext-invalid-border-color)];
   }
 
   .fade-down-enter-active {

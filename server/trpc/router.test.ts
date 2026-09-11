@@ -16,12 +16,12 @@ const { app_router } = await import('@server/trpc/router')
 
 const auth_user: AuthUser = {
   id: 7,
+  session_id: 11,
   username: 'tester',
   phone: '13800138000',
   avatar_file: null,
   is_verified: true,
   is_admin: true,
-  token_hash: 'token-hash',
 }
 
 function create_event() {

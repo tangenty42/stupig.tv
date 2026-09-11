@@ -19,6 +19,7 @@ export const auth_router = router({
     .mutation(async ({ ctx, input }) => {
       const { confirm_password: _confirm_password, ... register_input } = input
       return register_user(
+        ctx.event,
         register_input,
         get_request_device_context(ctx.event),
         get_identity_token(ctx),
@@ -28,6 +29,7 @@ export const auth_router = router({
   loginWithPassword: public_procedure
     .input(api_schema.auth.login_with_password)
     .mutation(({ ctx, input }) => login_with_password(
+      ctx.event,
       input,
       get_request_device_context(ctx.event),
       get_identity_token(ctx),
@@ -36,12 +38,13 @@ export const auth_router = router({
   loginWithPhone: public_procedure
     .input(api_schema.auth.login_with_phone)
     .mutation(({ ctx, input }) => login_with_phone(
+      ctx.event,
       input,
       get_request_device_context(ctx.event),
       get_identity_token(ctx),
     )),
 
-  logout: protected_procedure.mutation(({ ctx }) => logout_user(ctx.auth_user)),
+  logout: protected_procedure.mutation(({ ctx }) => logout_user(ctx.event, ctx.auth_user)),
 
   sendOtp: public_procedure
     .input(api_schema.auth.send_otp)

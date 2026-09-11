@@ -7,16 +7,20 @@ load_dotenv({ path: resolve(process.cwd(), '.env') })
 
 const env_schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  DB_HOST: z.string().min(1, 'DB_HOST is required'),
+  DB_HOST: z.string().min(1),
   DB_PORT: z.coerce.number(),
-  DB_USER: z.string().min(1, 'DB_USER is required'),
-  DB_PASSWORD: z.string().min(1, 'DB_PASSWORD is required'),
-  DB_NAME: z.string().min(1, 'DB_NAME is required'),
-  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
-  JWT_EXPIRES_IN: z.string(),
+  DB_USER: z.string().min(1),
+  DB_PASSWORD: z.string().min(1),
+  DB_NAME: z.string().min(1),
+  JWT_SECRET: z.string().min(32),
+  // Token lifetime in days. Kept numeric rather than a duration string so the
+  // cross-field checks below can compare it with the windows defined relative to
+  // it; sign_auth_token converts it to seconds for jsonwebtoken.
+  JWT_EXPIRES_IN_DAYS: z.coerce.number().positive(),
+  JWT_RENEW_BEFORE_DAYS: z.coerce.number().min(0),
   BCRYPT_ROUNDS: z.coerce.number(),
-  ALIYUN_ACCESS_KEY_ID: z.string().min(1, 'ALIYUN_ACCESS_KEY_ID is required'),
-  ALIYUN_ACCESS_KEY_SECRET: z.string().min(1, 'ALIYUN_ACCESS_KEY_SECRET is required'),
+  ALIYUN_ACCESS_KEY_ID: z.string().min(1),
+  ALIYUN_ACCESS_KEY_SECRET: z.string().min(1),
   ALIYUN_DYPNSAPI_ENDPOINT: z.string().min(1),
   ALIYUN_DYPNSAPI_REGION_ID: z.string().min(1),
   IDENTITY_COOKIE_NAME: z.string().min(1),
@@ -26,8 +30,8 @@ const env_schema = z.object({
   OTP_TIER1_COOLDOWN_MS: z.coerce.number(),
   OTP_TIER2_DAILY_LIMIT: z.coerce.number(),
   OTP_TIER2_COOLDOWN_MS: z.coerce.number(),
-  OTP_SMS_SIGN_NAME: z.string().min(1, 'OTP_SMS_SIGN_NAME is required'),
-  OTP_SMS_TEMPLATE_CODE: z.string().min(1, 'OTP_SMS_TEMPLATE_CODE is required'),
+  OTP_SMS_SIGN_NAME: z.string().min(1),
+  OTP_SMS_TEMPLATE_CODE: z.string().min(1),
   OTP_SMS_SCHEME_NAME: z.string().optional(),
   OTP_DEBUG: z.string().optional()
     .transform(value => value === 'true'),
@@ -35,7 +39,14 @@ const env_schema = z.object({
   CAPTCHA_APP_KEY: z.string().optional(),
   API_BASE: z.string(),
   COOKIE_MAX_AGE_DAYS: z.coerce.number(),
+  // Idle window: a session survives this long without any request. There is no
+  // absolute lifetime cap on top of it — an actively used session stays signed
+  // in indefinitely.
   SESSION_MAX_AGE_DAYS: z.coerce.number(),
+  // Upper bound on a session's live token generations. A client stuck on an
+  // older generation is re-issued one on every authenticated request (the
+  // presence ping polls continuously), so the family needs a ceiling.
+  SESSION_MAX_TOKEN_GENERATIONS: z.coerce.number().int().min(1),
   COLOR_MODE_FALLBACK: z.enum(['light', 'dark']),
   COLOR_MODE_COOKIE_NAME: z.string().min(1),
   TIMEZONE_COOKIE_NAME: z.string().min(1),
@@ -55,7 +66,18 @@ const env_schema = z.object({
   CONTENT_DRAFT_SCHEMA_VERSION: z.coerce.number().int().positive(),
   CONTENT_DRAFT_STORAGE_PREFIX: z.string().min(1),
   CONTENT_DRAFT_AUTOSAVE_DELAY_MS: z.coerce.number().int().min(0).max(60_000),
-  STATIC_ROOT: z.string().min(1),
+  CONTENT_UPLOAD_HANDLE_STORAGE_NAME: z.string().min(1),
+  // Lease on a scope's attachment-operation lock. Must outlive the slowest
+  // structure change (a folder move rewrites every row beneath it one by one),
+  // otherwise the lease expires mid-operation and a second request can steal it.
+  CONTENT_OPERATION_LOCK_TTL_SECONDS: z.coerce.number().int().min(10),
+  OSS_ENDPOINT: z.string().min(1),
+  OSS_REGION: z.string().min(1),
+  OSS_BUCKET: z.string().min(1),
+  OSS_ACCESS_KEY_ID: z.string().min(1),
+  OSS_ACCESS_KEY_SECRET: z.string().min(1),
+  OSS_FORCE_PATH_STYLE: z.string().optional()
+    .transform(value => value === 'true'),
   STATIC_BASE_URL: z.string(),
   SITE_URL: z.url(),
   SITE_INDEXABLE: z.string().optional()
@@ -66,6 +88,7 @@ const env_schema = z.object({
   BILIBILI_FETCH_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000),
   BILIBILI_CACHE_TTL_MS: z.coerce.number().int().min(0),
   BILIBILI_NEGATIVE_CACHE_TTL_MS: z.coerce.number().int().min(0),
+  BILIBILI_FETCH_FAILURE_COOLDOWN_MS: z.coerce.number().int().min(0),
   REDIS_HOST: z.string().min(1),
   REDIS_PORT: z.coerce.number(),
   REDIS_PASSWORD: z.string().optional(),
@@ -81,6 +104,23 @@ const env_schema = z.object({
   MQTT_CLIENT_ID_PREFIX_SERVER: z.string().min(1),
   MQTT_CLIENT_ID_PREFIX_WEB: z.string().min(1),
 })
+  // The auth windows only work as a set. A token is renewed while it has
+  // JWT_RENEW_BEFORE_DAYS left, so a user walks away holding between
+  // JWT_RENEW_BEFORE_DAYS (worst case) and JWT_EXPIRES_IN_DAYS (best case) of
+  // validity, and everything downstream has to outlive that. Messages name their
+  // own field because the aggregated error only prints `message`, not `path`.
+  .refine(value => value.JWT_RENEW_BEFORE_DAYS < value.JWT_EXPIRES_IN_DAYS, {
+    message: 'JWT_RENEW_BEFORE_DAYS must be less than JWT_EXPIRES_IN_DAYS: a token that is always due for renewal is renewed on every request',
+    path: ['JWT_RENEW_BEFORE_DAYS'],
+  })
+  .refine(value => value.COOKIE_MAX_AGE_DAYS >= value.JWT_EXPIRES_IN_DAYS, {
+    message: 'COOKIE_MAX_AGE_DAYS must be >= JWT_EXPIRES_IN_DAYS, otherwise the cookie expires before the token it carries and the user is logged out early',
+    path: ['COOKIE_MAX_AGE_DAYS'],
+  })
+  .refine(value => value.SESSION_MAX_AGE_DAYS > value.JWT_RENEW_BEFORE_DAYS, {
+    message: 'SESSION_MAX_AGE_DAYS must exceed JWT_RENEW_BEFORE_DAYS, otherwise the idle window expires sessions before their token would be renewed',
+    path: ['SESSION_MAX_AGE_DAYS'],
+  })
 
 const parsed_env = env_schema.safeParse(process.env)
 

@@ -61,7 +61,7 @@ export function get_last_trpc_request_at() {
 
 export function useTrpcClient() {
   const { public: config } = useRuntimeConfig()
-  const { logout, token } = useAuth()
+  const { logout, user } = useAuth()
   const trpc_path = `${config.api_base.replace(/\/$/, '')}/trpc`
   const trpc_url = import.meta.server
     ? new URL(trpc_path, useRequestURL()).toString()
@@ -212,7 +212,7 @@ export function useTrpcClient() {
           return
         }
 
-        if (! token.value) {
+        if (! user.value) {
           return
         }
 

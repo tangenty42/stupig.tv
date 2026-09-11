@@ -11,6 +11,14 @@ export default {
     './nuxt.config.{js,ts}',
     './app.config.{js,ts}',
   ],
+  safelist: [
+    'rating-难评',
+    'rating-拉完了',
+    'rating-NPC',
+    'rating-人上人',
+    'rating-顶级',
+    'rating-夯',
+  ],
   darkMode: ['class'],
   theme: {
     extend: {

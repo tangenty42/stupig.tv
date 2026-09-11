@@ -21,14 +21,34 @@
           :style="logo_spacer_style"
         />
 
+        <Transition name="route-loading">
+          <span
+            v-if="route_loading"
+            class="absolute left-3 top-[0.6rem] z-20 size-10"
+            :style="indicator_shift_style"
+          >
+            <MyIcon name="lucide:loader-circle" class="size-10 animate-spin text-slate-400" />
+          </span>
+        </Transition>
+
         <NuxtLink
           class="absolute left-3 top-[0.6rem] z-20 transition-[filter] duration-300 hover:blur-[1px] active:blur-[1px]"
           :class="{ 'pointer-events-none': header_shift_progress === 1 }"
           :style="logo_style"
           to="/"
         >
-          <img class="h-10 w-auto dark:hidden" :src="static_url('/imgs/Stupig_fancy.svg')" alt="Stupig Logo">
-          <img class="hidden h-10 w-auto dark:block" :src="static_url('/imgs/Stupig_fancy_light.svg')" alt="Stupig Logo">
+          <img
+            class="h-10 w-auto transition-opacity duration-200 dark:hidden"
+            :class="{ 'opacity-30': route_loading }"
+            :src="static_url('/imgs/Stupig_fancy.svg')"
+            alt="Stupig Logo"
+          >
+          <img
+            class="hidden h-10 w-auto transition-opacity duration-200 dark:block"
+            :class="{ 'opacity-30': route_loading }"
+            :src="static_url('/imgs/Stupig_fancy_light.svg')"
+            alt="Stupig Logo"
+          >
         </NuxtLink>
 
         <div class="absolute right-2 top-2 z-30 flex items-center gap-2">
@@ -46,7 +66,8 @@
         </div>
 
         <div
-          class="breadcrumb-row relative z-10 flex items-center px-4"
+          class="breadcrumb-row relative z-10 flex items-center px-4 transition-opacity duration-200"
+          :class="{ 'opacity-30': route_loading }"
           :style="breadcrumb_row_style"
         >
           <Breadcrumb :home="breadcrumb_home" :model="breadcrumb_items" class="!border-0 !bg-transparent !p-0">
@@ -235,11 +256,14 @@ import { sync_resource } from '@shared/types/sync'
 const static_url = useStaticUrl()
 const { error, ok, info, clear: clear_toasts } = useMyToast()
 const { auth: auth_api, profile: profile_api } = useApi()
-const { user, token, apply_auth, update_user, logout } = useAuth()
+const { user, apply_auth, update_user, logout } = useAuth()
 const { verify: captcha_verify, showing: captcha_showing } = useCaptcha()
 const color_mode = useColorMode()
 const my_color_mode = useMyColorMode()
 const route = useRoute()
+// Page-loading state emitted around client-side navigations; throttled by
+// Nuxt so quick route changes don't flash the icon.
+const { isLoading: route_loading } = useLoadingIndicator()
 
 const breadcrumb_home = {
   icon: 'lucide:house',
@@ -260,9 +284,12 @@ const breadcrumb_items = computed(() => {
     return [{ label: '蠢猪档案' }]
   }
   if (route.path.startsWith('/content/')) {
+    // The new-story route is `/content/new/edit`; it has no id to show yet.
+    const story_id = String(route.params.id ?? '')
+    const suffix = /^\d+$/.test(story_id) ? ` #${story_id}` : ''
     return [
       { label: '蠢猪档案', route: '/content' },
-      { label: route.path.endsWith('/edit') ? '编辑' : '详情' },
+      { label: `${route.path.endsWith('/edit') ? '编辑' : '详情'}${suffix}` },
     ]
   }
   if (route.path.startsWith('/u/')) {
@@ -299,6 +326,13 @@ useHead({
 const header_shift_distance = 80
 const header_shift_progress = ref(0)
 const scrolled = computed(() => header_shift_progress.value > 0)
+// The indicator sits in the logo's slot and its centre tracks the logo while
+// the header is expanded, then settles onto the breadcrumb row's centre once
+// the row has slid up to fill the header. Kept on a wrapper so the icon's spin
+// animation owns its own `transform`.
+const indicator_shift_style = computed(() => ({
+  transform: `translateY(-${0.125 * header_shift_progress.value}rem)`,
+}))
 const logo_spacer_style = computed(() => {
   const progress = header_shift_progress.value
   const remaining = 1 - progress
@@ -317,6 +351,9 @@ const logo_style = computed(() => {
 })
 const breadcrumb_row_style = computed(() => ({
   '--header-shift-progress': header_shift_progress.value,
+  // Only once the row has slid under the logo slot does the indicator share
+  // that space, so the trail steps aside for it.
+  '--indicator-inset': route_loading.value ? 1 : 0,
   'height': `${2.25 + 1.25 * header_shift_progress.value}rem`,
 }))
 
@@ -341,6 +378,9 @@ function on_escape_key(event: KeyboardEvent) {
 }
 let header_observer: ResizeObserver | null = null
 onMounted(() => {
+  // The first-paint mask is injected by the inline head script in nuxt.config.ts.
+  (window as Window & { __hide_app_loading_mask?: () => void }).__hide_app_loading_mask?.()
+
   on_scroll()
   window.addEventListener('scroll', on_scroll, { passive: true })
   window.addEventListener('keydown', on_escape_key)
@@ -406,7 +446,7 @@ function toggle_color_mode() {
 }
 
 async function sync_current_user() {
-  if (! token.value) {
+  if (! user.value) {
     return
   }
 
@@ -417,6 +457,7 @@ async function sync_current_user() {
     username: profile.username,
     phone: profile.phone || user.value?.phone || '',
     avatar_file: profile.avatar_file,
+    avatar_version: profile.avatar_version,
     is_verified: profile.is_verified,
     is_admin: profile.is_admin,
   })
@@ -551,6 +592,9 @@ async function on_submit_register(e: FormSubmitEvent) {
 .breadcrumb-row {
   overflow-x: auto;
   scrollbar-width: none;
+  /* Reserve the logo slot for the loading indicator once the header is folded. */
+  padding-inline-start: calc(1rem + 2.75rem * var(--header-shift-progress) * var(--indicator-inset, 0));
+  transition: padding-inline-start 0.2s ease-out;
   padding-inline-end: calc(1rem + 9rem * var(--header-shift-progress));
   /* Fade overflowing items out before they slide under the right-side buttons. */
   mask-image: linear-gradient(
@@ -575,5 +619,19 @@ async function on_submit_register(e: FormSubmitEvent) {
 .breadcrumb-row :deep(.p-breadcrumb-list li) {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+/* Opacity only: the wrapper's transform is bound to the scroll-driven shift. */
+.route-loading-enter-active {
+  transition: opacity 0.2s ease-out;
+}
+
+.route-loading-leave-active {
+  transition: opacity 0.15s ease-in;
+}
+
+.route-loading-enter-from,
+.route-loading-leave-to {
+  opacity: 0;
 }
 </style>

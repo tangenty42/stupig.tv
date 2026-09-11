@@ -53,6 +53,7 @@ export interface AvatarUser {
   id: number
   username: string
   avatar_file: string | null
+  avatar_version?: string | null
 }
 
 const props = withDefaults(defineProps<{
@@ -68,7 +69,7 @@ const props = withDefaults(defineProps<{
 
 const static_url = useStaticUrl()
 
-const image_url = ref<string | undefined>(props.lazy ? undefined : (avatar_url(static_url, props.user.avatar_file) ?? undefined))
+const image_url = ref<string | undefined>(props.lazy ? undefined : (avatar_url(static_url, props.user.avatar_file, props.user.avatar_version ?? null) ?? undefined))
 const loaded = ref(false)
 const error = ref(false)
 const fallback = computed(() => props.user.username.slice(0, 1).toUpperCase())
@@ -88,7 +89,7 @@ const size_computed = computed(() => {
 })
 
 watchEffect(() => {
-  const next_image_url = avatar_url(static_url, props.user.avatar_file) ?? undefined
+  const next_image_url = avatar_url(static_url, props.user.avatar_file, props.user.avatar_version ?? null) ?? undefined
 
   if (image_url.value !== next_image_url) {
     image_url.value = next_image_url

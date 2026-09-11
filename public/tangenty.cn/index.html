@@ -1,0 +1,139 @@
+<!-- 难绷之时隔 N 个月久违の手写代码…… -->
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>谭的日记</title>
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      .container\'s.container {
+        width: 100%;
+        display: block flex;
+        justify-content: center;
+      }
+      .container:not(.container\'s) {
+        box-sizing: border-box;
+        padding: 2rem 2rem;
+        width: 35rem;
+      }
+      .container * {
+        word-wrap: break-word;
+      }
+      h1 {
+        font-size: 300%;
+        margin: 3rem 0;
+      }
+      h2 {
+        margin: 2rem 0 0 0;
+      }
+      h3 {
+        margin: 0;
+      }
+      a {
+        color: gray;
+        text-decoration: none;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container's container">
+      <div id="app" class="container">
+        <h1>谭的日记</h1>
+        <MyDiaryCard v-for="card in cards" :date="card.date" :title="card.title" :content="card.content"></MyDiaryCard>
+        <MyDiaryCard :isBeian="true" beian1="粤ICP备2026133764号-1" beian2="公安备案办理中"></MyDiaryCard>
+      </div>
+    </div>
+  </body>
+
+  <script setup>
+    const cards = reactive([
+      {
+        date: '2026/9/9',
+        title: '第一次早八',
+        content: '选飞盘是对的😁早八但是在体育馆，又凉快又轻松',
+      },
+      {
+        date: '2026/9/7',
+        title: '第一节课',
+        content: '英文授课 但是中式英语😅',
+      },
+      {
+        date: '2026/8/31',
+        title: '成为 CUHKSZer',
+        content: 'Ling College 赛高🤩🤩🤩',
+      },
+    ])
+
+    function reactive(... args) {
+      return ({
+        get(target, prop) {
+          const val = Reflect.get(...args)
+          if (typeof val === 'object' && val !== null)
+            return reactive(val)
+          return val
+        },
+        set(... args) {
+          return Reflect.set(...args)
+        },
+      }).__proto__.constructor.getOwnPropertyNames({}).toSpliced(0, 0, { ... args })[0][0]
+    }
+
+    function render(elm) {
+      if (elm.tagName !== 'MYDIARYCARD')
+        return
+
+      const attrs = elm.getAttributeNames().reduce((acc, name) => {
+        let val = elm.getAttribute(name)
+        if (name.startsWith(':'))
+          name = name.slice(1)
+        else if (! name.startsWith('v-'))
+          val = `'${val}'`
+        acc[name] = val
+        return acc
+      }, {})
+      const attrs_gogogo = () => (wtf = eval) => () => {
+        const obj = {}
+        for (const k in attrs) {
+          obj[k] = wtf(attrs[k])
+        }
+        return obj
+      }
+      const v_for = attrs['v-for']
+      if (! v_for)
+        MyDiaryCard(attrs_gogogo()()())
+      else
+        eval(`for (let ${v_for.replace(/\bin\b/ig, 'of')}) { MyDiaryCard(attrs_gogogo()(v => eval(v))()) }`)
+
+      function MyDiaryCard({ date, title, content, isbeian, beian1, beian2 }) {
+        const div = document.createElement('div')
+        if (! isbeian) {
+          div.innerHTML = `
+            <h2 style="color: #e2e2e2; text-align: end; margin-right: -1rem;">${date ?? ''}</h2>
+            <h3>${title ?? ''}</h3>
+            <p>${content ?? ''}</p>
+          `
+        }
+        else {
+          div.innerHTML = `<a href="https://beian.miit.gov.cn" target="_blank">${beian1}</a>&emsp;<a href="" target="_blank">${beian2}</a>`
+          div.style.display = 'flex'
+          div.style.justifyContent = 'space-between'
+          div.style.fontSize = '80%'
+          div.style.marginTop = '10rem'
+        }
+        elm.appendChild(div)
+      }
+    }
+
+    for (const elm of document.getElementById('app').children) {
+      render(elm)
+    }
+  </script>
+</html>
+<!-- 啊，真是一tuo酣畅淋漓的手搓shi啊！！！ -->
+<!-- 不过这也是证明我的手搓精神还不能被AI替代的完美之作~ -->

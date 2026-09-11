@@ -26,10 +26,14 @@ config.*
 !config.example.*
 
 # Lock files
-*-lock.*
+*-lock.yaml
+*-lock.json
 
 # PNPM store
 .pnpm-store
 
 # Temporary agent files
+# Throwaway scripts and snapshots written while verifying a change (they are
+# meant to be deleted again, but must never be committed by accident).
+.tmp-*
 migrations/*

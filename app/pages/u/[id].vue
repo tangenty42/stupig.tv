@@ -378,7 +378,7 @@ useSeoMeta({
   ogTitle: computed(() => profile.value ? `用户主页 - ${profile.value.username}` : undefined),
   ogDescription: computed(() => profile.value ? `蠢猪小组成员「${profile.value.username}」的主页` : undefined),
   ogType: 'profile',
-  ogImage: computed(() => (profile.value ? avatar_url(static_url, profile.value.avatar_file) : null) ?? undefined),
+  ogImage: computed(() => (profile.value ? avatar_url(static_url, profile.value.avatar_file, profile.value.avatar_version) : null) ?? undefined),
 })
 
 const is_operating_other = computed(() => {

@@ -617,8 +617,11 @@ export function useDataSync() {
     })
 
     const config = useRuntimeConfig().public
-    const token = useCookie(config.auth_token_cookie_name)
-    watch(token, () => {
+    // Watches the user cookie rather than the auth token: the token cookie is
+    // now httpOnly and unreadable here, and login/logout move the user cookie in
+    // lockstep, which is all this signal needs.
+    const user = useCookie(config.auth_user_cookie_name)
+    watch(user, () => {
       if (! initial_gather_done) {
         return
       }

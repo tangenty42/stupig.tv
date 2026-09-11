@@ -1,14 +1,14 @@
 <template>
   <div class="pb-12 pt-8">
     <template v-if="story">
-      <MyContentStoryHeader back :editable="is_admin" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-version="cover_version" :date="format_event_range(story.event_precision, story.event_dates)" :story-id="story.id" />
+      <MyContentStoryHeader back :editable="is_admin" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-url="story.cover_url" :date="format_event_range(story.event_precision, story.event_dates)" :story-id="story.id" />
 
       <MyDivider class="mt-12">
         正文
       </MyDivider>
 
       <MyHeightSection tag="section" class="section-card-collapse mt-6">
-        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="story.attachments" :stories="stories ?? []" />
+        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="story.attachments" :stories="stories ?? []" folder-openable @folder-open="open_attachment_folder" />
       </MyHeightSection>
 
       <MyDivider class="mt-12">
@@ -22,6 +22,20 @@
           :initial_month="story.event_dates[0]?.slice(0, 7) ?? null"
         />
       </MyHeightSection>
+
+      <MyDivider class="mt-12">
+        附件
+      </MyDivider>
+
+      <MyHeightSection ref="attachment_section" tag="section" class="section-card-collapse mt-6">
+        <MyContentAttachmentList
+          :rows="attachment_rows"
+          :upload_busy="false"
+          readonly
+          layout="stack"
+          @row-click="on_attachment_row_click"
+        />
+      </MyHeightSection>
     </template>
 
     <div v-else class="section-card-collapse py-12 text-center text-slate-500 dark:text-slate-400">
@@ -31,7 +45,9 @@
 </template>
 
 <script setup lang="ts">
-import type { ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
+import type { ContentStoryAttachment, ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
+import type { MyContentAttachmentRow } from '~/utils/content/attachment'
+import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, compare_attachment_names } from '@shared/content-markdown'
 import { sync_resource } from '@shared/types/sync'
 import { story_front_cover_url } from '~/utils/content/attachment'
 import { format_event_range } from '~/utils/content/event'
@@ -76,12 +92,134 @@ await useSyncedData<ContentStorySummary[]>(
   stories_loading,
 )
 
-const cover_version = computed(() => {
-  const cover = story.value?.cover
-  return cover && ! cover.includes('/') && ! cover.startsWith('#') && ! /^[a-z][\w+.-]*:/i.test(cover)
-    ? (story.value?.attachments.find(item => item.file_name === cover)?.version ?? null)
-    : null
+// Folders start collapsed; the set tracks only the ones the user expanded.
+const expanded_attachment_folders = ref(new Set<string>())
+
+const attachment_folder_names = computed(() => {
+  const names = new Set(story.value?.folders ?? [])
+  for (const attachment of story.value?.attachments ?? []) {
+    let folder = attachment_folder_of(attachment.file_name)
+    while (folder) {
+      names.add(folder)
+      folder = attachment_folder_of(folder)
+    }
+  }
+  return [... names].sort(compare_attachment_names)
 })
+
+const attachment_groups = computed(() => {
+  const groups = new Map<string | null, ContentStoryAttachment[]>()
+  for (const attachment of story.value?.attachments ?? []) {
+    const folder = attachment_folder_of(attachment.file_name)
+    const parent = folder && attachment_folder_names.value.includes(folder) ? folder : null
+    const group = groups.get(parent)
+    if (group)
+      group.push(attachment)
+    else
+      groups.set(parent, [attachment])
+  }
+  return groups
+})
+
+function attachment_folder_count(folder: string) {
+  return (story.value?.attachments ?? []).filter(attachment => attachment.file_name.startsWith(`${folder}/`)).length
+}
+
+function toggle_attachment_folder(folder: string) {
+  const next = new Set(expanded_attachment_folders.value)
+  if (next.has(folder))
+    next.delete(folder)
+  else
+    next.add(folder)
+  expanded_attachment_folders.value = next
+}
+
+const attachment_section = ref<{ el: HTMLElement | null } | null>(null)
+
+/**
+ * Open a folder card's target: reveal it in the attachment list (its ancestors
+ * too, or it would still be hidden inside a collapsed parent) and bring the list
+ * into view. `scroll_to` accounts for the fixed app header.
+ */
+function open_attachment_folder(folder: string) {
+  const next = new Set(expanded_attachment_folders.value)
+  for (const path of [folder, ... attachment_ancestor_folders(folder)]) {
+    next.add(path)
+  }
+  expanded_attachment_folders.value = next
+  nextTick(() => scroll_to(attachment_section.value?.el))
+}
+
+const attachment_rows = computed<MyContentAttachmentRow[]>(() => {
+  const rows: MyContentAttachmentRow[] = []
+  const walk = (parent: string | null, depth: number) => {
+    for (const folder of attachment_folder_names.value.filter(name => attachment_folder_of(name) === parent)) {
+      rows.push({
+        key: `folder:${folder}`,
+        depth,
+        data: {
+          kind: 'folder',
+          path: folder,
+          name: attachment_base_name(folder),
+          collapsed: ! expanded_attachment_folders.value.has(folder),
+          count: attachment_folder_count(folder),
+          drop_target: false,
+          drop_disabled: false,
+          moving: false,
+          dimmed: false,
+          batch_pending: false,
+        },
+        state: {
+          selected: false,
+          selection_edges: null,
+          selection_count: 0,
+          delete_pending: false,
+          delete_disabled: false,
+          rename_disabled: true,
+          replace_disabled: true,
+          retry_disabled: true,
+          move_pending: false,
+          structure_locked: false,
+        },
+        item: null,
+      })
+      if (expanded_attachment_folders.value.has(folder))
+        walk(folder, depth + 1)
+    }
+    for (const attachment of attachment_groups.value.get(parent) ?? []) {
+      rows.push({
+        key: `stored:${attachment.file_name}`,
+        depth,
+        data: { ... attachment, kind: 'stored', referenced: true },
+        state: {
+          selected: false,
+          selection_edges: null,
+          selection_count: 0,
+          delete_pending: false,
+          delete_disabled: true,
+          rename_disabled: true,
+          replace_disabled: true,
+          retry_disabled: true,
+          move_pending: false,
+          structure_locked: false,
+        },
+        item: {
+          key: `stored:${attachment.file_name}`,
+          kind: 'stored',
+          attachment,
+          card: { ... attachment, kind: 'stored', referenced: true },
+        },
+      })
+    }
+  }
+  walk(null, 0)
+  return rows
+})
+
+function on_attachment_row_click(_event: MouseEvent, row: MyContentAttachmentRow) {
+  if (row.data.kind === 'folder')
+    toggle_attachment_folder(row.data.path)
+}
 
 // Seo getters are evaluated during head rendering (no Nuxt instance), so the
 // composable is captured here and passed in rather than called inside the util.
@@ -91,7 +229,7 @@ const og_image = computed(() => {
   if (! current?.cover || current.cover.startsWith('#')) {
     return undefined
   }
-  return story_front_cover_url(static_url, current.cover, current.id, cover_version.value)
+  return story_front_cover_url(static_url, current.cover, current.cover_url)
 })
 
 useSeoMeta({

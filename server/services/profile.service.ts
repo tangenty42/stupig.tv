@@ -1,13 +1,12 @@
 import type { AuthUser } from '@server/types/auth'
 import type { RowDataPacket } from 'mysql2/promise'
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { extname } from 'node:path'
 import { ApiError } from '@server/errors/ApiError'
 
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
-import { random_file_token } from '@server/lib/random'
 import { check_otp_sms } from '@server/lib/sms'
+import { delete_object, put_object } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
 import { env } from '@shared/env'
@@ -22,6 +21,7 @@ export interface UserRow extends RowDataPacket {
   username: string
   phone: string
   avatar_file: string | null
+  avatar_version: string | null
   birthday: string | null
   created_at: string
   last_login_at: string | null
@@ -43,6 +43,7 @@ interface UserIdRow extends RowDataPacket {
 
 interface UserAvatarRow extends RowDataPacket {
   avatar_file: string | null
+  avatar_version: string | null
 }
 
 interface SessionUserIdRow extends RowDataPacket {
@@ -58,7 +59,6 @@ interface CaptchaInput {
 
 interface AvatarUploadOptions {
   max_size_mb: number
-  static_root: string
 }
 
 const mime_to_ext: Record<string, string> = {
@@ -85,6 +85,7 @@ export function format_profile_row(viewer: AuthUser | null, user: UserRow, targe
     username: user.username,
     phone: editable ? user.phone : null,
     avatar_file: user.avatar_file,
+    avatar_version: user.avatar_version,
     birthday: user.birthday,
     created_at: user.created_at,
     last_seen_at: user.last_seen_at ?? null,
@@ -99,7 +100,7 @@ export function format_profile_row(viewer: AuthUser | null, user: UserRow, targe
 
 export const select_profile_row_sql = `
   SELECT
-    u.id, u.username, u.phone, u.avatar_file, u.birthday, u.created_at,
+    u.id, u.username, u.phone, u.avatar_file, u.avatar_version, u.birthday, u.created_at,
     u.is_verified, u.is_admin, u.verified_note, u.is_banned,
     (SELECT MAX(s.login_at) FROM user_login_sessions s WHERE s.user_id = u.id) AS last_login_at,
     (SELECT MAX(s.last_seen_at) FROM user_login_sessions s WHERE s.user_id = u.id) AS last_seen_at,
@@ -232,7 +233,7 @@ export async function set_profile_phone(user_id: number, new_phone: string) {
   publish_profile_refresh(user_id)
 }
 
-async function update_profile_avatar(user_id: number, avatar_file: string) {
+async function update_profile_avatar(user_id: number, avatar_file: string, avatar_version: string | null) {
   const [rows] = await db.execute<UserAvatarRow[]>(
     'SELECT avatar_file FROM users WHERE id = ?',
     [user_id],
@@ -240,14 +241,14 @@ async function update_profile_avatar(user_id: number, avatar_file: string) {
   const previous_file = rows[0]?.avatar_file ?? null
 
   await db.execute(
-    'UPDATE users SET avatar_file = ? WHERE id = ?',
-    [avatar_file, user_id],
+    'UPDATE users SET avatar_file = ?, avatar_version = ? WHERE id = ?',
+    [avatar_file, avatar_version, user_id],
   )
 
   return { previous_file }
 }
 
-export async function delete_profile_avatar(user_id: number, static_root: string) {
+export async function delete_profile_avatar(user_id: number) {
   const [rows] = await db.execute<UserAvatarRow[]>(
     'SELECT avatar_file FROM users WHERE id = ?',
     [user_id],
@@ -259,11 +260,11 @@ export async function delete_profile_avatar(user_id: number, static_root: string
   }
 
   await db.execute(
-    'UPDATE users SET avatar_file = NULL WHERE id = ?',
+    'UPDATE users SET avatar_file = NULL, avatar_version = NULL WHERE id = ?',
     [user_id],
   )
 
-  await unlink(join(static_root, 'avatar', previous_file)).catch(() => {})
+  await delete_object(`avatar/${previous_file}`).catch(() => {})
   publish_profile_refresh(user_id)
 }
 
@@ -303,13 +304,14 @@ export async function upload_profile_avatar(user_id: number, input: FormData, ge
     throw new ApiError(415, '只支持 JPG / PNG / WebP')
   }
 
-  const avatar_file_name = `${user_id}_${random_file_token()}${file_ext}`
-  const { previous_file } = await update_profile_avatar(user_id, avatar_file_name)
-  const avatar_dir = join(options.static_root, 'avatar')
-  await mkdir(avatar_dir, { recursive: true })
-  await writeFile(join(avatar_dir, avatar_file_name), file_data)
+  // Fixed object key per user; the stored ETag becomes the URL `?version=`
+  // cache-buster, replacing the random token previously baked into the name.
+  const avatar_file_name = `${user_id}${file_ext}`
+  // Put before the DB update so the (shared-key) object exists before its URL does.
+  const etag = await put_object(`avatar/${avatar_file_name}`, file_data, avatar.type || null)
+  const { previous_file } = await update_profile_avatar(user_id, avatar_file_name, etag)
   if (previous_file && previous_file !== avatar_file_name) {
-    await unlink(join(avatar_dir, previous_file)).catch(() => {})
+    await delete_object(`avatar/${previous_file}`).catch(() => {})
   }
   publish_profile_refresh(user_id)
 }

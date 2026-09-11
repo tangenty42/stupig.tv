@@ -9,7 +9,7 @@
         <div class="shrink-0">
           <OverlayBadge :severity="user.is_online ? 'success' : 'secondary'" class="avatar-online-badge">
             <MyAvatar
-              :user="{ id: user.id, username: user.username, avatar_file: user.avatar_file }"
+              :user="{ id: user.id, username: user.username, avatar_file: user.avatar_file, avatar_version: user.avatar_version }"
               size="large"
               previewable
             />
