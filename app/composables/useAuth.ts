@@ -1,4 +1,6 @@
+import type { PermissionGrant } from '@shared/permissions'
 import type { AuthResult } from '@shared/types/auth'
+import { normalize_permission_grants } from '@shared/permissions'
 
 export interface LoginUser {
   id: number
@@ -8,6 +10,7 @@ export interface LoginUser {
   avatar_version: string | null
   is_verified: boolean
   is_admin?: boolean
+  permissions?: PermissionGrant[]
 }
 
 export function useAuth() {
@@ -25,6 +28,7 @@ export function useAuth() {
     return {
       ... input,
       is_admin: Boolean(input.is_admin),
+      permissions: normalize_permission_grants(input.permissions),
     }
   }
 
@@ -37,6 +41,7 @@ export function useAuth() {
       && (left.avatar_version ?? null) === (right.avatar_version ?? null)
       && left.is_verified === right.is_verified
       && Boolean(left.is_admin) === Boolean(right.is_admin)
+      && JSON.stringify(normalize_permission_grants(left.permissions)) === JSON.stringify(normalize_permission_grants(right.permissions))
   }
 
   function apply_auth(result: AuthResult) {

@@ -1,34 +1,41 @@
 <template>
   <NuxtLink :to="`/content/${story.id}`" class="story-card watermark" :style="watermark_style">
     <span v-if="story.cover" class="story-card-cover">
+      <!-- No loading="lazy": Chromium strands a pending lazy load when Vue
+           re-parents the keyed card (filter/sort reorders), leaving the cover
+           permanently blank until a remount. The list is this page's primary
+           content, so eager loads are acceptable. -->
       <img
         :src="story_front_cover_url(static_url, story.cover, story.cover_url)"
         :alt="cover_alt(story.cover, story.cover_label, story.title)"
-        loading="lazy"
         referrerpolicy="no-referrer"
       >
     </span>
-    <span class="story-card-title">
-      <span v-if="pinned" class="mr-1 inline-flex items-center gap-0.5 align-baseline text-xs font-bold text-slate-400 dark:text-slate-500">
-        <MyIcon name="lucide:pin" />
-        <span>置顶</span>
+    <div class="story-card-body">
+      <span class="story-card-title">
+        <span>{{ story.title }}</span>
+        <span v-if="pinned" class="ms-2 inline-flex items-center gap-0.5 align-baseline text-xs font-bold text-slate-400 dark:text-slate-500">
+          <MyIcon name="lucide:pin" />
+          <span>置顶</span>
+        </span>
       </span>
-      <span>{{ story.title }}</span>
-    </span>
-    <span class="story-card-date">
-      {{ format_event_range(story.event_precision, story.event_dates) }}
-    </span>
-    <span v-if="story.desc" class="story-card-desc">{{ story.desc }}</span>
-    <span v-if="labels.length" class="mt-1 flex flex-wrap justify-center gap-1">
-      <MyBadge
-        v-for="label in labels"
-        :key="label"
-        type="info"
-        :outlined="! active_labels?.has(label)"
-      >
-        {{ label }}
-      </MyBadge>
-    </span>
+      <span v-if="story.desc" class="story-card-desc">{{ story.desc }}</span>
+      <div class="mt-2 w-full flex flex-wrap items-end gap-2">
+        <span v-if="labels.length" class="flex flex-wrap justify-center gap-1">
+          <MyBadge
+            v-for="label in labels"
+            :key="label"
+            type="info"
+            :outlined="! active_labels?.has(label)"
+          >
+            {{ label }}
+          </MyBadge>
+        </span>
+        <span class="story-card-date ml-auto">
+          {{ format_event_range(story.event_precision, story.event_dates) }}
+        </span>
+      </div>
+    </div>
   </NuxtLink>
 </template>
 
@@ -56,15 +63,24 @@ const watermark_style = computed(() =>
 </script>
 
 <style scoped>
-/* Mini StoryHeader look: centered title/date/desc/labels stack on the dashed
-   card chrome; the tier SVG watermark comes from the shared .watermark
-   class in global.css (driven by the inline --watermark-url). */
+/* Mini StoryHeader look: centered title/date/desc/labels stack on the card
+   chrome; the tier SVG watermark comes from the shared .watermark class in
+   global.css (driven by the inline --watermark-url).
+
+   The card itself is unpadded and the text rows own the inset instead (same
+   split as the MarkdownPreview reference cards), so a cover spans the card
+   edge to edge without having to cancel a padding it does not know. */
 .story-card {
-  @apply flex w-full min-w-0 flex-col items-center gap-1 rounded-sm border border-dashed border-slate-300 bg-slate-50/60 px-3 py-4 text-sm leading-5 shadow-none transition-all duration-300 dark:border-slate-600 dark:bg-slate-800/40;
+  @apply flex w-full min-w-0 flex-col rounded-sm bg-slate-100 text-sm leading-5 transition-all duration-300 dark:bg-slate-800/50;
 }
 
-.story-card > * {
+.story-card > *,
+.story-card-body > * {
   @apply min-w-0 max-w-full;
+}
+
+.story-card-body {
+  @apply flex w-full flex-col items-center gap-1 px-4 py-3;
 }
 
 .story-card:hover,
@@ -72,22 +88,20 @@ const watermark_style = computed(() =>
   @apply border-primary brightness-90;
 }
 
-/* Rows center as boxes via the card's items-center; no text-center, so a
+/* Rows center as boxes via the body's items-center; no text-center, so a
    wrapped row's lines lean left inside the shrink-wrapped box. */
 .story-card-title {
-  @apply my-0.5 break-words text-xl font-bold text-slate-800 dark:text-slate-100;
+  @apply mt-0.5 break-words text-xl font-bold text-slate-800 dark:text-slate-100;
 }
 
 .story-card-date {
   @apply text-xs text-slate-400 dark:text-slate-500;
 }
 
-/* Cover sits at the very top of the card (same as the MarkdownPreview
-   reference card), spilling 1px past the card's padding so the dashed top
-   and side borders fold behind it (allowed by .watermark's clip margin);
-   max-w-none overrides the generic children's cap so the bleed applies. */
+/* Cover sits at the very top of the card and takes its width, so the card's
+   rounded corners are the image's corners. */
 .story-card-cover {
-  @apply relative -mx-[calc(0.75rem_+_1px)] -mt-[calc(1rem_+_1px)] mb-1 w-[calc(100%_+_1.5rem_+_2px)] max-w-none shrink-0 overflow-hidden rounded-t-sm bg-slate-200 dark:bg-slate-700;
+  @apply relative w-full shrink-0 overflow-hidden rounded-t-sm bg-slate-200 dark:bg-slate-700;
 }
 
 .story-card-cover img {
@@ -95,6 +109,6 @@ const watermark_style = computed(() =>
 }
 
 .story-card-desc {
-  @apply mt-1 break-words text-sm text-slate-500 dark:text-slate-400;
+  @apply break-words text-sm text-slate-500 dark:text-slate-400;
 }
 </style>

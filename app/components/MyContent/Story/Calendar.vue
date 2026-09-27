@@ -111,14 +111,14 @@
 <script setup lang="ts">
 import type { ContentStorySummary } from '@shared/types/content'
 import type { Dayjs } from 'dayjs'
-import { story_rating } from '@shared/types/content'
+import { format_event_entry } from '~/utils/content/event'
 
 interface CalendarEvent {
   story: ContentStorySummary
   /** Inclusive day range. */
   start: Dayjs
   end: Dayjs
-  rating_class: string
+  color_class: string
 }
 
 interface CalendarCell {
@@ -160,6 +160,17 @@ const props = withDefaults(defineProps<{
 
 const week_labels = ['一', '二', '三', '四', '五', '六', '日']
 
+// Bar colors ignore ratings: events cycle through this palette in start-date
+// order, so neighboring bars rarely share a color.
+const bar_palette = [
+  'bg-rose-500',
+  'bg-sky-500',
+  'bg-amber-500',
+  'bg-violet-500',
+  'bg-emerald-500',
+  'bg-pink-500',
+]
+
 // Fixed pixel metrics keep the lane math exact on every device width.
 const DAY_HEAD_HEIGHT = 28
 const LANE_HEIGHT = 28
@@ -184,10 +195,13 @@ const events = computed<CalendarEvent[]>(() => {
       story,
       start,
       end: story.event_precision === 'month' ? last.endOf('month') : last,
-      rating_class: `rating-${story_rating(story.labels)}`,
+      color_class: '',
     })
   }
   list.sort((a, b) => a.start.diff(b.start) || a.end.diff(b.end) || a.story.id - b.story.id)
+  list.forEach((event, index) => {
+    event.color_class = bar_palette[index % bar_palette.length]!
+  })
   return list
 })
 
@@ -212,7 +226,7 @@ const max_month = computed(() => {
 
 const displayed_month = ref(parse_initial_month())
 
-const month_label = computed(() => datetime_build_string(displayed_month.value, '{YY} 年 {M} 月'))
+const month_label = computed(() => format_event_entry('month', displayed_month.value))
 
 // Hovering any segment applies the hover effect to every segment of that event.
 const hovered_id = ref<number | null>(null)
@@ -356,7 +370,7 @@ function bar_state_class(segment: CalendarSegment) {
 function segment_background_class(segment: CalendarSegment) {
   if (segment.event.story.id === props.highlight_id)
     return '!bg-slate-700/80 dark:!bg-slate-200/80'
-  return segment.event.rating_class
+  return segment.event.color_class
 }
 
 function segment_style(segment: CalendarSegment) {

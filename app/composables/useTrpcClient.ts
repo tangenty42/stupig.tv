@@ -6,6 +6,7 @@ type RouterOutputs = inferRouterOutputs<AppRouter>
 interface UploadOutputByPath {
   'content.uploadAttachment': RouterOutputs['content']['uploadAttachment']
   'content.replaceAttachment': RouterOutputs['content']['replaceAttachment']
+  'content.createAbridgedAttachment': RouterOutputs['content']['createAbridgedAttachment']
   'profile.uploadAvatar': RouterOutputs['profile']['uploadAvatar']
 }
 

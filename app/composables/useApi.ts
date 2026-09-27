@@ -1,4 +1,5 @@
 import type { AppRouter } from '@server/trpc/router'
+import type { PermissionGrant } from '@shared/permissions'
 import type { ContentStoryDetail, ContentUploadSignRequest } from '@shared/types/content'
 import type { inferRouterInputs } from '@trpc/server'
 
@@ -13,6 +14,17 @@ export function get_error_status(error: unknown) {
     data?: { httpStatus?: number }
   }
   return value?.data?.httpStatus ?? value?.statusCode ?? value?.status
+}
+
+/**
+ * Whether the request itself was rejected — a 4xx the caller's input caused
+ * (broken markdown, a name taken meanwhile, a folder that is not empty) rather
+ * than a failure on our side. 401 is excluded: the session layer ends the
+ * session for it, so a toast would only repeat that.
+ */
+export function is_client_error(error: unknown) {
+  const status = get_error_status(error)
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 401
 }
 
 export function useApi() {
@@ -139,6 +151,10 @@ export function useApi() {
       await trpc_call(trpc.admin.setRole.mutate({ id, is_admin }))
     },
 
+    async set_permissions(id: number, permissions: PermissionGrant[]) {
+      await trpc_call(trpc.admin.setPermissions.mutate({ id, permissions }))
+    },
+
     async get_keywords() {
       const result = await trpc_call(trpc.admin.getKeywords.query())
       return { ... result, fields: [... result.fields] }
@@ -213,6 +229,16 @@ export function useApi() {
       return trpc_upload('content.replaceAttachment', form, on_progress, signal)
     },
 
+    /** Uploads the redacted bitmap the 删减版 editor exported for an encrypted image. */
+    async create_abridged_attachment(id: number, source_file_name: string, file: File) {
+      const form = new FormData()
+      form.append('story_id', String(id))
+      form.append('source_file_name', source_file_name)
+      form.append('file', file)
+
+      return trpc_upload('content.createAbridgedAttachment', form)
+    },
+
     async delete_attachment(id: number, file_name: string, markdown: string, base_revision: number) {
       await trpc_call(trpc.content.deleteAttachment.mutate({ id, file_name, markdown, base_revision }))
     },
@@ -231,6 +257,14 @@ export function useApi() {
 
     async move_attachments(id: number, moves: { file_name: string, target_folder: string | null }[]) {
       return trpc_call(trpc.content.moveAttachments.mutate({ id, moves }))
+    },
+
+    async encrypt_attachments(id: number, file_names: string[]) {
+      return trpc_call(trpc.content.encryptAttachments.mutate({ id, file_names }))
+    },
+
+    async decrypt_attachments(id: number, file_names: string[]) {
+      return trpc_call(trpc.content.decryptAttachments.mutate({ id, file_names }))
     },
 
     async create_folder(id: number, folder: string) {

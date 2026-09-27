@@ -42,6 +42,7 @@
             <MyBadge v-if="user.is_banned" outlined type="error">
               <span class="inline-flex items-center gap-1"><MyIcon name="lucide:ban" />已封禁</span>
             </MyBadge>
+            <MyPermissionBadge v-for="grant in user.permissions" :key="grant.field" :grant="grant" />
           </div>
 
           <div class="mt-3 text-xs text-slate-400">
@@ -56,7 +57,7 @@
         </div>
       </div>
 
-      <div class="mt-4 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-slate-100 pt-4 dark:border-slate-800">
+      <div v-if="can_manage" class="mt-4 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-slate-100 pt-4 dark:border-slate-800">
         <NuxtLink target="_blank" :to="profile_link" @click.stop>
           <Button size="small" text label="修改信息">
             <template #icon>
@@ -88,11 +89,11 @@
           size="small"
           :severity="user.is_verified ? 'secondary' : 'success'"
           text
-          :label="user.is_verified ? '移除认证' : '授予认证'"
+          :label="user.is_verified ? '修改认证' : '授予认证'"
           @click.stop="toggle_verified"
         >
           <template #icon>
-            <MyIcon :name="user.is_verified ? 'lucide:badge-x' : 'lucide:badge-check'" />
+            <MyIcon :name="user.is_verified ? 'lucide:pencil' : 'lucide:badge-check'" />
           </template>
         </Button>
 
@@ -100,11 +101,27 @@
           size="small"
           :severity="user.is_admin ? 'secondary' : 'warn'"
           text
+          :disabled="is_self_admin_demote"
+          :title="is_self_admin_demote ? '不能移除自己的管理员身份' : undefined"
           :label="user.is_admin ? '移除管理员' : '设为管理员'"
           @click.stop="toggle_admin"
         >
           <template #icon>
             <MyIcon :name="user.is_admin ? 'lucide:shield-off' : 'lucide:shield-check'" />
+          </template>
+        </Button>
+
+        <Button
+          size="small"
+          severity="secondary"
+          text
+          label="权限"
+          :disabled="user.is_admin"
+          :title="user.is_admin ? '管理员拥有全部权限' : undefined"
+          @click.stop="edit_permissions"
+        >
+          <template #icon>
+            <MyIcon name="lucide:key-round" />
           </template>
         </Button>
       </div>
@@ -115,22 +132,30 @@
 <script setup lang="ts">
 import type { AdminUser } from '@shared/types/user'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   user: AdminUser
   selected?: boolean
   disable_pending?: boolean
   logout_pending?: boolean
-}>()
+  can_manage?: boolean
+}>(), {
+  can_manage: false,
+})
 
 const emit = defineEmits<{
   (e: 'toggle-disabled', user: AdminUser): void
   (e: 'force-logout', user: AdminUser): void
   (e: 'toggle-verified', user: AdminUser): void
   (e: 'toggle-admin', user: AdminUser): void
+  (e: 'edit-permissions', user: AdminUser): void
   (e: 'toggle-select', id: number): void
 }>()
 
+const { user: auth_user } = useAuth()
+
 const profile_link = computed(() => `/u/${props.user.id}`)
+
+const is_self_admin_demote = computed(() => props.user.is_admin && props.user.id === auth_user.value?.id)
 
 const date_now = useReactiveDateNow()
 
@@ -148,6 +173,10 @@ function toggle_verified() {
 
 function toggle_admin() {
   emit('toggle-admin', props.user)
+}
+
+function edit_permissions() {
+  emit('edit-permissions', props.user)
 }
 </script>
 

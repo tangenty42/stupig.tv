@@ -36,6 +36,10 @@ export interface ContentStoryAttachment {
   version: string
   /** Root-relative path; prefix with the static base URL before rendering. */
   url: string
+  /** Server-side encrypted (`.good` suffix); the object at `url` is AES-256-GCM ciphertext. */
+  is_encrypted: boolean
+  /** base64 AES-256-GCM key, present only for viewers holding content_private:read. */
+  encryption_key?: string
 }
 
 export type ContentUploadS3Method = 'PUT' | 'POST' | 'GET' | 'DELETE'
@@ -55,7 +59,7 @@ export interface ContentUploadSignResponse {
 }
 
 /** Structural attachment operations that take a scope lock. */
-export type ContentOperationKind = 'move' | 'rename' | 'folder_create' | 'folder_delete' | 'delete'
+export type ContentOperationKind = 'move' | 'rename' | 'folder_create' | 'folder_delete' | 'delete' | 'encrypt' | 'decrypt' | 'redact'
 
 /**
  * A live attachment-operation lock on a scope, published so peers disable the
@@ -70,6 +74,8 @@ export interface ContentOperationLock {
 
 export interface ContentStoryDetail extends ContentStorySummary {
   markdown: string
+  /** Whether the stored markdown holds private elements (before any viewer stripping). */
+  has_private: boolean
   attachments: ContentStoryAttachment[]
   /** Explicitly created folder paths (empty folders persist as rows). */
   folders: string[]

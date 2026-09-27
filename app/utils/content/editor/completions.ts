@@ -97,8 +97,8 @@ export function attachment_completion_source(sources: EditorCompletionSources) {
     }))
     const files: Completion[] = sources.attachments().map(attachment => ({
       label: attachment.file_name,
-      detail: attachment.is_image ? '图片' : '附件',
-      type: attachment.is_image ? 'image' : 'file',
+      detail: attachment.is_encrypted ? '机密附件' : (attachment.is_image ? '图片' : '附件'),
+      type: attachment.is_encrypted ? (attachment.encryption_key ? 'encrypted' : 'encrypted-denied') : (attachment.is_image ? 'image' : 'file'),
       apply: attachment.file_name,
     }))
     // One list for both, in the same natural order the attachment list uses.
@@ -235,23 +235,22 @@ function alert_marker_completion_source(context: CompletionContext): CompletionR
 // `keyword`, replacing CodeMirror's built-in glyph). The iconify classes must
 // be preloaded by the component so the injected spans display.
 const completion_icon_by_type: Record<string, string> = {
-  story: 'lucide:book-open',
-  file: 'lucide:file',
-  image: 'lucide:image',
-  folder: 'lucide:folder',
-  keyword: 'lucide:tag',
+  'story': 'lucide:book-open',
+  'file': 'lucide:file',
+  'image': 'lucide:image',
+  'folder': 'lucide:folder',
+  'keyword': 'lucide:tag',
+  'encrypted': 'lucide:lock',
+  'encrypted-denied': 'lucide:lock',
 }
 export const completion_icon_names = [... new Set(Object.values(completion_icon_by_type))]
 
-// Injects the type icon into an autocomplete option; returns null for types
-// without a custom icon so their default glyph stays.
-function completion_icon_renderer(completion: Completion): Node | null {
+// Injects the type icon into an autocomplete option. The span keeps its width
+// for a type with no icon, so every label starts at the same x.
+function completion_icon_renderer(completion: Completion): Node {
   const icon = completion.type ? completion_icon_by_type[completion.type] : undefined
-  if (! icon) {
-    return null
-  }
   const span = document.createElement('span')
-  span.className = `completion-type-icon iconify i-${icon}`
+  span.className = icon ? `completion-type-icon iconify i-${icon}` : 'completion-type-icon'
   span.setAttribute('aria-hidden', 'true')
   return span
 }
@@ -264,6 +263,13 @@ export function create_completion_extensions(sources: EditorCompletionSources) {
       label_completion_source(sources),
       alert_marker_completion_source,
     ],
+    // The library's own icon renderer renders a `cm-completionIcon-<type>`
+    // element for every option, and only known type names get a glyph through
+    // its stylesheet — for the rest it is an empty box that still takes
+    // `0.8em + 0.6em`, which indented exactly the types missing from a CSS
+    // hide-list (the encrypted attachments sat right of the plaintext ones).
+    // Ours replaces it outright, so the label column is flush for every type.
+    icons: false,
     addToOptions: [{
       render: completion_icon_renderer,
       position: 20,

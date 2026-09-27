@@ -33,6 +33,10 @@
   --p-togglebutton-border-radius: theme('borderRadius.full');
   --p-togglebutton-content-border-radius: theme('borderRadius.full');
   --p-selectbutton-border-radius: theme('borderRadius.full');
+
+  /* Aura's 3px track is a small thing to aim at. The handle keeps its own
+     `slider.handle` size and centring margins, so only the bar changes. */
+  --p-slider-track-size: .5rem;
 }
 
 .p-component {

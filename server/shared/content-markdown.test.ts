@@ -1,15 +1,22 @@
 import type { ContentMarkdownConfig } from './content-markdown'
 import { describe, expect, it } from 'vitest'
 import {
+  attachment_base_name,
+  attachment_name_segment_violation,
+  attachment_path_violation,
   compare_attachment_names,
+  decrypted_attachment_name,
   extract_attachment_names,
   extract_story_reference_titles,
   folder_file_count,
   folder_images,
   is_attachment_folder,
+  is_encrypted_attachment,
   parse_story_markdown,
+  redactable_attachment_mime,
   rename_attachment_references,
   rename_story_references,
+  split_attachment_editable_name,
 } from './content-markdown'
 
 const config: ContentMarkdownConfig = {
@@ -286,15 +293,162 @@ describe('rename_story_references', () => {
   })
 })
 
+describe('encrypted attachment naming', () => {
+  it('reads the .good suffix as the encryption marker', () => {
+    expect(is_encrypted_attachment('photo.png.good')).toBe(true)
+    expect(is_encrypted_attachment('photo.png')).toBe(false)
+  })
+
+  it('recovers the pre-encryption name, including the folder prefix', () => {
+    expect(decrypted_attachment_name('cards/photo.png.good')).toBe('cards/photo.png')
+    // A plaintext name is already its own answer.
+    expect(decrypted_attachment_name('cards/photo.png')).toBe('cards/photo.png')
+  })
+
+  it('keeps a .good file whose stem already looks like one intact', () => {
+    // Only the suffix comes off, so a name that itself ends in `good` survives.
+    expect(decrypted_attachment_name('a.good.good')).toBe('a.good')
+  })
+})
+
+describe('attachment name rules', () => {
+  // The single source of truth every operation's guard is built on: upload,
+  // rename, replace, folder create/rename/move. A rule that only held in one of
+  // them is exactly the bug this consolidates away.
+  describe('attachment_name_segment_violation', () => {
+    it('accepts ordinary names', () => {
+      expect(attachment_name_segment_violation('photo.png')).toBeNull()
+      expect(attachment_name_segment_violation('蠢猪组提交.jpg')).toBeNull()
+      expect(attachment_name_segment_violation('photo-1_final.png')).toBeNull()
+    })
+
+    it('reserves the .good suffix, whichever kind of entry asks', () => {
+      // Encrypting is the only thing allowed to append it, and a hand-made one
+      // would occupy the very name a real decrypt (or 删减版) needs.
+      expect(attachment_name_segment_violation('photo.png.good')).toContain('.good')
+      expect(attachment_name_segment_violation('cards.good')).toContain('.good')
+    })
+
+    it('rejects illegal characters', () => {
+      expect(attachment_name_segment_violation('a/b.png')).toContain('不支持的字符')
+      expect(attachment_name_segment_violation('a:b.png')).toContain('不支持的字符')
+      expect(attachment_name_segment_violation('a?b.png')).toContain('不支持的字符')
+      // Whitespace and parens are in the rejected set too — uploads are
+      // sanitized into names without them, so a rename must not introduce one.
+      expect(attachment_name_segment_violation('a b.png')).toContain('不支持的字符')
+      expect(attachment_name_segment_violation('photo (1).png')).toContain('不支持的字符')
+    })
+
+    it('rejects a leading or trailing dot', () => {
+      expect(attachment_name_segment_violation('.hidden')).toContain('点号')
+      expect(attachment_name_segment_violation('name.')).toContain('点号')
+    })
+
+    it('rejects the Windows device names', () => {
+      expect(attachment_name_segment_violation('con')).toContain('系统保留名')
+      expect(attachment_name_segment_violation('COM1.txt')).toContain('系统保留名')
+      expect(attachment_name_segment_violation('console.txt')).toBeNull()
+    })
+
+    it('rejects an empty name', () => {
+      expect(attachment_name_segment_violation('')).toContain('不能为空')
+    })
+  })
+
+  describe('attachment_path_violation', () => {
+    it('accepts a nested path whose every level is legal', () => {
+      expect(attachment_path_violation('cards/sub/photo.png')).toBeNull()
+    })
+
+    it('reports the offending level, not the whole path', () => {
+      expect(attachment_path_violation('cards/bad.good/photo.png')).toContain('.good')
+      expect(attachment_path_violation('cards/sub/bad:name.png')).toContain('不支持的字符')
+    })
+
+    it('catches a suffix on the file itself', () => {
+      expect(attachment_path_violation('cards/photo.png.good')).toContain('.good')
+    })
+  })
+})
+
+describe('split_attachment_editable_name', () => {
+  // The rename prompt locks this tail and edits the rest, and the server judges
+  // legality on the rest, so both sides have to agree on where the split is.
+  it('locks the extension and the marker together', () => {
+    expect(split_attachment_editable_name('photo.png.good'))
+      .toEqual({ editable: 'photo', locked: '.png.good' })
+  })
+
+  it('locks only the marker when the plaintext name has no extension', () => {
+    expect(split_attachment_editable_name('plain_file.good'))
+      .toEqual({ editable: 'plain_file', locked: '.good' })
+  })
+
+  it('locks the extension of a plaintext file', () => {
+    expect(split_attachment_editable_name('photo.png'))
+      .toEqual({ editable: 'photo', locked: '.png' })
+  })
+
+  it('splits the base name, not the folder, so a dotted folder stays intact', () => {
+    expect(split_attachment_editable_name('my.dir/photo.png.good'))
+      .toEqual({ editable: 'photo', locked: '.png.good' })
+    // The dotted folder must not be mistaken for an extension.
+    expect(split_attachment_editable_name('my.dir/photo'))
+      .toEqual({ editable: 'photo', locked: '' })
+  })
+
+  it('keeps dots that are part of the editable name', () => {
+    expect(split_attachment_editable_name('my.archive.tar.gz'))
+      .toEqual({ editable: 'my.archive.tar', locked: '.gz' })
+  })
+
+  it('leaves a name with no extension entirely editable', () => {
+    expect(split_attachment_editable_name('README')).toEqual({ editable: 'README', locked: '' })
+  })
+
+  it('recomposes the original name', () => {
+    for (const name of ['photo.png.good', 'plain_file.good', 'photo.png', 'a/b.tar.gz', 'README']) {
+      const { editable, locked } = split_attachment_editable_name(name)
+      expect(`${editable}${locked}`).toBe(attachment_base_name(name))
+    }
+  })
+})
+
+describe('redactable_attachment_mime', () => {
+  it('accepts the formats the canvas can read and write back', () => {
+    expect(redactable_attachment_mime('photo.png.good')).toBe('image/png')
+    expect(redactable_attachment_mime('photo.jpg.good')).toBe('image/jpeg')
+    expect(redactable_attachment_mime('photo.jpeg.good')).toBe('image/jpeg')
+    expect(redactable_attachment_mime('photo.webp.good')).toBe('image/webp')
+    expect(redactable_attachment_mime('photo.bmp.good')).toBe('image/bmp')
+  })
+
+  it('reads the format from the name without the .good suffix', () => {
+    // The suffix is appended to the original extension, so the mime lives before it.
+    expect(redactable_attachment_mime('photo.png.good')).toBe(redactable_attachment_mime('photo.png'))
+  })
+
+  it('rejects animated and non-canvas formats rather than transcoding them', () => {
+    expect(redactable_attachment_mime('anim.gif.good')).toBeNull()
+    expect(redactable_attachment_mime('photo.avif.good')).toBeNull()
+    expect(redactable_attachment_mime('drawing.svg.good')).toBeNull()
+  })
+
+  it('rejects names with no known extension', () => {
+    expect(redactable_attachment_mime('photo')).toBeNull()
+    expect(redactable_attachment_mime('photo.png.good.bak')).toBeNull()
+  })
+})
+
 describe('parse_story_markdown at-story lint', () => {
   it('flags dead references with the body line number', () => {
     const { issues } = parse_story_markdown(story_doc('前言\n\n[](@不存在档案)'), config)
-    expect(issues).toContainEqual({ line: 8, severity: 'error', source: 'at-story', message: '档案『不存在档案』不可引用' })
+    expect(issues).toEqual([{ line: 8, severity: 'error', source: 'at-story', message: '档案『不存在档案』不可引用' }])
   })
 
   it('flags self references', () => {
     const { issues } = parse_story_markdown(story_doc('[](@测试档案)'), config)
-    expect(issues).toContainEqual({ line: 6, severity: 'error', source: 'at-story', message: '不允许自我引用' })
+    expect(issues).toEqual([{ line: 6, severity: 'error', source: 'at-story', message: '不允许自我引用' }])
   })
 
   it('accepts references to existing stories, including nested ones', () => {

@@ -135,10 +135,8 @@
      yellow 人上人) stay readable. */
   .watermark {
     @apply relative;
-    /* overflow:clip + a 1px clip margin lets a bleeding child (e.g. a top
-       cover) paint over the host's border, folding the border behind it. */
+    /* clip keeps the oversized ::before tile layer inside the block's box. */
     overflow: clip;
-    overflow-clip-margin: 1px;
   }
 
   .watermark::before {
@@ -159,8 +157,7 @@
     @apply relative;
   }
 
-  /* Rating badge palette. Global because the story calendar's event bars use
-     these classes without rendering the Rating component. */
+  /* Rating badge palette. */
   .rating-难评 {
     @apply bg-slate-400 dark:bg-slate-500;
   }

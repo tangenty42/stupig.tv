@@ -1,7 +1,7 @@
 <template>
   <div class="pb-12 pt-8">
     <template v-if="story">
-      <MyContentStoryHeader back :editable="is_admin" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-url="story.cover_url" :date="format_event_range(story.event_precision, story.event_dates)" :story-id="story.id" />
+      <MyContentStoryHeader back :editable="can_manage_content" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-url="story.cover_url" :date="format_event_range(story.event_precision, story.event_dates)" :story-id="story.id" />
 
       <MyDivider class="mt-12">
         正文
@@ -47,7 +47,8 @@
 <script setup lang="ts">
 import type { ContentStoryAttachment, ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
 import type { MyContentAttachmentRow } from '~/utils/content/attachment'
-import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, compare_attachment_names } from '@shared/content-markdown'
+import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, compare_attachment_names, decrypted_attachment_name } from '@shared/content-markdown'
+import { has_permission } from '@shared/permissions'
 import { sync_resource } from '@shared/types/sync'
 import { story_front_cover_url } from '~/utils/content/attachment'
 import { format_event_range } from '~/utils/content/event'
@@ -57,7 +58,7 @@ const { content } = useApi()
 const { user } = useAuth()
 
 const story_id = computed(() => Number(route.params.id))
-const is_admin = computed(() => Boolean(user.value?.is_admin))
+const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full'))
 
 const story = useState<ContentStoryDetail | null>(`content_story_view_${String(route.params.id)}`, () => null)
 const loading = useState(`content_story_view_loading_${String(route.params.id)}`, () => false)
@@ -106,6 +107,11 @@ const attachment_folder_names = computed(() => {
   }
   return [... names].sort(compare_attachment_names)
 })
+
+/** Plaintext names that are the 删减版 twin of an encrypted sibling. */
+const abridged_twin_names = computed(() => new Set(
+  (story.value?.attachments ?? []).filter(attachment => attachment.is_encrypted).map(attachment => decrypted_attachment_name(attachment.file_name)),
+))
 
 const attachment_groups = computed(() => {
   const groups = new Map<string | null, ContentStoryAttachment[]>()
@@ -175,7 +181,12 @@ const attachment_rows = computed<MyContentAttachmentRow[]>(() => {
           selection_count: 0,
           delete_pending: false,
           delete_disabled: false,
-          rename_disabled: true,
+          // The read-only view offers no encrypt/decrypt, 删减版 or replace actions.
+          delete_blocked_reasons: [],
+          encrypt_pending: false,
+          encrypt_blocked_reasons: [],
+          decrypt_blocked_reasons: [],
+          replace_blocked_reasons: [],
           replace_disabled: true,
           retry_disabled: true,
           move_pending: false,
@@ -190,14 +201,19 @@ const attachment_rows = computed<MyContentAttachmentRow[]>(() => {
       rows.push({
         key: `stored:${attachment.file_name}`,
         depth,
-        data: { ... attachment, kind: 'stored', referenced: true },
+        data: { ... attachment, kind: 'stored', referenced: true, is_abridged_twin: abridged_twin_names.value.has(attachment.file_name) },
         state: {
           selected: false,
           selection_edges: null,
           selection_count: 0,
           delete_pending: false,
           delete_disabled: true,
-          rename_disabled: true,
+          // The read-only view offers no encrypt/decrypt, 删减版 or replace actions.
+          delete_blocked_reasons: [],
+          encrypt_pending: false,
+          encrypt_blocked_reasons: [],
+          decrypt_blocked_reasons: [],
+          replace_blocked_reasons: [],
           replace_disabled: true,
           retry_disabled: true,
           move_pending: false,
@@ -207,7 +223,7 @@ const attachment_rows = computed<MyContentAttachmentRow[]>(() => {
           key: `stored:${attachment.file_name}`,
           kind: 'stored',
           attachment,
-          card: { ... attachment, kind: 'stored', referenced: true },
+          card: { ... attachment, kind: 'stored', referenced: true, is_abridged_twin: abridged_twin_names.value.has(attachment.file_name) },
         },
       })
     }

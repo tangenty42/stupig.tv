@@ -1,5 +1,6 @@
-import { link_file_name_byte_length, link_file_name_illegal_chars, link_file_name_reserved_base } from '@shared/content-markdown'
+import { attachment_name_segment_violation, link_file_name_byte_length } from '@shared/content-markdown'
 import { env } from '@shared/env'
+import { is_valid_permission_grant, normalize_permission_grants } from '@shared/permissions'
 import { form_schema, phone_schema } from '@shared/schemas'
 import * as z from 'zod'
 
@@ -22,6 +23,11 @@ const public_id_input = z.object({
   id: z.coerce.number().int().positive(),
 })
 
+const permission_grant_input = z.object({
+  field: z.string(),
+  level: z.string(),
+}).refine(grant => is_valid_permission_grant(grant.field, grant.level), '权限项不合法')
+
 const content_story_update = z.object({
   markdown: markdown_input,
   delete_files: z.array(z.string().min(1).max(255)).max(500).optional().default([]),
@@ -33,29 +39,48 @@ const content_scope_input = z.object({
   id: z.coerce.number().int().min(0),
 })
 
-/** One path segment (file base name or folder name): no dots at the edges, no illegal chars, not reserved. */
-function is_valid_name_segment(name: string) {
-  return Boolean(name)
-    && ! name.startsWith('.')
-    && ! name.endsWith('.')
-    && ! name.match(link_file_name_illegal_chars)
-    && ! link_file_name_reserved_base.test(name.split('.')[0] ?? '')
+/**
+ * One path segment (file base name or folder name) drawn from the shared name
+ * rules, so the request schema and the service's name guard cannot drift apart.
+ * The message is the shared one, which is also what the editor shows inline.
+ */
+function assert_valid_name_segment(name: string, ctx: z.RefinementCtx) {
+  const violation = attachment_name_segment_violation(name)
+  if (violation)
+    ctx.addIssue({ code: 'custom', message: violation })
 }
 
 /** A bare file name or a (possibly nested) `folder/name` path. */
 const attachment_path_input = z.string()
   .trim()
   .min(1, '文件名不能为空')
-  .refine(name => name.split('/').every(is_valid_name_segment), '文件名包含不支持的字符')
+  .superRefine((name, ctx) => name.split('/').forEach(segment => assert_valid_name_segment(segment, ctx)))
   .refine(name => link_file_name_byte_length(name) <= env.CONTENT_LINK_FILE_NAME_MAX_BYTES, '文件名太长')
 
-/** A (possibly nested) folder path; null targets the root. */
+/**
+ * A (possibly nested) folder path being CREATED or RENAMED, which is therefore
+ * a new name and has to satisfy the name rules. Null targets the root.
+ */
 const folder_path_input = z.string()
   .trim()
   .min(1)
   .max(255)
-  .refine(name => name.split('/').every(is_valid_name_segment), '文件夹路径包含不支持的字符')
+  .superRefine((name, ctx) => name.split('/').forEach(segment => assert_valid_name_segment(segment, ctx)))
   .nullable()
+
+/**
+ * A path addressing something the scope already holds: the folder being renamed
+ * or removed, a folder a file is moved into, a file being replaced.
+ *
+ * Deliberately NOT run through the name rules. Those exist to stop a NEW name
+ * from faking the encryption marker, and an existing row's name is not new — it
+ * is whatever earlier requests (or history) put there. Validating it makes such
+ * a row impossible to operate on at all, which is how a folder that had acquired
+ * a `.good` name became impossible to rename: the request was refused for its
+ * SOURCE argument, before the service could even look at the new name.
+ * Existence is the service's business (a missing folder is a 404).
+ */
+const existing_path_input = z.string().trim().min(1).max(255)
 
 export const api_schema = {
   auth: {
@@ -106,6 +131,9 @@ export const api_schema = {
     set_role: public_id_input.extend({
       is_admin: z.boolean(),
     }),
+    set_permissions: public_id_input.extend({
+      permissions: z.array(permission_grant_input).max(100).transform(grants => normalize_permission_grants(grants)),
+    }),
   },
 
   content: {
@@ -134,7 +162,7 @@ export const api_schema = {
       file_name: z.string().min(1).max(255),
     }),
     replace_attachment: z.instanceof(FormData),
-    rename_attachment: public_id_input.extend({
+    rename_attachment: content_scope_input.extend({
       old_file_name: z.string().min(1).max(255),
       file_name: attachment_path_input,
     }),
@@ -148,24 +176,33 @@ export const api_schema = {
     }),
     move_attachment: content_scope_input.extend({
       file_name: z.string().min(1).max(255),
-      // Empty folders are editor-local, so the target folder is validated as a
-      // well-formed path only — the move creates the prefix implicitly.
-      target_folder: folder_path_input,
+      // Empty folders are editor-local, so the target folder is an existing
+      // path the caller already knows: the move creates the prefix implicitly.
+      target_folder: existing_path_input.nullable(),
     }),
     move_attachments: content_scope_input.extend({
       moves: z.array(z.object({
         file_name: z.string().min(1).max(255),
-        target_folder: folder_path_input,
+        target_folder: existing_path_input.nullable(),
       })).min(1).max(500),
     }),
+    encrypt_attachments: content_scope_input.extend({
+      file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
+    }),
+    decrypt_attachments: content_scope_input.extend({
+      file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
+    }),
+    create_abridged_attachment: z.instanceof(FormData),
     create_folder: content_scope_input.extend({
       folder: folder_path_input.unwrap(),
     }),
     delete_folder: content_scope_input.extend({
-      folder: folder_path_input.unwrap(),
+      folder: existing_path_input,
     }),
     move_folder: content_scope_input.extend({
-      source_folder: folder_path_input.unwrap(),
+      // The source is where the folder IS, the destination is the new name it
+      // takes: only the destination answers to the name rules.
+      source_folder: existing_path_input,
       new_folder: folder_path_input.unwrap(),
     }),
     get_bilibili_video_cards: z.object({

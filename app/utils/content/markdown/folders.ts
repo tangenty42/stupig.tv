@@ -5,7 +5,9 @@ import { local_file_name } from './links'
 /**
  * A folder reference written as an image (`![](cards)`) expands into one image
  * per image inside that folder, in the attachment list's order — the same
- * result as writing a bare `![](file.png)` for each file.
+ * result as writing one `![](file.png)` tag per file. The reference's own
+ * label carries onto every expansion, so `![卡片](cards)` renders exactly like
+ * the labeled per-file tags.
  *
  * It runs as a core rule placed before the carousel rule, so the expanded run
  * is treated exactly like hand-written consecutive images: a folder of two or
@@ -16,15 +18,17 @@ export const folder_images_plugin: StoryMarkdownPlugin = (md, ctx) => {
   // Anchored to the carousel rule, so carousel_plugin must run first.
   md.core.ruler.before('image_carousels', 'folder_image_expansion', (state) => {
     /**
-     * A bare image token. The alt is deliberately left empty: the image rule
-     * fills it with the base file name, which is what an unlabeled
-     * `![](file.png)` renders.
+     * One expanded image: the reference token with only the src swapped for
+     * the file name. Keeping the label (and any title) is what makes the
+     * reference identical to the spelled-out tags; an empty label still falls
+     * back to the base file name in the image rule.
      */
-    function image_token(file_name: string) {
+    function image_token(source: InstanceType<typeof state.Token>, file_name: string) {
       const token = new state.Token('image', 'img', 0)
-      token.attrs = [['src', file_name], ['alt', '']]
-      token.children = []
-      token.content = ''
+      token.attrs = source.attrs?.map(attribute => [... attribute]) ?? []
+      token.attrSet('src', file_name)
+      token.children = source.children ? [... source.children] : []
+      token.content = source.content
       return token
     }
 
@@ -55,7 +59,7 @@ export const folder_images_plugin: StoryMarkdownPlugin = (md, ctx) => {
           continue
         }
 
-        children.splice(index, 1, ... images.map(image => image_token(image.file_name)))
+        children.splice(index, 1, ... images.map(image => image_token(child, image.file_name)))
         index += images.length - 1
       }
     }

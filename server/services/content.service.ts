@@ -1,18 +1,22 @@
+import type { AuthUser } from '@server/types/auth'
 import type { ContentMarkdownConfig, ContentStoryMeta } from '@shared/content-markdown'
 import type { ContentOperationKind, ContentStoryAttachment, ContentStoryDetail, ContentUploadSignRequest } from '@shared/types/content'
 import type { Connection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { extname } from 'node:path'
 import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, ListPartsCommand, PutObjectCommand, UploadPartCommand } from '@aws-sdk/client-s3'
 import { ApiError } from '@server/errors/ApiError'
+import { decrypt_attachment, encrypt_attachment } from '@server/lib/attachment-crypto'
 import { db } from '@server/lib/db'
 import { acquire_operation_lock, content_scope_lock_id, get_operation_lock, release_operation_lock } from '@server/lib/operation-lock'
 import { random_file_token } from '@server/lib/random'
-import { copy_object, delete_object, head_object, put_object, signed_object_url } from '@server/lib/storage'
+import { copy_object, delete_object, get_object, head_object, put_object, signed_object_url } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { claim_attachment_rows, create_folder_rows, delete_attachment_rows, delete_folder_rows, delete_story_attachment_rows, folder_target_taken, get_scope_attachment, get_scope_object_keys, get_story_object_keys, insert_attachment_row, list_cover_urls, list_folder_attachment_rows, list_scope_attachments, list_scope_folders, move_folder_rows, rename_attachment_row, update_attachment_row_object } from '@server/services/content-attachments.service'
-import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_mime_type, attachment_path_join, extract_attachment_names, extract_story_reference_titles, link_file_name_byte_length, parse_story_markdown, rename_attachment_references, rename_story_references, sanitize_attachment_file_name, sanitize_attachment_path } from '@shared/content-markdown'
+import { claim_attachment_rows, create_folder_rows, delete_attachment_rows, delete_folder_rows, delete_rows_by_ids, delete_story_attachment_rows, get_scope_attachment, get_scope_object_keys, get_story_object_keys, insert_attachment_row, list_cover_urls, list_folder_subtree_rows, list_scope_attachments, list_scope_encryption_keys, list_scope_file_rows, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id, update_attachment_row_encryption, update_attachment_row_object } from '@server/services/content-attachments.service'
+import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, extract_story_reference_titles, is_encrypted_attachment, link_file_name_byte_length, parse_story_markdown, redactable_attachment_mime, rename_attachment_references, rename_story_references, sanitize_attachment_file_name, sanitize_attachment_path } from '@shared/content-markdown'
+import { has_private_content, redact_private_content } from '@shared/content-private'
 import { env } from '@shared/env'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
+import { has_permission } from '@shared/permissions'
 
 interface StoryRow extends RowDataPacket {
   id: number
@@ -59,7 +63,8 @@ interface AttachmentUploadOptions {
 const upload_url_expires_seconds = 15 * 60
 
 function content_upload_key_prefix(story_id: number) {
-  return `content-upload/${story_id}/`
+  // Unsaved stories upload under 'new' (client-side upload_scope), not '0'.
+  return `content-upload/${story_id > 0 ? story_id : 'new'}/`
 }
 
 function assert_content_upload_key(story_id: number, key: string) {
@@ -70,8 +75,10 @@ function assert_content_upload_key(story_id: number, key: string) {
 
 export async function sign_attachment_upload(input: ContentUploadSignRequest) {
   assert_content_upload_key(input.story_id, input.key)
-  if (input.story_id > 0)
-    await get_story(input.story_id)
+  // The orphan staging pool is gone: uploads start only after the story exists.
+  if (! input.story_id)
+    throw new ApiError(403, '请先保存档案，再上传附件')
+  await get_story(input.story_id)
 
   const common = { Bucket: env.OSS_BUCKET, Key: input.key }
   let command
@@ -108,6 +115,8 @@ export async function sign_attachment_upload(input: ContentUploadSignRequest) {
 
 export async function confirm_attachment_upload(story_id: number, key: string, raw_file_name: string, max_size_mb: number) {
   assert_content_upload_key(story_id, key)
+  if (! story_id)
+    throw new ApiError(403, '请先保存档案，再上传附件')
   const object = await head_object(key)
   if (object.size > max_size_mb * 1024 * 1024) {
     await delete_object(key).catch(() => {})
@@ -115,11 +124,9 @@ export async function confirm_attachment_upload(story_id: number, key: string, r
   }
 
   const base_name = sanitize_attachment_path(raw_file_name, env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
-  const existing = story_id > 0 ? (await get_story(story_id)).attachments : await list_scope_attachments(null)
-  const ext = extname(attachment_base_name(base_name)).toLowerCase()
-  const file_name = attachment_name_taken_in(existing, base_name)
-    ? suffixed_attachment_name(base_name, ext)
-    : base_name
+  // A signed upload can outlive its story, so the scope is revalidated here.
+  await get_story(story_id)
+  const file_name = resolve_attachment_name(base_name, await list_scope_paths(story_id), 'suffix')
   const target_key = `content/att/${crypto.randomUUID()}`
   const etag = await copy_object(key, target_key)
   await delete_object(key).catch(() => {})
@@ -139,11 +146,10 @@ export async function confirm_attachment_upload(story_id: number, key: string, r
     throw ex
   }
 
-  if (story_id > 0)
-    publish_refresh({ resource: sync_resource('content_story', story_id) })
-  else
-    publish_refresh({ resource: sync_resource('content_orphan_attachments', 'all') })
-  const row = await get_scope_attachment(story_id > 0 ? story_id : null, file_name)
+  const scope_id = story_id > 0 ? story_id : null
+  await materialize_attachment_folders(scope_id, file_name)
+  await publish_attachment_change(scope_id)
+  const row = await get_scope_attachment(scope_id, file_name)
   if (! row)
     throw new ApiError(500, '附件写入失败，请重试')
   return row
@@ -155,6 +161,25 @@ function get_form_file(form: FormData, field: string) {
     throw new ApiError(400, '请先选择要上传的文件')
   }
   return file
+}
+
+/**
+ * A file landing inside a folder makes that folder a row of its own.
+ *
+ * Folders otherwise exist only implicitly, through the files under them, so an
+ * uploaded folder would disappear the moment its last file was deleted or moved
+ * out — taking the structure the author uploaded with it. Recording the folder
+ * when it first receives a file is what makes "every folder has a row" hold, so
+ * no later operation has to invent one. Existing rows are kept, so a second
+ * file in the same folder (or a re-upload) costs nothing.
+ *
+ * A directory that is empty to begin with still cannot arrive this way: a
+ * picker yields no files for it, which is what 新建文件夹 is for.
+ */
+async function materialize_attachment_folders(story_id: number | null, file_name: string) {
+  const ancestors = attachment_ancestor_folders(file_name)
+  if (ancestors.length)
+    await create_folder_rows(story_id, ancestors)
 }
 
 function parse_or_throw(markdown: string, existing_titles: ContentMarkdownConfig['existing_titles']) {
@@ -235,16 +260,6 @@ function parse_event_dates(value: string | string[]) {
   return dates.sort((a, b) => a.localeCompare(b))
 }
 
-/**
- * Case-insensitive name collision check over an already-fetched list. Matches
- * the dropped table's utf8mb4_unicode_ci unique index, which rejected `A.png`
- * vs `a.png` duplicates.
- */
-function attachment_name_taken_in(attachments: { file_name: string }[], file_name: string, ignore_file_name: string | null = null) {
-  const target = file_name.toLowerCase()
-  return attachments.some(item => item.file_name !== ignore_file_name && item.file_name.toLowerCase() === target)
-}
-
 function parse_labels(value: string) {
   return value.split(/\s+/).filter(Boolean)
 }
@@ -289,7 +304,8 @@ export async function list_stories() {
 
 export async function get_story(id: number): Promise<ContentStoryDetail>
 export async function get_story(id: number, base_updated_at: string): Promise<ContentStoryDetail | null>
-export async function get_story(id: number, base_updated_at?: string): Promise<ContentStoryDetail | null> {
+export async function get_story(id: number, base_updated_at: string | undefined, viewer: AuthUser | null): Promise<ContentStoryDetail | null>
+export async function get_story(id: number, base_updated_at?: string, viewer?: AuthUser | null): Promise<ContentStoryDetail | null> {
   if (base_updated_at !== undefined) {
     const [versions] = await db.execute<RowDataPacket[]>(
       'SELECT updated_at FROM content_stories WHERE id = ?',
@@ -314,13 +330,32 @@ export async function get_story(id: number, base_updated_at?: string): Promise<C
   }
 
   const attachments = await list_scope_attachments(story.id)
+  // The per-file decryption keys ship only to viewers who may read private
+  // content; everyone else learns that a file is encrypted, never its key.
+  if (viewer && has_permission(viewer, 'content_private', 'read')) {
+    const keys = await list_scope_encryption_keys(story.id)
+    if (keys.size) {
+      for (const attachment of attachments) {
+        const key = keys.get(attachment.file_name)
+        if (key)
+          attachment.encryption_key = key
+      }
+    }
+  }
+  const has_private = has_private_content(story.markdown)
+  // viewer === undefined: internal call, full markdown. viewer === null or a
+  // user without the content_private permission: private elements stripped.
+  const markdown = viewer !== undefined && ! has_permission(viewer, 'content_private', 'read')
+    ? redact_private_content(story.markdown)
+    : story.markdown
   return {
     id: story.id,
     title: story.title,
     labels: parse_labels(story.label),
     event_precision: story.event_precision,
     event_dates: parse_event_dates(story.event_dates),
-    markdown: story.markdown,
+    markdown,
+    has_private,
     attachments,
     folders: await list_scope_folders(story.id),
     created_at: story.created_at,
@@ -338,7 +373,10 @@ function story_event_dates(meta: ContentStoryMeta) {
   return JSON.stringify(dates)
 }
 
-export async function create_story(created_by: number, markdown: string, claim_files: string[]) {
+export async function create_story(created_by: number, markdown: string, claim_files: string[], can_private: boolean) {
+  if (! can_private && has_private_content(markdown)) {
+    throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
+  }
   const existing_titles = await existing_story_titles(0)
   const meta = parse_or_throw(markdown, existing_titles)
   await ensure_unique_title(meta.title, 0)
@@ -375,8 +413,13 @@ async function claim_attachments(story_id: number, file_names: string[]) {
  * `delete_files` (trash bin confirmation flow). Returns the accepted file
  * names for callers that need to confirm a requested deletion occurred.
  */
-export async function update_story(id: number, markdown: string, delete_files: string[], base_revision: number) {
+export async function update_story(id: number, markdown: string, delete_files: string[], base_revision: number, can_private: boolean) {
   const story = await get_story(id)
+  // Old markdown checked too: an editor without the private permission must
+  // not silently delete private elements by saving over them.
+  if (! can_private && (has_private_content(markdown) || has_private_content(story.markdown))) {
+    throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
+  }
   const existing_titles = await existing_story_titles(id)
   const meta = parse_or_throw(markdown, existing_titles)
   await ensure_unique_title(meta.title, id)
@@ -506,6 +549,22 @@ function publish_attachment_refresh(story_id: number | null) {
 }
 
 /**
+ * Announces a finished attachment change.
+ *
+ * `content_stories.updated_at` is the token subscribers pass as `base_updated_at`
+ * to skip refetching an unchanged story, and attachment rows live in their own
+ * table — so a change that leaves the story row alone (an upload, a folder, a
+ * rename of an unreferenced file) has to bump it here, or every connected client
+ * would keep rendering the attachment list it already had. The bump also
+ * reorders the story list, which sorts by it.
+ */
+async function publish_attachment_change(story_id: number | null) {
+  if (story_id !== null)
+    await db.execute('UPDATE content_stories SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [story_id])
+  publish_attachment_refresh(story_id)
+}
+
+/**
  * Runs an attachment structure change under the scope's operation lock.
  *
  * The lock is broadcast on acquire and release as part of the attachment
@@ -588,8 +647,12 @@ export async function create_folder(story_id: number | null, folder: string) {
   await with_attachment_lock(story_id, 'folder_create', async () => {
     if (story_id !== null)
       await get_story(story_id)
-    await create_folder_rows(story_id, [... attachment_ancestor_folders(folder), folder])
-    publish_attachment_refresh(story_id)
+    // A name is one path for both kinds: a file already answering to it — or
+    // holding contents that make the name a folder in its own right — keeps the
+    // folder from existing under it.
+    const folder_path = resolve_attachment_name(folder, await list_scope_paths(story_id), 'reject')
+    await create_folder_rows(story_id, [... attachment_ancestor_folders(folder_path), folder_path])
+    await publish_attachment_change(story_id)
   })
   // Read after the lock is released, so the payload reports the scope as idle
   // instead of echoing the caller's own finished operation back as in flight.
@@ -602,14 +665,17 @@ export async function delete_folder(story_id: number | null, folder: string) {
     if (story_id !== null)
       await get_story(story_id)
     await delete_folder_rows(story_id, folder)
-    publish_attachment_refresh(story_id)
+    await publish_attachment_change(story_id)
   })
   return attachment_scope_payload(story_id)
 }
 
 /**
- * Moves/renames a folder: every row under the old prefix (files and
- * subfolders) gets the new one; story markdown/cover references follow.
+ * Moves/renames a folder: every row of its subtree (files, subfolders and the
+ * source folder row itself — no empty folder is left behind) gets the new
+ * prefix; story markdown/cover references follow. A folder row landing where a
+ * folder already exists merges into it (dropping `a/a` onto the root yields
+ * `a`, not a conflict); files still refuse a taken path with a 409.
  */
 export async function move_folder(story_id: number | null, source_folder: string, new_folder: string) {
   if (new_folder === source_folder)
@@ -619,24 +685,64 @@ export async function move_folder(story_id: number | null, source_folder: string
 
   await with_attachment_lock(story_id, 'move', async () => {
     const story = story_id !== null ? await get_story(story_id) : null
-    const files = await list_folder_attachment_rows(story_id, source_folder)
-    const folders = await list_scope_folders(story_id)
-    if (! files.length && ! folders.some(folder => folder === source_folder || folder.startsWith(`${source_folder}/`)))
-      throw new ApiError(404, '文件夹不存在或已被删除')
-
-    const renames = files.map(file => ({
-      old_file_name: file.file_name,
-      new_file_name: `${new_folder}/${file.file_name.slice(source_folder.length + 1)}`,
-    }))
 
     const connection = await db.getConnection()
     try {
       await connection.beginTransaction()
-      // Checked inside the transaction: the prefix rewrite and the check must not
-      // be separated by another writer.
-      if (await folder_target_taken(story_id, new_folder, connection))
-        throw new ApiError(409, '目标位置已有同名文件或文件夹')
-      await move_folder_rows(story_id, source_folder, new_folder, connection)
+      // Planned inside the transaction: the listing, the collision checks and
+      // the rewrite must not be separated by another writer.
+      const subtree = await list_folder_subtree_rows(story_id, source_folder, connection)
+      if (! subtree.length)
+        throw new ApiError(404, '文件夹不存在或已被删除')
+      const subtree_ids = new Set(subtree.map(row => row.id))
+      const remaining = (await list_scope_rows(story_id, connection)).filter(row => ! subtree_ids.has(row.id))
+      const remaining_folders = new Set(remaining.filter(row => row.is_folder).map(row => row.file_name.toLowerCase()))
+      const remaining_files = new Set(remaining.filter(row => ! row.is_folder).map(row => row.file_name.toLowerCase()))
+      const remaining_paths = remaining.map(row => row.file_name)
+
+      const renames: { old_file_name: string, new_file_name: string }[] = []
+      const moves: { id: number, new_file_name: string }[] = []
+      const merged: number[] = []
+      // The destination has to be a legal name in its own right (the `.good`
+      // check applies to folders too); landing on a folder that already answers
+      // to it is the documented merge, so that conflict is allowed here and the
+      // per-row checks below decide the rest.
+      const destination = resolve_attachment_name(new_folder, remaining_paths, 'merge')
+      for (const row of subtree) {
+        const new_file_name = `${destination}${row.file_name.slice(source_folder.length)}`
+        if (row.is_folder) {
+          const lower = new_file_name.toLowerCase()
+          if (remaining_folders.has(lower))
+            merged.push(row.id)
+          else if (remaining_files.has(lower))
+            throw new ApiError(409, attachment_name_conflict_message)
+          else
+            moves.push({ id: row.id, new_file_name })
+        }
+        else {
+          // Derived from the row, so it may carry the `.good` marker: only its
+          // availability is checked, never its legality.
+          assert_attachment_name_available(new_file_name, remaining_paths)
+          moves.push({ id: row.id, new_file_name })
+          renames.push({ old_file_name: row.file_name, new_file_name })
+        }
+      }
+
+      // Two-phase rename: a destination may still be another subtree row's
+      // source (moving onto an ancestor path, e.g. a/a → a), and the unique
+      // index forbids holding that name even mid-batch. The transaction keeps
+      // a failure between the loops from stranding rows under `.mvtmp-` names.
+      for (const row of subtree)
+        await rename_row_by_id(row.id, `.mvtmp-${crypto.randomUUID()}`, connection)
+      await delete_rows_by_ids(merged, connection)
+      for (const move of moves)
+        await rename_row_by_id(move.id, move.new_file_name, connection)
+      // The destination becomes a folder of its own, ancestors included. Files
+      // otherwise carry a folder's existence implicitly, so renaming onto a
+      // path no row answers to would leave the renamed folder to vanish as soon
+      // as its last file moved away. Existing rows are kept, so a merge is free.
+      if (moves.some(move => move.new_file_name.startsWith(`${destination}/`)))
+        await create_folder_rows(story_id, [... attachment_ancestor_folders(destination), destination], connection)
       if (story)
         await rewrite_story_attachment_refs(connection, story.id, renames)
       await connection.commit()
@@ -649,7 +755,7 @@ export async function move_folder(story_id: number | null, source_folder: string
       connection.release()
     }
 
-    publish_attachment_refresh(story_id)
+    await publish_attachment_change(story_id)
   })
   return attachment_scope_payload(story_id)
 }
@@ -663,7 +769,89 @@ function suffixed_attachment_name(file_name: string, ext: string) {
   return attachment_path_join(attachment_folder_of(file_name), `${sanitize_attachment_file_name(stem, Math.max(stem_limit, 1))}${suffix}${ext}`)
 }
 
+/**
+ * How an operation wants a name the scope already holds to be handled:
+ * `suffix` is an upload or a fresh name stepping aside with a random suffix,
+ * `reject` a rename or a new folder refusing with a 409, and `merge` a folder
+ * move landing on the folder that already answers to the name.
+ */
+type AttachmentNameConflict = 'suffix' | 'reject' | 'merge'
+
+/**
+ * The one gate every attachment path passes through, so legality is decided in
+ * a single place instead of once per operation. It answers all three questions
+ * — illegal characters, the reserved `.good` suffix, and whether the scope
+ * already holds the name — built on the shared rules in `content-markdown.ts`
+ * so the editor cannot disagree with the server about what is legal.
+ *
+ * For a name the author supplies: an upload, a rename, a replacement, a folder.
+ * A name the server *derives* from a row it already holds goes through
+ * `assert_attachment_name_available` instead — see there.
+ *
+ * The conflict policy is the caller's, because it genuinely differs by
+ * operation; everything scope-independent is a 400 the author has to fix.
+ * Returns the name to store, which is the given one unless it was suffixed.
+ */
+function resolve_attachment_name(
+  name: string,
+  existing: Iterable<string>,
+  on_taken: AttachmentNameConflict,
+  ignore_path: string | null = null,
+) {
+  assert_attachment_name_legal(name)
+  if (! attachment_path_taken(existing, name, ignore_path))
+    return name
+  if (on_taken === 'reject')
+    throw new ApiError(409, attachment_name_conflict_message)
+  if (on_taken === 'merge')
+    return name
+  return suffixed_attachment_name(name, extname(attachment_base_name(name)).toLowerCase())
+}
+
+/** The scope-independent half: a name no author may type, whichever door it arrives by. */
+function assert_attachment_name_legal(name: string) {
+  const violation = attachment_path_violation(name)
+  if (violation)
+    throw new ApiError(400, violation)
+}
+
+/**
+ * The conflict half, for a name the server derived from a row it already holds:
+ * a file following its renamed folder, or a move into another folder.
+ *
+ * Such a name is legal by construction — and may carry the `.good` marker,
+ * which only the encrypt step may append but which the scope already holds — so
+ * only its availability is open to question. Sending it through the legality
+ * check refused every legitimate move of an encrypted file, which is how a
+ * folder holding one became impossible to rename.
+ */
+function assert_attachment_name_available(name: string, existing: Iterable<string>, ignore_path: string | null = null) {
+  if (attachment_path_taken(existing, name, ignore_path))
+    throw new ApiError(409, attachment_name_conflict_message)
+}
+
+/**
+ * A file rename, where only the editable stem is the author's.
+ *
+ * The `.good` marker is the row's own state, not part of the name being edited
+ * (see `split_attachment_editable_name`), so it is checked as state rather than
+ * as a name: it may neither appear nor disappear here, since a rename swaps no
+ * object and a row whose name and encryption disagreed would render ciphertext
+ * as if it were plaintext. 加密/取消加密 are the operations that own that
+ * transition. Legality therefore applies to the name with the marker stripped.
+ */
+function resolve_renamed_attachment_name(old_file_name: string, new_file_name: string, existing: Iterable<string>) {
+  if (is_encrypted_attachment(old_file_name) !== is_encrypted_attachment(new_file_name))
+    throw new ApiError(400, `不能通过重命名增删 ${encrypted_attachment_suffix} 后缀`)
+  assert_attachment_name_legal(decrypted_attachment_name(new_file_name))
+  assert_attachment_name_available(new_file_name, existing, old_file_name)
+  return new_file_name
+}
+
 export async function upload_attachment(story_id: number | null, input: FormData, get_options: () => AttachmentUploadOptions) {
+  // The orphan staging pool is gone: uploads start only after the story exists.
+  if (story_id === null)
+    throw new ApiError(403, '请先保存档案，再上传附件')
   const upload = get_form_file(input, 'file')
   const file_data = Buffer.from(await upload.arrayBuffer())
   const options = get_options()
@@ -679,19 +867,13 @@ export async function upload_attachment(story_id: number | null, input: FormData
     typeof form_file_name === 'string' && form_file_name.trim() ? form_file_name : (upload.name ?? 'file'),
     env.CONTENT_LINK_FILE_NAME_MAX_BYTES,
   )
-  const ext = extname(attachment_base_name(base_name)).toLowerCase()
 
-  // Validates the story exists and doubles as the name-collision listing.
-  const existing = story_id !== null
-    ? (await get_story(story_id)).attachments
-    : await list_scope_attachments(null)
-
-  let file_name = base_name
+  // Validates the story exists, then lists the names to avoid: the scope's
+  // files and folders share one path space, so either can take a name.
+  await get_story(story_id)
   // Check-then-insert: a same-name upload racing past this check loses to the
   // unique index on (scope_id, file_name) and fails the request.
-  if (attachment_name_taken_in(existing, file_name)) {
-    file_name = suffixed_attachment_name(base_name, ext)
-  }
+  const file_name = resolve_attachment_name(base_name, await list_scope_paths(story_id), 'suffix')
 
   const object_key = `content/att/${crypto.randomUUID()}`
   const etag = await put_object(object_key, file_data, upload.type || null)
@@ -711,10 +893,8 @@ export async function upload_attachment(story_id: number | null, input: FormData
     throw ex
   }
 
-  if (story_id !== null)
-    publish_refresh({ resource: sync_resource('content_story', story_id) })
-  else
-    publish_refresh({ resource: sync_resource('content_orphan_attachments', 'all') })
+  await materialize_attachment_folders(story_id, file_name)
+  await publish_attachment_change(story_id)
   const row = await get_scope_attachment(story_id, file_name)
   if (! row)
     throw new ApiError(500, '附件写入失败，请重试')
@@ -734,12 +914,206 @@ export async function delete_orphan_attachment(file_name: string) {
   })
 }
 
-export async function delete_attachment(story_id: number, file_name: string, markdown: string, base_revision: number) {
+export async function delete_attachment(story_id: number, file_name: string, markdown: string, base_revision: number, can_private: boolean) {
   return await with_attachment_lock(story_id, 'delete', async () => {
-    const deleted_files = await update_story(story_id, markdown, [file_name], base_revision)
+    const deleted_files = await update_story(story_id, markdown, [file_name], base_revision, can_private)
     if (! deleted_files.includes(file_name)) {
       throw new ApiError(404, '附件不存在或已被删除')
     }
+  })
+}
+
+export async function encrypt_attachments(story_id: number | null, file_names: string[]) {
+  return await transform_attachment_encryption(story_id, 'encrypt', file_names)
+}
+
+export async function decrypt_attachments(story_id: number | null, file_names: string[]) {
+  return await transform_attachment_encryption(story_id, 'decrypt', file_names)
+}
+
+/** Magic bytes of the formats the 删减版 editor can hand back, for a cheap payload check. */
+function sniff_image_mime(data: Uint8Array) {
+  const starts_with = (... bytes: number[]) => bytes.every((byte, index) => data[index] === byte)
+  if (starts_with(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+    return 'image/png'
+  if (starts_with(0xFF, 0xD8, 0xFF))
+    return 'image/jpeg'
+  if (starts_with(0x42, 0x4D))
+    return 'image/bmp'
+  if (starts_with(0x52, 0x49, 0x46, 0x46) && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50)
+    return 'image/webp'
+  return null
+}
+
+/**
+ * Stores the public 删减版 of an encrypted image: a new plaintext attachment
+ * named like the encrypted file without its `.good` suffix, holding the
+ * redacted bitmap the editor exported. The twin keeps the source format, so a
+ * GIF (or any format the canvas cannot re-encode) is refused rather than
+ * silently transcoded, and the name is never taken over — an existing twin is
+ * a conflict the caller has to resolve, since replacing it would be a silent
+ * edit of a file that may already be published.
+ */
+export async function create_abridged_attachment(story_id: number | null, source_file_name: string, input: FormData, get_options: () => AttachmentUploadOptions) {
+  return await with_attachment_lock(story_id, 'redact', async () => {
+    const [source] = await list_scope_file_rows(story_id, [source_file_name])
+    if (! source)
+      throw new ApiError(404, '附件不存在或已被删除')
+    if (! source.encryption_key || ! is_encrypted_attachment(source.file_name))
+      throw new ApiError(400, '只有已加密的图片才能创建删减版')
+    const file_name = decrypted_attachment_name(source.file_name)
+    const mime_type = redactable_attachment_mime(file_name)
+    if (! mime_type)
+      throw new ApiError(400, '该图片格式不支持创建删减版')
+
+    const upload = get_form_file(input, 'file')
+    const file_data = Buffer.from(await upload.arrayBuffer())
+    const options = get_options()
+    if (file_data.length > options.max_size_mb * 1024 * 1024)
+      throw new ApiError(413, `文件太大了，不能超过 ${options.max_size_mb} MB`)
+    // The exported bytes must match the name they land under; the client sends
+    // no type of its own, so this is the only check the payload gets.
+    if (sniff_image_mime(file_data) !== mime_type)
+      throw new ApiError(400, '删减版内容与文件格式不符')
+
+    const existing = await list_scope_paths(story_id)
+    // The twin keeps the source's plaintext name, so it can never itself carry
+    // the `.good` suffix; the guard is here so this path answers to the same
+    // rules as every other name, including a folder in the way.
+    resolve_attachment_name(file_name, existing, 'reject')
+
+    const object_key = `content/att/${crypto.randomUUID()}`
+    const etag = await put_object(object_key, file_data, mime_type)
+    const version = etag ?? String(Date.now())
+    try {
+      await insert_attachment_row({
+        story_id,
+        file_name,
+        object_key,
+        mime_type,
+        file_size: file_data.length,
+        version,
+      })
+    }
+    catch (ex) {
+      await delete_object(object_key).catch(() => {})
+      throw ex
+    }
+
+    await publish_attachment_change(story_id)
+    const row = await get_scope_attachment(story_id, file_name)
+    if (! row)
+      throw new ApiError(500, '附件写入失败，请重试')
+    return row
+  })
+}
+
+/**
+ * Encrypts or decrypts attachments in place: downloads each object, uploads
+ * the transformed bytes under a fresh object key, and swaps the row's name
+ * (`.good` suffix on/off), object and key in one transaction — references are
+ * rewritten like a rename. The OSS transfers run outside the transaction
+ * (they can outlive a lease); old objects are deleted only after the commit.
+ */
+async function transform_attachment_encryption(story_id: number | null, kind: 'encrypt' | 'decrypt', file_names: string[]) {
+  return await with_attachment_lock(story_id, kind, async () => {
+    const rows = await list_scope_file_rows(story_id, file_names)
+    const by_name = new Map(rows.map(row => [row.file_name, row]))
+    const ordered = file_names.map((name) => {
+      const row = by_name.get(name)
+      if (! row)
+        throw new ApiError(404, '附件不存在或已被删除')
+      return row
+    })
+    const encrypting = kind === 'encrypt'
+    const targets = ordered.filter(row => encrypting !== is_encrypted_attachment(row.file_name))
+    if (! targets.length) {
+      publish_attachment_refresh(story_id)
+      return story_id !== null ? (await get_story(story_id)).attachments : (await list_orphan_attachments()).attachments
+    }
+    if (encrypting) {
+      const max_bytes = env.MAX_CONTENT_ENCRYPT_SIZE_MB * 1024 * 1024
+      for (const row of targets) {
+        if (Number(row.file_size) > max_bytes)
+          throw new ApiError(413, `文件太大无法加密：${row.file_name}`)
+      }
+    }
+
+    // The new display names must be free (a decrypt can land on a plaintext name).
+    // Deliberately not `resolve_attachment_name`: encrypting is the one operation
+    // whose whole purpose is to produce a `.good` name, so the intrinsic rule
+    // that reserves the suffix must not apply here — only the conflict does.
+    const planned = targets.map(row => ({
+      row,
+      new_file_name: encrypting ? `${row.file_name}${encrypted_attachment_suffix}` : decrypted_attachment_name(row.file_name),
+    }))
+    const moving_away = new Set(planned.map(plan => plan.row.file_name.toLowerCase()))
+    const remaining = (await list_scope_paths(story_id)).filter(path => ! moving_away.has(path.toLowerCase()))
+    for (const plan of planned) {
+      if (attachment_path_taken(remaining, plan.new_file_name))
+        throw new ApiError(409, attachment_name_conflict_message)
+    }
+
+    const processed: { row: (typeof planned)[number]['row'], new_file_name: string, object_key: string, version: string, encryption_key: string | null, file_size: number }[] = []
+    try {
+      for (const plan of planned) {
+        const source = await get_object(plan.row.object_key!)
+        const object_key = `content/att/${crypto.randomUUID()}`
+        if (encrypting) {
+          const { key, data } = encrypt_attachment(source)
+          const version = await put_object(object_key, data, null)
+          processed.push({ ... plan, object_key, version: version ?? '', encryption_key: key, file_size: data.length })
+        }
+        else {
+          if (! plan.row.encryption_key)
+            throw new ApiError(409, '附件缺少密钥，无法解密')
+          let data: Uint8Array
+          try {
+            data = decrypt_attachment(source, plan.row.encryption_key)
+          }
+          catch {
+            throw new ApiError(409, `附件解密失败：${plan.row.file_name}`)
+          }
+          const version = await put_object(object_key, data, plan.row.mime_type)
+          processed.push({ ... plan, object_key, version: version ?? '', encryption_key: null, file_size: data.length })
+        }
+      }
+    }
+    catch (ex) {
+      await Promise.all(processed.map(item => delete_object(item.object_key).catch(() => {})))
+      throw ex
+    }
+
+    const connection = await db.getConnection()
+    try {
+      await connection.beginTransaction()
+      for (const item of processed) {
+        await update_attachment_row_encryption(item.row.id, {
+          file_name: item.new_file_name,
+          object_key: item.object_key,
+          file_size: item.file_size,
+          version: item.version,
+          encryption_key: item.encryption_key,
+        }, connection)
+      }
+      if (story_id !== null)
+        await rewrite_story_attachment_refs(connection, story_id, processed.map(item => ({ old_file_name: item.row.file_name, new_file_name: item.new_file_name })))
+      await connection.commit()
+    }
+    catch (ex) {
+      await connection.rollback()
+      await Promise.all(processed.map(item => delete_object(item.object_key).catch(() => {})))
+      throw ex
+    }
+    finally {
+      connection.release()
+    }
+    for (const item of processed)
+      await delete_object(item.row.object_key!).catch(() => {})
+    await publish_attachment_change(story_id)
+    return story_id !== null
+      ? (await get_story(story_id)).attachments
+      : (await list_orphan_attachments()).attachments
   })
 }
 
@@ -761,8 +1135,9 @@ export async function move_attachment(story_id: number | null, file_name: string
     if (new_file_name === file_name)
       return attachment
 
-    if (attachment_name_taken_in(attachments, new_file_name))
-      throw new ApiError(409, '目标位置已有同名文件')
+    // Only the folder changes, so the name is the row's own — an encrypted
+    // file's `.good` marker rides along rather than being re-validated.
+    assert_attachment_name_available(new_file_name, await list_scope_paths(story_id))
 
     const connection = await db.getConnection()
     try {
@@ -780,7 +1155,7 @@ export async function move_attachment(story_id: number | null, file_name: string
       connection.release()
     }
 
-    publish_attachment_refresh(story_id)
+    await publish_attachment_change(story_id)
     const row = await get_scope_attachment(story_id, new_file_name)
     return row ?? { ... attachment, file_name: new_file_name }
   })
@@ -803,7 +1178,6 @@ export async function move_attachments(story_id: number | null, moves: Attachmen
       ? story.attachments
       : (await list_orphan_attachments()).attachments
     const by_name = new Map(attachments.map(item => [item.file_name, item]))
-    const taken = new Map(attachments.map(item => [item.file_name.toLowerCase(), item]))
 
     const planned: { attachment: ContentStoryAttachment, old_file_name: string, new_file_name: string }[] = []
     for (const move of moves) {
@@ -821,17 +1195,21 @@ export async function move_attachments(story_id: number | null, moves: Attachmen
     }
 
     // A destination must not collide with anything that still exists after the
-    // batch (case-insensitive, like the dropped unique index), and two moves in
-    // the same batch must not land on the same name.
+    // batch — files and folders alike — and two moves in the same batch must not
+    // land on the same name. The batch's own sources are excluded: a chained
+    // move (a→b, b→c) frees the name it vacates.
     const moved_away = new Set(planned.map(plan => plan.old_file_name.toLowerCase()))
+    const remaining = (await list_scope_paths(story_id)).filter(path => ! moved_away.has(path.toLowerCase()))
     const destinations = new Set<string>()
     for (const plan of planned) {
       const lower = plan.new_file_name.toLowerCase()
       if (destinations.has(lower))
-        throw new ApiError(409, '目标位置已有同名文件')
+        throw new ApiError(409, attachment_name_conflict_message)
       destinations.add(lower)
-      if (taken.has(lower) && ! moved_away.has(lower))
-        throw new ApiError(409, '目标位置已有同名文件')
+      // The batch's own sources are already excluded from `remaining`, so the
+      // guard sees exactly the names that survive it. Only the folder changes,
+      // so the row's own name (and any `.good` marker on it) is not re-validated.
+      assert_attachment_name_available(plan.new_file_name, remaining)
     }
 
     // Two-phase rename: a destination may be another move's source (a→b, b→c),
@@ -860,32 +1238,35 @@ export async function move_attachments(story_id: number | null, moves: Attachmen
       connection.release()
     }
 
-    publish_attachment_refresh(story_id)
+    await publish_attachment_change(story_id)
     return story_id !== null
       ? (await get_story(story_id)).attachments
       : (await list_orphan_attachments()).attachments
   })
 }
 
-export async function rename_attachment(story_id: number, old_file_name: string, new_file_name: string) {
+export async function rename_attachment(story_id: number | null, old_file_name: string, new_file_name: string) {
   return await with_attachment_lock(story_id, 'rename', async () => {
-    const story = await get_story(story_id)
-    const attachment = story.attachments.find(item => item.file_name === old_file_name)
+    const story = story_id !== null ? await get_story(story_id) : null
+    const attachments = story ? story.attachments : await list_scope_attachments(story_id)
+    const attachment = attachments.find(item => item.file_name === old_file_name)
     if (! attachment) {
       throw new ApiError(404, '附件不存在或已被删除')
     }
     if (old_file_name === new_file_name) {
       return attachment
     }
-    if (attachment_name_taken_in(story.attachments, new_file_name, old_file_name)) {
-      throw new ApiError(409, '已有同名附件')
-    }
+    // The renamed file is excluded from its own conflict check.
+    const file_name = resolve_renamed_attachment_name(old_file_name, new_file_name, await list_scope_paths(story_id))
 
     const connection = await db.getConnection()
     try {
       await connection.beginTransaction()
-      await rename_attachment_row(story_id, old_file_name, new_file_name, connection)
-      await rewrite_story_attachment_refs(connection, story_id, [{ old_file_name, new_file_name }])
+      await rename_attachment_row(story_id, old_file_name, file_name, connection)
+      // The orphan pool has no markdown of its own — the new-story editor
+      // rewrites its draft client-side.
+      if (story)
+        await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name, new_file_name: file_name }])
       await connection.commit()
     }
     catch (error) {
@@ -896,9 +1277,9 @@ export async function rename_attachment(story_id: number, old_file_name: string,
       connection.release()
     }
 
-    publish_attachment_refresh(story_id)
-    const row = await get_scope_attachment(story_id, new_file_name)
-    return row ?? { ... attachment, file_name: new_file_name }
+    await publish_attachment_change(story_id)
+    const row = await get_scope_attachment(story_id, file_name)
+    return row ?? { ... attachment, file_name }
   })
 }
 
@@ -914,17 +1295,24 @@ function file_stem(file_name: string) {
 }
 
 export async function replace_attachment(
-  story_id: number,
+  story_id: number | null,
   old_file_name: string,
   input: FormData,
   mode: 'keep-name' | 'new-name',
   get_options: () => AttachmentUploadOptions,
 ) {
-  const story = await get_story(story_id)
-  const attachment = story.attachments.find(item => item.file_name === old_file_name)
+  const story = story_id !== null ? await get_story(story_id) : null
+  const attachments = story ? story.attachments : await list_scope_attachments(story_id)
+  const attachment = attachments.find(item => item.file_name === old_file_name)
   if (! attachment) {
     throw new ApiError(404, '附件不存在或已被删除')
   }
+  // A replacement swaps the object but not the row's key, so replacing an
+  // encrypted file would leave a key on plaintext bytes: the client would try
+  // to decrypt readable content and the file would end up unopenable. Leaving
+  // the encrypted state is 取消加密's job, not a file swap's.
+  if (attachment.is_encrypted)
+    throw new ApiError(409, '已加密的附件不能替换，请先取消加密')
 
   const upload = get_form_file(input, 'file')
   const file_data = Buffer.from(await upload.arrayBuffer())
@@ -935,23 +1323,32 @@ export async function replace_attachment(
   }
 
   const new_name = sanitize_attachment_file_name(upload.name ?? 'file', env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
+  // The scope's files and folders share one path space, so a replacement has to
+  // clear both before it can take a name.
+  const existing = await list_scope_paths(story_id)
 
   // Resolve the replacement file name. `keep-name` reuses the old stem but
   // adopts the new file's extension; `new-name` uses the new file's name fully.
+  // Both go through the shared guard: the incoming extension is the one piece
+  // of the name the uploader controls, so `.good` has to be refused here too.
   let file_name: string
   if (mode === 'keep-name') {
     const new_ext = file_extension(new_name)
-    file_name = new_ext ? `${file_stem(old_file_name)}${new_ext}` : old_file_name
-    if (attachment_name_taken_in(story.attachments, file_name, old_file_name)) {
-      throw new ApiError(409, '已有同名附件')
-    }
+    file_name = resolve_attachment_name(
+      new_ext ? `${file_stem(old_file_name)}${new_ext}` : old_file_name,
+      existing,
+      'reject',
+      old_file_name,
+    )
   }
   else {
     // Keep the replacement in the same folder as the file it replaces.
-    file_name = attachment_path_join(attachment_folder_of(old_file_name), new_name)
-    if (attachment_name_taken_in(story.attachments, file_name, old_file_name)) {
-      file_name = suffixed_attachment_name(file_name, file_extension(file_name))
-    }
+    file_name = resolve_attachment_name(
+      attachment_path_join(attachment_folder_of(old_file_name), new_name),
+      existing,
+      'suffix',
+      old_file_name,
+    )
   }
 
   const old_keys = await get_scope_object_keys(story_id, [old_file_name])
@@ -960,18 +1357,21 @@ export async function replace_attachment(
   const etag = await put_object(object_key, file_data, upload.type || null)
   const version = etag ?? String(Date.now())
 
-  // Rewrite markdown/cover references only when the final name changed.
-  const markdown = file_name === old_file_name
-    ? story.markdown
-    : rename_attachment_references(story.markdown, old_file_name, file_name)
-  const renamed_cover = story.cover === old_file_name ? file_name : (story.cover ?? '')
-  const cover_version = cover_version_from(story.attachments, renamed_cover, { file_name, version })
-  // An in-place replacement of the cover file rewrites no references but the etag.
-  const cover_object_rewritten = renamed_cover !== '' && renamed_cover === file_name
-
   try {
-    if (markdown !== story.markdown || renamed_cover !== (story.cover ?? '') || cover_object_rewritten) {
-      await db.execute('UPDATE content_stories SET markdown = ?, cover = ?, cover_version = ? WHERE id = ?', [markdown, renamed_cover, cover_version, story_id])
+    // Rewrite markdown/cover references only when the final name changed. The
+    // orphan pool has no stored markdown — the new-story editor rewrites its
+    // own draft.
+    if (story) {
+      const markdown = file_name === old_file_name
+        ? story.markdown
+        : rename_attachment_references(story.markdown, old_file_name, file_name)
+      const renamed_cover = story.cover === old_file_name ? file_name : (story.cover ?? '')
+      const cover_version = cover_version_from(story.attachments, renamed_cover, { file_name, version })
+      // An in-place replacement of the cover file rewrites no references but the etag.
+      const cover_object_rewritten = renamed_cover !== '' && renamed_cover === file_name
+      if (markdown !== story.markdown || renamed_cover !== (story.cover ?? '') || cover_object_rewritten) {
+        await db.execute('UPDATE content_stories SET markdown = ?, cover = ?, cover_version = ? WHERE id = ?', [markdown, renamed_cover, cover_version, story.id])
+      }
     }
     await update_attachment_row_object(story_id, old_file_name, {
       file_name,
@@ -988,7 +1388,7 @@ export async function replace_attachment(
 
   await Promise.all(old_keys.map(key => delete_object(key).catch(() => {})))
 
-  publish_refresh({ resource: sync_resource('content_story', story_id) })
+  await publish_attachment_change(story_id)
   const row = await get_scope_attachment(story_id, file_name)
   if (! row)
     throw new ApiError(500, '附件写入失败，请重试')

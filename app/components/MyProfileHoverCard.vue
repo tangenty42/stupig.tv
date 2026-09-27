@@ -43,7 +43,7 @@
               <MyIcon name="lucide:user" />
               我的主页
             </NuxtLink>
-            <NuxtLink v-if="profile.is_admin" class="text-sm link" to="/admin">
+            <NuxtLink v-if="can_access_admin" class="text-sm link" to="/admin">
               <MyIcon name="lucide:settings" />
               控制台
             </NuxtLink>
@@ -61,6 +61,7 @@
 
 <script setup lang="ts">
 import type { LoginUser } from '@/composables/useAuth'
+import { has_permission } from '@shared/permissions'
 
 const props = defineProps<{
   profile: LoginUser
@@ -77,6 +78,7 @@ const root_ref = ref<HTMLElement | null>(null)
 let hide_timer: ReturnType<typeof setTimeout> | null = null
 
 const profile_link = computed(() => `/u/${props.profile.id}`)
+const can_access_admin = computed(() => has_permission(props.profile, 'admin_access', 'readonly'))
 
 // The confirmation is anchored inside the menu, so the menu has to survive the
 // pending confirm: without this it would collapse on the next mouse-leave (or on

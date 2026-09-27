@@ -39,8 +39,12 @@ export const carousel_plugin: StoryMarkdownPlugin = (md, ctx) => {
 
         let run_end = child_index + 1
         let image_count = 1
-        while (is_break(children[run_end]?.type ?? '') && children[run_end + 1]?.type === 'image') {
-          run_end += 2
+        // Adjacent images are a run too: the folder expansion splices its
+        // images in without breaks, and hand-written `![](a)![](b)` must split
+        // exactly like the break-separated spelling.
+        while (children[run_end]?.type === 'image'
+          || (is_break(children[run_end]?.type ?? '') && children[run_end + 1]?.type === 'image')) {
+          run_end += children[run_end]?.type === 'image' ? 1 : 2
           image_count ++
         }
 
@@ -151,7 +155,7 @@ export const carousel_plugin: StoryMarkdownPlugin = (md, ctx) => {
       const end_anchor = map && ctx.anchor_render_depth === 0
         ? `<span class="carousel-end-anchor" data-line="${map[1]}" aria-hidden="true"></span>`
         : ''
-      return `</div><button type="button" class="carousel-nav carousel-next" aria-label="下一张"><span class="carousel-hint-text" aria-hidden="true">右边还有 · 可左右滚动</span><span class="iconify i-lucide:chevron-right" aria-hidden="true"></span></button>${end_anchor}</div>\n`
+      return `</div><button type="button" class="carousel-nav carousel-next" aria-label="下一张"><span class="carousel-hint-text" aria-hidden="true">右边还有·可左右滚动</span><span class="iconify i-lucide:chevron-right" aria-hidden="true"></span></button>${end_anchor}</div>\n`
     }
     return self.renderToken(tokens, idx, options)
   }

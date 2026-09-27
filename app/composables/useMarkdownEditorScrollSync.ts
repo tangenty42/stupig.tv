@@ -3,9 +3,15 @@ import type { EditorView } from '@codemirror/view'
 // VSCode-style scroll sync between the CodeMirror editor and the markdown
 // preview pane: preview blocks carry data-line anchors (their body line), and
 // both directions interpolate between the anchors bracketing the scroll
-// position instead of mapping raw scroll ratios. attach/detach are driven by
-// the editor's fullscreen watcher; `get_line_offset` supplies the front
-// matter line count of the current document.
+// position instead of mapping raw scroll ratios. The mapping is direct
+// (preview scrollTop ↔ editor line, anchors measured in flow coordinates), so
+// sticky headings play their natural pin/push animation in both directions;
+// they only ever overlay content and never change the flow geometry the
+// anchors measure. Scroll-loop feedback is prevented by echo detection and
+// the driver-intent lock below, not by quantizing the mapping.
+// attach/detach are driven by the editor's fullscreen watcher;
+// `get_line_offset` supplies the front matter line count of the current
+// document.
 export function useMarkdownEditorScrollSync(
   get_view: () => EditorView | null,
   preview_pane: Ref<HTMLElement | undefined>,
@@ -59,47 +65,10 @@ export function useMarkdownEditorScrollSync(
       const editor_max = scroller.scrollHeight - scroller.clientHeight
       const preview_max = pane.scrollHeight - pane.clientHeight
       if (editor_max > 1 && preview_max > 1) {
-        // First-readable content y at max scroll = preview_max + the pinned
-        // heading stack at that scroll. The stack is discontinuous in y (a
-        // heading being pushed out holds the first-readable line at its
-        // section bottom), so derive it from flow geometry instead of a
-        // fixed point: a pinned heading's bottom edge sits at
-        // min(dock position + height, section bottom). Stickiness and dock
-        // offsets must be read before `measuring` suspends pinning.
-        let end_y = preview_max
-        const sticky_headings: { heading: HTMLElement, dock: number }[] = []
-        for (const heading of body?.querySelectorAll<HTMLElement>(':is(h1, h2, h3, h4, h5, h6)') ?? []) {
-          const style = getComputedStyle(heading)
-          if (style.position === 'sticky') {
-            sticky_headings.push({ heading, dock: Number.parseFloat(style.top) || 0 })
-          }
-        }
-        body?.classList.add('measuring')
-        try {
-          const pane_top = pane.getBoundingClientRect().top
-          const scroll_top = pane.scrollTop
-          for (const { heading, dock } of sticky_headings) {
-            const flow_top = heading.getBoundingClientRect().top - pane_top + scroll_top
-            if (flow_top - dock > preview_max) {
-              continue
-            }
-            const section = heading.closest('.story-section')
-            const section_bottom = section
-              ? section.getBoundingClientRect().bottom - pane_top + scroll_top
-              : Number.POSITIVE_INFINITY
-            const bottom = Math.min(preview_max + dock + heading.offsetHeight, section_bottom)
-            if (bottom > end_y) {
-              end_y = bottom
-            }
-          }
-        }
-        finally {
-          body?.classList.remove('measuring')
-        }
         const block = view.lineBlockAtHeight(editor_max)
         const end_line = view.state.doc.lineAt(block.from).number - 1
           + (block.height > 0 ? Math.min(Math.max((editor_max - block.top) / block.height, 0), 1) : 0)
-        anchors.push({ line: end_line, y: end_y })
+        anchors.push({ line: end_line, y: preview_max })
       }
     }
     anchors.sort((a, b) => a.line - b.line || a.y - b.y)
@@ -184,77 +153,12 @@ export function useMarkdownEditorScrollSync(
     return line + ratio
   }
 
-  // Suspended (pinned sticky) titles cover the top of the scrollport, so the
-  // first readable content sits that far below scrollTop. Measure the live
-  // stack (no `measuring` suspension — we want the pinned positions): a
-  // heading is docked when its top reaches its computed sticky offset, and
-  // exiting ones still overlap until fully pushed away. The stack is
-  // contiguous, so the lowest pinned bottom edge is the obscured height.
-  function pinned_headings_height(): number {
-    const pane = preview_pane.value
-    if (! pane) {
-      return 0
-    }
-    const pane_top = pane.getBoundingClientRect().top + pane.clientTop
-    let bottom = 0
-    for (const heading of pane.querySelectorAll<HTMLElement>('.story-body :is(h1, h2, h3, h4, h5, h6)')) {
-      const style = getComputedStyle(heading)
-      if (style.position !== 'sticky') {
-        continue
-      }
-      const dock = Number.parseFloat(style.top) || 0
-      const rect = heading.getBoundingClientRect()
-      if (rect.top <= pane_top + dock + 1 && rect.bottom > pane_top + 1) {
-        bottom = Math.max(bottom, rect.bottom - pane_top)
-      }
-    }
-    return Math.max(0, bottom)
-  }
-
   /** Convert a document-space content-y to the preview scroll position. */
-  function content_y_to_scroll_top(pane: HTMLElement, y: number) {
-    const body = pane.querySelector<HTMLElement>('.story-body')
-    if (! body) {
-      return Math.max(0, y)
-    }
-    let docked_heading: HTMLElement | null = null
-    let docked_flow_top = 0
-    let pinned_height = 0
-    body.classList.add('measuring')
-    try {
-      const pane_top = pane.getBoundingClientRect().top
-      const scroll_top = pane.scrollTop
-      for (const heading of body.querySelectorAll<HTMLElement>(':is(h1, h2, h3, h4, h5, h6)')) {
-        const top = heading.getBoundingClientRect().top - pane_top + scroll_top
-        if (y >= top && y < top + heading.offsetHeight) {
-          docked_heading = heading
-          docked_flow_top = top
-          continue
-        }
-        const section = heading.closest('.story-section')
-        const section_bottom = section
-          ? section.getBoundingClientRect().bottom - pane_top + scroll_top
-          : Number.POSITIVE_INFINITY
-        if (top < y && section_bottom > y) {
-          pinned_height += heading.offsetHeight
-        }
-      }
-    }
-    finally {
-      body.classList.remove('measuring')
-    }
-    if (docked_heading) {
-      const dock = Number.parseFloat(getComputedStyle(docked_heading).top) || 0
-      return Math.max(0, docked_flow_top - pane.clientTop - dock)
-    }
-    return Math.max(0, y - pinned_height)
-  }
-
-  // Scroll the pane so the content at document-space y becomes the first
-  // readable line, i.e. lands just below the pinned title stack.
   function scroll_pane_to_content_y(pane: HTMLElement, y: number) {
-    // Derive the stack from y itself; the live stack would toggle at dock boundaries.
-    const target = content_y_to_scroll_top(pane, y)
+    // Anchors are flow coordinates, so y IS the scroll position: sticky
+    // headings overlay content without moving it. The dock/push animation
+    // plays naturally as this crosses heading boundaries.
+    const target = Math.max(0, y)
     if (Math.abs(pane.scrollTop - target) >= 1) {
       pane.scrollTop = target
     }
@@ -358,15 +262,11 @@ export function useMarkdownEditorScrollSync(
       return
     }
     const before = view.scrollDOM.scrollTop
-    // The first readable content sits below the pinned title stack, so the
-    // editor's top line corresponds to that document position, not scrollTop.
-    // At max scroll the pinned stack measurement can drop a sub-pixel
-    // remainder, so clamp to the document-end anchor directly.
-    const pane = preview_pane.value
-    const y = pane.scrollTop >= pane.scrollHeight - pane.clientHeight - 2
-      ? anchors[anchors.length - 1]!.y
-      : pane.scrollTop + pinned_headings_height()
-    scroll_editor_to_line(interpolate_anchors(anchors, 'y', y))
+    // Direct scrollTop mapping: anchors are flow coordinates on both axes, so
+    // this stays continuous through heading dock/push transitions (a pinned
+    // heading merely covers the mapped content, it doesn't shift it) — no
+    // editor jump when the preview scrolls past a heading.
+    scroll_editor_to_line(interpolate_anchors(anchors, 'y', preview_pane.value.scrollTop))
     expected_editor_scroll = view.scrollDOM.scrollTop === before ? null : view.scrollDOM.scrollTop
   }
 

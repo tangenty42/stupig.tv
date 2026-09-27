@@ -1,0 +1,684 @@
+import type { AuthUser } from '@server/types/auth'
+import { attachment_name_conflict_message } from '@shared/content-markdown'
+import { CONTENT_PRIVATE_DENIED_TEXT } from '@shared/content-private'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => ({
+  env: {
+    OSS_BUCKET: 'unit-test-bucket',
+    CONTENT_OPERATION_LOCK_TTL_SECONDS: 60,
+  },
+  signed_object_url: vi.fn(async () => 'https://signed.example.test/upload'),
+  put_object: vi.fn(),
+  delete_object: vi.fn(),
+  head_object: vi.fn(),
+  copy_object: vi.fn(),
+  publish_refresh: vi.fn(),
+  db_execute: vi.fn(),
+  /** The transaction connection structural operations run on. */
+  get_connection: vi.fn(),
+}))
+
+vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@server/lib/db', () => ({ db: { execute: mocks.db_execute, getConnection: mocks.get_connection } }))
+vi.mock('@server/lib/storage', () => ({
+  signed_object_url: mocks.signed_object_url,
+  copy_object: mocks.copy_object,
+  delete_object: mocks.delete_object,
+  head_object: mocks.head_object,
+  put_object: mocks.put_object,
+}))
+// The lease itself is exercised by the lock's own tests; here the scope lock
+// only has to be taken and released.
+vi.mock('@server/lib/operation-lock', () => ({
+  content_scope_lock_id: (story_id: number | null) => story_id ?? 0,
+  acquire_operation_lock: vi.fn(async (scope_id: number) => ({ scope_id, token: 'test-token' })),
+  release_operation_lock: vi.fn(async () => {}),
+  get_operation_lock: vi.fn(async () => null),
+}))
+vi.mock('@server/lib/sync', async () => ({
+  ... (await vi.importActual<typeof import('@server/lib/sync')>('@server/lib/sync')),
+  publish_refresh: mocks.publish_refresh,
+}))
+
+const { confirm_attachment_upload, create_abridged_attachment, create_folder, get_story, move_attachment, move_attachments, move_folder, rename_attachment, replace_attachment, sign_attachment_upload, upload_attachment } = await import('@server/services/content.service')
+
+function stub_story_row(story_id: number, markdown = '') {
+  mocks.db_execute.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM content_stories')) {
+      return [[{
+        id: story_id,
+        title: 'story',
+        label: '',
+        description: '',
+        cover: '',
+        cover_label: '',
+        cover_version: null,
+        event_precision: 'day',
+        event_dates: '[]',
+        markdown,
+        created_at: '2026-01-01 00:00:00',
+        updated_at: '2026-01-01 00:00:00',
+        revision: 1,
+      }], []]
+    }
+    return [[], []]
+  })
+}
+
+describe('sign_attachment_upload staging key validation', () => {
+  beforeEach(() => {
+    mocks.signed_object_url.mockClear()
+    mocks.db_execute.mockReset()
+    mocks.db_execute.mockResolvedValue([[], []])
+  })
+  // The orphan staging pool is gone: uploads start only after the story exists.
+  it('rejects new-scope keys for unsaved stories (story_id 0)', async () => {
+    const key = `content-upload/new/${crypto.randomUUID()}`
+    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key }))
+      .rejects.toMatchObject({ name: 'ApiError', statusCode: 403, message: '请先保存档案，再上传附件' })
+    expect(mocks.signed_object_url).not.toHaveBeenCalled()
+  })
+
+  it('rejects multipart creation under the new scope', async () => {
+    const key = `content-upload/new/${crypto.randomUUID()}`
+    await expect(sign_attachment_upload({ story_id: 0, method: 'POST', key }))
+      .rejects.toMatchObject({ statusCode: 403, message: '请先保存档案，再上传附件' })
+  })
+
+  // Regression guard: story_id 0 used to expect content-upload/0/ while the
+  // client stages under content-upload/new/, failing every new-story upload.
+  it('rejects the numeric zero prefix for unsaved stories', async () => {
+    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key: `content-upload/0/${crypto.randomUUID()}` }))
+      .rejects.toMatchObject({ name: 'ApiError', statusCode: 400, message: '上传凭证无效' })
+    expect(mocks.signed_object_url).not.toHaveBeenCalled()
+  })
+
+  it('rejects keys scoped to a persisted story for unsaved stories', async () => {
+    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key: `content-upload/42/${crypto.randomUUID()}` }))
+      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
+  })
+
+  it('rejects keys whose suffix is not a plain token', async () => {
+    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key: 'content-upload/new/name.with.dots' }))
+      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
+  })
+
+  it('accepts keys under the matching story prefix', async () => {
+    stub_story_row(42)
+    const key = `content-upload/42/${crypto.randomUUID()}`
+    const result = await sign_attachment_upload({ story_id: 42, method: 'PUT', key })
+    expect(result.key).toBe(key)
+  })
+
+  it('rejects the new scope for persisted stories', async () => {
+    await expect(sign_attachment_upload({ story_id: 42, method: 'PUT', key: `content-upload/new/${crypto.randomUUID()}` }))
+      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
+    expect(mocks.signed_object_url).not.toHaveBeenCalled()
+  })
+})
+
+describe('get_story private stripping', () => {
+  const private_markdown = 'public\n\n<good>\nsecret\n</good>\n'
+
+  function viewer(overrides: Partial<AuthUser>) {
+    return {
+      id: 7,
+      session_id: 1,
+      username: 'viewer',
+      phone: '',
+      avatar_file: null,
+      is_verified: false,
+      is_admin: false,
+      ... overrides,
+    } as AuthUser
+  }
+
+  beforeEach(() => {
+    mocks.db_execute.mockReset()
+    stub_story_row(1, private_markdown)
+  })
+
+  it('redacts private elements for a guest viewer', async () => {
+    const story = await get_story(1, undefined, null)
+
+    expect(story!.has_private).toBe(true)
+    expect(story!.markdown).not.toContain('secret')
+    expect(story!.markdown).toContain(CONTENT_PRIVATE_DENIED_TEXT)
+    expect(story!.markdown).toContain('public')
+  })
+
+  it('redacts private elements for a user without content_private', async () => {
+    const story = await get_story(1, undefined, viewer({ permissions: [] }))
+
+    expect(story!.markdown).not.toContain('secret')
+    expect(story!.markdown).toContain(CONTENT_PRIVATE_DENIED_TEXT)
+    expect(story!.has_private).toBe(true)
+  })
+
+  it('keeps private elements for a user holding content_private read', async () => {
+    const story = await get_story(1, undefined, viewer({ permissions: [{ field: 'content_private', level: 'read' }] }))
+
+    expect(story!.markdown).toBe(private_markdown)
+    expect(story!.has_private).toBe(true)
+  })
+
+  it('keeps private elements for an admin', async () => {
+    const story = await get_story(1, undefined, viewer({ is_admin: true }))
+
+    expect(story!.markdown).toBe(private_markdown)
+  })
+
+  it('internal calls without a viewer get the full markdown', async () => {
+    const story = await get_story(1)
+
+    expect(story.markdown).toBe(private_markdown)
+  })
+})
+
+describe('create_abridged_attachment', () => {
+  const png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+  const jpeg_header = [0xFF, 0xD8, 0xFF, 0xE0]
+
+  const encrypted_png: {
+    id: number
+    story_id: number
+    is_folder: number
+    file_name: string
+    object_key: string
+    mime_type: string
+    file_size: number
+    version: string
+    encryption_key: string | null
+  } = {
+    id: 11,
+    story_id: 5,
+    is_folder: 0,
+    file_name: 'cards/photo.png.good',
+    object_key: 'content/att/cipher',
+    mime_type: 'image/png',
+    file_size: 40,
+    version: 'v1',
+    encryption_key: 'a2V5',
+  }
+
+  function abridged_form(bytes: number[]) {
+    const form = new FormData()
+    form.append('story_id', '5')
+    form.append('source_file_name', 'cards/photo.png.good')
+    form.append('file', new File([new Uint8Array(bytes)], 'ignored.png', { type: 'image/png' }))
+    return form
+  }
+
+  /** Answers the scope's read-check-insert sequence for one redaction request. */
+  function stub_scope(source: typeof encrypted_png | null, existing_paths: string[] = []) {
+    mocks.db_execute.mockImplementation(async (sql: string) => {
+      if (sql.includes('file_name IN ('))
+        return [source ? [source] : [], []]
+      if (sql.includes('SELECT file_name FROM content_story_attachments'))
+        return [existing_paths.map(file_name => ({ file_name })), []]
+      if (sql.startsWith('INSERT INTO content_story_attachments'))
+        return [{ affectedRows: 1, insertId: 12 }, []]
+      if (sql.startsWith('SELECT * FROM content_story_attachments'))
+        return [[{ ... encrypted_png, id: 12, file_name: 'cards/photo.png', object_key: 'content/att/twin', encryption_key: null }], []]
+      return [[], []]
+    })
+  }
+
+  beforeEach(() => {
+    mocks.db_execute.mockReset()
+    mocks.db_execute.mockResolvedValue([[], []])
+    mocks.put_object.mockReset()
+    mocks.put_object.mockResolvedValue('etag-twin')
+    mocks.delete_object.mockReset()
+    mocks.publish_refresh.mockReset()
+  })
+
+  it('stores the redaction under the name without the .good suffix', async () => {
+    stub_scope(encrypted_png)
+
+    const row = await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form([... png_header, 1, 2, 3]), () => ({ max_size_mb: 20 }))
+
+    expect(row.file_name).toBe('cards/photo.png')
+    expect(row.is_encrypted).toBe(false)
+  })
+
+  it('uploads the exported bytes unchanged, typed as the source format', async () => {
+    stub_scope(encrypted_png)
+    const bytes = [... png_header, 9, 8, 7]
+
+    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(bytes), () => ({ max_size_mb: 20 }))
+
+    // No transcoding: the object is exactly what the editor exported, and the
+    // content type comes from the name rather than the form payload.
+    const [, stored, content_type] = mocks.put_object.mock.calls[0]!
+    expect([... (stored as Uint8Array)]).toEqual(bytes)
+    expect(content_type).toBe('image/png')
+  })
+
+  it('bumps the story so subscribers refetch the attachment list', async () => {
+    stub_scope(encrypted_png)
+
+    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 20 }))
+
+    const touch = mocks.db_execute.mock.calls.find(([sql]) => String(sql).includes('UPDATE content_stories SET updated_at'))
+    expect(touch).toBeDefined()
+    expect(touch![1]).toEqual([5])
+  })
+
+  it('refuses a source that is not encrypted', async () => {
+    stub_scope({ ... encrypted_png, file_name: 'cards/photo.png', encryption_key: null })
+
+    await expect(create_abridged_attachment(5, 'cards/photo.png', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+      .rejects.toMatchObject({ statusCode: 400, message: '只有已加密的图片才能创建删减版' })
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('refuses a format the editor cannot write back', async () => {
+    stub_scope({ ... encrypted_png, file_name: 'cards/anim.gif.good', mime_type: 'image/gif' })
+
+    await expect(create_abridged_attachment(5, 'cards/anim.gif.good', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+      .rejects.toMatchObject({ statusCode: 400, message: '该图片格式不支持创建删减版' })
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('refuses payload bytes that do not match the target name', async () => {
+    stub_scope(encrypted_png)
+
+    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(jpeg_header), () => ({ max_size_mb: 20 })))
+      .rejects.toMatchObject({ statusCode: 400, message: '删减版内容与文件格式不符' })
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('refuses a payload over the size limit', async () => {
+    stub_scope(encrypted_png)
+
+    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 0 })))
+      .rejects.toMatchObject({ statusCode: 413 })
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('never takes over an existing twin, reporting the conflict instead', async () => {
+    stub_scope(encrypted_png, ['cards/photo.png'])
+
+    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+      .rejects.toMatchObject({ statusCode: 409, message: attachment_name_conflict_message })
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('reports a missing source', async () => {
+    stub_scope(null)
+
+    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+      .rejects.toMatchObject({ statusCode: 404 })
+  })
+})
+
+/**
+ * Every one of these operations names an attachment, and all of them go through
+ * the same guard, so the reserved suffix and the illegal characters have to be
+ * refused identically whichever door the name arrives by. The individual rules
+ * are covered in the shared module's tests; what these assert is the wiring —
+ * one guard the operations share rather than a check per operation.
+ */
+describe('attachment name guard', () => {
+  const story_row = {
+    id: 5,
+    title: 't',
+    label: '',
+    description: '',
+    cover: '',
+    cover_label: '',
+    cover_version: null,
+    event_precision: 'day',
+    event_dates: '[]',
+    markdown: '',
+    created_at: '',
+    updated_at: '',
+    revision: 1,
+  }
+
+  function file_row(file_name: string, id = 10, encryption_key: string | null = null) {
+    return {
+      id,
+      story_id: 5,
+      is_folder: 0,
+      file_name,
+      object_key: `content/att/${id}`,
+      mime_type: 'image/png',
+      file_size: 10,
+      version: 'v1',
+      encryption_key,
+    }
+  }
+
+  function folder_row(file_name: string, id = 3) {
+    return { ... file_row(file_name, id), is_folder: 1, object_key: null, mime_type: null, file_size: 0, version: '' }
+  }
+
+  /** A replacement upload; the name matches the plaintext row so keep-name lands on the same path. */
+  function replace_form() {
+    const form = new FormData()
+    form.append('story_id', '5')
+    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
+    return form
+  }
+
+  /**
+   * Answers the read-check-write sequence of one scope. The checks are ordered
+   * most specific first, because the query strings nest: the encryption-key and
+   * folder listings both contain the file listing's `is_folder = 0` clause.
+   */
+  function stub_scope(rows: ReturnType<typeof file_row | typeof folder_row>[]) {
+    const files = rows.filter(row => ! row.is_folder)
+    const folders = rows.filter(row => row.is_folder)
+    mocks.db_execute.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('encryption_key IS NOT NULL'))
+        return [[], []]
+      if (sql.includes('FROM content_stories'))
+        return [[story_row], []]
+      // move_folder reads its subtree by prefix through the transaction
+      // connection, which forwards here, so the filter has to be honoured: a
+      // stub that returned every row would hide a cross-subtree collision.
+      if (sql.includes('SUBSTRING(file_name, 1, ?)')) {
+        const source = String(params?.[1] ?? '')
+        return [rows.filter(row => row.file_name === source || row.file_name.startsWith(`${source}/`)), []]
+      }
+      if (sql.includes('SELECT file_name FROM content_story_attachments'))
+        return [rows.map(row => ({ file_name: row.file_name })), []]
+      if (sql.includes('is_folder = 1'))
+        return [folders, []]
+      if (sql.includes('is_folder = 0'))
+        return [files, []]
+      if (sql.includes('SELECT * FROM content_story_attachments'))
+        return [rows, []]
+      return [[], []]
+    })
+  }
+
+  let connection: { execute: (... args: unknown[]) => Promise<unknown>, beginTransaction: () => Promise<void>, commit: () => Promise<void>, rollback: () => Promise<void>, release: () => void }
+
+  beforeEach(() => {
+    connection = {
+      // The service runs its statement sequence on the transaction connection,
+      // so it forwards to the same stub the pooled calls use.
+      execute: (... args: unknown[]) => mocks.db_execute(... args),
+      beginTransaction: vi.fn(async () => {}),
+      commit: vi.fn(async () => {}),
+      rollback: vi.fn(async () => {}),
+      release: vi.fn(),
+    }
+    mocks.get_connection.mockResolvedValue(connection)
+    mocks.db_execute.mockReset()
+    mocks.db_execute.mockResolvedValue([[], []])
+    // The storage mocks are promise-returning: the service chains `.catch` on
+    // the deletions, so an un-implemented vi.fn() would blow up on undefined.
+    mocks.put_object.mockReset()
+    mocks.put_object.mockResolvedValue('etag-1')
+    mocks.delete_object.mockReset()
+    mocks.delete_object.mockResolvedValue(undefined)
+  })
+
+  it('refuses a .good folder on create', async () => {
+    stub_scope([])
+
+    await expect(create_folder(5, 'cards.good'))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('.good') })
+  })
+
+  it('refuses a .good folder on rename', async () => {
+    stub_scope([folder_row('cards')])
+
+    await expect(move_folder(5, 'cards', 'cards.good'))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('.good') })
+  })
+
+  it('refuses a .good name on file rename', async () => {
+    stub_scope([file_row('photo.png')])
+
+    await expect(rename_attachment(5, 'photo.png', 'photo.png.good'))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('.good') })
+  })
+
+  it('refuses illegal characters on file rename', async () => {
+    stub_scope([file_row('photo.png')])
+
+    await expect(rename_attachment(5, 'photo.png', 'bad name.png'))
+      .rejects.toMatchObject({ statusCode: 400, message: '文件名包含不支持的字符' })
+  })
+
+  it('renames an encrypted file, keeping the marker the row already carries', async () => {
+    // The marker is the row's state, so the author edits only the stem and the
+    // server keeps `.good` in place. This is the case a blanket "no .good" rule
+    // refused outright, and the client's locked `.[ext].good` tail produces it.
+    stub_scope([file_row('photo.png.good', 10, 'a2V5')])
+
+    await expect(rename_attachment(5, 'photo.png.good', 'renamed.png.good')).resolves.toBeTruthy()
+    expect(connection.commit).toHaveBeenCalled()
+  })
+
+  it('refuses a rename that adds the marker', async () => {
+    // Faking encryption on a plaintext row would render ciphertext-less bytes
+    // as confidential, and the key would be missing.
+    stub_scope([file_row('photo.png')])
+
+    await expect(rename_attachment(5, 'photo.png', 'photo.png.good'))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('.good') })
+  })
+
+  it('refuses a rename that drops the marker', async () => {
+    // A row whose name says plaintext but that still holds a key would render
+    // ciphertext as if it were readable. 取消加密 owns that transition.
+    stub_scope([file_row('photo.png.good', 10, 'a2V5')])
+
+    await expect(rename_attachment(5, 'photo.png.good', 'photo.png'))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('.good') })
+  })
+
+  it('still validates the editable stem of an encrypted rename', async () => {
+    stub_scope([file_row('photo.png.good', 10, 'a2V5')])
+
+    await expect(rename_attachment(5, 'photo.png.good', 'bad name.png.good'))
+      .rejects.toMatchObject({ statusCode: 400, message: '文件名包含不支持的字符' })
+  })
+
+  it('still refuses an encrypted rename that collides', async () => {
+    stub_scope([file_row('photo.png.good', 10, 'a2V5'), file_row('other.png.good', 11, 'a2V5')])
+
+    await expect(rename_attachment(5, 'photo.png.good', 'other.png.good'))
+      .rejects.toMatchObject({ statusCode: 409, message: attachment_name_conflict_message })
+  })
+
+  it('still lets an ordinary rename through', async () => {
+    // The guard has to refuse the reserved suffix without becoming a blanket ban.
+    stub_scope([file_row('photo.png')])
+
+    await expect(rename_attachment(5, 'photo.png', 'photo-2.png')).resolves.toBeTruthy()
+    expect(connection.commit).toHaveBeenCalled()
+  })
+
+  it('lets a folder move land on the folder that already answers to the name', async () => {
+    // The documented merge: the guard must not turn it into a 409.
+    stub_scope([folder_row('a', 3), folder_row('b', 4)])
+
+    await expect(move_folder(5, 'b', 'a')).resolves.toBeTruthy()
+    expect(connection.commit).toHaveBeenCalled()
+  })
+
+  /**
+   * The legality half belongs to the name an author supplies, not to a name the
+   * server derives from a row it already holds: an encrypted file's `.good`
+   * marker is the server's own, and re-validating it refused every operation
+   * that carried one along — a folder holding an encrypted file could not be
+   * renamed at all. Only availability is checked for those.
+   */
+  it('renames a folder that holds an encrypted file', async () => {
+    stub_scope([folder_row('cards', 3), file_row('cards/photo.png.good', 10)])
+
+    await expect(move_folder(5, 'cards', 'cards2')).resolves.toBeTruthy()
+    expect(connection.commit).toHaveBeenCalled()
+  })
+
+  it('gives the renamed folder a row of its own', async () => {
+    // Without it the renamed folder exists only through its files, so it would
+    // vanish as soon as the last one was deleted — the same bug the upload path
+    // was fixed for, arriving through the rename door instead.
+    stub_scope([folder_row('cards', 3), file_row('cards/photo.png.good', 10)])
+
+    await move_folder(5, 'cards', 'cards2')
+
+    const inserted = mocks.db_execute.mock.calls
+      .filter(([sql]) => String(sql).includes('is_folder, file_name'))
+      .map(([, params]) => String((params as unknown[])[1]))
+    expect(inserted).toEqual(['cards2'])
+  })
+
+  it('moves an encrypted file into another folder', async () => {
+    stub_scope([file_row('cards/photo.png.good', 10)])
+
+    await expect(move_attachment(5, 'cards/photo.png.good', null)).resolves.toBeTruthy()
+    expect(connection.commit).toHaveBeenCalled()
+  })
+
+  it('moves encrypted files in a batch', async () => {
+    stub_scope([file_row('cards/photo.png.good', 10), file_row('cards/doc.pdf.good', 11)])
+
+    await expect(move_attachments(5, [
+      { file_name: 'cards/photo.png.good', target_folder: null },
+      { file_name: 'cards/doc.pdf.good', target_folder: null },
+    ])).resolves.toBeTruthy()
+    expect(connection.commit).toHaveBeenCalled()
+  })
+
+  it('refuses to replace an encrypted attachment', async () => {
+    // A replacement swaps the object but not the row's key, which would leave
+    // plaintext bytes marked encrypted and render the file unopenable.
+    stub_scope([file_row('photo.png.good', 10, 'a2V5')])
+
+    await expect(replace_attachment(5, 'photo.png.good', replace_form(), 'keep-name', () => ({ max_size_mb: 20 })))
+      .rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('已加密') })
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('still replaces a plaintext attachment', async () => {
+    stub_scope([file_row('photo.png', 10)])
+
+    await expect(replace_attachment(5, 'photo.png', replace_form(), 'keep-name', () => ({ max_size_mb: 20 })))
+      .resolves.toBeTruthy()
+    expect(mocks.put_object).toHaveBeenCalled()
+  })
+
+  it('still refuses a derived name that collides with what survives', async () => {
+    // Dropping the legality check must not drop the conflict check with it:
+    // `cards/photo.png.good` merging into `x` would land on the row that
+    // already holds that name there.
+    stub_scope([
+      folder_row('cards', 3),
+      file_row('cards/photo.png.good', 10),
+      folder_row('x', 4),
+      file_row('x/photo.png.good', 11),
+    ])
+
+    await expect(move_folder(5, 'cards', 'x'))
+      .rejects.toMatchObject({ statusCode: 409, message: attachment_name_conflict_message })
+  })
+})
+
+/**
+ * Folders exist implicitly through the files under them, so an uploaded folder
+ * used to vanish the moment its last file was deleted. Recording the folder
+ * when it first receives a file is what keeps the structure the author uploaded.
+ */
+describe('folder rows materialized by uploads', () => {
+  const story_row = {
+    id: 5,
+    title: 't',
+    label: '',
+    description: '',
+    cover: '',
+    cover_label: '',
+    cover_version: null,
+    event_precision: 'day',
+    event_dates: '[]',
+    markdown: '',
+    created_at: '',
+    updated_at: '',
+    revision: 1,
+  }
+
+  /** Every folder row the service asked to insert, as `folder name` strings. */
+  function inserted_folders() {
+    return mocks.db_execute.mock.calls
+      .filter(([sql]) => String(sql).includes('is_folder, file_name'))
+      .map(([, params]) => String((params as unknown[])[1]))
+  }
+
+  function stub_scope() {
+    mocks.db_execute.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM content_stories'))
+        return [[story_row], []]
+      if (sql.includes('SELECT * FROM content_story_attachments'))
+        return [[{ ... story_row, id: 10, is_folder: 0, file_name: 'cards/sub/photo.png', object_key: 'k', mime_type: 'image/png', file_size: 3, version: 'v1', encryption_key: null, story_id: 5 }], []]
+      return [[], []]
+    })
+  }
+
+  beforeEach(() => {
+    mocks.db_execute.mockReset()
+    mocks.db_execute.mockResolvedValue([[], []])
+    mocks.put_object.mockReset()
+    mocks.put_object.mockResolvedValue('etag-1')
+    mocks.delete_object.mockReset()
+    mocks.delete_object.mockResolvedValue(undefined)
+    mocks.head_object.mockResolvedValue({ size: 3, content_type: 'image/png', etag: 'e1' })
+    mocks.copy_object.mockResolvedValue('e2')
+  })
+
+  it('records every ancestor folder of a nested upload', async () => {
+    stub_scope()
+    const form = new FormData()
+    form.append('story_id', '5')
+    form.append('file_name', 'cards/sub/photo.png')
+    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
+
+    await upload_attachment(5, form, () => ({ max_size_mb: 20 }))
+
+    // Ancestors first, so a deeper folder depends on a row that already exists.
+    expect(inserted_folders()).toEqual(['cards', 'cards/sub'])
+  })
+
+  it('records the folder of a direct upload, and nothing above it', async () => {
+    stub_scope()
+    const form = new FormData()
+    form.append('story_id', '5')
+    form.append('file_name', 'cards/photo.png')
+    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
+
+    await upload_attachment(5, form, () => ({ max_size_mb: 20 }))
+
+    expect(inserted_folders()).toEqual(['cards'])
+  })
+
+  it('records no folder for a file at the root', async () => {
+    stub_scope()
+    const form = new FormData()
+    form.append('story_id', '5')
+    form.append('file_name', 'photo.png')
+    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
+
+    await upload_attachment(5, form, () => ({ max_size_mb: 20 }))
+
+    expect(inserted_folders()).toEqual([])
+  })
+
+  it('records the folders of a signed upload too, since that is the path folder uploads take', async () => {
+    // The browser uploads straight to storage and confirms afterwards, so the
+    // folder rows have to be created on this path or not at all.
+    stub_scope()
+    const key = `content-upload/5/${crypto.randomUUID()}`
+
+    await confirm_attachment_upload(5, key, 'cards/sub/photo.png', 20)
+
+    expect(inserted_folders()).toEqual(['cards', 'cards/sub'])
+  })
+})

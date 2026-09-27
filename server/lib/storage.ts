@@ -1,6 +1,7 @@
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -45,6 +46,15 @@ export async function put_object(key: string, body: Uint8Array, content_type: st
     CacheControl: 'public, max-age=31536000, immutable',
   }))
   return strip_etag(result.ETag)
+}
+
+/** Downloads an object's bytes (server-side transforms like attachment encryption). */
+export async function get_object(key: string) {
+  const result = await get_client().send(new GetObjectCommand({
+    Bucket: env.OSS_BUCKET,
+    Key: key,
+  }))
+  return new Uint8Array(await result.Body!.transformToByteArray())
 }
 
 export async function signed_object_url(command: unknown, expires_in: number) {

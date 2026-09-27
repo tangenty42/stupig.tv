@@ -1,18 +1,33 @@
 import type { UserRow } from '@server/services/profile.service'
 
 import type { AuthUser } from '@server/types/auth'
-import type { H3Event } from 'h3'
+import type { PermissionGrant } from '@shared/permissions'
 import type { RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { require_auth_user } from '@server/services/auth-guards.service'
 import { format_profile_row, select_profile_row_sql } from '@server/services/profile.service'
 import { logout_all_user_sessions } from '@server/services/session.service'
 import { env } from '@shared/env'
+import { normalize_permission_grants } from '@shared/permissions'
 
 interface CountRow extends RowDataPacket {
   total: number
+}
+
+interface UserAdminRow extends RowDataPacket {
+  is_admin: number
+}
+
+async function require_non_admin_target(target_id: number) {
+  const [rows] = await db.execute<UserAdminRow[]>(
+    'SELECT is_admin FROM users WHERE id = ?',
+    [target_id],
+  )
+  if (! rows[0]) {
+    throw new ApiError(404, '用户不存在')
+  }
+  return rows[0]
 }
 
 function publish_user_refresh(id: number) {
@@ -87,15 +102,34 @@ export async function list_users(
         last_online_at: user.last_seen_at ?? null,
         is_online: profile.is_online,
         verified_note: profile.verified_note,
+        permissions: profile.permissions,
       }
     }),
   }
 }
 
-export async function set_user_admin_role(target_id: number, is_admin: boolean) {
+export async function set_user_admin_role(actor_id: number, target_id: number, is_admin: boolean) {
+  if (! is_admin && actor_id === target_id) {
+    throw new ApiError(400, '不能移除自己的管理员身份')
+  }
+  await require_non_admin_target(target_id)
   await db.execute(
-    'UPDATE users SET is_admin = ? WHERE id = ?',
-    [is_admin ? 1 : 0, target_id],
+    // 提升为管理员时清空权限列表：is_admin 等价于全部权限
+    'UPDATE users SET is_admin = ?, permissions = IF(?, NULL, permissions) WHERE id = ?',
+    [is_admin ? 1 : 0, is_admin ? 1 : 0, target_id],
+  )
+  publish_user_refresh(target_id)
+}
+
+export async function set_user_permissions(target_id: number, grants: PermissionGrant[]) {
+  const target = await require_non_admin_target(target_id)
+  if (target.is_admin) {
+    throw new ApiError(400, '管理员拥有全部权限，无需编辑权限')
+  }
+  const normalized = normalize_permission_grants(grants)
+  await db.execute(
+    'UPDATE users SET permissions = ? WHERE id = ?',
+    [normalized.length ? JSON.stringify(normalized) : null, target_id],
   )
   publish_user_refresh(target_id)
 }
@@ -106,12 +140,4 @@ export async function set_profile_verification(target_id: number, is_verified: b
     [is_verified ? 1 : 0, verified_note ?? null, target_id],
   )
   publish_user_refresh(target_id)
-}
-
-export async function require_admin_user(event: H3Event) {
-  const user = await require_auth_user(event)
-  if (! user.is_admin) {
-    throw new ApiError(403, '需要管理员权限')
-  }
-  return user
 }
