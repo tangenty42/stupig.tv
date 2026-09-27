@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 1Panel-mysql
--- Generation Time: Sep 23, 2026 at 02:12 PM
+-- Generation Time: Sep 27, 2026 at 07:27 AM
 -- Server version: 8.4.8
 -- PHP Version: 8.3.30
 
@@ -75,6 +75,7 @@ CREATE TABLE `content_story_attachments` (
   `mime_type` varchar(127) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `file_size` bigint UNSIGNED NOT NULL DEFAULT '0',
   `version` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `encryption_key` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -112,6 +113,7 @@ CREATE TABLE `users` (
   `is_verified` tinyint(1) NOT NULL DEFAULT '0',
   `verified_note` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `is_admin` tinyint(1) NOT NULL DEFAULT '0',
+  `permissions` json DEFAULT NULL,
   `is_banned` tinyint(1) NOT NULL DEFAULT '0',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
