@@ -150,6 +150,7 @@ describe('require_auth_user credential checks', () => {
       avatar_file: null,
       is_verified: true,
       is_admin: true,
+      permissions: [],
     })
   })
 })
@@ -253,6 +254,6 @@ describe('resolve_operate_target', () => {
   })
 
   it('refuses a non-admin targeting another user', async () => {
-    await expect(resolve_operate_target(create_event(), 99)).rejects.toEqual(new ApiError(403, '需要管理员权限'))
+    await expect(resolve_operate_target(create_event(), 99)).rejects.toEqual(new ApiError(403, '权限不足'))
   })
 })

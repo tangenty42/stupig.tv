@@ -12,7 +12,7 @@ export function ua_label(user_agent: string | null | undefined) {
   const browser = result.browser.name
 
   if (os && browser) {
-    return `${os} · ${browser}`
+    return `${os}·${browser}`
   }
   if (os || browser) {
     return (os ?? browser)!

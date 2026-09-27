@@ -118,6 +118,20 @@
         </div>
       </MyHeightSection>
 
+      <MyHeightSection v-if="profile.is_admin || profile.permissions.length" tag="section" class="section-card-collapse">
+        <h2 class="mb-6">
+          权限
+        </h2>
+
+        <MyBadge v-if="profile.is_admin" outlined type="warning">
+          <span class="inline-flex items-center gap-1"><MyIcon name="lucide:shield-check" />管理员·全部权限</span>
+        </MyBadge>
+
+        <div v-else class="flex flex-wrap gap-2">
+          <MyPermissionBadge v-for="grant in profile.permissions" :key="grant.field" :grant="grant" />
+        </div>
+      </MyHeightSection>
+
       <template v-if="profile.editable">
         <MyHeightSection tag="section" class="section-card-collapse">
           <h2 class="mb-6">
@@ -345,6 +359,7 @@ import type { Profile } from '@shared/types/user'
 import type { Dayjs } from 'dayjs'
 import { Form } from '@primevue/forms'
 import { zodResolver } from '@primevue/forms/resolvers/zod'
+import { has_permission } from '@shared/permissions'
 import { form_default, form_schema } from '@shared/schemas'
 import { sync_resource } from '@shared/types/sync'
 
@@ -382,7 +397,7 @@ useSeoMeta({
 })
 
 const is_operating_other = computed(() => {
-  return Boolean(auth_user.value?.is_admin) && !! profile.value && profile.value.id !== auth_user.value?.id
+  return has_permission(auth_user.value, 'admin_access', 'full') && !! profile.value && profile.value.id !== auth_user.value?.id
 })
 const avatar_badge_severity = computed(() => {
   if (profile.value?.is_banned)

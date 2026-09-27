@@ -1,3 +1,4 @@
+import type { ContentStorySummary } from '@shared/types/content'
 import type { StoryMarkdownOptions } from './types'
 
 const scheme_pattern = /^[a-z][\w+.-]*:/i
@@ -56,8 +57,17 @@ export function resolve_content_url(options: StoryMarkdownOptions, url: string) 
   return url
 }
 
+// Folded-title indexes, keyed by the stories array's identity so a render
+// with many `@title` links builds the lookup once per payload, not per link.
+const title_index_cache = new WeakMap<ContentStorySummary[], Map<string, ContentStorySummary>>()
+
 /** Case-insensitive title lookup for `[](@title)` references. */
 export function find_story_by_title(options: StoryMarkdownOptions, title: string) {
-  const folded = title.toLocaleLowerCase()
-  return options.stories().find(story => story.title.toLocaleLowerCase() === folded)
+  const stories = options.stories()
+  let index = title_index_cache.get(stories)
+  if (! index) {
+    index = new Map(stories.map(story => [story.title.toLocaleLowerCase(), story]))
+    title_index_cache.set(stories, index)
+  }
+  return index.get(title.toLocaleLowerCase())
 }

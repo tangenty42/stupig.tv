@@ -342,6 +342,7 @@ describe('login_with_password token issuance', () => {
         avatar_version: null,
         is_verified: true,
         is_admin: false,
+        permissions: [],
       },
     })
     expect(JSON.stringify(result)).not.toContain('issued-token')
@@ -461,6 +462,7 @@ describe('login_with_phone token issuance', () => {
         avatar_version: null,
         is_verified: true,
         is_admin: false,
+        permissions: [],
       },
     })
     expect(JSON.stringify(result)).not.toContain('issued-token')

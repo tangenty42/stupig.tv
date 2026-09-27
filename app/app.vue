@@ -460,6 +460,7 @@ async function sync_current_user() {
     avatar_version: profile.avatar_version,
     is_verified: profile.is_verified,
     is_admin: profile.is_admin,
+    permissions: profile.permissions,
   })
 
   return profile

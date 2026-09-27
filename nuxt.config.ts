@@ -120,6 +120,8 @@ export default defineNuxtConfig({
       cookie_max_age: env.COOKIE_MAX_AGE_DAYS * 86400,
       max_avatar_size_mb: env.MAX_AVATAR_SIZE_MB,
       max_content_attachment_size_mb: env.MAX_CONTENT_ATTACHMENT_SIZE_MB,
+      max_content_encrypt_size_mb: env.MAX_CONTENT_ENCRYPT_SIZE_MB,
+      content_redact_max_dimension: env.CONTENT_REDACT_MAX_DIMENSION,
       content_story_title_max_length: env.CONTENT_STORY_TITLE_MAX_LENGTH,
       content_story_label_max_bytes: env.CONTENT_STORY_LABEL_MAX_BYTES,
       content_story_desc_max_bytes: env.CONTENT_STORY_DESC_MAX_BYTES,
@@ -188,6 +190,18 @@ export default defineNuxtConfig({
     '@nuxtjs/sitemap',
     '@nuxtjs/robots',
   ],
+  icon: {
+    clientBundle: {
+      // Scan bundles every icon named as a literal in source (the regex also
+      // catches `lucide:*` strings inside dynamic bindings), so first-use
+      // icons never fetch their CSS a roundtrip late and flash zero-width.
+      // The default glob skips .ts/.js, where this project's icon literals
+      // live (app/utils), so it must be extended.
+      scan: {
+        globInclude: ['**/*.{vue,ts,js,jsx,tsx,md,mdc,mdx,yml,yaml}'],
+      },
+    },
+  },
   site: {
     url: env.SITE_URL,
     name: 'Stupig 蠢猪小组',

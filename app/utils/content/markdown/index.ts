@@ -9,6 +9,7 @@ import { folder_images_plugin } from './folders'
 import { html_wrappers_plugin } from './html-wrappers'
 import { images_plugin } from './images'
 import { link_cards_plugin } from './link-cards'
+import { private_blocks_plugin } from './private'
 import { source_anchor_plugin } from './source-anchor'
 
 /**
@@ -34,6 +35,7 @@ export function create_story_markdown(options: StoryMarkdownOptions) {
   chips_plugin(md, ctx)
   link_cards_plugin(md, ctx)
   code_blocks_plugin(md, ctx)
+  private_blocks_plugin(md, ctx)
   html_wrappers_plugin(md, ctx)
   return md
 }

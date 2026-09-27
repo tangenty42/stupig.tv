@@ -1,3 +1,5 @@
+import type { PermissionGrant } from '@shared/permissions'
+
 export interface JwtPayload {
   sub: number
   jti: string
@@ -13,6 +15,7 @@ export interface AuthUser {
   avatar_file: string | null
   is_verified: boolean
   is_admin: boolean
+  permissions?: PermissionGrant[]
 }
 
 export interface AuthRegisterInput {

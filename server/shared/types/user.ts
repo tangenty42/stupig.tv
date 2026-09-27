@@ -1,3 +1,5 @@
+import type { PermissionGrant } from '@shared/permissions'
+
 export interface User {
   id: number
   username: string
@@ -7,6 +9,7 @@ export interface User {
   avatar_version: string | null
   is_verified: boolean
   is_admin: boolean
+  permissions?: PermissionGrant[]
 }
 
 export interface Profile {
@@ -24,6 +27,7 @@ export interface Profile {
   is_banned: boolean
   verified_note: string | null
   editable: boolean
+  permissions: PermissionGrant[]
 }
 
 export interface AdminUser {
@@ -40,6 +44,7 @@ export interface AdminUser {
   last_online_at: string | null
   is_online: boolean
   verified_note: string | null
+  permissions: PermissionGrant[]
 }
 
 export const ADMIN_FILTER_FIELDS = [

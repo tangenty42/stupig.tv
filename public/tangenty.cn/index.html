@@ -38,6 +38,12 @@
         color: gray;
         text-decoration: none;
       }
+      .flex.flex-wrap.justify-between.gap-2 {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 0.5rem;
+      }
     </style>
   </head>
 
@@ -46,13 +52,18 @@
       <div id="app" class="container">
         <h1>谭的日记</h1>
         <MyDiaryCard v-for="card in cards" :date="card.date" :title="card.title" :content="card.content"></MyDiaryCard>
-        <MyDiaryCard :isBeian="true" beian1="粤ICP备2026133764号-1" beian2="公安备案办理中"></MyDiaryCard>
+        <MyDiaryCard :is-beian="true" beian1="粤ICP备2026133764号-1" beian2="粤公网安备44078102441020号" beian2-url="https://beian.mps.gov.cn/#/query/webSearch?code=44078102441020"></MyDiaryCard>
       </div>
     </div>
   </body>
 
   <script setup>
     const cards = reactive([
+      {
+        date: '2026/9/19',
+        title: '第一次出战足球新生杯',
+        content: '球队无人可换，于是打满全场 半场领先结果被绝平😭继续加油！！',
+      },
       {
         date: '2026/9/9',
         title: '第一次早八',
@@ -97,10 +108,11 @@
         acc[name] = val
         return acc
       }, {})
+      const attr_go = (attr) => attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
       const attrs_gogogo = () => (wtf = eval) => () => {
         const obj = {}
         for (const k in attrs) {
-          obj[k] = wtf(attrs[k])
+          obj[attr_go(k)] = wtf(attrs[k])
         }
         return obj
       }
@@ -110,9 +122,9 @@
       else
         eval(`for (let ${v_for.replace(/\bin\b/ig, 'of')}) { MyDiaryCard(attrs_gogogo()(v => eval(v))()) }`)
 
-      function MyDiaryCard({ date, title, content, isbeian, beian1, beian2 }) {
+      function MyDiaryCard({ date, title, content, isBeian, beian1, beian2, beian2Url }) {
         const div = document.createElement('div')
-        if (! isbeian) {
+        if (! isBeian) {
           div.innerHTML = `
             <h2 style="color: #e2e2e2; text-align: end; margin-right: -1rem;">${date ?? ''}</h2>
             <h3>${title ?? ''}</h3>
@@ -120,9 +132,8 @@
           `
         }
         else {
-          div.innerHTML = `<a href="https://beian.miit.gov.cn" target="_blank">${beian1}</a>&emsp;<a href="" target="_blank">${beian2}</a>`
-          div.style.display = 'flex'
-          div.style.justifyContent = 'space-between'
+          div.innerHTML = `<a href="https://beian.miit.gov.cn" target="_blank">${beian1}</a><div><img src="beian.png" style="width: 1rem; vertical-align: middle; margin-right: 0.3rem;" alt="beian logo"/><a href="${beian2Url}" target="_blank">${beian2}</a></div>`
+          div.className = 'flex flex-wrap justify-between gap-2'
           div.style.fontSize = '80%'
           div.style.marginTop = '10rem'
         }

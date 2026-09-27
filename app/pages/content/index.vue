@@ -7,7 +7,7 @@
           <span>蠢猪档案！</span>
         </h1>
         <Button
-          v-if="is_admin"
+          v-if="can_manage_content"
           size="small"
           label="新建档案"
           @click="navigateTo('/content/new/edit')"
@@ -95,13 +95,14 @@
 
 <script setup lang="ts">
 import type { ContentStorySummary } from '@shared/types/content'
+import { has_permission } from '@shared/permissions'
 import { story_pinned, story_rating_rank } from '@shared/types/content'
 import { sync_resource } from '@shared/types/sync'
 
 const { content } = useApi()
 const { user } = useAuth()
 
-const is_admin = computed(() => Boolean(user.value?.is_admin))
+const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full'))
 
 const stories = useState<ContentStorySummary[] | null>('content_stories', () => null)
 const loading = useState('content_stories_loading', () => false)

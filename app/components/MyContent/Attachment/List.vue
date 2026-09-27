@@ -2,6 +2,7 @@
   <div
     ref="root_el"
     class="w-full"
+    :class="layout === 'stack' ? 'px-4' : ''"
     @dragenter.capture="emit('root-dragenter', $event)"
     @dragover.capture="emit('root-dragover', $event)"
     @dragleave.capture="emit('root-dragleave', $event)"
@@ -61,6 +62,9 @@
           @copy="emit('copy', row)"
           @rename="emit('rename', row)"
           @replace="emit('replace', row)"
+          @create-abridged="emit('create-abridged', row)"
+          @encrypt="emit('encrypt', $event, row)"
+          @decrypt="emit('decrypt', $event, row)"
           @delete="emit('delete', $event, row)"
           @retry="emit('retry', row)"
           @pause="emit('pause', row)"
@@ -73,6 +77,8 @@
           @rename-folder="emit('rename-folder', row_folder_path(row))"
           @delete-folder="emit('delete-folder', $event, row_folder_path(row))"
           @copy-folder="emit('copy-folder', row)"
+          @upload-files="pick_files(row_folder_path(row))"
+          @upload-folder="pick_folder(row_folder_path(row))"
         />
       </template>
     </div>
@@ -127,6 +133,9 @@ const emit = defineEmits<{
   'copy': [row: MyContentAttachmentRow]
   'rename': [row: MyContentAttachmentRow]
   'replace': [row: MyContentAttachmentRow]
+  'create-abridged': [row: MyContentAttachmentRow]
+  'encrypt': [event: MouseEvent, row: MyContentAttachmentRow]
+  'decrypt': [event: MouseEvent, row: MyContentAttachmentRow]
   'delete': [event: MouseEvent, row: MyContentAttachmentRow]
   'retry': [row: MyContentAttachmentRow]
   'pause': [row: MyContentAttachmentRow]
@@ -149,9 +158,13 @@ const file_input = ref<HTMLInputElement>()
 const folder_input = ref<HTMLInputElement>()
 const add_menu = ref<{ toggle: (event: Event) => void, show: (event: Event) => void }>()
 
+/** Folder a folder-row picker targets; the hidden inputs stash it here until change fires. */
+const input_target_folder = ref<string | null>(null)
+
 const add_menu_items: FileMenuItem[] = [
   { label: '上传文件', icon_name: 'lucide:paperclip', command: () => void pick_files() },
   { label: '上传文件夹', icon_name: 'lucide:folder-up', command: () => void pick_folder() },
+  { separator: true },
   { label: '新建文件夹', icon_name: 'lucide:folder-plus', command: () => emit('create-folder', null) },
 ]
 
@@ -168,7 +181,9 @@ function on_files_picked(event: Event) {
   const input = event.target as HTMLInputElement
   const files = [... (input.files ?? [])]
   input.value = ''
-  emit('files-picked', files.map(file => ({ file, file_name: file.webkitRelativePath || file.name })))
+  const target = input_target_folder.value
+  input_target_folder.value = null
+  emit('files-picked', with_target_folder(files.map(file => ({ file, file_name: file.webkitRelativePath || file.name })), target))
 }
 
 // Right-click on the list background opens the same menu as the "+" button;
@@ -183,12 +198,17 @@ function on_background_contextmenu(event: MouseEvent) {
   add_menu.value?.show(event)
 }
 
+/** Prefix picks with the folder a folder-row menu targeted, if any. */
+function with_target_folder(picks: AttachmentUploadPick[], target: string | null) {
+  return target ? picks.map(pick => ({ ... pick, file_name: `${target}/${pick.file_name}` })) : picks
+}
+
 // Prefer the File System Access pickers (Chromium) so picks carry a resumable
 // handle; fall back to the hidden inputs where they are unavailable.
-async function pick_files() {
+async function pick_files(target: string | null = null) {
   if (typeof window.showOpenFilePicker === 'function') {
     try {
-      emit('files-picked', await picks_from_file_handles(await window.showOpenFilePicker({ multiple: true })))
+      emit('files-picked', with_target_folder(await picks_from_file_handles(await window.showOpenFilePicker({ multiple: true })), target))
       return
     }
     catch (ex) {
@@ -196,13 +216,14 @@ async function pick_files() {
         return
     }
   }
+  input_target_folder.value = target
   file_input.value?.click()
 }
 
-async function pick_folder() {
+async function pick_folder(target: string | null = null) {
   if (typeof window.showDirectoryPicker === 'function') {
     try {
-      emit('files-picked', await picks_from_file_handles([await window.showDirectoryPicker()]))
+      emit('files-picked', with_target_folder(await picks_from_file_handles([await window.showDirectoryPicker()]), target))
       return
     }
     catch (ex) {
@@ -210,6 +231,7 @@ async function pick_folder() {
         return
     }
   }
+  input_target_folder.value = target
   folder_input.value?.click()
 }
 

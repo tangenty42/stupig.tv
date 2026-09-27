@@ -56,6 +56,11 @@ const env_schema = z.object({
   SYNC_CLIENT_ID_STORAGE_KEY: z.string().min(1),
   MAX_AVATAR_SIZE_MB: z.coerce.number(),
   MAX_CONTENT_ATTACHMENT_SIZE_MB: z.coerce.number(),
+  MAX_CONTENT_ENCRYPT_SIZE_MB: z.coerce.number(),
+  // Longest side of an image the 删减版 editor may decode into a canvas. A file
+  // limit does not bound the decoded size, so a small PNG could still exhaust
+  // the tab's memory.
+  CONTENT_REDACT_MAX_DIMENSION: z.coerce.number().int().min(1),
   CONTENT_STORY_TITLE_MAX_LENGTH: z.coerce.number().int().min(1).max(120),
   CONTENT_LINK_FILE_NAME_MAX_BYTES: z.coerce.number().int().min(1).max(255),
   CONTENT_STORY_LABEL_MAX_BYTES: z.coerce.number().int().min(1).max(255),

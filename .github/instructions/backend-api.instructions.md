@@ -24,7 +24,7 @@ applyTo: "server/**/*.ts"
 - MySQL timezone is forced to UTC on every connection. Timestamps are stored as UTC.
 - Boolean DB fields are `tinyint(1)` and must be converted with `Boolean()` before returning to the client.
 - Date handling: use `dayjs` with `dayjs.extend(utc)`; store UTC, display local.
-- Run tests with `pnpm test`.
+- Run tests with `pnpm test`; the policy (layout, what to assert, verifying a guard can fail) is in `.github/copilot-instructions.md` → Testing & Build. Backend behavior worth covering is the service layer: validation, the thrown `ApiError` status and Chinese message, and the side effects (rows written, objects touched, refresh published). Mock the boundary — `@server/lib/db`, `storage`, `sync`, `operation-lock` — never the service under test, and remember a transaction connection is a separate object that needs its own `execute`.
 - After server-side type refactors or import changes, run `npx nuxt typecheck` to type-check the whole workspace. Type errors must be resolved before considering the task complete.
 - External services (Aliyun, MQTT) are configured via `server/shared/env.ts`. Read `.env.example` and `server/shared/env.ts` thoroughly before proposing environment changes.
 - If `.env` is not accessible, ask the user before proceeding with tasks that require secrets.

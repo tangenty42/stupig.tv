@@ -31,7 +31,5 @@ const tier = computed(() => story_rating(props.rating))
       font-bold
       text-white;
   }
-  /* The rating-* palette lives in global.css: the story calendar's event bars
-     use it without rendering this component, and scoped component CSS only
-     loads with the component. */
+  /* The rating-* palette lives in global.css. */
 </style>

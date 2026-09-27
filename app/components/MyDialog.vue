@@ -7,7 +7,8 @@
     :draggable="false"
     :closable="props.closable ?? (! props.pending)"
     :dismissable-mask="props.closable ?? (! props.pending)"
-    class="w-full max-w-md"
+    class="w-full"
+    :class="panel_class"
   >
     <template v-if="$slots.default" #default>
       <MyHeightTransition>
@@ -31,9 +32,12 @@ const props = withDefaults(defineProps<{
   header?: string
   pending?: boolean
   closable?: boolean
+  /** Tailwind max-width class for the panel; the default suits ordinary forms. */
+  panel_class?: string
 }>(), {
   pending: false,
   closable: true,
+  panel_class: 'max-w-md',
 })
 
 const emit = defineEmits<{

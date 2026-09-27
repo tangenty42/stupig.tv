@@ -36,5 +36,5 @@ ESLint is the sole formatter for this project — **no Prettier**. Config lives 
 - Run `pnpm lint` to check, `pnpm lint:fix` to auto-fix.
 - Pre-commit hook (simple-git-hooks + lint-staged) auto-fixes staged files; VS Code applies ESLint fixes on save.
 - After style or type changes, verify with `pnpm lint`, `npx nuxt typecheck`, and `pnpm test`.
-- Do not modify test files to satisfy the linter without user approval; prefer a scoped rule override with a TODO comment instead.
+- Test files follow the same style as any other code (see `.github/copilot-instructions.md` → Testing & Build for the testing policy). A lint error in a test is fixed by correcting the code, not by hollowing out an assertion; only when a rule genuinely cannot apply, exempt that file with a scoped override plus a TODO comment.
 - For intentional rule violations, use an `eslint-disable-next-line` comment with a `-- reason` suffix.

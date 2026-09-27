@@ -12,6 +12,7 @@ import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { create_login_session, logout_session } from '@server/services/session.service'
 import { env } from '@shared/env'
+import { normalize_permission_grants } from '@shared/permissions'
 import { phone_schema } from '@shared/schemas'
 import bcrypt from 'bcryptjs'
 import dayjs from 'dayjs'
@@ -37,6 +38,7 @@ interface UserAuthRow extends RowDataPacket {
   avatar_version: string | null
   is_verified: number
   is_admin: number
+  permissions: unknown
 }
 
 interface OtpCooldownRecord extends RowDataPacket {
@@ -135,7 +137,7 @@ async function build_auth_result(event: H3Event, user_id: number, device: Device
   publish_refresh({ resource: sync_resource('profile_sessions', user_id) })
 
   const [rows] = await db.execute<UserAuthRow[]>(
-    'SELECT id, username, phone, avatar_file, avatar_version, is_verified, is_admin FROM users WHERE id = ?',
+    'SELECT id, username, phone, avatar_file, avatar_version, is_verified, is_admin, permissions FROM users WHERE id = ?',
     [user_id],
   )
   const user = rows[0]
@@ -154,6 +156,7 @@ async function build_auth_result(event: H3Event, user_id: number, device: Device
       avatar_version: user.avatar_version,
       is_verified: Boolean(user.is_verified),
       is_admin: Boolean(user.is_admin),
+      permissions: normalize_permission_grants(user.permissions),
     },
   }
 }

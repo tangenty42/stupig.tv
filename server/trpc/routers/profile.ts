@@ -12,8 +12,10 @@ import {
   upload_profile_avatar,
 } from '@server/services/profile.service'
 import { get_login_sessions } from '@server/services/session.service'
-import { admin_procedure, protected_procedure, public_procedure, router } from '@server/trpc/init'
+import { permission_procedure, protected_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
+
+const admin_edit_procedure = permission_procedure('admin_access', 'full')
 
 export const profile_router = router({
   get: public_procedure
@@ -55,7 +57,7 @@ export const profile_router = router({
       await force_logout_session(target_id, input.id)
     }),
 
-  resetPasswordFor: admin_procedure
+  resetPasswordFor: admin_edit_procedure
     .input(api_schema.profile.reset_password_for)
     .mutation(({ input }) => reset_profile_password(input.operate_for, input.new_password)),
 
@@ -67,7 +69,7 @@ export const profile_router = router({
     .input(api_schema.profile.change_password_by_otp)
     .mutation(({ ctx, input }) => change_profile_password_by_otp(ctx.auth_user, input)),
 
-  changePhoneFor: admin_procedure
+  changePhoneFor: admin_edit_procedure
     .input(api_schema.profile.change_phone_for)
     .mutation(({ input }) => set_profile_phone(input.operate_for, input.new_phone)),
 

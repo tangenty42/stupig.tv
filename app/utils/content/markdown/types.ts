@@ -13,6 +13,12 @@ export interface FileCardData {
   size: string
   /** Set when the link has no label; the card then renders the file name itself. */
   name: string | null
+  /** Encrypted attachment with a shipped key: amber card plus a 机密附件 tag. */
+  encrypted?: boolean
+  /** Renders the plaintext 删减版 twin to an unauthorized viewer. */
+  abridged?: boolean
+  /** Permitted viewer with an abridged twin: the card gets a full/abridged toggle. */
+  twin_url?: string
 }
 
 export interface StoryCardMeta {

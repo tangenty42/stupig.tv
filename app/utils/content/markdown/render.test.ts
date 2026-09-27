@@ -1,7 +1,11 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
+import { readdirSync, readFileSync } from 'node:fs'
+import { CONTENT_ATTACHMENT_DENIED_TEXT, CONTENT_IMAGE_DENIED_TEXT } from '@shared/content-markdown'
+import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_DENIED_TEXT, CONTENT_PRIVATE_INLINE_PLACEHOLDER } from '@shared/content-private'
 import { describe, expect, it } from 'vitest'
 import { content_attachment_markdown, content_folder_markdown } from '~/utils/content/attachment-drag'
 import { create_story_markdown } from '~/utils/content/markdown'
+import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
 
 function attachment(file_name: string, is_image: boolean): ContentStoryAttachment {
   return {
@@ -11,6 +15,7 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
     is_image,
     version: 'v1',
     url: `/objects/${file_name}`,
+    is_encrypted: false,
   }
 }
 
@@ -104,13 +109,12 @@ describe('folder image expansion', () => {
     expect(html).toContain('alt="10.png"')
   })
 
-  it('drops a label written on the folder reference', () => {
-    // The reference names a gallery, not one image, so its own label is not a
-    // caption for every file inside.
-    const { html, images } = render('![卡片](cards)')
-
-    expect(images).toHaveLength(3)
-    expect(html).not.toContain('卡片')
+  it('carries a label written on the folder reference onto every image', () => {
+    // The reference is shorthand for the per-file tags, label included:
+    // `![卡片](cards)` must render exactly like the spelled-out labeled tags,
+    // captions and all.
+    expect(render('![卡片](cards)').html)
+      .toBe(render('![卡片](cards/1.png)![卡片](cards/2.png)![卡片](cards/10.png)').html)
   })
 
   it('leaves a plain file reference alone', () => {
@@ -169,6 +173,19 @@ describe('folder image expansion', () => {
     // The whole point of the feature: the folder reference is shorthand for the
     // per-file tags, so the markup must not differ in any way.
     expect(expanded).toBe(literal)
+  })
+
+  it('stays equivalent when other content shares the paragraph', () => {
+    // The expanded images are spliced in adjacent, the literal spelling has a
+    // line break between tags; both must split into the same carousel plus a
+    // trailing folder-card paragraph. data-line differs because the two
+    // spellings occupy a different number of source lines.
+    const strip_lines = (html: string) => html.replaceAll(/ data-line="\d+"/g, '')
+    const shorthand = render('![](cards)\n[](cards)').html
+    const literal = render('![](cards/1.png)\n![](cards/2.png)\n![](cards/10.png)\n[](cards)').html
+
+    expect(shorthand).toContain('image-carousel')
+    expect(strip_lines(shorthand)).toBe(strip_lines(literal))
   })
 
   it('expands inside an html wrapper as well', () => {
@@ -335,5 +352,350 @@ describe('folder markdown shorthand', () => {
     // the link form only.
     expect(render(copied).html).not.toContain('carousel')
     expect(render(`!${copied}`).html).toContain('carousel')
+  })
+})
+
+describe('private (good) elements', () => {
+  it('renders a block element as a dashed lock card with markdown inside', () => {
+    const { html } = render('a\n\n<good>\nsecret **bold**\n</good>\n\nb\n')
+
+    expect(html).toContain('class="private-block"')
+    expect(html).toContain('机密内容')
+    expect(html).toContain('<strong>bold</strong>')
+    // The card carries its source line for editor scroll sync.
+    expect(html).toContain('data-line="2"')
+  })
+
+  it('renders an inline element as a lock span', () => {
+    const { html } = render('before <good>secret</good> after\n')
+
+    expect(html).toContain('class="private-inline chip-card-gap-l chip-card-gap-r"')
+    expect(html).toContain('>secret</span>')
+  })
+
+  it('skips the side gaps at a line edge', () => {
+    const { html } = render('before <good>secret</good>\n')
+
+    expect(html).toContain('class="private-inline chip-card-gap-l"')
+  })
+
+  it('renders a whole-line single-line element as a block', () => {
+    const { html } = render('a\n\n<good>secret</good>\n\nb\n')
+
+    expect(html).toContain('class="private-block"')
+  })
+
+  it('keeps text trailing the close tag out of the block card', () => {
+    const { html } = render('<good>\nsecret\n</good> tail\n')
+
+    expect(html).toContain('class="private-block"')
+    expect(html).toContain('secret')
+    // The trailing text renders as its own paragraph after the card.
+    expect(html).toMatch(/<\/div>\s*<p[^>]*>tail<\/p>/)
+  })
+
+  it('renders a line-start element with trailing text as an inline chip', () => {
+    const { html } = render('<good>secret</good> tail\n')
+
+    expect(html).toContain('private-inline')
+    expect(html).not.toContain('private-block')
+    // The trailing text stays ordinary inline content.
+    expect(html).toContain('</span> tail')
+  })
+
+  it('leaves plain HTML untouched', () => {
+    const { html } = render('a\n\n<div>\nx\n</div>\n')
+
+    expect(html).not.toContain('private-block')
+  })
+
+  it('does not claim an unclosed tag', () => {
+    const { html } = render('a\n\n<good>\nx\n')
+
+    expect(html).not.toContain('private-block')
+  })
+})
+
+describe('private placeholders', () => {
+  it('renders the redacted block placeholder as the denied card', () => {
+    const { html } = render(`a\n\n${CONTENT_PRIVATE_BLOCK_PLACEHOLDER}\n\nb\n`)
+
+    expect(html).toContain('private-block-denied')
+    expect(html).toContain(CONTENT_PRIVATE_DENIED_TEXT)
+  })
+
+  it('renders the redacted inline placeholder inline', () => {
+    const { html } = render(`before ${CONTENT_PRIVATE_INLINE_PLACEHOLDER} after\n`)
+
+    expect(html).toContain('private-inline-denied chip-card-gap-l chip-card-gap-r')
+  })
+})
+
+describe('plain link cards', () => {
+  it('renders a chain icon on the left of the label', () => {
+    const { html } = render('[标签](https://example.com/x)\n')
+
+    expect(html).toContain('link-card-icon chip-icon iconify i-lucide:link')
+    expect(html).toContain('link-card-label')
+    // link-chip marks the wrappable inline variant.
+    expect(html).toContain('link-chip')
+  })
+
+  it('keeps file cards free of the chain icon (they have their own leading icon)', () => {
+    const { html } = render('[](solo.png)\n')
+
+    expect(html).toContain('file-card-icon')
+    expect(html).not.toContain('link-card-icon')
+  })
+})
+
+describe('compiled icons', () => {
+  // Renders one of everything (alerts, file/folder/video/story/plain-link
+  // cards, private chrome) and asserts every emitted icon is registered for
+  // bundling; a renderer icon missing from story_compiled_icons ships blank.
+  it('covers every icon the renderer emits', () => {
+    const md = create_story_markdown({
+      story_id: () => 1,
+      attachments: () => [
+        attachment('cards/1.png', true),
+        attachment('doc.pdf', false),
+        attachment('data.xlsx', false),
+        attachment('archive.zip', false),
+        attachment('song.mp3', false),
+        attachment('clip.mp4', false),
+        attachment('code.sql', false),
+        attachment('notes.txt', false),
+        { ... attachment('locked.png', true), file_name: 'locked.png.good', is_encrypted: true },
+        { ... attachment('unlocked.png', true), file_name: 'unlocked.png.good', is_encrypted: true, encryption_key: 'a2V5' },
+        // An encrypted image WITH a plaintext 删减版 twin: an unauthorized
+        // viewer gets the twin, which is the only path that emits the closed
+        // keyhole. Without this pair the 删减版 branch is never rendered, and
+        // the icon it carries went unchecked for exactly that reason.
+        attachment('twin.png', true),
+        { ... attachment('twin.png', true), file_name: 'twin.png.good', is_encrypted: true },
+      ],
+      stories: () => [{
+        id: 9,
+        title: '目标档案',
+        labels: [],
+        event_precision: 'day',
+        event_dates: [],
+        created_at: '',
+        updated_at: '',
+        desc: '描述',
+        cover: null,
+        cover_label: null,
+        cover_version: null,
+        cover_url: null,
+      }],
+      static_url: path => path,
+      video_card: () => ({
+        bvid: 'BV1',
+        url: 'https://www.bilibili.com/video/BV1',
+        title: '视频',
+        cover: 'https://i0.hdslb.com/x.jpg',
+        uploader: 'UP主',
+        duration: 61,
+        views: 100,
+        likes: 10,
+      }),
+      folder_card_openable: () => true,
+    })
+    const markdown = [
+      '> [!NOTE]\n> 提示\n',
+      '> [!TIP]\n> tip\n',
+      '> [!IMPORTANT]\n> 重要\n',
+      '> [!WARNING]\n> 警告\n',
+      '> [!CAUTION]\n> 注意\n',
+      '[](doc.pdf) [](data.xlsx) [](archive.zip) [](song.mp3) [](clip.mp4) [](code.sql) [](notes.txt)\n',
+      '[](cards)\n',
+      '[](https://www.bilibili.com/video/BV1)\n',
+      '[](@目标档案) [](@不存在的档案)\n',
+      '[标签](https://example.com/x)\n',
+      '<good>secret</good>\n',
+      '<good>\nsecret\n</good>\n',
+      // Denied placeholders and an encrypted-but-keyless attachment (denied card).
+      `before ${CONTENT_PRIVATE_INLINE_PLACEHOLDER} after\n`,
+      `${CONTENT_PRIVATE_BLOCK_PLACEHOLDER}\n`,
+      '[](locked.png.good)\n',
+      '![](unlocked.png.good)\n',
+      // The 删减版 twin as an image (abridged brand) and as a card
+      // (the substituted encrypted card).
+      '![](twin.png.good)\n',
+      '[](twin.png.good)\n',
+    ].join('\n')
+
+    const html = md.render(markdown, { images: [], bilibili_hrefs: [] })
+    // Rendered classes are the `i-lucide:*` form; the bundle list uses names.
+    const used = new Set([... html.matchAll(/i-lucide:[a-z0-9-]+/g)].map(match => match[0].slice(2)))
+
+    expect(used.size).toBeGreaterThan(10)
+    for (const icon of used) {
+      expect(story_compiled_icons, `${icon} is not registered`).toContain(icon)
+    }
+  })
+
+  /**
+   * The runtime check above can only see the branches its fixtures reach, which
+   * is how an unregistered icon shipped: the 删减版 path simply was not in the
+   * fixture set. This scans the renderer sources instead, so a newly emitted
+   * icon is caught no matter which branch produces it.
+   */
+  it('registers every icon literal in the renderer sources', () => {
+    const emitter_files = [
+      ... readdirSync(new URL('.', import.meta.url)).filter(name => name.endsWith('.ts') && ! name.endsWith('.test.ts') && name !== 'compiled-icons.ts'),
+      '../../../../server/shared/content-private.ts',
+    ]
+    const registered = new Set(story_compiled_icons.map(icon => icon.replace(/^lucide:/, '')))
+    const found = new Map<string, string>()
+    for (const file of emitter_files) {
+      const url = new URL(file.startsWith('..') ? file : `./${file}`, import.meta.url)
+      for (const match of readFileSync(url, 'utf8').matchAll(/lucide:([a-z0-9-]+)/g))
+        found.set(match[1]!, file)
+    }
+    expect(found.size).toBeGreaterThan(10)
+    for (const [icon, file] of found) {
+      expect(registered, `${icon} (${file}) is not in story_compiled_icons`).toContain(icon)
+    }
+  })
+})
+
+describe('encrypted attachments', () => {
+  const encrypted = {
+    file_name: 'secret.png.good',
+    mime_type: 'image/png',
+    file_size: 1024,
+    is_image: true,
+    version: 'v1',
+    url: '/objects/secret.png.good',
+    is_encrypted: true,
+  }
+  const with_key = { ... encrypted, encryption_key: 'a2V5' }
+
+  it('marks an encrypted file card for client-side decryption when the key shipped', () => {
+    const { html } = render('[](secret.png.good)\n', [with_key])
+
+    expect(html).toContain('data-encrypted')
+    expect(html).toContain('i-lucide:lock-keyhole-open')
+    // Amber chrome plus the 机密附件 tag mark the card as encrypted.
+    expect(html).toContain('file-card-encrypted')
+    expect(html).toContain('机密附件')
+    // The card displays the pre-encryption name; the .good suffix only
+    // survives in the ciphertext href.
+    expect(html).toContain('file-card-name">secret.png<')
+    expect(html).toContain('secret.png.good')
+  })
+
+  it('renders a nameless denied card when no key shipped', () => {
+    const { html } = render('[](secret.png.good)\n', [encrypted])
+
+    expect(html).toContain('encrypted-card-denied')
+    expect(html).toContain('i-lucide:ban"')
+    expect(html).toContain(CONTENT_ATTACHMENT_DENIED_TEXT)
+    expect(html).not.toContain('secret.png.good')
+  })
+
+  it('denies even a labeled link to an encrypted file without a key', () => {
+    const { html } = render('[下载](secret.png.good)\n', [encrypted])
+
+    expect(html).toContain('encrypted-card-denied')
+    expect(html).not.toContain('secret.png.good')
+  })
+
+  it('marks an encrypted image for decryption when the key shipped', () => {
+    const { html } = render('![](secret.png.good)\n', [with_key])
+
+    expect(html).toContain('data-encrypted')
+    expect(html).toContain('/objects/secret.png.good')
+    // The amber card announces 机密附件 with a loader until the blob lands.
+    expect(html).toContain('encrypted-block-brand')
+    expect(html).toContain('机密附件·解密中')
+    expect(html).toContain('encrypted-image-loading')
+  })
+
+  it('keeps the frame and caption, swapping only the img for a placeholder', () => {
+    const { html, images } = render('![背面的故事](secret.png.good)\n', [encrypted])
+
+    expect(html).toContain('encrypted-image-denied')
+    expect(html).toContain(CONTENT_IMAGE_DENIED_TEXT)
+    expect(html).toContain('img-frame')
+    // The caption survives; the ciphertext URL and file name do not.
+    expect(html).toContain('背面的故事')
+    expect(html).not.toContain('/objects/secret.png.good')
+    expect(html).not.toContain('<img')
+    // No lightbox entry for content the viewer cannot decrypt.
+    expect(images).toEqual([])
+  })
+})
+
+describe('abridged twin (删减版)', () => {
+  const twin = {
+    file_name: 'secret.png',
+    mime_type: 'image/png',
+    file_size: 512,
+    is_image: true,
+    version: 'v1',
+    url: '/objects/secret.png',
+    is_encrypted: false,
+  }
+  const encrypted = {
+    file_name: 'secret.png.good',
+    mime_type: 'image/png',
+    file_size: 1024,
+    is_image: true,
+    version: 'v2',
+    url: '/objects/secret.png.good',
+    is_encrypted: true,
+  }
+  const with_key = { ... encrypted, encryption_key: 'a2V5' }
+
+  it('renders the twin as an amber card for unauthorized viewers', () => {
+    const { html } = render('[](secret.png.good)\n', [encrypted, twin])
+
+    expect(html).toContain('file-card-encrypted')
+    expect(html).toContain('机密附件·删减版')
+    // The card links the plaintext twin and never mentions the ciphertext.
+    expect(html).toContain('href="/objects/secret.png"')
+    expect(html).not.toContain('secret.png.good')
+    expect(html).not.toContain('data-encrypted')
+  })
+
+  it('renders the twin image with a 删减版 brand for unauthorized viewers', () => {
+    const { html, images } = render('![](secret.png.good)\n', [encrypted, twin])
+
+    expect(html).toContain('机密附件·删减版')
+    expect(html).toContain('src="/objects/secret.png"')
+    expect(html).not.toContain('encrypted-image-denied')
+    expect(images).toEqual(['/objects/secret.png'])
+  })
+
+  it('gives permitted viewers a full/abridged toggle on the file card', () => {
+    const { html } = render('[](secret.png.good)\n', [with_key, twin])
+
+    expect(html).toContain('data-twin-url="/objects/secret.png"')
+    expect(html).toContain('encrypted-toggle')
+    expect(html).toContain('查看删减版')
+  })
+
+  it('gives permitted viewers a toggle on the image card', () => {
+    const { html } = render('![](secret.png.good)\n', [with_key, twin])
+
+    expect(html).toContain('data-twin-url="/objects/secret.png"')
+    expect(html).toContain('encrypted-toggle')
+    expect(html).toContain('机密附件·解密中')
+  })
+
+  it('points a labeled link at the twin for unauthorized viewers', () => {
+    const { html } = render('[下载](secret.png.good)\n', [encrypted, twin])
+
+    expect(html).toContain('href="/objects/secret.png"')
+    expect(html).not.toContain('encrypted-card-denied')
+    expect(html).not.toContain('data-encrypted')
+  })
+
+  it('falls back to the denied card when there is no twin', () => {
+    const { html } = render('[](secret.png.good)\n', [encrypted])
+
+    expect(html).toContain('encrypted-card-denied')
   })
 })

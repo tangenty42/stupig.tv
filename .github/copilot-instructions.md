@@ -28,7 +28,7 @@
 - Ask follow-up questions when something is unclear; the user is welcome to clarify.
 - Do not make changes without approval when approval is required.
 - Do not hardcode values; make items configurable.
-- Ask for clarification when there is any doubt. The user may be in Autopilot mode and cannot respond mid-round. Ask questions at the end of the conversation and wait for the next prompt.
+- Ask for clarification when there is any doubt. The user may be in Autopilot mode and cannot respond mid-round. Ask questions at the end of the conversation and wait for the next prompt. **In Autopilot mode, never use interactive question prompts/tools — they get auto-skipped and the questions are lost. Put open questions as plain text at the end of the reply, then end the turn without implementing the parts in doubt.**
 - **Never delete or recreate files during code editing**, even if Autopilot would approve. Ask the user first using the "wait for my next prompt" approach.
 - Favor minimal replacement or modification over rewriting the whole file or module.
 - When updating shared server-side state that needs to be reflected in the UI (e.g., profile changes, admin role changes, user bans), do not proactively fetch from the client side. Instead, emit the appropriate refresh event via `server/lib/sync.ts` and rely on the existing data sync module to reload the affected data in all connected clients/tabs. On the client, prefer `useSyncedData` for subscribing to and reloading data. In most cases, leave `universal` at its default `true` so multiple subscribers to the same resource share one proxy and one fetch. Only set `universal: false` when the `fetcher` has caller-specific side effects or different behavior across callers. Use `useDataSync` directly only in rare cases where a component needs to react to a raw sync event without fetching a shared resource.
@@ -48,11 +48,22 @@
 - Define server-side public/API-facing types in `server/types/` (e.g., `api.ts`, `auth.ts`, `sync.ts`). Keep internal service-specific types (e.g., row mappers, input shapes) near the service that owns them.
 - Validate input with Zod. Map error messages to user-facing Chinese text where appropriate.
 - Date handling: use `dayjs` with `dayjs.extend(utc)`; store UTC, display local. MySQL timezone is forced to UTC on every connection.
-- Styling: Tailwind CSS 3 + PrimeVue. Use `global.css` and `primevue-overrides.css` for app-wide styles. Scoped component styles use `<style scoped>` with `@apply`. Never write PrimeVue `--p-*` CSS variables directly; reference theme values via `theme('colors.primary')`, `theme('colors.primary-emphasis')` (hover), `theme('colors.primary-contrast')`, `theme('colors.primary-500')`, etc.
+- Styling: Tailwind CSS 3 + PrimeVue. Use `global.css` and `primevue-overrides.css` for app-wide styles. Scoped component styles use `<style scoped>` with `@apply`. To restyle a PrimeVue component's internals, prefer its design tokens (`--p-*`) over overriding generated class names; app-wide tokens go in `primevue-overrides.css`. For our own palette use Tailwind `theme('colors.primary')`, `theme('colors.primary-emphasis')` (hover), `theme('colors.primary-contrast')`, `theme('colors.primary-500')`, etc.
 
 ## Testing & Build
 
-- Run tests with `pnpm test` (`vitest run`).
-- Do not create or modify test files without user approval. If a change clearly benefits from tests and is straightforward to cover, mention the recommendation and ask before adding them.
+- Run tests with `pnpm test` (`vitest run`). There is no watch task; run the command and read the output.
+
+**Tests are part of the change, not a follow-up.** Add them for new behavior, update them when a change makes their expectations outdated, and fix the cause of a failure rather than the assertion. If a change genuinely needs no test, say why in the reply rather than staying silent about it.
+
+- Layout: a test lives beside the module it covers, named `<module>.test.ts` (e.g. `app/utils/content/redact.ts` → `app/utils/content/redact.test.ts`). There is no separate test directory, no shared test utilities module, and no `setupFiles`; add one only when several suites genuinely share the helper.
+- Environment: Node, no DOM — there is no jsdom/happy-dom. `import.meta.client` is forced `true` and `import.meta.server` `false` by `vitest.config.ts`; the `~`, `@server` and `@shared` aliases resolve. Anything needing a real browser (canvas, layout, pointer events) is out of scope for tests.
+- Assert the contract, not the implementation: the observable behavior, the returned shape, the thrown status and message, the side effect. Prefer the smallest unit that expresses the rule, but go through a real entry point when the risk being guarded is the wiring (that a guard is actually called, that a caller passes the right argument).
+- Mocking: declare mocks with `vi.hoisted` and register them with `vi.mock`, then `await import()` the module under test — `vi.mock` is hoisted above imports, so a plain top-level mock would be initialized too late. Mock at the boundary (db, storage, sync, locks, clock), never the module under test. The mock's shape has to match what the code actually calls (`db.execute`, not `db.query`; a transaction connection needs its own `execute`).
+- **A new guard must be able to fail.** Before trusting one, temporarily break the fix it guards and confirm the test goes red, then restore. A guard that cannot fail when the behavior breaks is worse than no guard: it advertises protection that is not there. The same applies to a guard whose fixture never reaches the branch it claims to cover.
+- Never weaken a test to make it pass: no hollowed-out assertions, no `.skip`, no widening an expectation to whatever the code happens to do. If an expectation turns out to be wrong, first decide which one is right — the code or the test — and fix that one.
+- A test may read project source files when the invariant is about the source itself (for example "every icon this renderer can emit is registered in the bundling list"). Say why in a comment, assert a real minimum, and prefer a runtime check when one can reach the same coverage.
+- Lint applies to tests like any other code: run `pnpm lint`, and fix a test's lint error as code rather than exempting the file.
+
 - After type refactors or import changes on either the frontend or the backend, run `npx nuxt typecheck` to type-check the whole workspace. Type errors must be resolved before considering the task complete.
 - Avoid adding new external dependencies unless there is a clear, justified need. The project already uses PrimeVue, Tailwind, and Nuxt icons.

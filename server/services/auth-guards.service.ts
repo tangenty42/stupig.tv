@@ -8,6 +8,7 @@ import { get_auth_token_from_cookie, get_client_ip, is_auth_token_expiring, make
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { refresh_login_session } from '@server/services/session.service'
 import { env } from '@shared/env'
+import { has_permission, normalize_permission_grants } from '@shared/permissions'
 
 declare module 'h3' {
   interface H3EventContext {
@@ -24,6 +25,7 @@ interface SessionVerificationRecord extends RowDataPacket {
   avatar_version: string | null
   is_verified: number
   is_admin: number
+  permissions: unknown
   is_banned: number
   is_logged_out: number
   is_expired: number
@@ -70,6 +72,7 @@ export async function require_auth_user(event: H3Event) {
        u.avatar_version,
        u.is_verified,
        u.is_admin,
+       u.permissions,
        u.is_banned,
        s.is_logged_out,
        (s.expires_at <= NOW()) AS is_expired
@@ -143,6 +146,7 @@ export async function require_auth_user(event: H3Event) {
         avatar_version: record.avatar_version,
         is_verified: Boolean(record.is_verified),
         is_admin: Boolean(record.is_admin),
+        permissions: normalize_permission_grants(record.permissions),
       })
     }
   }
@@ -155,6 +159,7 @@ export async function require_auth_user(event: H3Event) {
     avatar_file: record.avatar_file,
     is_verified: Boolean(record.is_verified),
     is_admin: Boolean(record.is_admin),
+    permissions: normalize_permission_grants(record.permissions),
   }
 
   event.context.auth_user = auth_user
@@ -177,8 +182,8 @@ export async function resolve_operate_target(event: H3Event, operate_for?: numbe
     return { auth_user, target_id: auth_user.id }
   }
 
-  if (! auth_user.is_admin) {
-    throw new ApiError(403, '需要管理员权限')
+  if (! has_permission(auth_user, 'admin_access', 'full')) {
+    throw new ApiError(403, '权限不足')
   }
 
   return { auth_user, target_id: operate_for }

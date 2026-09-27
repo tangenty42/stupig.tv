@@ -44,7 +44,7 @@
         </div>
       </div>
 
-      <div class="mb-2 flex flex-wrap gap-2">
+      <div v-if="can_manage" class="mb-2 flex flex-wrap gap-2">
         <Button
           :variant="current_page_all_selected ? undefined : 'text'"
           :label="current_page_all_selected ? '取消全选' : '全选本页'"
@@ -95,10 +95,12 @@
             :selected="selected_ids.has(user.id)"
             :disable_pending="pending_disable_user_ids.has(user.id)"
             :logout_pending="pending_logout_user_ids.has(user.id)"
+            :can_manage="can_manage"
             @toggle-disabled="toggle_disabled"
             @force-logout="force_logout"
             @toggle-verified="toggle_verified"
             @toggle-admin="toggle_admin"
+            @edit-permissions="open_permission_dialog"
             @toggle-select="toggle_selection"
           />
         </KeepAlive>
@@ -117,10 +119,13 @@
     <MyDialog
       v-model:visible="verify_note_dialog_visible"
       header="认证说明"
-      :pending="verify_note_pending"
-      :closable="! verify_note_pending"
+      :pending="verify_dialog_pending"
+      :closable="! verify_dialog_pending"
     >
       <div>
+        <div class="mb-3 text-sm text-slate-500 dark:text-slate-400">
+          {{ target_users_label(verify_target_ids) }}
+        </div>
         <Textarea
           v-model="verify_note_value"
           auto-resize
@@ -136,10 +141,66 @@
 
       <template #footer>
         <div class="flex justify-end gap-2">
-          <Button label="取消" severity="secondary" text :disabled="verify_note_pending" @click="reset_verify_note_dialog" />
-          <Button label="授予" :loading="verify_note_pending" :disabled="verify_note_pending" @click="submit_verification_note">
+          <Button label="取消" severity="secondary" text :disabled="verify_dialog_pending" @click="reset_verify_note_dialog" />
+          <Button
+            v-if="verify_remove_available"
+            label="移除认证"
+            severity="danger"
+            text
+            :loading="verify_remove_pending"
+            :disabled="verify_dialog_pending"
+            @click="remove_verification"
+          >
+            <template #icon>
+              <MyIcon name="lucide:badge-x" />
+            </template>
+          </Button>
+          <Button label="保存" :loading="verify_note_pending" :disabled="verify_dialog_pending" @click="submit_verification_note">
             <template #icon>
               <MyIcon name="lucide:badge-check" />
+            </template>
+          </Button>
+        </div>
+      </template>
+    </MyDialog>
+
+    <MyDialog
+      v-model:visible="permission_dialog_visible"
+      header="修改权限"
+      :pending="permission_pending"
+      :closable="! permission_pending"
+    >
+      <div v-if="permission_target" class="space-y-5">
+        <div class="text-sm text-slate-500 dark:text-slate-400">
+          {{ target_users_label([permission_target.id]) }}
+        </div>
+
+        <div v-for="item in permission_options" :key="item.field" class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="font-medium text-slate-900 dark:text-slate-100">
+              {{ item.name }}
+            </div>
+            <div class="text-xs text-slate-500 dark:text-slate-400">
+              {{ permission_description(item) }}
+            </div>
+          </div>
+          <SelectButton
+            v-model="permission_draft[item.field]"
+            class="shrink-0"
+            :options="item.options"
+            option-label="label"
+            option-value="value"
+            :allow-empty="false"
+          />
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <Button label="取消" severity="secondary" text :disabled="permission_pending" @click="permission_dialog_visible = false" />
+          <Button label="保存" :loading="permission_pending" :disabled="permission_pending" @click="submit_permissions">
+            <template #icon>
+              <MyIcon name="lucide:check" />
             </template>
           </Button>
         </div>
@@ -149,7 +210,9 @@
 </template>
 
 <script setup lang="ts">
+import type { PermissionField, PermissionGrant, PermissionLevel } from '@shared/permissions'
 import type { AdminUser, AdminUserList } from '@shared/types/user'
+import { has_permission, PERMISSIONS } from '@shared/permissions'
 
 definePageMeta({
   middleware: 'require-admin-auth',
@@ -177,6 +240,19 @@ const shortcut_commands = [
 
 const { admin } = useApi()
 const { ok, error } = useMyToast()
+const { user: auth_user } = useAuth()
+
+// admin_access 只读用户可进入后台查看，但所有写操作入口隐藏
+const can_manage = computed(() => has_permission(auth_user.value, 'admin_access', 'full'))
+
+// SelectButton 不会高亮 null 值选项，用 'none' 哨兵表示未授予
+const permission_options = PERMISSIONS.map(item => ({
+  ... item,
+  options: [
+    { label: '未授予', value: 'none' },
+    ... item.levels.map(level => ({ label: level.name, value: level.level })),
+  ],
+}))
 
 const active_filter = ref('')
 const page = ref(1)
@@ -193,6 +269,12 @@ const batch_pending_command = ref<BatchCommand | null>(null)
 const verify_note_dialog_visible = ref(false)
 const verify_note_value = ref('')
 const verify_target_ids = ref<number[]>([])
+const verify_remove_pending = ref(false)
+
+const permission_dialog_visible = ref(false)
+const permission_target = ref<AdminUser | null>(null)
+const permission_draft = ref<Partial<Record<PermissionField, PermissionLevel | 'none'>>>({})
+const permission_pending = ref(false)
 
 const last_sync_at = ref<number | null>(null)
 const last_sync_reason = ref<RefreshReason>('initial')
@@ -209,6 +291,11 @@ const current_page_all_selected = computed(() => {
 })
 const batch_busy = computed(() => batch_pending_command.value !== null)
 const verify_note_pending = computed(() => batch_pending_command.value === 'VERIFY')
+const verify_dialog_pending = computed(() => verify_note_pending.value || verify_remove_pending.value)
+const verify_remove_available = computed(() => {
+  return verify_target_ids.value.length === 1
+    && Boolean(users.value.find(user => user.id === verify_target_ids.value[0])?.is_verified)
+})
 
 function next_set_with(ids: Set<number>, target_id: number, enabled: boolean) {
   const next = new Set(ids)
@@ -314,8 +401,22 @@ function change_page(event: { first: number, rows: number }) {
   void reload_users('query')
 }
 
+function target_users_label(ids: number[]) {
+  const first_raw = users.value.find(user => user.id === ids[0])?.username
+  const first = first_raw ? `『${first_raw}』` : `#${ids[0]}`
+  return ids.length > 1 ? `${first}等 ${ids.length} 个用户` : `用户${first}`
+}
+
+function permission_description(item: (typeof permission_options)[number]) {
+  const level = permission_draft.value[item.field]
+  const definition = level && level !== 'none'
+    ? item.levels.find(candidate => candidate.level === level)
+    : null
+  return definition?.description ?? item.description
+}
+
 async function perform_command(command: BatchCommand, ids: number[], verified_note?: string | null) {
-  if (! ids.length) {
+  if (! ids.length || ! can_manage.value) {
     return false
   }
 
@@ -362,7 +463,7 @@ async function perform_command(command: BatchCommand, ids: number[], verified_no
       }
     }
 
-    ok(`${success_map[command]} ${ids.length} 个用户`)
+    ok(`${success_map[command]}：${target_users_label(ids)}`)
     clear_selection()
     await reload_users('mutation')
     return true
@@ -384,7 +485,7 @@ async function perform_command(command: BatchCommand, ids: number[], verified_no
 }
 
 function reset_verify_note_dialog() {
-  if (verify_note_pending.value) {
+  if (verify_dialog_pending.value) {
     return
   }
   verify_note_dialog_visible.value = false
@@ -418,9 +519,27 @@ async function submit_verification_note() {
   }
 }
 
+async function remove_verification() {
+  const ids = [... verify_target_ids.value]
+  if (! ids.length || verify_remove_pending.value) {
+    return
+  }
+
+  verify_remove_pending.value = true
+  const success = await perform_command('UNVERIFY', ids)
+  verify_remove_pending.value = false
+  if (success) {
+    reset_verify_note_dialog()
+  }
+}
+
 function handle_command(command: string) {
   if (! command) {
     clear_filter()
+    return
+  }
+
+  if (! can_manage.value) {
     return
   }
 
@@ -451,16 +570,58 @@ function force_logout(user: AdminUser) {
 }
 
 function toggle_verified(user: AdminUser) {
-  if (user.is_verified) {
-    void perform_command('UNVERIFY', [user.id])
-    return
-  }
-
   request_verification_note([user.id])
 }
 
 function toggle_admin(user: AdminUser) {
   void perform_command(user.is_admin ? 'DEMOTE' : 'PROMOTE', [user.id])
+}
+
+function open_permission_dialog(user: AdminUser) {
+  if (user.is_admin) {
+    return
+  }
+
+  permission_target.value = user
+
+  const draft: Partial<Record<PermissionField, PermissionLevel | 'none'>> = {}
+  for (const item of PERMISSIONS) {
+    draft[item.field] = 'none'
+  }
+  for (const grant of user.permissions) {
+    draft[grant.field] = grant.level
+  }
+  permission_draft.value = draft
+  permission_dialog_visible.value = true
+}
+
+async function submit_permissions() {
+  const target = permission_target.value
+  if (! target || permission_pending.value) {
+    return
+  }
+
+  const grants: PermissionGrant[] = []
+  for (const item of PERMISSIONS) {
+    const level = permission_draft.value[item.field]
+    if (level && level !== 'none') {
+      grants.push({ field: item.field, level })
+    }
+  }
+
+  permission_pending.value = true
+  try {
+    await admin.set_permissions(target.id, grants)
+    ok(`已更新 ${target_users_label([target.id])}的权限`)
+    permission_dialog_visible.value = false
+    await reload_users('mutation')
+  }
+  catch (ex) {
+    error(ex)
+  }
+  finally {
+    permission_pending.value = false
+  }
 }
 
 onMounted(() => {

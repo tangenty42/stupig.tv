@@ -50,23 +50,24 @@
         </div>
       </div>
 
-      <div :class="fullscreen ? 'flex min-h-0 flex-1 gap-2' : 'flex flex-col gap-2'">
+      <div :class="fullscreen ? 'flex min-h-0 flex-1' : 'flex flex-col gap-2'">
         <div
           v-if="fullscreen"
-          ref="attachments_pane"
-          class="editor-attachments-pane shrink-0 overflow-hidden rounded-sm border border-slate-200 dark:border-slate-700"
+          class="editor-attachments-pane shrink-0 overflow-hidden rounded-l-sm border border-r-0 border-slate-200 dark:border-slate-700"
           :style="{ width: `${attachments_width}px` }"
         >
           <!-- Inner scroller: the scrollbar ends stay inside the pane's
-               rounded corners (a scrollbar isn't clipped by border-radius). -->
-          <div class="h-full overflow-y-auto p-2">
+               rounded corners (a scrollbar isn't clipped by border-radius).
+               Side padding lives on the list root instead, so the gutter
+               belongs to the list's marquee trigger area. -->
+          <div class="h-full overflow-y-auto py-2">
             <slot name="attachments" />
           </div>
         </div>
 
         <div
           v-if="fullscreen"
-          class="w-1.5 shrink-0 cursor-col-resize self-stretch rounded-full bg-slate-200 transition-colors hover:bg-brand-400 dark:bg-slate-700 dark:hover:bg-brand-600"
+          class="editor-divider"
           role="separator"
           aria-orientation="vertical"
           @mousedown.prevent="start_attachments_divider_drag"
@@ -74,11 +75,13 @@
 
         <div
           v-show="fullscreen || editor_mode === 'edit'"
+          ref="text_pane"
           class="editor-text-pane overflow-hidden rounded-sm border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
           :class="{
             'border-dashed border-brand-400 dark:border-brand-600': drag_over,
             'editor-mode-enter': ! fullscreen && mode_has_switched && editor_mode === 'edit',
             'flex min-w-0 flex-col': fullscreen,
+            'border-x-0 rounded-l-none rounded-r-none': fullscreen,
           }"
           :style="fullscreen ? { flex: `${split_ratio} 1 0%` } : undefined"
           @dragenter.capture.prevent="on_drag_over"
@@ -102,7 +105,7 @@
 
         <div
           v-if="fullscreen"
-          class="w-1.5 shrink-0 cursor-col-resize self-stretch rounded-full bg-slate-200 transition-colors hover:bg-brand-400 dark:bg-slate-700 dark:hover:bg-brand-600"
+          class="editor-divider"
           role="separator"
           aria-orientation="vertical"
           @mousedown.prevent="start_divider_drag"
@@ -112,7 +115,7 @@
           v-show="fullscreen || editor_mode === 'preview'"
           ref="preview_pane"
           :class="[
-            fullscreen ? 'min-w-0 overflow-y-auto rounded-sm border border-slate-200 px-3 pb-3 dark:border-slate-700' : 'section-card-collapse',
+            fullscreen ? 'min-w-0 overflow-y-auto rounded-r-sm border border-l-0 border-slate-200 px-3 pb-3 dark:border-slate-700' : 'section-card-collapse',
             { 'editor-mode-enter': ! fullscreen && mode_has_switched && editor_mode === 'preview' },
           ]"
           :style="fullscreen ? { flex: `${1 - split_ratio} 1 0%` } : undefined"
@@ -179,6 +182,8 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'lint': [issues: LintListItem[]]
   'files-dropped': [files: AttachmentUploadPick[], position: number | null]
+  /** Clipboard files; kept apart from drops so the parent can ask for a name. */
+  'files-pasted': [files: AttachmentUploadPick[], position: number | null]
   'attachment-drop-outside': [event: DragEvent]
   /** A folder card in the preview was activated. */
   'folder-open': [folder: string]
@@ -209,7 +214,7 @@ const editor_modes = [
 const fullscreen = ref(false)
 const split_ratio = ref(0.5)
 const attachments_width = ref(256)
-const attachments_pane = ref<HTMLElement>()
+const text_pane = ref<HTMLElement>()
 const preview_pane = ref<HTMLElement>()
 
 function toggle_fullscreen() {
@@ -230,19 +235,29 @@ function start_attachments_divider_drag(event: MouseEvent) {
   window.addEventListener('mouseup', on_up)
 }
 
+/**
+ * Editor/preview divider. Both panes are flex-sized (`flex: <ratio> 1 0%`), so
+ * their widths are the ratio's shares of their combined width — which stays put
+ * for the whole drag (what one pane gains the other loses) and is measured here
+ * rather than derived from the row, keeping the dividers' own widths out of the
+ * mapping. The pointer's travel is applied as a delta for the same reason the
+ * attachments divider uses one: the divider follows the cursor 1:1 from wherever
+ * it was grabbed, instead of snapping to an absolute position on the first move.
+ */
 function start_divider_drag(event: MouseEvent) {
-  const container = (event.currentTarget as HTMLElement).parentElement
-  if (! container) {
+  const editor = text_pane.value
+  const preview = preview_pane.value
+  if (! editor || ! preview) {
     return
   }
-  const container_rect = container.getBoundingClientRect()
-  const pane_right = attachments_pane.value?.getBoundingClientRect().right ?? container_rect.left
-  const available = container_rect.right - pane_right
-  if (available <= 0) {
+  const free = editor.getBoundingClientRect().width + preview.getBoundingClientRect().width
+  if (free <= 0) {
     return
   }
+  const start_x = event.clientX
+  const start_ratio = split_ratio.value
   const on_move = (move: MouseEvent) => {
-    split_ratio.value = Math.min(0.8, Math.max(0.2, (move.clientX - pane_right) / available))
+    split_ratio.value = Math.min(0.8, Math.max(0.2, start_ratio + (move.clientX - start_x) / free))
   }
   const on_up = () => {
     window.removeEventListener('mousemove', on_move)
@@ -346,7 +361,7 @@ onMounted(() => {
               return false
             }
             event.preventDefault()
-            emit('files-dropped', files.map(attachment_pick_from_file), editor_view.state.selection.main.from)
+            emit('files-pasted', files.map(attachment_pick_from_file), editor_view.state.selection.main.from)
             return true
           },
         }),
@@ -532,6 +547,23 @@ function on_overlay_drop(event: DragEvent) {
 </script>
 
 <style scoped>
+/* The split's separator is the seam itself: the same colour the panes use for
+   their borders, between panes that keep no border there (border-x-0 /
+   border-r-0 / border-l-0) and square off the corners facing it — so the three
+   panes read as one plate divided by two bands, with rounding only on the
+   outside. A 7px transparent strip still takes the drag, centred on the band
+   but wider than it, so the cursor doesn't have to land on the few visible
+   pixels. */
+.editor-divider {
+  @apply relative w-1 shrink-0 cursor-col-resize self-stretch bg-slate-200 transition-colors hover:bg-brand-400 dark:bg-slate-700 dark:hover:bg-brand-600;
+}
+
+.editor-divider::before {
+  content: '';
+  @apply absolute inset-y-0;
+  inset-inline: -3px;
+}
+
 :deep(.cm-editor) {
   @apply min-h-80 max-h-[60vh] text-sm;
 }
@@ -542,11 +574,12 @@ function on_overlay_drop(event: DragEvent) {
 }
 
 /* The frosted heading bars bleed to 100vw on the detail page; inside the
-   fullscreen pane that overflows the pane horizontally, so they span only
-   the content column here. */
+   fullscreen pane that would overflow horizontally, so they bleed only into
+   the pane's px-3 padding (edge-to-edge, scrollbar excluded) with the
+   padding keeping the title text on the content column. */
 .editor-fullscreen :deep(.story-body :is(h1, h2, h3, h4, h5, h6)) {
-  margin-inline: 0;
-  padding-inline: 0;
+  margin-inline: -0.75rem;
+  padding-inline: 0.75rem;
 }
 
 /* Sticky headings pin to the pane's content-box edge, so the pane itself
@@ -595,17 +628,9 @@ function on_overlay_drop(event: DragEvent) {
   @apply ml-2 text-xs not-italic text-slate-400 dark:text-slate-500;
 }
 
-/* Custom completion types render a lucide icon via addToOptions; hide the
-   default glyph so only our icon shows. Every custom type must be listed here —
-   a missing one keeps its default glyph and pushes the label right. */
-:deep(.cm-completionIcon-story),
-:deep(.cm-completionIcon-file),
-:deep(.cm-completionIcon-image),
-:deep(.cm-completionIcon-folder),
-:deep(.cm-completionIcon-keyword) {
-  display: none;
-}
-
+/* Every option carries the lucide icon our renderer injects (the library's own
+   glyph is off via `icons: false`), in a fixed-width column so the labels line
+   up whatever the type. */
 :deep(.completion-type-icon) {
   @apply h-4 w-4 shrink-0 text-slate-400 dark:text-slate-500 transition;
 }

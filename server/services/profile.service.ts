@@ -10,6 +10,7 @@ import { delete_object, put_object } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
 import { env } from '@shared/env'
+import { has_permission, normalize_permission_grants } from '@shared/permissions'
 import bcrypt from 'bcryptjs'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
@@ -31,6 +32,7 @@ export interface UserRow extends RowDataPacket {
   is_admin: number
   verified_note: string | null
   is_banned: number
+  permissions: unknown
 }
 
 interface PasswordHashRow extends RowDataPacket {
@@ -74,7 +76,7 @@ function publish_profile_refresh(id: number) {
 }
 
 export function is_profile_editable(viewer: AuthUser | null, target_id: number) {
-  return Boolean(viewer?.is_admin) || viewer?.id === target_id
+  return has_permission(viewer, 'admin_access', 'full') || viewer?.id === target_id
 }
 
 export function format_profile_row(viewer: AuthUser | null, user: UserRow, target_id: number) {
@@ -94,6 +96,8 @@ export function format_profile_row(viewer: AuthUser | null, user: UserRow, targe
     is_admin: Boolean(user.is_admin),
     is_banned: Boolean(user.is_banned),
     verified_note: user.verified_note,
+    // 权限列表对所有人公开；is_admin 用户的列表恒为空，等价于全部权限
+    permissions: normalize_permission_grants(user.permissions),
     editable,
   }
 }
@@ -101,7 +105,7 @@ export function format_profile_row(viewer: AuthUser | null, user: UserRow, targe
 export const select_profile_row_sql = `
   SELECT
     u.id, u.username, u.phone, u.avatar_file, u.avatar_version, u.birthday, u.created_at,
-    u.is_verified, u.is_admin, u.verified_note, u.is_banned,
+    u.is_verified, u.is_admin, u.verified_note, u.is_banned, u.permissions,
     (SELECT MAX(s.login_at) FROM user_login_sessions s WHERE s.user_id = u.id) AS last_login_at,
     (SELECT MAX(s.last_seen_at) FROM user_login_sessions s WHERE s.user_id = u.id) AS last_seen_at,
     EXISTS(

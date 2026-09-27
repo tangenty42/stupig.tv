@@ -1,4 +1,17 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
+import { decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
+
+/**
+ * The public "删减版" of an encrypted attachment: the plaintext sibling named
+ * without the .good suffix. Authors upload it deliberately as the abridged
+ * variant that unauthorized viewers get in place of the denied placeholder.
+ */
+export function abridged_twin_of(attachments: ContentStoryAttachment[], file_name: string) {
+  if (! is_encrypted_attachment(file_name))
+    return null
+  const twin_name = decrypted_attachment_name(file_name)
+  return attachments.find(item => item.file_name === twin_name && ! item.is_encrypted) ?? null
+}
 
 export type AttachmentUploadStatus = 'queued' | 'uploading' | 'paused' | 'completed' | 'error' | 'cancelled'
 
@@ -8,6 +21,8 @@ export type AttachmentFileCardData
     kind: 'stored'
     /** Unreferenced stored attachments are deleted when the story is saved. */
     referenced: boolean
+    /** This plaintext file is the 删减版 twin of an encrypted sibling. */
+    is_abridged_twin?: boolean
     /** Live progress while this stored file is being replaced by a new upload. */
     replacing?: { progress: number, speed: number }
   })
@@ -202,11 +217,33 @@ export type MyContentAttachmentSelectionEdges = 'top' | 'bottom' | 'none' | 'bot
 export interface MyContentAttachmentRowState {
   selected: boolean
   selection_edges: MyContentAttachmentSelectionEdges
-  /** Stored files in the current selection, when this row is selected (drives the bulk-delete label). */
+  /** Rows in the current selection, when this row is selected (a count above 1 selects the batch menu). */
   selection_count: number
   delete_pending: boolean
   delete_disabled: boolean
-  rename_disabled: boolean
+  /** In-flight encrypt/decrypt on this file (disables the same actions as a delete). */
+  encrypt_pending: boolean
+  /**
+   * Why the action cannot run on the row's target set, or empty when it can —
+   * reported in the menu in place of the action, so nothing has to be refused
+   * server-side for the author to learn the reason. Independent causes are
+   * listed side by side (a selection of encrypted files plus an oversized
+   * plaintext one is `['已加密', '文件太大']`).
+   *
+   * The target set is the whole selection for a row inside a multi-selection
+   * (that is what its menu acts on) and the row itself otherwise. Decrypt and
+   * the 删减版 store the same name, so they share a reason.
+   */
+  encrypt_blocked_reasons: string[]
+  decrypt_blocked_reasons: string[]
+  delete_blocked_reasons: string[]
+  /**
+   * Why the file cannot be replaced, or empty when it can. Replacing an
+   * encrypted file would store the new bytes as plaintext while leaving the
+   * row's key in place, so the client would try to decrypt readable content —
+   * that transition belongs to 取消加密, not to a file swap.
+   */
+  replace_blocked_reasons: string[]
   replace_disabled: boolean
   retry_disabled: boolean
   move_pending: boolean
@@ -231,34 +268,41 @@ export interface MyContentAttachmentRow {
 }
 
 export const file_icon_names = [
-  'file',
-  'file-archive',
-  'file-audio',
-  'file-code-2',
-  'file-image',
-  'file-text',
-  'file-video',
-  'sheet',
+  'lucide:file',
+  'lucide:file-archive',
+  'lucide:file-audio',
+  'lucide:file-code-2',
+  'lucide:file-image',
+  'lucide:file-text',
+  'lucide:file-video',
+  'lucide:lock',
+  'lucide:sheet',
 ] as const
 
-export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'>) {
+// The names carry the collection prefix so Nuxt Icon's client-bundle scan
+// (which matches literal `lucide:*` strings) picks them up. Admin surfaces
+// (this list, menus, completions) mark encrypted attachments with the plain
+// lock; the keyhole variants belong to rendered content (see link-cards).
+export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'> & { encryption_key?: string }) {
+  if (is_encrypted_attachment(attachment.file_name))
+    return 'lucide:lock'
   const mime_type = attachment.mime_type ?? ''
   const extension = attachment.file_name.split('.').pop()?.toLowerCase() ?? ''
   if (mime_type.startsWith('image/'))
-    return 'file-image'
+    return 'lucide:file-image'
   if (mime_type.startsWith('video/'))
-    return 'file-video'
+    return 'lucide:file-video'
   if (mime_type.startsWith('audio/'))
-    return 'file-audio'
+    return 'lucide:file-audio'
   if (mime_type.startsWith('text/') || mime_type === 'application/pdf')
-    return 'file-text'
+    return 'lucide:file-text'
   if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(extension))
-    return 'file-archive'
+    return 'lucide:file-archive'
   if (['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'vue', 'html', 'css', 'json', 'xml', 'yaml', 'yml'].includes(extension))
-    return 'file-code-2'
+    return 'lucide:file-code-2'
   if (['csv', 'xls', 'xlsx', 'ods'].includes(extension))
-    return 'sheet'
-  return 'file'
+    return 'lucide:sheet'
+  return 'lucide:file'
 }
 
 /**

@@ -1,7 +1,8 @@
 import type { TrpcContext } from '@server/trpc/context'
-import type { AuthUser } from '@server/types/auth'
+import type { PermissionField, PermissionLevel } from '@shared/permissions'
 import { ApiError } from '@server/errors/ApiError'
-import { require_admin_user, require_auth_user } from '@server/services/auth-guards.service'
+import { require_auth_user } from '@server/services/auth-guards.service'
+import { has_permission } from '@shared/permissions'
 import { initTRPC, TRPCError } from '@trpc/server'
 import { ZodError } from 'zod'
 
@@ -83,11 +84,12 @@ export const protected_procedure = public_procedure.use(async ({ ctx, next }) =>
   return next({ ctx: { auth_user } })
 })
 
-export const admin_procedure = public_procedure.use(async ({ ctx, next }) => {
-  const auth_user = await require_admin_user(ctx.event)
-  return next({ ctx: { auth_user } })
-})
-
-export interface AuthenticatedTrpcContext extends TrpcContext {
-  auth_user: AuthUser
+export function permission_procedure(field: PermissionField, level: PermissionLevel) {
+  return public_procedure.use(async ({ ctx, next }) => {
+    const auth_user = await require_auth_user(ctx.event)
+    if (! has_permission(auth_user, field, level)) {
+      throw new ApiError(403, '权限不足')
+    }
+    return next({ ctx: { auth_user } })
+  })
 }

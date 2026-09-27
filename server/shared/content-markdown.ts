@@ -297,7 +297,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
       case 'time': {
         const tokens = value.split('~').map(token => token.trim())
         if (! value || tokens.some(token => ! token) || tokens.length > 2) {
-          issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: '时间格式应为 年/月/日、年/月，或用 ~ 连接起止时间' })
+          issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: '时间格式应为 年/月/日、年/月；可用 ~ 连接起止时间' })
           break
         }
 
@@ -537,6 +537,69 @@ export function attachment_base_name(file_name: string) {
   return file_name.slice(file_name.lastIndexOf('/') + 1)
 }
 
+// Encrypted attachments carry a `.good` suffix (appended by the server-side
+// encrypt step, which also swaps the object for the ciphertext). The original
+// mime type stays on the row, so the suffix is display-level only.
+export const encrypted_attachment_suffix = '.good'
+
+export function is_encrypted_attachment(file_name: string) {
+  return file_name.endsWith(encrypted_attachment_suffix)
+}
+
+/** The name an encrypted attachment had before encryption (`a.png.good` → `a.png`). */
+export function decrypted_attachment_name(file_name: string) {
+  return is_encrypted_attachment(file_name) ? file_name.slice(0, - encrypted_attachment_suffix.length) : file_name
+}
+
+/**
+ * A stored file name split into the part a rename edits and the part it locks,
+ * for `folder/name.png.good` → `{ editable: 'name', locked: '.png.good' }`.
+ *
+ * The locked tail is the extension plus the encryption marker, so
+ * `plain_file.good` locks only `.good` (there is no other extension). The
+ * extension is locked because it decides the mime type and how the file
+ * renders: letting it ride inside the editable text would let a rename dress a
+ * file up as another kind. The marker is locked because it is the server's own
+ * state on the row — an author writing or dropping it is a fake, which is why
+ * only 加密/取消加密 change it.
+ *
+ * Shared so the rename prompt and the server's validation cannot disagree about
+ * where the editable part ends.
+ */
+export function split_attachment_editable_name(file_name: string) {
+  const base = attachment_base_name(file_name)
+  const plain = decrypted_attachment_name(base)
+  const dot = plain.lastIndexOf('.')
+  const editable = dot > 0 ? plain.slice(0, dot) : plain
+  return {
+    editable,
+    locked: base.slice(editable.length),
+  }
+}
+
+// Formats the 删减版 editor can read and write back in the same format. The
+// keep-the-format rule is what excludes GIF (animated), AVIF and SVG: the
+// browser canvas can only re-encode PNG, JPEG and WebP, and BMP needs the
+// hand-rolled encoder the client carries.
+const redactable_attachment_mimes = ['image/png', 'image/jpeg', 'image/webp', 'image/bmp']
+
+/**
+ * The mime type a 删减版 built from this attachment is stored and encoded as,
+ * or null when the format cannot be redacted. Read from the twin's own name so
+ * the bytes, the stored mime type and the extension always agree, even when an
+ * upload shipped a type that contradicted its extension.
+ */
+export function redactable_attachment_mime(file_name: string) {
+  const mime = attachment_mime_type(decrypted_attachment_name(file_name))
+  return mime && redactable_attachment_mimes.includes(mime) ? mime : null
+}
+
+/** What an unauthorized viewer sees in place of an encrypted attachment (card or image placeholder). */
+export const CONTENT_ATTACHMENT_DENIED_TEXT = '你无权查看此机密附件'
+
+/** The image variant, rendered inside the picture's own frame with its caption kept. */
+export const CONTENT_IMAGE_DENIED_TEXT = '你无权查看此机密附件'
+
 /** Join a folder and a base file name into an attachment path (null folder = root). */
 export function attachment_path_join(folder: string | null, base_name: string) {
   return folder ? `${folder}/${base_name}` : base_name
@@ -608,6 +671,48 @@ export function folder_file_count(attachments: readonly NamedAttachment[], folde
   return attachments.filter(item => item.file_name.startsWith(prefix)).length
 }
 
+/**
+ * Every path a scope's rows reserve: each path itself plus the folders its path
+ * implies (`a/b/c.png` also occupies `a` and `a/b`). Files and folders share one
+ * path space — a folder only exists as the prefix of the paths under it — so
+ * reserving the implied folders is what stops a file from taking a name a folder
+ * already answers to, which would hide everything beneath that folder.
+ */
+export function reserved_attachment_paths(paths: Iterable<string>) {
+  const reserved = new Set<string>()
+  for (const path of paths) {
+    let current: string | null = path
+    while (current) {
+      reserved.add(current.toLowerCase())
+      current = attachment_folder_of(current)
+    }
+  }
+  return reserved
+}
+
+/**
+ * Whether an attachment path conflicts with what a scope already holds, so a
+ * rename, move or upload can be refused before it reaches the database. A path
+ * conflicts when a row (file or folder alike) already holds that exact name, or
+ * when something already lives beneath it — the folder case, where a file would
+ * take over the name of a folder that still has contents. The comparison is
+ * case-insensitive, matching the stored rows' key collation
+ * (utf8mb4_unicode_ci, where `A.png` and `a.png` are the same name).
+ * `ignore_path` excludes the entry being renamed from its own check.
+ */
+export function attachment_path_taken(paths: Iterable<string>, path: string, ignore_path: string | null = null) {
+  const others = ignore_path === null ? paths : [... paths].filter(item => item !== ignore_path)
+  return reserved_attachment_paths(others).has(path.toLowerCase())
+}
+
+/**
+ * The single message every duplicate-name refusal returns. The caller cannot
+ * act on the difference between "the rename target is taken" and "the move
+ * target is taken", and which of the two names is at fault is already visible
+ * in the list, so the distinction only made the outcomes harder to predict.
+ */
+export const attachment_name_conflict_message = '操作时发生文件名冲突'
+
 /** All ancestor folder paths of a path, deepest last (`a/b/c.png` → ['a', 'a/b']); empty at root. */
 export function attachment_ancestor_folders(path: string) {
   const folders: string[] = []
@@ -621,6 +726,44 @@ export function attachment_ancestor_folders(path: string) {
 
 /** Windows-reserved device basenames; matched against the stem before the first dot. */
 export const link_file_name_reserved_base = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+
+/**
+ * Why one name segment (a file's base name, or a single folder level) may not
+ * be used at all, or null when it is fine.
+ *
+ * The scope-independent half of name validation. The same rules have to hold
+ * whether the name arrives as an upload, a rename, a replacement or a folder
+ * operation, and the editor shows the author the identical text, so they live
+ * here rather than in the tRPC schema or whichever service checks first. The
+ * scope-dependent half is `attachment_path_taken` below.
+ *
+ * The `.good` suffix is reserved because it marks server-side encryption: a
+ * hand-made one would pass for an encrypted row and would occupy the very name
+ * a real decrypt (or a 删减版) needs.
+ */
+export function attachment_name_segment_violation(name: string) {
+  if (! name)
+    return '文件名不能为空'
+  if (is_encrypted_attachment(name))
+    return `文件名不能以 ${encrypted_attachment_suffix} 结尾`
+  if (name.startsWith('.') || name.endsWith('.'))
+    return '文件名不能以点号开头或结尾'
+  if (has_attachment_illegal_char(name))
+    return '文件名包含不支持的字符'
+  if (link_file_name_reserved_base.test(name.split('.')[0] ?? ''))
+    return '文件名不能使用系统保留名'
+  return null
+}
+
+/** The same for a `folder/name` path: every segment has to pass on its own. */
+export function attachment_path_violation(path: string) {
+  for (const segment of path.split('/')) {
+    const violation = attachment_name_segment_violation(segment)
+    if (violation)
+      return violation
+  }
+  return null
+}
 
 export function link_file_name_byte_length(name: string) {
   return new TextEncoder().encode(name).length

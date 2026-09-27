@@ -2,7 +2,7 @@
 
 This is the repository for our official website, built with our custom Markdown-powered full-stack CMS.
 
-We are the smart `Stupig`s! Learn more about us at [Stupig.TV](https://stupig.tv).
+We are the smart `Stupig`s! Learn more about us at [Stupig.TV](https://www.stupig.tv).
 
 # This is why you should always update your VSCode
 
