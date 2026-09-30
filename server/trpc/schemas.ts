@@ -34,9 +34,9 @@ const content_story_update = z.object({
   base_revision: z.number().int().positive(),
 })
 
-/** Content scope id: a story id, or 0 for the orphan staging pool (mapped to null in the service). */
+/** Content scope id: the story whose attachments the operation targets. */
 const content_scope_input = z.object({
-  id: z.coerce.number().int().min(0),
+  id: z.coerce.number().int().positive(),
 })
 
 /**
@@ -139,17 +139,15 @@ export const api_schema = {
   content: {
     get_story: public_id_input.extend({
       base_updated_at: z.string().min(1).optional(),
+      base_viewer_key: z.string().min(1).optional(),
     }),
     create_story: z.object({
       markdown: markdown_input,
-      /** Orphan attachment file names (story_id NULL) to adopt into the new story. */
-      claim_files: z.array(z.string().min(1).max(255)).max(200).default([]),
     }),
     update_story: public_id_input.extend(content_story_update.shape),
     delete_story: public_id_input,
-    upload_attachment: z.instanceof(FormData),
     sign_attachment_upload: z.object({
-      story_id: z.coerce.number().int().min(0),
+      story_id: z.coerce.number().int().positive(),
       method: z.enum(['PUT', 'POST', 'GET', 'DELETE']),
       key: z.string().min(1).max(512),
       upload_id: z.string().min(1).max(256).optional(),
@@ -157,11 +155,18 @@ export const api_schema = {
       content_type: z.string().max(255).nullable().optional(),
     }),
     confirm_attachment_upload: z.object({
-      story_id: z.coerce.number().int().min(0),
+      story_id: z.coerce.number().int().positive(),
       key: z.string().min(1).max(512),
       file_name: z.string().min(1).max(255),
     }),
-    replace_attachment: z.instanceof(FormData),
+    replace_attachment: z.object({
+      story_id: z.coerce.number().int().positive(),
+      old_file_name: z.string().min(1).max(255),
+      mode: z.enum(['keep-name', 'new-name']),
+      key: z.string().min(1).max(512),
+      file_name: z.string().min(1).max(255),
+      content_type: z.string().max(255).nullable(),
+    }),
     rename_attachment: content_scope_input.extend({
       old_file_name: z.string().min(1).max(255),
       file_name: attachment_path_input,
@@ -170,9 +175,6 @@ export const api_schema = {
       file_name: z.string().min(1).max(255),
       markdown: markdown_input,
       base_revision: z.number().int().positive(),
-    }),
-    delete_orphan_attachment: z.object({
-      file_name: z.string().min(1).max(255),
     }),
     move_attachment: content_scope_input.extend({
       file_name: z.string().min(1).max(255),

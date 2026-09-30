@@ -73,13 +73,32 @@ export function duration_between(start_date: DateLike, end_date: DateLike) {
     [start, end] = [end, start]
   }
 
+  /**
+   * POV: again, good material for 屎山论剑.
+   * 此 BUG 还是看 yuan 的主页偶然发现的，
+   * 2026 年 8 月 28 是 2026 年 9 月 28 日的 15 小时前这一块，
+   * 差点栽在这 :)
+   */
+
+  const year = end.diff(start, 'year')
+  start = start.add(year, 'year')
+  const month = end.diff(start, 'month')
+  start = start.add(month, 'month')
+  const day = end.diff(start, 'day')
+  start = start.add(day, 'day')
+  const hour = end.diff(start, 'hour')
+  start = start.add(hour, 'hour')
+  const minute = end.diff(start, 'minute')
+  start = start.add(minute, 'minute')
+  const second = end.diff(start, 'second')
+
   return {
-    year: end.diff(start, 'year'),
-    month: end.diff(start, 'month') % 12,
-    day: end.diff(start, 'day') % 30,
-    hour: end.diff(start, 'hour') % 24,
-    minute: end.diff(start, 'minute') % 60,
-    second: end.diff(start, 'second') % 60,
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
   }
 }
 

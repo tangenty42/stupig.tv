@@ -54,10 +54,6 @@
         <span v-else-if="upload" class="mt-0.5 truncate text-xs text-red-600 dark:text-red-400">
           上传失败：{{ upload.message }}
         </span>
-
-        <div v-if="replacing" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {{ replace_status_text }}
-        </div>
       </div>
     </template>
 
@@ -208,12 +204,9 @@ const is_decrypting = computed(() => {
 const upload = computed(() => data.value.kind === 'upload' ? data.value : null)
 const folder = computed(() => data.value.kind === 'folder' ? data.value : null)
 const file_row = computed(() => data.value.kind === 'folder' ? null : data.value)
-const replacing = computed(() => stored.value?.replacing ?? null)
 const progress_percent = computed(() => {
   if (upload.value && upload.value.status !== 'error' && upload.value.status !== 'queued')
     return upload.value.progress
-  if (replacing.value)
-    return replacing.value.progress
   return null
 })
 
@@ -225,7 +218,7 @@ const row_pending = computed(() => {
   const task = upload.value
   if (task)
     return task.status === 'queued' || task.status === 'uploading'
-  return state.value.delete_pending || state.value.encrypt_pending || state.value.move_pending || replacing.value !== null
+  return state.value.delete_pending || state.value.encrypt_pending || state.value.move_pending
 })
 
 /** Measured progress text for the meta slot (transfer rate, or paused bytes). */
@@ -235,8 +228,6 @@ const row_progress_text = computed(() => {
     return task.speed > 0 ? format_speed(task.speed) : null
   if (task?.status === 'paused')
     return `${format_bytes(task.file_size * task.progress / 100)} / ${format_bytes(task.file_size)}`
-  if (replacing.value)
-    return replacing.value.speed > 0 ? format_speed(replacing.value.speed) : null
   return null
 })
 const display_name = computed(() => folder.value ? folder.value.name : attachment_base_name(data.value.kind === 'folder' ? '' : data.value.file_name))
@@ -339,7 +330,7 @@ const is_draggable = computed(() => ! props.readonly
 const icon_class = computed(() => {
   if (upload.value?.status === 'error')
     return 'text-red-500 dark:text-red-400'
-  if ((upload.value && upload.value.status !== 'completed') || replacing.value)
+  if (upload.value && upload.value.status !== 'completed')
     return 'text-primary'
   // Encrypted rows and abridged twins tint their lock icon with the badge color.
   if (stored.value?.is_encrypted)
@@ -474,13 +465,6 @@ const upload_status_text = computed(() => {
   if (current.status === 'uploading')
     return current.progress >= 95 ? '服务器处理中' : `${current.progress} %`
   return ''
-})
-
-const replace_status_text = computed(() => {
-  const current = replacing.value
-  if (! current)
-    return ''
-  return current.progress >= 95 ? '服务器处理中' : `替换中 ${current.progress} %`
 })
 
 /** Downloads the decrypted plaintext of an encrypted attachment under its original name. */

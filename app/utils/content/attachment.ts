@@ -23,8 +23,6 @@ export type AttachmentFileCardData
     referenced: boolean
     /** This plaintext file is the 删减版 twin of an encrypted sibling. */
     is_abridged_twin?: boolean
-    /** Live progress while this stored file is being replaced by a new upload. */
-    replacing?: { progress: number, speed: number }
   })
   | {
     kind: 'upload'
@@ -63,7 +61,7 @@ export type AttachmentCardData
       batch_pending: boolean
     }
 
-/** A file queued for upload from the editor, including its progress and abort control. */
+/** A file queued for upload from the editor, including its progress. */
 export interface PendingAttachmentUpload {
   id: number
   uppy_id: string
@@ -79,7 +77,6 @@ export interface PendingAttachmentUpload {
   speed: number
   status: AttachmentUploadStatus
   message: string | null
-  controller: AbortController | null
   insert_position: number | null
 }
 

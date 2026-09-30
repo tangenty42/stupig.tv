@@ -88,7 +88,7 @@ const props = withDefaults(defineProps<{
   coverUrl?: string | null
   /** Pre-formatted event date text shown at the right of the labels row. */
   date?: string | null
-  /** Story owning the cover attachment; null for a new story (orphan uploads). */
+  /** Story owning the cover attachment; null for a new story. */
   storyId?: number | null
   /** Show the back button above the header band. */
   back?: boolean

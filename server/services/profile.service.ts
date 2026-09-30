@@ -6,7 +6,7 @@ import { ApiError } from '@server/errors/ApiError'
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
 import { check_otp_sms } from '@server/lib/sms'
-import { delete_object, put_object } from '@server/lib/storage'
+import { delete_object_best_effort, put_object } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
 import { env } from '@shared/env'
@@ -268,7 +268,7 @@ export async function delete_profile_avatar(user_id: number) {
     [user_id],
   )
 
-  await delete_object(`avatar/${previous_file}`).catch(() => {})
+  await delete_object_best_effort(`avatar/${previous_file}`)
   publish_profile_refresh(user_id)
 }
 
@@ -315,7 +315,7 @@ export async function upload_profile_avatar(user_id: number, input: FormData, ge
   const etag = await put_object(`avatar/${avatar_file_name}`, file_data, avatar.type || null)
   const { previous_file } = await update_profile_avatar(user_id, avatar_file_name, etag)
   if (previous_file && previous_file !== avatar_file_name) {
-    await delete_object(`avatar/${previous_file}`).catch(() => {})
+    await delete_object_best_effort(`avatar/${previous_file}`)
   }
   publish_profile_refresh(user_id)
 }

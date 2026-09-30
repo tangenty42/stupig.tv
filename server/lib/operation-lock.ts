@@ -5,10 +5,10 @@ import { db } from '@server/lib/db'
 import { env } from '@shared/env'
 
 // Scope-level mutual exclusion for content attachment structure changes. The
-// lock is a single row per scope (`story_id`, or 0 for the orphan staging
-// pool) carrying a lease, which gives two properties the in-memory guards of a
-// single browser tab cannot: it is shared across tabs/users, and a crashed
-// request self-heals once the lease expires instead of wedging the scope.
+// lock is a single row per scope (`story_id`) carrying a lease, which gives
+// two properties the in-memory guards of a single browser tab cannot: it is
+// shared across tabs/users, and a crashed request self-heals once the lease
+// expires instead of wedging the scope.
 
 interface LockTokenRow extends RowDataPacket {
   token: string
@@ -78,9 +78,4 @@ export async function get_operation_lock(scope_id: number): Promise<ContentOpera
     kind: row.kind as ContentOperationKind,
     expires_at: new Date(row.expires_at).toISOString(),
   }
-}
-
-/** The lock row of a scope is keyed by its story id, with 0 standing in for the orphan pool. */
-export function content_scope_lock_id(story_id: number | null) {
-  return story_id ?? 0
 }

@@ -2,6 +2,7 @@ import type DypnsapiClass from '@alicloud/dypnsapi20170525'
 import DypnsapiModule, { CheckSmsVerifyCodeRequest, SendSmsVerifyCodeRequest } from '@alicloud/dypnsapi20170525'
 import { Config } from '@alicloud/openapi-client'
 import { ApiError } from '@server/errors/ApiError'
+import { error_fields, log_error } from '@server/lib/log'
 import { env } from '@shared/env'
 
 function is_dypnsapi_module_default(value: unknown): value is { default: typeof DypnsapiClass } {
@@ -51,12 +52,12 @@ export async function send_otp_sms(input: SendOtpSmsInput) {
     const body = response.body
 
     if (! body?.success || body.code !== 'OK') {
-      console.log('[SMS] Aliyun SMS send fails: ', body)
+      log_error('sms send failed', { response_body: body })
       throw new ApiError(502, '短信发送失败')
     }
   }
   catch (error) {
-    console.log('[SMS] unknown SMS send fails: ', error)
+    log_error('sms send threw', error_fields(error))
     throw new ApiError(502, '短信发送失败')
   }
 }

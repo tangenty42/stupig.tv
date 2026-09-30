@@ -1,13 +1,16 @@
 import {
+  AbortMultipartUploadCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListMultipartUploadsCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { error_fields, log_error } from '@server/lib/log'
 import { env } from '@shared/env'
 
 interface StoredObject {
@@ -15,6 +18,12 @@ interface StoredObject {
   size: number
   etag: string | null
   last_modified: Date | null
+}
+
+export interface MultipartUpload {
+  key: string
+  upload_id: string
+  initiated: Date | null
 }
 
 let client: S3Client | null = null
@@ -84,6 +93,18 @@ export async function delete_object(key: string) {
   }))
 }
 
+// Business operations must not be blocked by a storage outage, so callers drop
+// the error — but a failed delete leaves an orphan object, so it is always
+// logged for the reconciliation job to find.
+export async function delete_object_best_effort(key: string) {
+  try {
+    await delete_object(key)
+  }
+  catch (error) {
+    log_error('storage-delete-failed', { key, ... error_fields(error) })
+  }
+}
+
 export async function delete_prefix(prefix: string) {
   let continuation_token: string | undefined
   do {
@@ -132,4 +153,42 @@ export async function list_objects(prefix = '') {
     continuation_token = page.IsTruncated ? page.NextContinuationToken : undefined
   } while (continuation_token)
   return objects
+}
+
+export async function list_multipart_uploads(prefix = '') {
+  const uploads: MultipartUpload[] = []
+  let key_marker: string | undefined
+  let upload_id_marker: string | undefined
+
+  do {
+    const page = await get_client().send(new ListMultipartUploadsCommand({
+      Bucket: env.OSS_BUCKET,
+      Prefix: prefix,
+      KeyMarker: key_marker,
+      UploadIdMarker: upload_id_marker,
+    }))
+
+    for (const upload of page.Uploads ?? []) {
+      if (upload.Key && upload.UploadId) {
+        uploads.push({
+          key: upload.Key,
+          upload_id: upload.UploadId,
+          initiated: upload.Initiated ?? null,
+        })
+      }
+    }
+
+    key_marker = page.IsTruncated ? page.NextKeyMarker : undefined
+    upload_id_marker = page.IsTruncated ? page.NextUploadIdMarker : undefined
+  } while (key_marker || upload_id_marker)
+
+  return uploads
+}
+
+export async function abort_multipart_upload(key: string, upload_id: string) {
+  await get_client().send(new AbortMultipartUploadCommand({
+    Bucket: env.OSS_BUCKET,
+    Key: key,
+    UploadId: upload_id,
+  }))
 }

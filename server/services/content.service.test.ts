@@ -1,4 +1,5 @@
 import type { AuthUser } from '@server/types/auth'
+import { encrypt_attachment } from '@server/lib/attachment-crypto'
 import { attachment_name_conflict_message } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_DENIED_TEXT } from '@shared/content-private'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,10 +8,12 @@ const mocks = vi.hoisted(() => ({
   env: {
     OSS_BUCKET: 'unit-test-bucket',
     CONTENT_OPERATION_LOCK_TTL_SECONDS: 60,
+    MAX_CONTENT_ENCRYPT_SIZE_MB: 10,
   },
   signed_object_url: vi.fn(async () => 'https://signed.example.test/upload'),
+  get_object: vi.fn(),
   put_object: vi.fn(),
-  delete_object: vi.fn(),
+  delete_object_best_effort: vi.fn(),
   head_object: vi.fn(),
   copy_object: vi.fn(),
   publish_refresh: vi.fn(),
@@ -24,14 +27,14 @@ vi.mock('@server/lib/db', () => ({ db: { execute: mocks.db_execute, getConnectio
 vi.mock('@server/lib/storage', () => ({
   signed_object_url: mocks.signed_object_url,
   copy_object: mocks.copy_object,
-  delete_object: mocks.delete_object,
+  delete_object_best_effort: mocks.delete_object_best_effort,
+  get_object: mocks.get_object,
   head_object: mocks.head_object,
   put_object: mocks.put_object,
 }))
 // The lease itself is exercised by the lock's own tests; here the scope lock
 // only has to be taken and released.
 vi.mock('@server/lib/operation-lock', () => ({
-  content_scope_lock_id: (story_id: number | null) => story_id ?? 0,
   acquire_operation_lock: vi.fn(async (scope_id: number) => ({ scope_id, token: 'test-token' })),
   release_operation_lock: vi.fn(async () => {}),
   get_operation_lock: vi.fn(async () => null),
@@ -41,7 +44,7 @@ vi.mock('@server/lib/sync', async () => ({
   publish_refresh: mocks.publish_refresh,
 }))
 
-const { confirm_attachment_upload, create_abridged_attachment, create_folder, get_story, move_attachment, move_attachments, move_folder, rename_attachment, replace_attachment, sign_attachment_upload, upload_attachment } = await import('@server/services/content.service')
+const { confirm_attachment_upload, create_abridged_attachment, create_folder, decrypt_attachments, encrypt_attachments, get_story, move_attachment, move_attachments, move_folder, rename_attachment, replace_attachment, sign_attachment_upload } = await import('@server/services/content.service')
 
 function stub_story_row(story_id: number, markdown = '') {
   mocks.db_execute.mockImplementation(async (sql: string) => {
@@ -72,25 +75,25 @@ describe('sign_attachment_upload staging key validation', () => {
     mocks.db_execute.mockReset()
     mocks.db_execute.mockResolvedValue([[], []])
   })
-  // The orphan staging pool is gone: uploads start only after the story exists.
+  // Uploads start only after the story exists; story_id 0 never gets a signature.
   it('rejects new-scope keys for unsaved stories (story_id 0)', async () => {
     const key = `content-upload/new/${crypto.randomUUID()}`
     await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key }))
-      .rejects.toMatchObject({ name: 'ApiError', statusCode: 403, message: '请先保存档案，再上传附件' })
+      .rejects.toMatchObject({ name: 'ApiError', statusCode: 400, message: '上传凭证无效' })
     expect(mocks.signed_object_url).not.toHaveBeenCalled()
   })
 
   it('rejects multipart creation under the new scope', async () => {
     const key = `content-upload/new/${crypto.randomUUID()}`
     await expect(sign_attachment_upload({ story_id: 0, method: 'POST', key }))
-      .rejects.toMatchObject({ statusCode: 403, message: '请先保存档案，再上传附件' })
+      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
   })
 
-  // Regression guard: story_id 0 used to expect content-upload/0/ while the
-  // client stages under content-upload/new/, failing every new-story upload.
+  // Regression guard: a key under content-upload/0/ matches story_id 0's
+  // prefix, so the story lookup is what stops it from being signed.
   it('rejects the numeric zero prefix for unsaved stories', async () => {
     await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key: `content-upload/0/${crypto.randomUUID()}` }))
-      .rejects.toMatchObject({ name: 'ApiError', statusCode: 400, message: '上传凭证无效' })
+      .rejects.toMatchObject({ name: 'ApiError', statusCode: 404, message: '档案不存在或已被删除' })
     expect(mocks.signed_object_url).not.toHaveBeenCalled()
   })
 
@@ -176,6 +179,40 @@ describe('get_story private stripping', () => {
   })
 })
 
+describe('get_story version check', () => {
+  const base = { updated_at: '2026-01-01 00:00:00', viewer_key: 'anon:false' }
+
+  beforeEach(() => {
+    mocks.db_execute.mockReset()
+    stub_story_row(1, 'public\n\n<good>\nsecret\n</good>\n')
+  })
+
+  it('returns null when both the story and the viewer are unchanged', async () => {
+    await expect(get_story(1, base, null)).resolves.toBeNull()
+  })
+
+  it('returns a full copy when the viewer changed despite an unchanged story', async () => {
+    const story = await get_story(1, base, {
+      id: 7,
+      session_id: 1,
+      username: 'viewer',
+      phone: '',
+      avatar_file: null,
+      is_verified: false,
+      is_admin: true,
+    } as AuthUser)
+
+    expect(story!.viewer_key).toBe('7:true')
+    expect(story!.markdown).toContain('secret')
+  })
+
+  it('reports the viewer key each payload was rendered for', async () => {
+    const story = await get_story(1, undefined, null)
+
+    expect(story.viewer_key).toBe('anon:false')
+  })
+})
+
 describe('create_abridged_attachment', () => {
   const png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
   const jpeg_header = [0xFF, 0xD8, 0xFF, 0xE0]
@@ -230,14 +267,14 @@ describe('create_abridged_attachment', () => {
     mocks.db_execute.mockResolvedValue([[], []])
     mocks.put_object.mockReset()
     mocks.put_object.mockResolvedValue('etag-twin')
-    mocks.delete_object.mockReset()
+    mocks.delete_object_best_effort.mockReset()
     mocks.publish_refresh.mockReset()
   })
 
   it('stores the redaction under the name without the .good suffix', async () => {
     stub_scope(encrypted_png)
 
-    const row = await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form([... png_header, 1, 2, 3]), () => ({ max_size_mb: 20 }))
+    const row = await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form([... png_header, 1, 2, 3]))
 
     expect(row.file_name).toBe('cards/photo.png')
     expect(row.is_encrypted).toBe(false)
@@ -247,7 +284,7 @@ describe('create_abridged_attachment', () => {
     stub_scope(encrypted_png)
     const bytes = [... png_header, 9, 8, 7]
 
-    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(bytes), () => ({ max_size_mb: 20 }))
+    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(bytes))
 
     // No transcoding: the object is exactly what the editor exported, and the
     // content type comes from the name rather than the form payload.
@@ -259,7 +296,7 @@ describe('create_abridged_attachment', () => {
   it('bumps the story so subscribers refetch the attachment list', async () => {
     stub_scope(encrypted_png)
 
-    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 20 }))
+    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header))
 
     const touch = mocks.db_execute.mock.calls.find(([sql]) => String(sql).includes('UPDATE content_stories SET updated_at'))
     expect(touch).toBeDefined()
@@ -269,7 +306,7 @@ describe('create_abridged_attachment', () => {
   it('refuses a source that is not encrypted', async () => {
     stub_scope({ ... encrypted_png, file_name: 'cards/photo.png', encryption_key: null })
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+    await expect(create_abridged_attachment(5, 'cards/photo.png', abridged_form(png_header)))
       .rejects.toMatchObject({ statusCode: 400, message: '只有已加密的图片才能创建删减版' })
     expect(mocks.put_object).not.toHaveBeenCalled()
   })
@@ -277,7 +314,7 @@ describe('create_abridged_attachment', () => {
   it('refuses a format the editor cannot write back', async () => {
     stub_scope({ ... encrypted_png, file_name: 'cards/anim.gif.good', mime_type: 'image/gif' })
 
-    await expect(create_abridged_attachment(5, 'cards/anim.gif.good', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+    await expect(create_abridged_attachment(5, 'cards/anim.gif.good', abridged_form(png_header)))
       .rejects.toMatchObject({ statusCode: 400, message: '该图片格式不支持创建删减版' })
     expect(mocks.put_object).not.toHaveBeenCalled()
   })
@@ -285,23 +322,15 @@ describe('create_abridged_attachment', () => {
   it('refuses payload bytes that do not match the target name', async () => {
     stub_scope(encrypted_png)
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(jpeg_header), () => ({ max_size_mb: 20 })))
+    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(jpeg_header)))
       .rejects.toMatchObject({ statusCode: 400, message: '删减版内容与文件格式不符' })
-    expect(mocks.put_object).not.toHaveBeenCalled()
-  })
-
-  it('refuses a payload over the size limit', async () => {
-    stub_scope(encrypted_png)
-
-    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 0 })))
-      .rejects.toMatchObject({ statusCode: 413 })
     expect(mocks.put_object).not.toHaveBeenCalled()
   })
 
   it('never takes over an existing twin, reporting the conflict instead', async () => {
     stub_scope(encrypted_png, ['cards/photo.png'])
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header)))
       .rejects.toMatchObject({ statusCode: 409, message: attachment_name_conflict_message })
     expect(mocks.put_object).not.toHaveBeenCalled()
   })
@@ -309,7 +338,7 @@ describe('create_abridged_attachment', () => {
   it('reports a missing source', async () => {
     stub_scope(null)
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header), () => ({ max_size_mb: 20 })))
+    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header)))
       .rejects.toMatchObject({ statusCode: 404 })
   })
 })
@@ -354,14 +383,6 @@ describe('attachment name guard', () => {
 
   function folder_row(file_name: string, id = 3) {
     return { ... file_row(file_name, id), is_folder: 1, object_key: null, mime_type: null, file_size: 0, version: '' }
-  }
-
-  /** A replacement upload; the name matches the plaintext row so keep-name lands on the same path. */
-  function replace_form() {
-    const form = new FormData()
-    form.append('story_id', '5')
-    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
-    return form
   }
 
   /**
@@ -411,12 +432,16 @@ describe('attachment name guard', () => {
     mocks.get_connection.mockResolvedValue(connection)
     mocks.db_execute.mockReset()
     mocks.db_execute.mockResolvedValue([[], []])
-    // The storage mocks are promise-returning: the service chains `.catch` on
-    // the deletions, so an un-implemented vi.fn() would blow up on undefined.
+    // Deletes go through the best-effort wrapper, whose failure handling has
+    // its own test in lib/storage.test.ts.
     mocks.put_object.mockReset()
     mocks.put_object.mockResolvedValue('etag-1')
-    mocks.delete_object.mockReset()
-    mocks.delete_object.mockResolvedValue(undefined)
+    mocks.head_object.mockReset()
+    mocks.head_object.mockResolvedValue({ size: 3, content_type: 'image/png', etag: 'source-etag' })
+    mocks.copy_object.mockReset()
+    mocks.copy_object.mockResolvedValue('etag-1')
+    mocks.delete_object_best_effort.mockReset()
+    mocks.delete_object_best_effort.mockResolvedValue(undefined)
   })
 
   it('refuses a .good folder on create', async () => {
@@ -550,22 +575,35 @@ describe('attachment name guard', () => {
     expect(connection.commit).toHaveBeenCalled()
   })
 
+  it('returns the successful moves when another destination is occupied', async () => {
+    stub_scope([file_row('cards/a.png', 10), file_row('cards/b.png', 11), file_row('a.png', 12)])
+
+    const result = await move_attachments(5, [
+      { file_name: 'cards/a.png', target_folder: null },
+      { file_name: 'cards/b.png', target_folder: null },
+    ])
+
+    expect(result.succeeded).toEqual(['cards/b.png'])
+    expect(result.skipped).toEqual([{ file_name: 'cards/a.png', reason: attachment_name_conflict_message }])
+    expect(connection.commit).toHaveBeenCalled()
+  })
+
   it('refuses to replace an encrypted attachment', async () => {
     // A replacement swaps the object but not the row's key, which would leave
     // plaintext bytes marked encrypted and render the file unopenable.
     stub_scope([file_row('photo.png.good', 10, 'a2V5')])
 
-    await expect(replace_attachment(5, 'photo.png.good', replace_form(), 'keep-name', () => ({ max_size_mb: 20 })))
+    await expect(replace_attachment(5, 'photo.png.good', 'content-upload/5/replacement', 'photo.png', 'image/png', 'keep-name'))
       .rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('已加密') })
-    expect(mocks.put_object).not.toHaveBeenCalled()
+    expect(mocks.copy_object).not.toHaveBeenCalled()
   })
 
   it('still replaces a plaintext attachment', async () => {
     stub_scope([file_row('photo.png', 10)])
 
-    await expect(replace_attachment(5, 'photo.png', replace_form(), 'keep-name', () => ({ max_size_mb: 20 })))
+    await expect(replace_attachment(5, 'photo.png', 'content-upload/5/replacement', 'photo.png', 'image/png', 'keep-name'))
       .resolves.toBeTruthy()
-    expect(mocks.put_object).toHaveBeenCalled()
+    expect(mocks.copy_object).toHaveBeenCalled()
   })
 
   it('still refuses a derived name that collides with what survives', async () => {
@@ -581,6 +619,147 @@ describe('attachment name guard', () => {
 
     await expect(move_folder(5, 'cards', 'x'))
       .rejects.toMatchObject({ statusCode: 409, message: attachment_name_conflict_message })
+  })
+})
+
+/**
+ * The encrypt/decrypt split decides from the row's own state: encrypt takes
+ * plaintext rows, decrypt takes `.good` rows, and everything else is reported
+ * as skipped — an inverted split encrypts the already-encrypted and refuses
+ * exactly the files it exists for.
+ */
+describe('attachment encryption transform', () => {
+  const story_row = {
+    id: 5,
+    title: 't',
+    label: '',
+    description: '',
+    cover: '',
+    cover_label: '',
+    cover_version: null,
+    event_precision: 'day',
+    event_dates: '[]',
+    markdown: '',
+    created_at: '',
+    updated_at: '',
+    revision: 1,
+  }
+
+  function file_row(file_name: string, id = 10, encryption_key: string | null = null) {
+    return {
+      id,
+      story_id: 5,
+      is_folder: 0,
+      file_name,
+      object_key: `content/att/${id}`,
+      mime_type: 'image/png',
+      file_size: 10,
+      version: 'v1',
+      encryption_key,
+    }
+  }
+
+  function stub_scope(rows: ReturnType<typeof file_row>[]) {
+    mocks.db_execute.mockImplementation(async (sql: string) => {
+      if (sql.includes('file_name IN ('))
+        return [rows, []]
+      if (sql.includes('SELECT file_name FROM content_story_attachments'))
+        return [rows.map(row => ({ file_name: row.file_name })), []]
+      if (sql.includes('FROM content_stories'))
+        return [[story_row], []]
+      if (sql.includes('is_folder = 1'))
+        return [[], []]
+      if (sql.includes('is_folder = 0'))
+        return [rows, []]
+      return [[], []]
+    })
+  }
+
+  beforeEach(() => {
+    mocks.get_connection.mockResolvedValue({
+      execute: (... args: unknown[]) => mocks.db_execute(... args),
+      beginTransaction: vi.fn(async () => {}),
+      commit: vi.fn(async () => {}),
+      rollback: vi.fn(async () => {}),
+      release: vi.fn(),
+    })
+    mocks.db_execute.mockReset()
+    mocks.db_execute.mockResolvedValue([[], []])
+    mocks.get_object.mockReset()
+    mocks.get_object.mockResolvedValue(new Uint8Array([1, 2, 3]))
+    mocks.put_object.mockReset()
+    mocks.put_object.mockResolvedValue('etag-1')
+    mocks.delete_object_best_effort.mockReset()
+    mocks.delete_object_best_effort.mockResolvedValue(undefined)
+  })
+
+  /** The row rewrite of the transform: [file_name, object_key, file_size, version, encryption_key, id]. */
+  function encryption_update_calls() {
+    return mocks.db_execute.mock.calls
+      .filter(([sql]) => String(sql).includes('UPDATE content_story_attachments SET file_name'))
+      .map(([, params]) => params as unknown[])
+  }
+
+  it('encrypts a plaintext row under the .good name with a fresh key', async () => {
+    stub_scope([file_row('photo.png')])
+
+    const result = await encrypt_attachments(5, ['photo.png'])
+
+    expect(result.succeeded).toEqual(['photo.png'])
+    expect(result.skipped).toEqual([])
+    const [update] = encryption_update_calls()
+    expect(update![0]).toBe('photo.png.good')
+    expect(typeof update![4]).toBe('string')
+    expect((update![4] as string).length).toBeGreaterThan(0)
+    expect(mocks.delete_object_best_effort).toHaveBeenCalledWith('content/att/10')
+  })
+
+  it('skips an already-encrypted row instead of encrypting it again', async () => {
+    stub_scope([file_row('photo.png.good', 10, 'a2V5')])
+
+    const result = await encrypt_attachments(5, ['photo.png.good'])
+
+    expect(result.succeeded).toEqual([])
+    expect(result.skipped).toEqual([{ file_name: 'photo.png.good', reason: '已加密' }])
+    expect(mocks.get_object).not.toHaveBeenCalled()
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('decrypts an encrypted row back under its plaintext name', async () => {
+    const plaintext = new Uint8Array([9, 8, 7, 6])
+    const { key, data } = encrypt_attachment(plaintext)
+    stub_scope([file_row('photo.png.good', 10, key)])
+    mocks.get_object.mockResolvedValue(data)
+
+    const result = await decrypt_attachments(5, ['photo.png.good'])
+
+    expect(result.succeeded).toEqual(['photo.png.good'])
+    expect(result.skipped).toEqual([])
+    const [, stored] = mocks.put_object.mock.calls[0]!
+    expect([... (stored as Uint8Array)]).toEqual([... plaintext])
+    const [update] = encryption_update_calls()
+    expect(update![0]).toBe('photo.png')
+    expect(update![4]).toBeNull()
+  })
+
+  it('skips a plaintext row on decrypt', async () => {
+    stub_scope([file_row('photo.png')])
+
+    const result = await decrypt_attachments(5, ['photo.png'])
+
+    expect(result.succeeded).toEqual([])
+    expect(result.skipped).toEqual([{ file_name: 'photo.png', reason: '未加密' }])
+    expect(mocks.get_object).not.toHaveBeenCalled()
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('reports names the scope does not hold', async () => {
+    stub_scope([])
+
+    const result = await encrypt_attachments(5, ['ghost.png'])
+
+    expect(result.succeeded).toEqual([])
+    expect(result.skipped).toEqual([{ file_name: 'ghost.png', reason: '附件不存在或已被删除' }])
   })
 })
 
@@ -628,47 +807,10 @@ describe('folder rows materialized by uploads', () => {
     mocks.db_execute.mockResolvedValue([[], []])
     mocks.put_object.mockReset()
     mocks.put_object.mockResolvedValue('etag-1')
-    mocks.delete_object.mockReset()
-    mocks.delete_object.mockResolvedValue(undefined)
+    mocks.delete_object_best_effort.mockReset()
+    mocks.delete_object_best_effort.mockResolvedValue(undefined)
     mocks.head_object.mockResolvedValue({ size: 3, content_type: 'image/png', etag: 'e1' })
     mocks.copy_object.mockResolvedValue('e2')
-  })
-
-  it('records every ancestor folder of a nested upload', async () => {
-    stub_scope()
-    const form = new FormData()
-    form.append('story_id', '5')
-    form.append('file_name', 'cards/sub/photo.png')
-    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
-
-    await upload_attachment(5, form, () => ({ max_size_mb: 20 }))
-
-    // Ancestors first, so a deeper folder depends on a row that already exists.
-    expect(inserted_folders()).toEqual(['cards', 'cards/sub'])
-  })
-
-  it('records the folder of a direct upload, and nothing above it', async () => {
-    stub_scope()
-    const form = new FormData()
-    form.append('story_id', '5')
-    form.append('file_name', 'cards/photo.png')
-    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
-
-    await upload_attachment(5, form, () => ({ max_size_mb: 20 }))
-
-    expect(inserted_folders()).toEqual(['cards'])
-  })
-
-  it('records no folder for a file at the root', async () => {
-    stub_scope()
-    const form = new FormData()
-    form.append('story_id', '5')
-    form.append('file_name', 'photo.png')
-    form.append('file', new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }))
-
-    await upload_attachment(5, form, () => ({ max_size_mb: 20 }))
-
-    expect(inserted_folders()).toEqual([])
   })
 
   it('records the folders of a signed upload too, since that is the path folder uploads take', async () => {
@@ -677,7 +819,7 @@ describe('folder rows materialized by uploads', () => {
     stub_scope()
     const key = `content-upload/5/${crypto.randomUUID()}`
 
-    await confirm_attachment_upload(5, key, 'cards/sub/photo.png', 20)
+    await confirm_attachment_upload(5, key, 'cards/sub/photo.png')
 
     expect(inserted_folders()).toEqual(['cards', 'cards/sub'])
   })

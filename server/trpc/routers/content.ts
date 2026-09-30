@@ -8,11 +8,9 @@ import {
   decrypt_attachments,
   delete_attachment,
   delete_folder,
-  delete_orphan_attachment,
   delete_story,
   encrypt_attachments,
   get_story,
-  list_orphan_attachments,
   list_stories,
   move_attachment,
   move_attachments,
@@ -21,7 +19,6 @@ import {
   replace_attachment,
   sign_attachment_upload,
   update_story,
-  upload_attachment,
 } from '@server/services/content.service'
 import { permission_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
@@ -43,23 +40,21 @@ export const content_router = router({
       catch {
         viewer = null
       }
-      return input.base_updated_at === undefined
+      return input.base_updated_at === undefined || input.base_viewer_key === undefined
         ? get_story(input.id, undefined, viewer)
-        : get_story(input.id, input.base_updated_at, viewer)
+        : get_story(input.id, { updated_at: input.base_updated_at, viewer_key: input.base_viewer_key }, viewer)
     }),
-
-  listOrphanAttachments: content_admin_procedure.query(() => list_orphan_attachments()),
 
   createStory: content_admin_procedure
     .input(api_schema.content.create_story)
     .mutation(async ({ ctx, input }) => ({
-      id: await create_story(ctx.auth_user.id, input.markdown, input.claim_files, has_permission(ctx.auth_user, 'content_private', 'read')),
+      id: await create_story(ctx.auth_user.id, input.markdown, has_permission(ctx.auth_user, 'content_private', 'read')),
     })),
 
   updateStory: content_admin_procedure
     .input(api_schema.content.update_story)
     .mutation(async ({ ctx, input }) => {
-      await update_story(
+      return update_story(
         input.id,
         input.markdown,
         input.delete_files,
@@ -72,50 +67,32 @@ export const content_router = router({
     .input(api_schema.content.delete_story)
     .mutation(({ input }) => delete_story(input.id)),
 
-  uploadAttachment: content_admin_procedure
-    .input(api_schema.content.upload_attachment)
-    .mutation(async ({ ctx, input }) => {
-      const raw_id = z.coerce.number().int().min(0).parse(input.get('story_id'))
-      return upload_attachment(raw_id || null, input, () => {
-        const config = useRuntimeConfig(ctx.event)
-        return {
-          max_size_mb: config.public.max_content_attachment_size_mb as number,
-        }
-      })
-    }),
-
   signAttachmentUpload: content_admin_procedure
     .input(api_schema.content.sign_attachment_upload)
     .mutation(({ input }) => sign_attachment_upload(input)),
 
   confirmAttachmentUpload: content_admin_procedure
     .input(api_schema.content.confirm_attachment_upload)
-    .mutation(async ({ ctx, input }) => {
-      const config = useRuntimeConfig(ctx.event)
-      return confirm_attachment_upload(input.story_id, input.key, input.file_name, config.public.max_content_attachment_size_mb as number)
-    }),
+    .mutation(({ input }) => confirm_attachment_upload(input.story_id, input.key, input.file_name)),
 
   renameAttachment: content_admin_procedure
     .input(api_schema.content.rename_attachment)
     .mutation(({ input }) => rename_attachment(
-      input.id || null,
+      input.id,
       input.old_file_name,
       input.file_name,
     )),
 
   replaceAttachment: content_admin_procedure
     .input(api_schema.content.replace_attachment)
-    .mutation(async ({ ctx, input }) => {
-      const raw_id = z.coerce.number().int().min(0).parse(input.get('story_id'))
-      const old_file_name = z.string().min(1).max(120).parse(input.get('old_file_name'))
-      const mode = z.enum(['keep-name', 'new-name']).parse(input.get('mode'))
-      return replace_attachment(raw_id || null, old_file_name, input, mode, () => {
-        const config = useRuntimeConfig(ctx.event)
-        return {
-          max_size_mb: config.public.max_content_attachment_size_mb as number,
-        }
-      })
-    }),
+    .mutation(({ input }) => replace_attachment(
+      input.story_id,
+      input.old_file_name,
+      input.key,
+      input.file_name,
+      input.content_type,
+      input.mode,
+    )),
 
   deleteAttachment: content_admin_procedure
     .input(api_schema.content.delete_attachment)
@@ -127,14 +104,10 @@ export const content_router = router({
       has_permission(ctx.auth_user, 'content_private', 'read'),
     )),
 
-  deleteOrphanAttachment: content_admin_procedure
-    .input(api_schema.content.delete_orphan_attachment)
-    .mutation(({ input }) => delete_orphan_attachment(input.file_name)),
-
   moveAttachment: content_admin_procedure
     .input(api_schema.content.move_attachment)
     .mutation(({ input }) => move_attachment(
-      input.id || null,
+      input.id,
       input.file_name,
       input.target_folder,
     )),
@@ -142,43 +115,38 @@ export const content_router = router({
   moveAttachments: content_admin_procedure
     .input(api_schema.content.move_attachments)
     .mutation(({ input }) => move_attachments(
-      input.id || null,
+      input.id,
       input.moves,
     )),
 
   encryptAttachments: content_admin_procedure
     .input(api_schema.content.encrypt_attachments)
-    .mutation(({ input }) => encrypt_attachments(input.id || null, input.file_names)),
+    .mutation(({ input }) => encrypt_attachments(input.id, input.file_names)),
 
   decryptAttachments: content_admin_procedure
     .input(api_schema.content.decrypt_attachments)
-    .mutation(({ input }) => decrypt_attachments(input.id || null, input.file_names)),
+    .mutation(({ input }) => decrypt_attachments(input.id, input.file_names)),
 
   createAbridgedAttachment: content_admin_procedure
     .input(api_schema.content.create_abridged_attachment)
-    .mutation(async ({ ctx, input }) => {
-      const raw_id = z.coerce.number().int().min(0).parse(input.get('story_id'))
+    .mutation(({ input }) => {
+      const story_id = z.coerce.number().int().positive().parse(input.get('story_id'))
       const source_file_name = z.string().min(1).max(255).parse(input.get('source_file_name'))
-      return create_abridged_attachment(raw_id || null, source_file_name, input, () => {
-        const config = useRuntimeConfig(ctx.event)
-        return {
-          max_size_mb: config.public.max_content_attachment_size_mb as number,
-        }
-      })
+      return create_abridged_attachment(story_id, source_file_name, input)
     }),
 
   createFolder: content_admin_procedure
     .input(api_schema.content.create_folder)
-    .mutation(({ input }) => create_folder(input.id || null, input.folder)),
+    .mutation(({ input }) => create_folder(input.id, input.folder)),
 
   deleteFolder: content_admin_procedure
     .input(api_schema.content.delete_folder)
-    .mutation(({ input }) => delete_folder(input.id || null, input.folder)),
+    .mutation(({ input }) => delete_folder(input.id, input.folder)),
 
   moveFolder: content_admin_procedure
     .input(api_schema.content.move_folder)
     .mutation(({ input }) => move_folder(
-      input.id || null,
+      input.id,
       input.source_folder,
       input.new_folder,
     )),
