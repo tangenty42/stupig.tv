@@ -10,6 +10,9 @@ COPY . .
 # 固定 production 覆盖层，免得构建机的 NODE_ENV 影响 config/*.yaml 合并结果。
 ENV NODE_ENV=production
 RUN pnpm build
+# 维护脚本（OSS 对账清理）打成自包含单文件塞进 .output：运行时镜像里没有源码、
+# 没有 tsx、也不装 node_modules，1panel 的"容器内执行"定时任务直接 node 跑它
+RUN pnpm maintenance:build
 
 FROM node:24-slim
 WORKDIR /app

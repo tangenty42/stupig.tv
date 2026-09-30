@@ -18,6 +18,4 @@ config/local.yaml
 docs
 migrations
 docker-compose.dev.yml
-deploy
-scripts
 stupig_tv.sql
