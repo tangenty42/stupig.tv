@@ -1,0 +1,25 @@
+# 服务器端编排：应用容器接入 1panel 的 Docker 网络，直连 1Panel-mysql /
+# 1panel-redis / 1panel-EMQX（见 config/default.yaml 的 host 名）。
+# .env 放本文件旁边，密钥由 compose 注入容器，不进镜像。
+services:
+  app:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/stupig-tv:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3042
+    ports:
+      # 只绑回环，外部流量由 openresty 反代进来
+      - 127.0.0.1:3042:3042
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:3042/").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  default:
+    name: ${PANEL_NETWORK:-1panel-network}
+    external: true
