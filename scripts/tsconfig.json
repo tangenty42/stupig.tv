@@ -1,6 +1,9 @@
 {
   // 让编辑器/tsx 识别 scripts/*.ts 里的 @server、@shared 别名。
   // 不继承 .nuxt 的 tsconfig——那些是 Nuxt 生成物，scripts 是独立 Node 脚本。
+  // 刻意不被根 tsconfig 的 references 引用：Docker 构建上下文排除了 scripts/，
+  // 一旦引用，Nuxt 构建会在 references 里找不到本文件而失败。编辑器按"就近
+  // tsconfig"规则仍会用它来处理 scripts/ 下的文件。
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
