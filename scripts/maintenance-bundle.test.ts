@@ -22,7 +22,12 @@ beforeAll(async () => {
   await cp(resolve(project_root, 'config'), resolve(work_dir, 'config'), { recursive: true })
   // 指向一个必然拒连的端口：不碰数据库也能确认"已经走到建连"
   await writeFile(resolve(work_dir, 'config/local.yaml'), 'db:\n  host: 127.0.0.1\n  port: 1\n')
-  await run('pnpm', ['maintenance:build'], { cwd: project_root })
+  if (process.platform === 'win32') {
+    await run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'pnpm maintenance:build'], { cwd: project_root })
+  }
+  else {
+    await run('pnpm', ['maintenance:build'], { cwd: project_root })
+  }
   await cp(build_output, bundle)
 }, 120_000)
 

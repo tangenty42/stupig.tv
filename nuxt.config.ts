@@ -190,6 +190,9 @@ export default defineNuxtConfig({
     // rollup 会把它按文件系统绝对路径解析,Windows 本地变成 C:\app\... 导致
     // "Cannot find module" 报错。相对路径在容器(/app)和本地都能正确解析。
     errorHandler: './server/error-handler.ts',
+    externals: {
+      inline: ['pinia'],
+    },
   },
   modules: [
     '@pinia/nuxt',

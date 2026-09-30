@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { error_fields, log_error, log_info } from '@server/lib/log'
 import { load_config } from '@server/shared/config'
 import mysql from 'mysql2/promise'
@@ -190,7 +191,7 @@ export async function run_migrations(options: MigrationOptions = {}): Promise<vo
   }
 }
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await run_migrations({
     baseline: process.argv.includes('--baseline'),
     check_only: process.argv.includes('--status') || process.argv.includes('--dry-run'),

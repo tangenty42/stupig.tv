@@ -1,3 +1,6 @@
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // 不加载真实 .env：本测试要证明"没有密钥时运行路径报错、构建路径可用"，
@@ -14,16 +17,25 @@ const secret_keys = [
 ]
 
 const { load_config, load_public_config } = await import('./config')
+const default_config_path = resolve(import.meta.dirname, '../../config/default.yaml')
+let work_dir = ''
 
 beforeEach(() => {
+  work_dir = mkdtempSync(resolve(tmpdir(), 'stupig-config-test-'))
+  mkdirSync(resolve(work_dir, 'config'))
+  copyFileSync(default_config_path, resolve(work_dir, 'config/default.yaml'))
+  vi.spyOn(process, 'cwd').mockReturnValue(work_dir)
+  vi.stubEnv('NODE_ENV', 'test')
   for (const key of secret_keys) {
-    delete process.env[key]
+    vi.stubEnv(key, undefined)
   }
 })
 
 afterEach(() => {
-  for (const key of secret_keys) {
-    delete process.env[key]
+  vi.restoreAllMocks()
+  vi.unstubAllEnvs()
+  if (work_dir) {
+    rmSync(work_dir, { recursive: true, force: true })
   }
 })
 
