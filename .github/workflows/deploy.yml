@@ -26,18 +26,29 @@ jobs:
           docker build -t "$IMAGE:latest" .
           docker push "$IMAGE:latest"
 
-      # 只能 prune -f（清悬空镜像）。严禁改成 -a：这台主机与 1panel 共用，
-      # -a 会删掉其他站点正在用的镜像（它们对 docker 而言"未使用"，却是别的
-      # 站点的运行基础），且被删的往往是从上游拉不到的历史镜像，无法恢复。
-      - name: Deploy to server
+      # 先把 key 准备好并自证：ssh 的 "Permission denied" 分不清"私钥损坏"和
+      # "服务器不认这把公钥"，而 `ssh-keygen -y` 从私钥推导公钥——文件缺 BEGIN/END、
+      # 粘贴被截断、带口令，都会在这里立刻炸掉。指纹还要和服务器上的 authorized_keys
+      # 对比，所以打印出来（只暴露公钥指纹，不泄露私钥）
+      - name: Prepare SSH key
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 | ssh-keygen -lf -
+
+      # 部署脚本里的 docker image prune 只能带 -f（清悬空镜像）。严禁改成 -a：
+      # 这台主机与 1panel 共用，-a 会删掉其他站点正在用的镜像（它们对 docker 而言
+      # "未使用"，却是别的站点的运行基础），且被删的往往是从上游拉不到的历史镜像。
+      - name: Deploy to server
+        run: |
           ssh-keyscan -p "${{ vars.SSH_PORT }}" -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -p "${{ vars.SSH_PORT }}" "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
+          ssh -p "${{ vars.SSH_PORT }}" \
+              -o IdentitiesOnly=yes \
+              -o ConnectTimeout=15 \
+              "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
             "cd ${{ vars.DEPLOY_DIR }} \
              && echo '${{ secrets.ACR_PASSWORD }}' | docker login '${IMAGE%%/*}' -u '${{ secrets.ACR_USERNAME }}' --password-stdin \
              && docker compose pull \
