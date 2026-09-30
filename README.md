@@ -10,6 +10,11 @@ Learn more about us at our official website [stupig.tv](https://www.stupig.tv).
 
 - Wire up your MySQL and Redis instance
 - Wire up your EMQX WebSocket endpoint like `http://127.0.0.1:8083` to `<your-domain>/mqtt`
+- Migrations under `migrations/` are applied automatically when the container starts
+  (the `CMD` runs the bundled runner before the server; a failure keeps the container down
+  on purpose). Existing databases whose schema was built by hand need a one-off
+  `docker exec stupig-tv node .output/server/maintenance/migrate.mjs --baseline`;
+  `--status` is read-only and lists what is pending
 - Add a scheduled task to run the storage cleanup: 1panel 计划任务 → 类型选「容器内执行」→
   容器 `stupig-tv` → 命令 `cd /app && node .output/server/maintenance/cleanup.mjs --delete --grace-hours=168`
   （`cd /app` 不能省：配置加载以 cwd 为基准找 `config/*.yaml`。先用不带 `--delete`

@@ -16,6 +16,5 @@ config/local.yaml
 .idea
 .github
 docs
-migrations
 docker-compose.dev.yml
 stupig_tv.sql

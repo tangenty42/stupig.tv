@@ -38,4 +38,3 @@ config/local.yaml
 # Throwaway scripts and snapshots written while verifying a change (they are
 # meant to be deleted again, but must never be committed by accident).
 .tmp-*
-migrations/*
