@@ -5,6 +5,8 @@
 services:
   app:
     image: ${ACR_IMAGE}:latest
+    # 固定容器名：1panel 定时任务靠它 docker exec 跑维护脚本
+    container_name: stupig-tv
     restart: unless-stopped
     env_file: .env
     environment:
@@ -22,5 +24,5 @@ services:
 
 networks:
   default:
-    name: ${PANEL_NETWORK:-1panel-network}
+    name: ${PANEL_NETWORK}
     external: true
