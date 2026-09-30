@@ -9,8 +9,8 @@
 
 ## External Services
 
-- The app talks to a MySQL server running on the same host machine in a separate Docker container. Configuration lives in `.env` / `.env.example` and `server/shared/env.ts`.
-- Aliyun services are used (DYPNS, SMS, CAPTCHA). Refer to `.env.example` and `server/shared/env.ts` for required keys and endpoints.
+- The app talks to a MySQL server running on the same host machine in a separate Docker container. Configuration lives in `config/*.yaml` (`default` + per-environment overrides), validated in `server/shared/config.ts`; secrets are `${VAR}` interpolations resolved from `.env` / `.env.example`. `server/shared/env.ts` is a flat compatibility layer over `config` that call sites are migrating away from.
+- Aliyun services are used (DYPNS, SMS, CAPTCHA). Refer to `config/default.yaml` and `server/shared/config.ts` for required keys and endpoints.
 - MQTT/EMQX is used for real-time synchronization. The server publishes events via `server/lib/mqtt.ts` (topics are prefixed with `MQTT_TOPIC_PREFIX`), and the browser client receives those events through `app/composables/useDataSync.ts`. Only one active tab per browser maintains a unique WebSocket connection; background tabs disconnect via `visibilitychange` to save resources. When server-side state changes (e.g., profile updates, role changes, session invalidation), emit the appropriate refresh event via `server/lib/sync.ts` using `publish_refresh({ resource: sync_resource('<type>', <id>) })` so connected clients can reload the affected data.
 - The same browser uses a `BroadcastChannel` for cross-tab transport. When `useDataSync` receives an MQTT event on the active tab, it posts the event to the BroadcastChannel so other tabs (including background tabs) are notified. `BroadcastChannel` is also the dedicated channel for cross-tab login/logout broadcasts. When implementing features that mutate shared user or admin state, emit the appropriate refresh event via `server/lib/sync.ts` so both MQTT clients and same-browser tabs stay in sync.
 - If `.env` is not accessible, ask the user before proceeding with any task that requires secrets.
@@ -23,7 +23,7 @@
 
 ## Workflow Standards
 
-- Always externalize configurable settings: change `.env`, `.env.example`, and `server/shared/env.ts` together. Read these files thoroughly before proposing environment changes.
+- Always externalize configurable settings: change `config/*.yaml`, `.env.example`, and `server/shared/config.ts` together. Read these files thoroughly before proposing configuration changes.
 - Plan first, then wait for user approval before executing **structural or environmental changes** (e.g., new dependencies, schema changes, config/env changes, major refactors). For small, safe code edits, you may proceed directly.
 - Ask follow-up questions when something is unclear; the user is welcome to clarify.
 - Do not make changes without approval when approval is required.
