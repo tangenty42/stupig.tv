@@ -26,7 +26,8 @@ services:
       - '6379:6379'
 
   emqx:
-    image: emqx/emqx:5
+    # emqx/emqx 没有 :5 浮动标签,只能用具体版本(5.x 最新稳定版)
+    image: emqx/emqx:5.10.5
     restart: unless-stopped
     ports:
       - '1883:1883' # TCP，服务端 publish 用
