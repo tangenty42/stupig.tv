@@ -1,6 +1,7 @@
 # 本地开发依赖服务：MySQL + Redis + EMQX。
 # 用法：docker compose -f docker-compose.dev.yml up -d
 # 连接信息已在 config/development.yaml 覆盖为 127.0.0.1。
+
 services:
   mysql:
     image: mysql:8.4
@@ -33,6 +34,19 @@ services:
       - '18083:18083' # Dashboard（admin/public）
     environment:
       EMQX_DASHBOARD__DEFAULT_PASSWORD: public
+
+  phpmyadmin:
+    image: phpmyadmin:5-apache
+    restart: unless-stopped
+    ports:
+      - '8081:80'
+    environment:
+      PMA_HOST: mysql
+      # 免登录直接进（仅本地开发，别带去服务器）
+      PMA_USER: root
+      PMA_PASSWORD: root
+    depends_on:
+      - mysql
 
 volumes:
   mysql-data:
