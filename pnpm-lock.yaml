@@ -189,6 +189,9 @@ importers:
       browserslist:
         specifier: ^4.28.6
         version: 4.28.6
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       eslint:
         specifier: ^10.7.0
         version: 10.7.0(jiti@1.21.7)
