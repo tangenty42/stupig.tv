@@ -17,7 +17,7 @@ jobs:
 
       - name: Build and push image
         run: |
-          IMAGE="${{ vars.ACR_IMAGE || 'registry.cn-hangzhou.aliyuncs.com/stupig/stupig-tv' }}"
+          IMAGE="${{ vars.ACR_IMAGE }}"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           echo "${{ secrets.ACR_PASSWORD }}" | docker login "${IMAGE%%/*}" \
             -u "${{ secrets.ACR_USERNAME }}" --password-stdin
