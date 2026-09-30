@@ -14,7 +14,11 @@ import { describe, expect, it } from 'vitest'
 //
 // 已知盲区：若某个 CLI 连本地 .bin 里都没有，本测试无从判断它属于哪个包，会放过。
 // 那种情况本地也跑不起来，会在别处立刻暴露。
-const project_root = resolve(import.meta.dirname)
+//
+// 放在 scripts/ 而非仓库根：根目录的任何 TS 文件都不属于任何 tsconfig 项目（根
+// tsconfig 是 files: [] 的 solution），编辑器会退化成无 node 类型的推断项目而报错。
+// scripts/tsconfig.json 是唯一声明了 types: ["node"] 的项目。
+const project_root = resolve(import.meta.dirname, '..')
 
 function read_package_json(): {
   scripts: Record<string, string>
