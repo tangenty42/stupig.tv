@@ -14,5 +14,8 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["./**/*.ts", "../server/**/*.ts"]
+  // 只收 scripts 自己的文件；被 import 的 server 模块由 paths 解析并作为依赖
+  // 参与本次检查，但不要用 include 把整个 server/ 拖进来——它缺少 Nuxt/h3 的
+  // 自动导入类型，会报一堆假错误。
+  "include": ["./**/*.ts"]
 }

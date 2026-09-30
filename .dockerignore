@@ -8,6 +8,8 @@ dist
 .env
 .env.*
 !.env.example
+# 本机覆盖（db/redis/mqtt 指向 127.0.0.1）绝不能进镜像
+config/local.yaml
 .tmp-*
 *.log
 .vscode
