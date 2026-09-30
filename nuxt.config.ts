@@ -186,7 +186,10 @@ export default defineNuxtConfig({
     },
   },
   nitro: {
-    errorHandler: '/app/server/error-handler.ts',
+    // 相对路径(相对项目根)。不要写 /app/... 这类容器内绝对路径:
+    // rollup 会把它按文件系统绝对路径解析,Windows 本地变成 C:\app\... 导致
+    // "Cannot find module" 报错。相对路径在容器(/app)和本地都能正确解析。
+    errorHandler: './server/error-handler.ts',
   },
   modules: [
     '@pinia/nuxt',
