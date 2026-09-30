@@ -1,6 +1,45 @@
 import { resolve } from 'node:path'
 import Aura from '@primeuix/themes/aura'
-import { env } from './server/shared/env'
+import { config } from './server/shared/config'
+
+// 客户端可见配置的白名单映射。配置本体在 config/*.yaml，schema 与类型推导在
+// server/shared/config.ts；只有这里列出的字段会通过 runtimeConfig.public 下发。
+const public_config = {
+  api_base: config.app.api.base,
+  captcha_app_id: config.aliyun.captcha.appId ?? '',
+  color_mode_fallback: config.app.colorMode.fallback,
+  color_mode_cookie_name: config.app.colorMode.cookieName,
+  identity_cookie_name: config.app.identity.cookieName,
+  cookie_max_age: config.app.auth.cookie.maxAgeDays * 86400,
+  max_avatar_size_mb: config.app.avatar.maxSizeMb,
+  max_content_encrypt_size_mb: config.app.content.encrypt.maxSizeMb,
+  content_redact_max_dimension: config.app.content.redact.maxDimension,
+  content_story_title_max_length: config.app.content.story.titleMaxLength,
+  content_story_label_max_bytes: config.app.content.story.labelMaxBytes,
+  content_story_desc_max_bytes: config.app.content.story.descMaxBytes,
+  content_story_cover_max_bytes: config.app.content.story.coverMaxBytes,
+  content_story_markdown_max_bytes: config.app.content.story.markdownMaxBytes,
+  content_draft_schema_version: config.app.content.draft.schemaVersion,
+  content_draft_storage_prefix: config.app.content.draft.storagePrefix,
+  content_draft_autosave_delay_ms: config.app.content.draft.autosaveDelayMs,
+  content_upload_handle_storage_name: config.app.content.upload.handleStorageName,
+  static_base_url: config.site.staticBaseUrl,
+  site_url: config.site.url,
+  site_indexable: config.site.indexable,
+  mqtt_ws_host: config.mqtt.web.wsHost,
+  mqtt_ws_port: config.mqtt.web.wsPort,
+  mqtt_wss_port: config.mqtt.web.wssPort,
+  mqtt_qos: config.mqtt.qos,
+  mqtt_topic_prefix: config.mqtt.topicPrefix,
+  mqtt_client_id_prefix_web: config.mqtt.web.clientIdPrefix,
+  timezone_cookie_name: config.app.timezone.cookieName,
+  auth_user_cookie_name: config.app.auth.cookie.userName,
+  sync_broadcast_channel_name: config.app.sync.broadcastChannelName,
+  sync_client_id_storage_key: config.app.sync.clientIdStorageKey,
+  ping_idle_interval_seconds: config.app.online.pingIdleIntervalSeconds,
+  poll_interval_seconds: config.app.online.pollIntervalSeconds,
+  online_timeout_seconds: config.app.online.timeoutSeconds,
+}
 
 const alias = {
   '@shared': resolve(__dirname, './server/shared'),
@@ -111,42 +150,7 @@ export default defineNuxtConfig({
   alias,
 
   runtimeConfig: {
-    public: {
-      api_base: env.API_BASE,
-      captcha_app_id: env.CAPTCHA_APP_ID,
-      color_mode_fallback: env.COLOR_MODE_FALLBACK,
-      color_mode_cookie_name: env.COLOR_MODE_COOKIE_NAME,
-      identity_cookie_name: env.IDENTITY_COOKIE_NAME,
-      cookie_max_age: env.COOKIE_MAX_AGE_DAYS * 86400,
-      max_avatar_size_mb: env.MAX_AVATAR_SIZE_MB,
-      max_content_attachment_size_mb: env.MAX_CONTENT_ATTACHMENT_SIZE_MB,
-      max_content_encrypt_size_mb: env.MAX_CONTENT_ENCRYPT_SIZE_MB,
-      content_redact_max_dimension: env.CONTENT_REDACT_MAX_DIMENSION,
-      content_story_title_max_length: env.CONTENT_STORY_TITLE_MAX_LENGTH,
-      content_story_label_max_bytes: env.CONTENT_STORY_LABEL_MAX_BYTES,
-      content_story_desc_max_bytes: env.CONTENT_STORY_DESC_MAX_BYTES,
-      content_story_cover_max_bytes: env.CONTENT_STORY_COVER_MAX_BYTES,
-      content_story_markdown_max_bytes: env.CONTENT_STORY_MARKDOWN_MAX_BYTES,
-      content_draft_schema_version: env.CONTENT_DRAFT_SCHEMA_VERSION,
-      content_draft_storage_prefix: env.CONTENT_DRAFT_STORAGE_PREFIX,
-      content_draft_autosave_delay_ms: env.CONTENT_DRAFT_AUTOSAVE_DELAY_MS,
-      content_upload_handle_storage_name: env.CONTENT_UPLOAD_HANDLE_STORAGE_NAME,
-      static_base_url: env.STATIC_BASE_URL,
-      site_url: env.SITE_URL,
-      mqtt_ws_host: env.MQTT_WS_HOST,
-      mqtt_ws_port: env.MQTT_WS_PORT,
-      mqtt_wss_port: env.MQTT_WSS_PORT,
-      mqtt_qos: env.MQTT_QOS,
-      mqtt_topic_prefix: env.MQTT_TOPIC_PREFIX,
-      mqtt_client_id_prefix_web: env.MQTT_CLIENT_ID_PREFIX_WEB,
-      timezone_cookie_name: env.TIMEZONE_COOKIE_NAME,
-      auth_user_cookie_name: env.AUTH_USER_COOKIE_NAME,
-      sync_broadcast_channel_name: env.SYNC_BROADCAST_CHANNEL_NAME,
-      sync_client_id_storage_key: env.SYNC_CLIENT_ID_STORAGE_KEY,
-      ping_idle_interval_seconds: env.PING_IDLE_INTERVAL_SECONDS,
-      poll_interval_seconds: env.POLL_INTERVAL_SECONDS,
-      online_timeout_seconds: env.ONLINE_TIMEOUT_SECONDS,
-    },
+    public: public_config,
   },
 
   devtools: { enabled: false },
@@ -203,11 +207,11 @@ export default defineNuxtConfig({
     },
   },
   site: {
-    url: env.SITE_URL,
+    url: public_config.site_url,
     name: 'Stupig 蠢猪小组',
     // Production is served by a dev-mode process, so indexing can't rely on
     // NODE_ENV — it's an explicit switch.
-    indexable: env.SITE_INDEXABLE,
+    indexable: public_config.site_indexable,
   },
   sitemap: {
     sources: ['/api/_sitemap/urls'],
@@ -370,13 +374,13 @@ export default defineNuxtConfig({
     },
   },
   colorMode: {
-    fallback: env.COLOR_MODE_FALLBACK,
+    fallback: public_config.color_mode_fallback,
     globalName: '__NUXT_COLOR_MODE__',
     componentName: 'ColorScheme',
     classPrefix: '',
     classSuffix: '',
     storage: 'cookie',
-    storageKey: env.COLOR_MODE_COOKIE_NAME,
+    storageKey: public_config.color_mode_cookie_name,
   },
   legacy: {
     vite: {
@@ -391,7 +395,7 @@ export default defineNuxtConfig({
         lang: 'zh-CN',
       },
       link: [
-        { rel: 'icon', href: `${env.STATIC_BASE_URL}/imgs/Stupig_icon.svg` },
+        { rel: 'icon', href: `${public_config.static_base_url}/imgs/Stupig_icon.svg` },
       ],
       style: [
         { key: 'app-loading-mask-style', textContent: app_loading_mask_css },

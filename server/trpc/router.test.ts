@@ -74,17 +74,6 @@ describe('tRPC router contracts', () => {
     })
   })
 
-  it('accepts FormData transport and preserves upload validation errors', async () => {
-    const caller = app_router.createCaller({ event: create_event() })
-    const form = new FormData()
-    form.append('story_id', '1')
-
-    await expect(caller.content.uploadAttachment(form)).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: '请先选择要上传的文件',
-    })
-  })
-
   it.each([
     [400, 'BAD_REQUEST'],
     [401, 'UNAUTHORIZED'],

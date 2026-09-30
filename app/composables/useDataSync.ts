@@ -69,10 +69,6 @@ function sync_client_id() {
   return id
 }
 
-function sync_connection_id() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
 function safe_call(listener: SyncListener, event: DataSyncEvent) {
   try {
     listener(event)
@@ -188,7 +184,11 @@ function broker_ws_url() {
 function broker_client_id() {
   const config = useRuntimeConfig().public
   if (! current_client_id) {
-    current_client_id = `${config.mqtt_client_id_prefix_web}_${sync_client_id()}_${sync_connection_id()}`
+    // One stable id per tab (sessionStorage) so reconnects resume the same
+    // broker session: with clean=false and QoS 1, sessionPresent then tells us
+    // whether offline events were queued, letting quick reconnects skip the
+    // full refresh below.
+    current_client_id = `${config.mqtt_client_id_prefix_web}_${sync_client_id()}`
   }
   return current_client_id
 }
@@ -229,7 +229,7 @@ async function open_mqtt() {
 
       const client = mqtt.connect(broker_ws_url(), {
         clientId: broker_client_id(),
-        clean: true,
+        clean: false,
         reconnectPeriod: 5000,
         connectTimeout: 30_000,
       })
@@ -625,6 +625,10 @@ export function useDataSync() {
       if (! initial_gather_done) {
         return
       }
+      // Identity changed: every subscription's data may be identity-scoped
+      // (permissions, private content), so refresh explicitly — with
+      // clean:false the reconnect below no longer implies a full refresh.
+      notify_all_listeners_refresh()
       reset_connection()
     }, { immediate: true })
 

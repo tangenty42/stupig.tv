@@ -77,7 +77,10 @@ await useSyncedData<ContentStoryDetail>(
     if (! current) {
       return content.get_story(story_id.value)
     }
-    return await content.get_story(story_id.value, current.updated_at) ?? current
+    // The server skips the version check when the echoed viewer key no longer
+    // matches (login/logout/permission change), so a viewer change always
+    // forces a full refetch instead of keeping the old viewer's redacted copy.
+    return await content.get_story(story_id.value, current.updated_at, current.viewer_key) ?? current
   },
   story,
   loading,

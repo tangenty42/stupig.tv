@@ -133,7 +133,6 @@ import type { RedactionStroke } from '~/utils/content/redact'
 import { attachment_base_name, decrypted_attachment_name, redactable_attachment_mime } from '@shared/content-markdown'
 import { decrypted_blob_url } from '~/utils/content/attachment-crypto'
 import { encode_bmp, paint_redaction_stroke, paint_redaction_strokes } from '~/utils/content/redact'
-import { format_bytes } from '~/utils/size'
 
 interface Props {
   visible: boolean
@@ -154,7 +153,6 @@ const emit = defineEmits<{
 const static_url = useStaticUrl()
 const { error: toast_error } = useMyToast()
 const config = useRuntimeConfig().public
-const max_upload_bytes = config.max_content_attachment_size_mb * 1024 * 1024
 // A file-size cap does not bound the decoded size, and a small PNG can inflate
 // into a canvas that exhausts the tab's memory.
 const max_editable_dimension = config.content_redact_max_dimension
@@ -687,10 +685,6 @@ async function submit() {
     return
   try {
     const file = await export_file()
-    if (file.size > max_upload_bytes) {
-      toast_error(`删减版超过 ${format_bytes(max_upload_bytes)}，无法上传`)
-      return
-    }
     emit('save', file)
   }
   catch {

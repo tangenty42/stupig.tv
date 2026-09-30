@@ -1,5 +1,6 @@
 import { env } from '@shared/env'
 import { Redis } from 'ioredis'
+import { log_warn } from './log'
 
 // One shared client; connects lazily on the first command. A cache outage
 // must never break requests — callers treat command failures as a cache
@@ -14,5 +15,5 @@ export const redis = new Redis({
 })
 
 redis.on('error', (error) => {
-  console.warn('[redis] connection error:', error.message)
+  log_warn('redis connection error', { error_message: error.message })
 })

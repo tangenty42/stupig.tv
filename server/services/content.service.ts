@@ -1,17 +1,17 @@
 import type { AuthUser } from '@server/types/auth'
 import type { ContentMarkdownConfig, ContentStoryMeta } from '@shared/content-markdown'
-import type { ContentOperationKind, ContentStoryAttachment, ContentStoryDetail, ContentUploadSignRequest } from '@shared/types/content'
+import type { ContentAttachmentBatchResult, ContentBatchSkipped, ContentOperationKind, ContentStoryAttachment, ContentStoryDetail, ContentUploadSignRequest } from '@shared/types/content'
 import type { Connection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { extname } from 'node:path'
 import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, ListPartsCommand, PutObjectCommand, UploadPartCommand } from '@aws-sdk/client-s3'
 import { ApiError } from '@server/errors/ApiError'
 import { decrypt_attachment, encrypt_attachment } from '@server/lib/attachment-crypto'
 import { db } from '@server/lib/db'
-import { acquire_operation_lock, content_scope_lock_id, get_operation_lock, release_operation_lock } from '@server/lib/operation-lock'
+import { acquire_operation_lock, get_operation_lock, release_operation_lock } from '@server/lib/operation-lock'
 import { random_file_token } from '@server/lib/random'
-import { copy_object, delete_object, get_object, head_object, put_object, signed_object_url } from '@server/lib/storage'
+import { copy_object, delete_object_best_effort, get_object, head_object, put_object, signed_object_url } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { claim_attachment_rows, create_folder_rows, delete_attachment_rows, delete_folder_rows, delete_rows_by_ids, delete_story_attachment_rows, get_scope_attachment, get_scope_object_keys, get_story_object_keys, insert_attachment_row, list_cover_urls, list_folder_subtree_rows, list_scope_attachments, list_scope_encryption_keys, list_scope_file_rows, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id, update_attachment_row_encryption, update_attachment_row_object } from '@server/services/content-attachments.service'
+import { create_folder_rows, delete_attachment_rows, delete_folder_rows, delete_rows_by_ids, delete_story_attachment_rows, get_scope_attachment, get_scope_object_keys, get_story_object_keys, insert_attachment_row, list_cover_urls, list_folder_subtree_rows, list_scope_attachments, list_scope_encryption_keys, list_scope_file_rows, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id, update_attachment_row_encryption, update_attachment_row_object } from '@server/services/content-attachments.service'
 import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, extract_story_reference_titles, is_encrypted_attachment, link_file_name_byte_length, parse_story_markdown, redactable_attachment_mime, rename_attachment_references, rename_story_references, sanitize_attachment_file_name, sanitize_attachment_path } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { env } from '@shared/env'
@@ -56,15 +56,10 @@ const content_markdown_config = {
   markdown_max_bytes: env.CONTENT_STORY_MARKDOWN_MAX_BYTES,
 } satisfies ContentMarkdownConfig
 
-interface AttachmentUploadOptions {
-  max_size_mb: number
-}
-
 const upload_url_expires_seconds = 15 * 60
 
 function content_upload_key_prefix(story_id: number) {
-  // Unsaved stories upload under 'new' (client-side upload_scope), not '0'.
-  return `content-upload/${story_id > 0 ? story_id : 'new'}/`
+  return `content-upload/${story_id}/`
 }
 
 function assert_content_upload_key(story_id: number, key: string) {
@@ -75,9 +70,6 @@ function assert_content_upload_key(story_id: number, key: string) {
 
 export async function sign_attachment_upload(input: ContentUploadSignRequest) {
   assert_content_upload_key(input.story_id, input.key)
-  // The orphan staging pool is gone: uploads start only after the story exists.
-  if (! input.story_id)
-    throw new ApiError(403, '请先保存档案，再上传附件')
   await get_story(input.story_id)
 
   const common = { Bucket: env.OSS_BUCKET, Key: input.key }
@@ -87,7 +79,7 @@ export async function sign_attachment_upload(input: ContentUploadSignRequest) {
     command = new UploadPartCommand({ ... common, UploadId: input.upload_id, PartNumber: input.part_number })
   }
   else if (input.method === 'PUT') {
-    command = new PutObjectCommand(common)
+    command = new PutObjectCommand({ ... common, ContentType: input.content_type || undefined })
     return_key = true
   }
   else if (input.method === 'POST' && ! input.upload_id) {
@@ -113,27 +105,20 @@ export async function sign_attachment_upload(input: ContentUploadSignRequest) {
   }
 }
 
-export async function confirm_attachment_upload(story_id: number, key: string, raw_file_name: string, max_size_mb: number) {
+export async function confirm_attachment_upload(story_id: number, key: string, raw_file_name: string) {
   assert_content_upload_key(story_id, key)
-  if (! story_id)
-    throw new ApiError(403, '请先保存档案，再上传附件')
   const object = await head_object(key)
-  if (object.size > max_size_mb * 1024 * 1024) {
-    await delete_object(key).catch(() => {})
-    throw new ApiError(413, `文件太大了，不能超过 ${max_size_mb} MB`)
-  }
-
   const base_name = sanitize_attachment_path(raw_file_name, env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
   // A signed upload can outlive its story, so the scope is revalidated here.
   await get_story(story_id)
   const file_name = resolve_attachment_name(base_name, await list_scope_paths(story_id), 'suffix')
   const target_key = `content/att/${crypto.randomUUID()}`
   const etag = await copy_object(key, target_key)
-  await delete_object(key).catch(() => {})
+  await delete_object_best_effort(key)
   const version = etag ?? object.etag ?? String(Date.now())
   try {
     await insert_attachment_row({
-      story_id: story_id > 0 ? story_id : null,
+      story_id,
       file_name,
       object_key: target_key,
       mime_type: attachment_mime_type(file_name),
@@ -142,14 +127,13 @@ export async function confirm_attachment_upload(story_id: number, key: string, r
     })
   }
   catch (ex) {
-    await delete_object(target_key).catch(() => {})
+    await delete_object_best_effort(target_key)
     throw ex
   }
 
-  const scope_id = story_id > 0 ? story_id : null
-  await materialize_attachment_folders(scope_id, file_name)
-  await publish_attachment_change(scope_id)
-  const row = await get_scope_attachment(scope_id, file_name)
+  await materialize_attachment_folders(story_id, file_name)
+  await publish_attachment_change(story_id)
+  const row = await get_scope_attachment(story_id, file_name)
   if (! row)
     throw new ApiError(500, '附件写入失败，请重试')
   return row
@@ -176,7 +160,7 @@ function get_form_file(form: FormData, field: string) {
  * A directory that is empty to begin with still cannot arrive this way: a
  * picker yields no files for it, which is what 新建文件夹 is for.
  */
-async function materialize_attachment_folders(story_id: number | null, file_name: string) {
+async function materialize_attachment_folders(story_id: number, file_name: string) {
   const ancestors = attachment_ancestor_folders(file_name)
   if (ancestors.length)
     await create_folder_rows(story_id, ancestors)
@@ -302,11 +286,22 @@ export async function list_stories() {
   }))
 }
 
+// Identifies the viewer a story payload was rendered for; echoed back as
+// base_viewer_key so the version check below can tell "story unchanged" from
+// "viewer changed" — a guest's redacted copy and a privileged full copy share
+// the same updated_at.
+function story_viewer_key(viewer: AuthUser | null | undefined) {
+  return viewer === undefined
+    ? 'internal'
+    : `${viewer?.id ?? 'anon'}:${has_permission(viewer, 'content_private', 'read')}`
+}
+
 export async function get_story(id: number): Promise<ContentStoryDetail>
-export async function get_story(id: number, base_updated_at: string): Promise<ContentStoryDetail | null>
-export async function get_story(id: number, base_updated_at: string | undefined, viewer: AuthUser | null): Promise<ContentStoryDetail | null>
-export async function get_story(id: number, base_updated_at?: string, viewer?: AuthUser | null): Promise<ContentStoryDetail | null> {
-  if (base_updated_at !== undefined) {
+export async function get_story(id: number, base: undefined, viewer: AuthUser | null): Promise<ContentStoryDetail>
+export async function get_story(id: number, base: { updated_at: string, viewer_key: string }, viewer: AuthUser | null): Promise<ContentStoryDetail | null>
+export async function get_story(id: number, base?: { updated_at: string, viewer_key: string }, viewer?: AuthUser | null): Promise<ContentStoryDetail | null> {
+  const viewer_key = story_viewer_key(viewer)
+  if (base && base.viewer_key === viewer_key) {
     const [versions] = await db.execute<RowDataPacket[]>(
       'SELECT updated_at FROM content_stories WHERE id = ?',
       [id],
@@ -315,7 +310,7 @@ export async function get_story(id: number, base_updated_at?: string, viewer?: A
     if (! version) {
       throw new ApiError(404, '档案不存在或已被删除')
     }
-    if (new Date(version.updated_at).getTime() === new Date(base_updated_at).getTime()) {
+    if (new Date(version.updated_at).getTime() === new Date(base.updated_at).getTime()) {
       return null
     }
   }
@@ -361,7 +356,8 @@ export async function get_story(id: number, base_updated_at?: string, viewer?: A
     created_at: story.created_at,
     updated_at: story.updated_at,
     revision: story.revision,
-    operation_lock: await get_operation_lock(content_scope_lock_id(story.id)),
+    viewer_key,
+    operation_lock: await get_operation_lock(story.id),
     ... format_desc_cover(story, attachments.find(item => item.file_name === story.cover)?.url ?? null),
   }
 }
@@ -373,7 +369,7 @@ function story_event_dates(meta: ContentStoryMeta) {
   return JSON.stringify(dates)
 }
 
-export async function create_story(created_by: number, markdown: string, claim_files: string[], can_private: boolean) {
+export async function create_story(created_by: number, markdown: string, can_private: boolean) {
   if (! can_private && has_private_content(markdown)) {
     throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
   }
@@ -387,25 +383,8 @@ export async function create_story(created_by: number, markdown: string, claim_f
   )
   const story_id = Number(result.insertId)
 
-  if (claim_files.length)
-    await claim_attachments(story_id, claim_files)
-
-  // Claimed objects carry fresh etags, so resolve the cover version post-claim.
-  if (meta.cover) {
-    const cover_version = cover_version_from(await list_scope_attachments(story_id), meta.cover)
-    if (cover_version)
-      await db.execute('UPDATE content_stories SET cover_version = ? WHERE id = ?', [cover_version, story_id])
-  }
-
   publish_refresh({ resource: sync_resource('content_stories', 'all') })
   return story_id
-}
-
-/** Adopts orphan attachments into a story: pure row updates, objects stay put. */
-async function claim_attachments(story_id: number, file_names: string[]) {
-  await claim_attachment_rows(story_id, [... new Set(file_names)])
-  publish_refresh({ resource: sync_resource('content_story', story_id) })
-  publish_refresh({ resource: sync_resource('content_orphan_attachments', 'all') })
 }
 
 /**
@@ -428,12 +407,15 @@ export async function update_story(id: number, markdown: string, delete_files: s
   const known_files = new Set(story.attachments.map(a => a.file_name))
 
   const accepted_deletes: string[] = []
+  const skipped: ContentBatchSkipped[] = []
   for (const file_name of new Set(delete_files)) {
     if (! known_files.has(file_name)) {
+      skipped.push({ file_name, reason: '附件不存在或已被删除' })
       continue
     }
     if (referenced.has(file_name)) {
-      throw new ApiError(400, `附件 ${file_name} 仍在正文中被引用，不能删除`)
+      skipped.push({ file_name, reason: '已被正文引用' })
+      continue
     }
     accepted_deletes.push(file_name)
   }
@@ -503,8 +485,8 @@ export async function update_story(id: number, markdown: string, delete_files: s
 
   const delete_keys = await get_scope_object_keys(id, accepted_deletes)
   await delete_attachment_rows(id, accepted_deletes)
-  await Promise.all(delete_keys.map(key => delete_object(key).catch(() => {})))
-  return accepted_deletes
+  await Promise.all(delete_keys.map(key => delete_object_best_effort(key)))
+  return { succeeded: accepted_deletes, skipped }
 }
 
 /** Deletes the story row and its attachment directory. */
@@ -529,23 +511,20 @@ export async function delete_story(id: number) {
 
   publish_refresh({ resource: sync_resource('content_stories', 'all') })
   publish_refresh({ resource: sync_resource('content_story', id) })
-  await Promise.all(object_keys.map(key => delete_object(key).catch(() => {})))
+  await Promise.all(object_keys.map(key => delete_object_best_effort(key)))
 }
 
-/** Attachment files and explicit folders of a scope (`null` = orphan pool). */
-async function attachment_scope_payload(story_id: number | null) {
+/** Attachment files and explicit folders of a story's scope. */
+async function attachment_scope_payload(story_id: number) {
   return {
     attachments: await list_scope_attachments(story_id),
     folders: await list_scope_folders(story_id),
-    operation_lock: await get_operation_lock(content_scope_lock_id(story_id)),
+    operation_lock: await get_operation_lock(story_id),
   }
 }
 
-function publish_attachment_refresh(story_id: number | null) {
-  if (story_id !== null)
-    publish_refresh({ resource: sync_resource('content_story', story_id) })
-  else
-    publish_refresh({ resource: sync_resource('content_orphan_attachments', 'all') })
+function publish_attachment_refresh(story_id: number) {
+  publish_refresh({ resource: sync_resource('content_story', story_id) })
 }
 
 /**
@@ -558,9 +537,8 @@ function publish_attachment_refresh(story_id: number | null) {
  * would keep rendering the attachment list it already had. The bump also
  * reorders the story list, which sorts by it.
  */
-async function publish_attachment_change(story_id: number | null) {
-  if (story_id !== null)
-    await db.execute('UPDATE content_stories SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [story_id])
+async function publish_attachment_change(story_id: number) {
+  await db.execute('UPDATE content_stories SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', [story_id])
   publish_attachment_refresh(story_id)
 }
 
@@ -577,8 +555,8 @@ async function publish_attachment_change(story_id: number | null) {
  * name themselves around collisions, and are additive rather than
  * renames of names other operations already resolved.
  */
-async function with_attachment_lock<T>(story_id: number | null, kind: ContentOperationKind, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquire_operation_lock(content_scope_lock_id(story_id), kind)
+async function with_attachment_lock<T>(story_id: number, kind: ContentOperationKind, fn: () => Promise<T>): Promise<T> {
+  const lock = await acquire_operation_lock(story_id, kind)
   publish_attachment_refresh(story_id)
   try {
     return await fn()
@@ -637,16 +615,10 @@ async function rewrite_story_attachment_refs(connection: Connection, story_id: n
   }
 }
 
-/** Lists unclaimed attachments (the orphan pool of the new-story editor). */
-export async function list_orphan_attachments() {
-  return attachment_scope_payload(null)
-}
-
 /** Persists a folder (and missing ancestors) in a scope. */
-export async function create_folder(story_id: number | null, folder: string) {
+export async function create_folder(story_id: number, folder: string) {
   await with_attachment_lock(story_id, 'folder_create', async () => {
-    if (story_id !== null)
-      await get_story(story_id)
+    await get_story(story_id)
     // A name is one path for both kinds: a file already answering to it — or
     // holding contents that make the name a folder in its own right — keeps the
     // folder from existing under it.
@@ -660,10 +632,9 @@ export async function create_folder(story_id: number | null, folder: string) {
 }
 
 /** Removes a folder row subtree; files beneath make it a 409. */
-export async function delete_folder(story_id: number | null, folder: string) {
+export async function delete_folder(story_id: number, folder: string) {
   await with_attachment_lock(story_id, 'folder_delete', async () => {
-    if (story_id !== null)
-      await get_story(story_id)
+    await get_story(story_id)
     await delete_folder_rows(story_id, folder)
     await publish_attachment_change(story_id)
   })
@@ -677,14 +648,14 @@ export async function delete_folder(story_id: number | null, folder: string) {
  * folder already exists merges into it (dropping `a/a` onto the root yields
  * `a`, not a conflict); files still refuse a taken path with a 409.
  */
-export async function move_folder(story_id: number | null, source_folder: string, new_folder: string) {
+export async function move_folder(story_id: number, source_folder: string, new_folder: string) {
   if (new_folder === source_folder)
     return attachment_scope_payload(story_id)
   if (new_folder.startsWith(`${source_folder}/`))
     throw new ApiError(400, '不能移动到文件夹自身内部')
 
   await with_attachment_lock(story_id, 'move', async () => {
-    const story = story_id !== null ? await get_story(story_id) : null
+    const story = await get_story(story_id)
 
     const connection = await db.getConnection()
     try {
@@ -743,8 +714,7 @@ export async function move_folder(story_id: number | null, source_folder: string
       // as its last file moved away. Existing rows are kept, so a merge is free.
       if (moves.some(move => move.new_file_name.startsWith(`${destination}/`)))
         await create_folder_rows(story_id, [... attachment_ancestor_folders(destination), destination], connection)
-      if (story)
-        await rewrite_story_attachment_refs(connection, story.id, renames)
+      await rewrite_story_attachment_refs(connection, story.id, renames)
       await connection.commit()
     }
     catch (error) {
@@ -848,86 +818,20 @@ function resolve_renamed_attachment_name(old_file_name: string, new_file_name: s
   return new_file_name
 }
 
-export async function upload_attachment(story_id: number | null, input: FormData, get_options: () => AttachmentUploadOptions) {
-  // The orphan staging pool is gone: uploads start only after the story exists.
-  if (story_id === null)
-    throw new ApiError(403, '请先保存档案，再上传附件')
-  const upload = get_form_file(input, 'file')
-  const file_data = Buffer.from(await upload.arrayBuffer())
-  const options = get_options()
-
-  if (file_data.length > options.max_size_mb * 1024 * 1024) {
-    throw new ApiError(413, `文件太大了，不能超过 ${options.max_size_mb} MB`)
-  }
-
-  // Folder uploads send the (possibly nested) storage path separately; plain
-  // uploads fall back to the file's own base name.
-  const form_file_name = input.get('file_name')
-  const base_name = sanitize_attachment_path(
-    typeof form_file_name === 'string' && form_file_name.trim() ? form_file_name : (upload.name ?? 'file'),
-    env.CONTENT_LINK_FILE_NAME_MAX_BYTES,
-  )
-
-  // Validates the story exists, then lists the names to avoid: the scope's
-  // files and folders share one path space, so either can take a name.
-  await get_story(story_id)
-  // Check-then-insert: a same-name upload racing past this check loses to the
-  // unique index on (scope_id, file_name) and fails the request.
-  const file_name = resolve_attachment_name(base_name, await list_scope_paths(story_id), 'suffix')
-
-  const object_key = `content/att/${crypto.randomUUID()}`
-  const etag = await put_object(object_key, file_data, upload.type || null)
-  const version = etag ?? String(Date.now())
-  try {
-    await insert_attachment_row({
-      story_id,
-      file_name,
-      object_key,
-      mime_type: upload.type || null,
-      file_size: file_data.length,
-      version,
-    })
-  }
-  catch (ex) {
-    await delete_object(object_key).catch(() => {})
-    throw ex
-  }
-
-  await materialize_attachment_folders(story_id, file_name)
-  await publish_attachment_change(story_id)
-  const row = await get_scope_attachment(story_id, file_name)
-  if (! row)
-    throw new ApiError(500, '附件写入失败，请重试')
-  return row
-}
-
-/** Deletes an unclaimed attachment and its object. */
-export async function delete_orphan_attachment(file_name: string) {
-  return await with_attachment_lock(null, 'delete', async () => {
-    const keys = await get_scope_object_keys(null, [file_name])
-    if (! keys.length)
-      throw new ApiError(404, '附件不存在或已被删除')
-
-    await delete_attachment_rows(null, [file_name])
-    publish_attachment_refresh(null)
-    await Promise.all(keys.map(key => delete_object(key).catch(() => {})))
-  })
-}
-
 export async function delete_attachment(story_id: number, file_name: string, markdown: string, base_revision: number, can_private: boolean) {
   return await with_attachment_lock(story_id, 'delete', async () => {
-    const deleted_files = await update_story(story_id, markdown, [file_name], base_revision, can_private)
-    if (! deleted_files.includes(file_name)) {
+    const result = await update_story(story_id, markdown, [file_name], base_revision, can_private)
+    if (! result.succeeded.includes(file_name)) {
       throw new ApiError(404, '附件不存在或已被删除')
     }
   })
 }
 
-export async function encrypt_attachments(story_id: number | null, file_names: string[]) {
+export async function encrypt_attachments(story_id: number, file_names: string[]) {
   return await transform_attachment_encryption(story_id, 'encrypt', file_names)
 }
 
-export async function decrypt_attachments(story_id: number | null, file_names: string[]) {
+export async function decrypt_attachments(story_id: number, file_names: string[]) {
   return await transform_attachment_encryption(story_id, 'decrypt', file_names)
 }
 
@@ -954,7 +858,7 @@ function sniff_image_mime(data: Uint8Array) {
  * a conflict the caller has to resolve, since replacing it would be a silent
  * edit of a file that may already be published.
  */
-export async function create_abridged_attachment(story_id: number | null, source_file_name: string, input: FormData, get_options: () => AttachmentUploadOptions) {
+export async function create_abridged_attachment(story_id: number, source_file_name: string, input: FormData) {
   return await with_attachment_lock(story_id, 'redact', async () => {
     const [source] = await list_scope_file_rows(story_id, [source_file_name])
     if (! source)
@@ -968,9 +872,6 @@ export async function create_abridged_attachment(story_id: number | null, source
 
     const upload = get_form_file(input, 'file')
     const file_data = Buffer.from(await upload.arrayBuffer())
-    const options = get_options()
-    if (file_data.length > options.max_size_mb * 1024 * 1024)
-      throw new ApiError(413, `文件太大了，不能超过 ${options.max_size_mb} MB`)
     // The exported bytes must match the name they land under; the client sends
     // no type of its own, so this is the only check the payload gets.
     if (sniff_image_mime(file_data) !== mime_type)
@@ -996,7 +897,7 @@ export async function create_abridged_attachment(story_id: number | null, source
       })
     }
     catch (ex) {
-      await delete_object(object_key).catch(() => {})
+      await delete_object_best_effort(object_key)
       throw ex
     }
 
@@ -1015,27 +916,40 @@ export async function create_abridged_attachment(story_id: number | null, source
  * rewritten like a rename. The OSS transfers run outside the transaction
  * (they can outlive a lease); old objects are deleted only after the commit.
  */
-async function transform_attachment_encryption(story_id: number | null, kind: 'encrypt' | 'decrypt', file_names: string[]) {
+async function transform_attachment_encryption(story_id: number, kind: 'encrypt' | 'decrypt', file_names: string[]): Promise<ContentAttachmentBatchResult> {
   return await with_attachment_lock(story_id, kind, async () => {
     const rows = await list_scope_file_rows(story_id, file_names)
     const by_name = new Map(rows.map(row => [row.file_name, row]))
-    const ordered = file_names.map((name) => {
+    const skipped: ContentBatchSkipped[] = []
+    const ordered = [... new Set(file_names)].flatMap((name) => {
       const row = by_name.get(name)
-      if (! row)
-        throw new ApiError(404, '附件不存在或已被删除')
-      return row
+      if (! row) {
+        skipped.push({ file_name: name, reason: '附件不存在或已被删除' })
+        return []
+      }
+      return [row]
     })
     const encrypting = kind === 'encrypt'
-    const targets = ordered.filter(row => encrypting !== is_encrypted_attachment(row.file_name))
+    const targets = ordered.filter((row) => {
+      // A row qualifies only when its state differs from the goal: encrypt
+      // takes plaintext rows, decrypt takes `.good` rows.
+      if (encrypting !== is_encrypted_attachment(row.file_name))
+        return true
+      skipped.push({ file_name: row.file_name, reason: encrypting ? '已加密' : '未加密' })
+      return false
+    })
     if (! targets.length) {
       publish_attachment_refresh(story_id)
-      return story_id !== null ? (await get_story(story_id)).attachments : (await list_orphan_attachments()).attachments
+      const attachments = (await get_story(story_id)).attachments
+      return { attachments, succeeded: [], skipped }
     }
     if (encrypting) {
       const max_bytes = env.MAX_CONTENT_ENCRYPT_SIZE_MB * 1024 * 1024
-      for (const row of targets) {
-        if (Number(row.file_size) > max_bytes)
-          throw new ApiError(413, `文件太大无法加密：${row.file_name}`)
+      for (const row of [... targets]) {
+        if (Number(row.file_size) > max_bytes) {
+          skipped.push({ file_name: row.file_name, reason: '文件太大' })
+          targets.splice(targets.indexOf(row), 1)
+        }
       }
     }
 
@@ -1049,9 +963,21 @@ async function transform_attachment_encryption(story_id: number | null, kind: 'e
     }))
     const moving_away = new Set(planned.map(plan => plan.row.file_name.toLowerCase()))
     const remaining = (await list_scope_paths(story_id)).filter(path => ! moving_away.has(path.toLowerCase()))
+    const available: typeof planned = []
     for (const plan of planned) {
-      if (attachment_path_taken(remaining, plan.new_file_name))
-        throw new ApiError(409, attachment_name_conflict_message)
+      const destinations = available.map(item => item.new_file_name)
+      if (attachment_path_taken([... remaining, ... destinations], plan.new_file_name)) {
+        skipped.push({ file_name: plan.row.file_name, reason: attachment_name_conflict_message })
+        continue
+      }
+      available.push(plan)
+    }
+    planned.splice(0, planned.length, ... available)
+
+    if (! planned.length) {
+      publish_attachment_refresh(story_id)
+      const attachments = (await get_story(story_id)).attachments
+      return { attachments, succeeded: [], skipped }
     }
 
     const processed: { row: (typeof planned)[number]['row'], new_file_name: string, object_key: string, version: string, encryption_key: string | null, file_size: number }[] = []
@@ -1080,7 +1006,7 @@ async function transform_attachment_encryption(story_id: number | null, kind: 'e
       }
     }
     catch (ex) {
-      await Promise.all(processed.map(item => delete_object(item.object_key).catch(() => {})))
+      await Promise.all(processed.map(item => delete_object_best_effort(item.object_key)))
       throw ex
     }
 
@@ -1096,24 +1022,26 @@ async function transform_attachment_encryption(story_id: number | null, kind: 'e
           encryption_key: item.encryption_key,
         }, connection)
       }
-      if (story_id !== null)
-        await rewrite_story_attachment_refs(connection, story_id, processed.map(item => ({ old_file_name: item.row.file_name, new_file_name: item.new_file_name })))
+      await rewrite_story_attachment_refs(connection, story_id, processed.map(item => ({ old_file_name: item.row.file_name, new_file_name: item.new_file_name })))
       await connection.commit()
     }
     catch (ex) {
       await connection.rollback()
-      await Promise.all(processed.map(item => delete_object(item.object_key).catch(() => {})))
+      await Promise.all(processed.map(item => delete_object_best_effort(item.object_key)))
       throw ex
     }
     finally {
       connection.release()
     }
     for (const item of processed)
-      await delete_object(item.row.object_key!).catch(() => {})
+      await delete_object_best_effort(item.row.object_key!)
     await publish_attachment_change(story_id)
-    return story_id !== null
-      ? (await get_story(story_id)).attachments
-      : (await list_orphan_attachments()).attachments
+    const attachments = (await get_story(story_id)).attachments
+    return {
+      attachments,
+      succeeded: processed.map(item => item.row.file_name),
+      skipped,
+    }
   })
 }
 
@@ -1121,12 +1049,10 @@ async function transform_attachment_encryption(story_id: number | null, kind: 'e
  * Moves an attachment into a folder (or back to root when `target_folder` is
  * null): a row update plus the story's markdown/cover reference rewrite.
  */
-export async function move_attachment(story_id: number | null, file_name: string, target_folder: string | null) {
+export async function move_attachment(story_id: number, file_name: string, target_folder: string | null) {
   return await with_attachment_lock(story_id, 'move', async () => {
-    const story = story_id !== null ? await get_story(story_id) : null
-    const attachments = story
-      ? story.attachments
-      : (await list_orphan_attachments()).attachments
+    const story = await get_story(story_id)
+    const attachments = story.attachments
     const attachment = attachments.find(item => item.file_name === file_name)
     if (! attachment)
       throw new ApiError(404, '附件不存在或已被删除')
@@ -1143,8 +1069,7 @@ export async function move_attachment(story_id: number | null, file_name: string
     try {
       await connection.beginTransaction()
       await rename_attachment_row(story_id, file_name, new_file_name, connection)
-      if (story)
-        await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name: file_name, new_file_name }])
+      await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name: file_name, new_file_name }])
       await connection.commit()
     }
     catch (error) {
@@ -1171,19 +1096,20 @@ export interface AttachmentMove {
  * markdown/cover rewrite and one refresh — instead of one request per file.
  * Each move keeps its own target folder (or root when null).
  */
-export async function move_attachments(story_id: number | null, moves: AttachmentMove[]) {
+export async function move_attachments(story_id: number, moves: AttachmentMove[]): Promise<ContentAttachmentBatchResult> {
   return await with_attachment_lock(story_id, 'move', async () => {
-    const story = story_id !== null ? await get_story(story_id) : null
-    const attachments = story
-      ? story.attachments
-      : (await list_orphan_attachments()).attachments
+    const story = await get_story(story_id)
+    const attachments = story.attachments
     const by_name = new Map(attachments.map(item => [item.file_name, item]))
 
     const planned: { attachment: ContentStoryAttachment, old_file_name: string, new_file_name: string }[] = []
+    const skipped: ContentBatchSkipped[] = []
     for (const move of moves) {
       const attachment = by_name.get(move.file_name)
-      if (! attachment)
-        throw new ApiError(404, '附件不存在或已被删除')
+      if (! attachment) {
+        skipped.push({ file_name: move.file_name, reason: '附件不存在或已被删除' })
+        continue
+      }
       const new_file_name = attachment_path_join(move.target_folder, attachment_base_name(move.file_name))
       if (new_file_name !== move.file_name)
         planned.push({ attachment, old_file_name: move.file_name, new_file_name })
@@ -1191,7 +1117,7 @@ export async function move_attachments(story_id: number | null, moves: Attachmen
 
     if (! planned.length) {
       publish_attachment_refresh(story_id)
-      return attachments
+      return { attachments, succeeded: [], skipped }
     }
 
     // A destination must not collide with anything that still exists after the
@@ -1201,15 +1127,34 @@ export async function move_attachments(story_id: number | null, moves: Attachmen
     const moved_away = new Set(planned.map(plan => plan.old_file_name.toLowerCase()))
     const remaining = (await list_scope_paths(story_id)).filter(path => ! moved_away.has(path.toLowerCase()))
     const destinations = new Set<string>()
+    const available: typeof planned = []
     for (const plan of planned) {
       const lower = plan.new_file_name.toLowerCase()
-      if (destinations.has(lower))
-        throw new ApiError(409, attachment_name_conflict_message)
+      if (destinations.has(lower)) {
+        skipped.push({ file_name: plan.old_file_name, reason: attachment_name_conflict_message })
+        continue
+      }
       destinations.add(lower)
       // The batch's own sources are already excluded from `remaining`, so the
       // guard sees exactly the names that survive it. Only the folder changes,
       // so the row's own name (and any `.good` marker on it) is not re-validated.
-      assert_attachment_name_available(plan.new_file_name, remaining)
+      try {
+        assert_attachment_name_available(plan.new_file_name, remaining)
+      }
+      catch (error) {
+        if (error instanceof ApiError && error.statusCode === 409) {
+          skipped.push({ file_name: plan.old_file_name, reason: attachment_name_conflict_message })
+          continue
+        }
+        throw error
+      }
+      available.push(plan)
+    }
+    planned.splice(0, planned.length, ... available)
+
+    if (! planned.length) {
+      publish_attachment_refresh(story_id)
+      return { attachments, succeeded: [], skipped }
     }
 
     // Two-phase rename: a destination may be another move's source (a→b, b→c),
@@ -1226,8 +1171,7 @@ export async function move_attachments(story_id: number | null, moves: Attachmen
       for (const [index, plan] of planned.entries()) {
         await rename_attachment_row(story_id, temp_names[index]!, plan.new_file_name, connection)
       }
-      if (story)
-        await rewrite_story_attachment_refs(connection, story.id, planned)
+      await rewrite_story_attachment_refs(connection, story.id, planned)
       await connection.commit()
     }
     catch (error) {
@@ -1239,16 +1183,19 @@ export async function move_attachments(story_id: number | null, moves: Attachmen
     }
 
     await publish_attachment_change(story_id)
-    return story_id !== null
-      ? (await get_story(story_id)).attachments
-      : (await list_orphan_attachments()).attachments
+    const result_attachments = (await get_story(story_id)).attachments
+    return {
+      attachments: result_attachments,
+      succeeded: planned.map(plan => plan.old_file_name),
+      skipped,
+    }
   })
 }
 
-export async function rename_attachment(story_id: number | null, old_file_name: string, new_file_name: string) {
+export async function rename_attachment(story_id: number, old_file_name: string, new_file_name: string) {
   return await with_attachment_lock(story_id, 'rename', async () => {
-    const story = story_id !== null ? await get_story(story_id) : null
-    const attachments = story ? story.attachments : await list_scope_attachments(story_id)
+    const story = await get_story(story_id)
+    const attachments = story.attachments
     const attachment = attachments.find(item => item.file_name === old_file_name)
     if (! attachment) {
       throw new ApiError(404, '附件不存在或已被删除')
@@ -1263,10 +1210,7 @@ export async function rename_attachment(story_id: number | null, old_file_name: 
     try {
       await connection.beginTransaction()
       await rename_attachment_row(story_id, old_file_name, file_name, connection)
-      // The orphan pool has no markdown of its own — the new-story editor
-      // rewrites its draft client-side.
-      if (story)
-        await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name, new_file_name: file_name }])
+      await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name, new_file_name: file_name }])
       await connection.commit()
     }
     catch (error) {
@@ -1295,14 +1239,16 @@ function file_stem(file_name: string) {
 }
 
 export async function replace_attachment(
-  story_id: number | null,
+  story_id: number,
   old_file_name: string,
-  input: FormData,
+  key: string,
+  raw_file_name: string,
+  content_type: string | null,
   mode: 'keep-name' | 'new-name',
-  get_options: () => AttachmentUploadOptions,
 ) {
-  const story = story_id !== null ? await get_story(story_id) : null
-  const attachments = story ? story.attachments : await list_scope_attachments(story_id)
+  assert_content_upload_key(story_id, key)
+  const story = await get_story(story_id)
+  const attachments = story.attachments
   const attachment = attachments.find(item => item.file_name === old_file_name)
   if (! attachment) {
     throw new ApiError(404, '附件不存在或已被删除')
@@ -1314,15 +1260,8 @@ export async function replace_attachment(
   if (attachment.is_encrypted)
     throw new ApiError(409, '已加密的附件不能替换，请先取消加密')
 
-  const upload = get_form_file(input, 'file')
-  const file_data = Buffer.from(await upload.arrayBuffer())
-  const options = get_options()
-
-  if (file_data.length > options.max_size_mb * 1024 * 1024) {
-    throw new ApiError(413, `文件太大了，不能超过 ${options.max_size_mb} MB`)
-  }
-
-  const new_name = sanitize_attachment_file_name(upload.name ?? 'file', env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
+  const object = await head_object(key)
+  const new_name = sanitize_attachment_file_name(raw_file_name || 'file', env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
   // The scope's files and folders share one path space, so a replacement has to
   // clear both before it can take a name.
   const existing = await list_scope_paths(story_id)
@@ -1354,39 +1293,36 @@ export async function replace_attachment(
   const old_keys = await get_scope_object_keys(story_id, [old_file_name])
   // A replacement always lands on a fresh object; the old one is deleted after.
   const object_key = `content/att/${crypto.randomUUID()}`
-  const etag = await put_object(object_key, file_data, upload.type || null)
-  const version = etag ?? String(Date.now())
+  const etag = await copy_object(key, object_key)
+  await delete_object_best_effort(key)
+  const version = etag ?? object.etag ?? String(Date.now())
 
   try {
-    // Rewrite markdown/cover references only when the final name changed. The
-    // orphan pool has no stored markdown — the new-story editor rewrites its
-    // own draft.
-    if (story) {
-      const markdown = file_name === old_file_name
-        ? story.markdown
-        : rename_attachment_references(story.markdown, old_file_name, file_name)
-      const renamed_cover = story.cover === old_file_name ? file_name : (story.cover ?? '')
-      const cover_version = cover_version_from(story.attachments, renamed_cover, { file_name, version })
-      // An in-place replacement of the cover file rewrites no references but the etag.
-      const cover_object_rewritten = renamed_cover !== '' && renamed_cover === file_name
-      if (markdown !== story.markdown || renamed_cover !== (story.cover ?? '') || cover_object_rewritten) {
-        await db.execute('UPDATE content_stories SET markdown = ?, cover = ?, cover_version = ? WHERE id = ?', [markdown, renamed_cover, cover_version, story.id])
-      }
+    // Rewrite markdown/cover references only when the final name changed.
+    const markdown = file_name === old_file_name
+      ? story.markdown
+      : rename_attachment_references(story.markdown, old_file_name, file_name)
+    const renamed_cover = story.cover === old_file_name ? file_name : (story.cover ?? '')
+    const cover_version = cover_version_from(story.attachments, renamed_cover, { file_name, version })
+    // An in-place replacement of the cover file rewrites no references but the etag.
+    const cover_object_rewritten = renamed_cover !== '' && renamed_cover === file_name
+    if (markdown !== story.markdown || renamed_cover !== (story.cover ?? '') || cover_object_rewritten) {
+      await db.execute('UPDATE content_stories SET markdown = ?, cover = ?, cover_version = ? WHERE id = ?', [markdown, renamed_cover, cover_version, story.id])
     }
     await update_attachment_row_object(story_id, old_file_name, {
       file_name,
       object_key,
-      mime_type: upload.type || null,
-      file_size: file_data.length,
+      mime_type: content_type || attachment_mime_type(file_name),
+      file_size: object.size,
       version,
     })
   }
   catch (ex) {
-    await delete_object(object_key).catch(() => {})
+    await delete_object_best_effort(object_key)
     throw ex
   }
 
-  await Promise.all(old_keys.map(key => delete_object(key).catch(() => {})))
+  await Promise.all(old_keys.map(key => delete_object_best_effort(key)))
 
   await publish_attachment_change(story_id)
   const row = await get_scope_attachment(story_id, file_name)

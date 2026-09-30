@@ -42,6 +42,17 @@ export interface ContentStoryAttachment {
   encryption_key?: string
 }
 
+export interface ContentBatchSkipped {
+  file_name: string
+  reason: string
+}
+
+export interface ContentAttachmentBatchResult {
+  attachments: ContentStoryAttachment[]
+  succeeded: string[]
+  skipped: ContentBatchSkipped[]
+}
+
 export type ContentUploadS3Method = 'PUT' | 'POST' | 'GET' | 'DELETE'
 
 export interface ContentUploadSignRequest {
@@ -51,6 +62,15 @@ export interface ContentUploadSignRequest {
   upload_id?: string
   part_number?: number
   content_type?: string | null
+}
+
+export interface ContentAttachmentReplaceRequest {
+  story_id: number
+  old_file_name: string
+  mode: 'keep-name' | 'new-name'
+  key: string
+  file_name: string
+  content_type: string | null
 }
 
 export interface ContentUploadSignResponse {
@@ -81,11 +101,16 @@ export interface ContentStoryDetail extends ContentStorySummary {
   folders: string[]
   /** Editor optimistic-concurrency token; bumps on each confirmed submit. */
   revision: number
+  /**
+   * Server-issued key of the viewer this payload was rendered for; echo it
+   * back as `base_viewer_key` so the version check can detect a viewer change.
+   */
+  viewer_key: string
   /** In-flight attachment structure change by any client; null when idle. */
   operation_lock: ContentOperationLock | null
 }
 
-/** Attachment files and explicit folders of one scope (a story or the orphan pool). */
+/** Attachment files and explicit folders of one story's scope. */
 export interface ContentAttachmentScope {
   attachments: ContentStoryAttachment[]
   folders: string[]

@@ -1,0 +1,8 @@
+# 开发环境覆盖。只写与 default.yaml 不同的项，深度合并。
+# 注意：本文件进仓库，对所有开发环境生效。本机特有的覆盖（如 Windows 本地
+# 开发把 db/redis/mqtt 指向 127.0.0.1）请写在 config/local.yaml（不进仓库，
+# 优先级最高），模板见 config/local.example.yaml。
+
+app:
+  otp:
+    debug: true

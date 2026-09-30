@@ -31,7 +31,7 @@ export interface StoryCardMeta {
  * reads during `md.render` track the caller's refs and re-render on change.
  */
 export interface StoryMarkdownOptions {
-  /** Current story id; null = new-story editor (orphan uploads under content/0/). */
+  /** Current story id; null = new-story editor (no attachments yet). */
   story_id: () => number | null
   attachments: () => ContentStoryAttachment[]
   /** Known stories so `[](@title)` references render as story cards. */

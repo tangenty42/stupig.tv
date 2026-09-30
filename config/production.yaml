@@ -1,0 +1,4 @@
+# 生产环境覆盖。只写与 default.yaml 不同的项，深度合并。
+
+site:
+  indexable: true

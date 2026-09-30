@@ -1,5 +1,6 @@
 import type { BilibiliLinkTarget } from '@shared/bilibili'
 import type { BilibiliVideoCard } from '@shared/types/bilibili'
+import { error_fields, log_warn } from '@server/lib/log'
 import { redis } from '@server/lib/redis'
 import { bilibili_target_key, parse_bilibili_href } from '@shared/bilibili'
 import { env } from '@shared/env'
@@ -84,7 +85,7 @@ async function remember(key: string, card: BilibiliVideoCard | null) {
     }
   }
   catch (error) {
-    console.warn(`[bilibili] cache write failed for ${key}:`, error)
+    log_warn('bilibili cache write failed', { key, ... error_fields(error) })
   }
 }
 
@@ -100,7 +101,7 @@ async function remember_failure(key: string, entry: CacheEntry | undefined) {
     await redis.set(cache_key(key), JSON.stringify({ ... entry, failed_at: Date.now() }))
   }
   catch (error) {
-    console.warn(`[bilibili] cache write failed for ${key}:`, error)
+    log_warn('bilibili cache write failed', { key, ... error_fields(error) })
   }
 }
 
@@ -219,7 +220,7 @@ export async function get_bilibili_video_card(target: BilibiliLinkTarget) {
       return card
     })
     .catch((error) => {
-      console.warn(`[bilibili] metadata fetch failed for ${key}:`, error)
+      log_warn('bilibili metadata fetch failed', { key, ... error_fields(error) })
       void remember_failure(key, entry)
       // The stale entry stays servable until the first refresh succeeds.
       return entry?.card ?? null

@@ -1,136 +1,93 @@
-import { resolve } from 'node:path'
-import { config as load_dotenv } from 'dotenv'
-import * as z from 'zod'
+import { config } from './config'
 
-// Read .env in production — Nuxt only auto-loads it in dev mode.
-load_dotenv({ path: resolve(process.cwd(), '.env') })
+const node_env = ['development', 'test', 'production'].includes(process.env.NODE_ENV ?? '')
+  ? process.env.NODE_ENV as 'development' | 'test' | 'production'
+  : 'development'
 
-const env_schema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  DB_HOST: z.string().min(1),
-  DB_PORT: z.coerce.number(),
-  DB_USER: z.string().min(1),
-  DB_PASSWORD: z.string().min(1),
-  DB_NAME: z.string().min(1),
-  JWT_SECRET: z.string().min(32),
-  // Token lifetime in days. Kept numeric rather than a duration string so the
-  // cross-field checks below can compare it with the windows defined relative to
-  // it; sign_auth_token converts it to seconds for jsonwebtoken.
-  JWT_EXPIRES_IN_DAYS: z.coerce.number().positive(),
-  JWT_RENEW_BEFORE_DAYS: z.coerce.number().min(0),
-  BCRYPT_ROUNDS: z.coerce.number(),
-  ALIYUN_ACCESS_KEY_ID: z.string().min(1),
-  ALIYUN_ACCESS_KEY_SECRET: z.string().min(1),
-  ALIYUN_DYPNSAPI_ENDPOINT: z.string().min(1),
-  ALIYUN_DYPNSAPI_REGION_ID: z.string().min(1),
-  IDENTITY_COOKIE_NAME: z.string().min(1),
-  IDENTITY_COOKIE_MAX_AGE_DAYS: z.coerce.number(),
-  OTP_EXPIRES_MINUTES: z.coerce.number(),
-  OTP_TIER1_DAILY_LIMIT: z.coerce.number(),
-  OTP_TIER1_COOLDOWN_MS: z.coerce.number(),
-  OTP_TIER2_DAILY_LIMIT: z.coerce.number(),
-  OTP_TIER2_COOLDOWN_MS: z.coerce.number(),
-  OTP_SMS_SIGN_NAME: z.string().min(1),
-  OTP_SMS_TEMPLATE_CODE: z.string().min(1),
-  OTP_SMS_SCHEME_NAME: z.string().optional(),
-  OTP_DEBUG: z.string().optional()
-    .transform(value => value === 'true'),
-  CAPTCHA_APP_ID: z.string().optional(),
-  CAPTCHA_APP_KEY: z.string().optional(),
-  API_BASE: z.string(),
-  COOKIE_MAX_AGE_DAYS: z.coerce.number(),
-  // Idle window: a session survives this long without any request. There is no
-  // absolute lifetime cap on top of it — an actively used session stays signed
-  // in indefinitely.
-  SESSION_MAX_AGE_DAYS: z.coerce.number(),
-  // Upper bound on a session's live token generations. A client stuck on an
-  // older generation is re-issued one on every authenticated request (the
-  // presence ping polls continuously), so the family needs a ceiling.
-  SESSION_MAX_TOKEN_GENERATIONS: z.coerce.number().int().min(1),
-  COLOR_MODE_FALLBACK: z.enum(['light', 'dark']),
-  COLOR_MODE_COOKIE_NAME: z.string().min(1),
-  TIMEZONE_COOKIE_NAME: z.string().min(1),
-  AUTH_TOKEN_COOKIE_NAME: z.string().min(1),
-  AUTH_USER_COOKIE_NAME: z.string().min(1),
-  SYNC_BROADCAST_CHANNEL_NAME: z.string().min(1),
-  SYNC_CLIENT_ID_STORAGE_KEY: z.string().min(1),
-  MAX_AVATAR_SIZE_MB: z.coerce.number(),
-  MAX_CONTENT_ATTACHMENT_SIZE_MB: z.coerce.number(),
-  MAX_CONTENT_ENCRYPT_SIZE_MB: z.coerce.number(),
-  // Longest side of an image the 删减版 editor may decode into a canvas. A file
-  // limit does not bound the decoded size, so a small PNG could still exhaust
-  // the tab's memory.
-  CONTENT_REDACT_MAX_DIMENSION: z.coerce.number().int().min(1),
-  CONTENT_STORY_TITLE_MAX_LENGTH: z.coerce.number().int().min(1).max(120),
-  CONTENT_LINK_FILE_NAME_MAX_BYTES: z.coerce.number().int().min(1).max(255),
-  CONTENT_STORY_LABEL_MAX_BYTES: z.coerce.number().int().min(1).max(255),
-  CONTENT_STORY_DESC_MAX_BYTES: z.coerce.number().int().min(1).max(500),
-  CONTENT_STORY_COVER_MAX_BYTES: z.coerce.number().int().min(1).max(255),
-  // `markdown` is a mediumtext column (max 16,777,215 bytes).
-  CONTENT_STORY_MARKDOWN_MAX_BYTES: z.coerce.number().int().min(1).max(16_777_215),
-  CONTENT_DRAFT_SCHEMA_VERSION: z.coerce.number().int().positive(),
-  CONTENT_DRAFT_STORAGE_PREFIX: z.string().min(1),
-  CONTENT_DRAFT_AUTOSAVE_DELAY_MS: z.coerce.number().int().min(0).max(60_000),
-  CONTENT_UPLOAD_HANDLE_STORAGE_NAME: z.string().min(1),
-  // Lease on a scope's attachment-operation lock. Must outlive the slowest
-  // structure change (a folder move rewrites every row beneath it one by one),
-  // otherwise the lease expires mid-operation and a second request can steal it.
-  CONTENT_OPERATION_LOCK_TTL_SECONDS: z.coerce.number().int().min(10),
-  OSS_ENDPOINT: z.string().min(1),
-  OSS_REGION: z.string().min(1),
-  OSS_BUCKET: z.string().min(1),
-  OSS_ACCESS_KEY_ID: z.string().min(1),
-  OSS_ACCESS_KEY_SECRET: z.string().min(1),
-  OSS_FORCE_PATH_STYLE: z.string().optional()
-    .transform(value => value === 'true'),
-  STATIC_BASE_URL: z.string(),
-  SITE_URL: z.url(),
-  SITE_INDEXABLE: z.string().optional()
-    .transform(value => value !== 'false'),
-  ONLINE_TIMEOUT_SECONDS: z.coerce.number(),
-  PING_IDLE_INTERVAL_SECONDS: z.coerce.number(),
-  POLL_INTERVAL_SECONDS: z.coerce.number(),
-  BILIBILI_FETCH_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000),
-  BILIBILI_CACHE_TTL_MS: z.coerce.number().int().min(0),
-  BILIBILI_NEGATIVE_CACHE_TTL_MS: z.coerce.number().int().min(0),
-  BILIBILI_FETCH_FAILURE_COOLDOWN_MS: z.coerce.number().int().min(0),
-  REDIS_HOST: z.string().min(1),
-  REDIS_PORT: z.coerce.number(),
-  REDIS_PASSWORD: z.string().optional(),
-  MQTT_HOST: z.string().min(1),
-  MQTT_PORT: z.coerce.number(),
-  MQTT_WS_HOST: z.string().min(1),
-  MQTT_WS_PORT: z.coerce.number(),
-  MQTT_WSS_PORT: z.coerce.number(),
-  MQTT_USERNAME: z.string().optional(),
-  MQTT_PASSWORD: z.string().optional(),
-  MQTT_QOS: z.coerce.number(),
-  MQTT_TOPIC_PREFIX: z.string().min(1),
-  MQTT_CLIENT_ID_PREFIX_SERVER: z.string().min(1),
-  MQTT_CLIENT_ID_PREFIX_WEB: z.string().min(1),
-})
-  // The auth windows only work as a set. A token is renewed while it has
-  // JWT_RENEW_BEFORE_DAYS left, so a user walks away holding between
-  // JWT_RENEW_BEFORE_DAYS (worst case) and JWT_EXPIRES_IN_DAYS (best case) of
-  // validity, and everything downstream has to outlive that. Messages name their
-  // own field because the aggregated error only prints `message`, not `path`.
-  .refine(value => value.JWT_RENEW_BEFORE_DAYS < value.JWT_EXPIRES_IN_DAYS, {
-    message: 'JWT_RENEW_BEFORE_DAYS must be less than JWT_EXPIRES_IN_DAYS: a token that is always due for renewal is renewed on every request',
-    path: ['JWT_RENEW_BEFORE_DAYS'],
-  })
-  .refine(value => value.COOKIE_MAX_AGE_DAYS >= value.JWT_EXPIRES_IN_DAYS, {
-    message: 'COOKIE_MAX_AGE_DAYS must be >= JWT_EXPIRES_IN_DAYS, otherwise the cookie expires before the token it carries and the user is logged out early',
-    path: ['COOKIE_MAX_AGE_DAYS'],
-  })
-  .refine(value => value.SESSION_MAX_AGE_DAYS > value.JWT_RENEW_BEFORE_DAYS, {
-    message: 'SESSION_MAX_AGE_DAYS must exceed JWT_RENEW_BEFORE_DAYS, otherwise the idle window expires sessions before their token would be renewed',
-    path: ['SESSION_MAX_AGE_DAYS'],
-  })
-
-const parsed_env = env_schema.safeParse(process.env)
-
-if (! parsed_env.success) {
-  throw new Error(`Invalid environment configuration: ${parsed_env.error.issues.map(issue => issue.message).join('; ')}`)
+// 兼容层：结构化配置（config.ts）以历史扁平形状暴露，调用点逐步迁移到 config 后
+// 本文件即可删除。新增配置请直接加到 config/default.yaml 和 config.ts 的 schema。
+export const env = {
+  NODE_ENV: node_env,
+  DB_HOST: config.db.host,
+  DB_PORT: config.db.port,
+  DB_USER: config.db.user,
+  DB_PASSWORD: config.db.password,
+  DB_NAME: config.db.name,
+  JWT_SECRET: config.app.auth.jwt.secret,
+  JWT_EXPIRES_IN_DAYS: config.app.auth.jwt.expiresInDays,
+  JWT_RENEW_BEFORE_DAYS: config.app.auth.jwt.renewBeforeDays,
+  BCRYPT_ROUNDS: config.app.auth.bcryptRounds,
+  ALIYUN_ACCESS_KEY_ID: config.aliyun.accessKeyId,
+  ALIYUN_ACCESS_KEY_SECRET: config.aliyun.accessKeySecret,
+  ALIYUN_DYPNSAPI_ENDPOINT: config.aliyun.dypns.endpoint,
+  ALIYUN_DYPNSAPI_REGION_ID: config.aliyun.dypns.regionId,
+  IDENTITY_COOKIE_NAME: config.app.identity.cookieName,
+  IDENTITY_COOKIE_MAX_AGE_DAYS: config.app.identity.cookieMaxAgeDays,
+  OTP_EXPIRES_MINUTES: config.app.otp.expiresMinutes,
+  OTP_TIER1_DAILY_LIMIT: config.app.otp.tier1.dailyLimit,
+  OTP_TIER1_COOLDOWN_MS: config.app.otp.tier1.cooldownMs,
+  OTP_TIER2_DAILY_LIMIT: config.app.otp.tier2.dailyLimit,
+  OTP_TIER2_COOLDOWN_MS: config.app.otp.tier2.cooldownMs,
+  OTP_SMS_SIGN_NAME: config.aliyun.sms.signName,
+  OTP_SMS_TEMPLATE_CODE: config.aliyun.sms.templateCode,
+  OTP_SMS_SCHEME_NAME: config.aliyun.sms.schemeName,
+  OTP_DEBUG: config.app.otp.debug,
+  CAPTCHA_APP_ID: config.aliyun.captcha.appId,
+  CAPTCHA_APP_KEY: config.aliyun.captcha.appKey,
+  API_BASE: config.app.api.base,
+  COOKIE_MAX_AGE_DAYS: config.app.auth.cookie.maxAgeDays,
+  SESSION_MAX_AGE_DAYS: config.app.auth.session.maxAgeDays,
+  SESSION_MAX_TOKEN_GENERATIONS: config.app.auth.session.maxTokenGenerations,
+  COLOR_MODE_FALLBACK: config.app.colorMode.fallback,
+  COLOR_MODE_COOKIE_NAME: config.app.colorMode.cookieName,
+  TIMEZONE_COOKIE_NAME: config.app.timezone.cookieName,
+  AUTH_TOKEN_COOKIE_NAME: config.app.auth.cookie.tokenName,
+  AUTH_USER_COOKIE_NAME: config.app.auth.cookie.userName,
+  SYNC_BROADCAST_CHANNEL_NAME: config.app.sync.broadcastChannelName,
+  SYNC_CLIENT_ID_STORAGE_KEY: config.app.sync.clientIdStorageKey,
+  MAX_AVATAR_SIZE_MB: config.app.avatar.maxSizeMb,
+  MAX_CONTENT_ENCRYPT_SIZE_MB: config.app.content.encrypt.maxSizeMb,
+  CONTENT_REDACT_MAX_DIMENSION: config.app.content.redact.maxDimension,
+  CONTENT_STORY_TITLE_MAX_LENGTH: config.app.content.story.titleMaxLength,
+  CONTENT_LINK_FILE_NAME_MAX_BYTES: config.app.content.link.fileNameMaxBytes,
+  CONTENT_STORY_LABEL_MAX_BYTES: config.app.content.story.labelMaxBytes,
+  CONTENT_STORY_DESC_MAX_BYTES: config.app.content.story.descMaxBytes,
+  CONTENT_STORY_COVER_MAX_BYTES: config.app.content.story.coverMaxBytes,
+  CONTENT_STORY_MARKDOWN_MAX_BYTES: config.app.content.story.markdownMaxBytes,
+  CONTENT_DRAFT_SCHEMA_VERSION: config.app.content.draft.schemaVersion,
+  CONTENT_DRAFT_STORAGE_PREFIX: config.app.content.draft.storagePrefix,
+  CONTENT_DRAFT_AUTOSAVE_DELAY_MS: config.app.content.draft.autosaveDelayMs,
+  CONTENT_UPLOAD_HANDLE_STORAGE_NAME: config.app.content.upload.handleStorageName,
+  CONTENT_OPERATION_LOCK_TTL_SECONDS: config.app.content.operationLock.ttlSeconds,
+  OSS_ENDPOINT: config.oss.endpoint,
+  OSS_REGION: config.oss.region,
+  OSS_BUCKET: config.oss.bucket,
+  OSS_ACCESS_KEY_ID: config.oss.accessKeyId,
+  OSS_ACCESS_KEY_SECRET: config.oss.accessKeySecret,
+  OSS_FORCE_PATH_STYLE: config.oss.forcePathStyle,
+  STATIC_BASE_URL: config.site.staticBaseUrl,
+  SITE_URL: config.site.url,
+  SITE_INDEXABLE: config.site.indexable,
+  ONLINE_TIMEOUT_SECONDS: config.app.online.timeoutSeconds,
+  PING_IDLE_INTERVAL_SECONDS: config.app.online.pingIdleIntervalSeconds,
+  POLL_INTERVAL_SECONDS: config.app.online.pollIntervalSeconds,
+  BILIBILI_FETCH_TIMEOUT_MS: config.app.content.bilibili.fetchTimeoutMs,
+  BILIBILI_CACHE_TTL_MS: config.app.content.bilibili.cacheTtlMs,
+  BILIBILI_NEGATIVE_CACHE_TTL_MS: config.app.content.bilibili.negativeCacheTtlMs,
+  BILIBILI_FETCH_FAILURE_COOLDOWN_MS: config.app.content.bilibili.fetchFailureCooldownMs,
+  REDIS_HOST: config.redis.host,
+  REDIS_PORT: config.redis.port,
+  REDIS_PASSWORD: config.redis.password,
+  MQTT_HOST: config.mqtt.host,
+  MQTT_PORT: config.mqtt.port,
+  MQTT_WS_HOST: config.mqtt.web.wsHost,
+  MQTT_WS_PORT: config.mqtt.web.wsPort,
+  MQTT_WSS_PORT: config.mqtt.web.wssPort,
+  MQTT_USERNAME: config.mqtt.username,
+  MQTT_PASSWORD: config.mqtt.password,
+  MQTT_QOS: config.mqtt.qos,
+  MQTT_TOPIC_PREFIX: config.mqtt.topicPrefix,
+  MQTT_CLIENT_ID_PREFIX_SERVER: config.mqtt.clientIdPrefixServer,
+  MQTT_CLIENT_ID_PREFIX_WEB: config.mqtt.web.clientIdPrefix,
+  MQTT_PUBLISH_QUEUE_SIZE: config.mqtt.publishQueueSize,
 }
-
-export const env = parsed_env.data

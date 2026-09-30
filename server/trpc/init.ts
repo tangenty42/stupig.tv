@@ -1,6 +1,7 @@
 import type { TrpcContext } from '@server/trpc/context'
 import type { PermissionField, PermissionLevel } from '@shared/permissions'
 import { ApiError } from '@server/errors/ApiError'
+import { INTERNAL_ERROR_MESSAGE } from '@server/errors/public-message'
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { has_permission } from '@shared/permissions'
 import { initTRPC, TRPCError } from '@trpc/server'
@@ -54,11 +55,16 @@ function throw_trpc_error(error: unknown): never {
 
 const t = initTRPC.context<TrpcContext>().create({
   errorFormatter({ error, shape }) {
+    const cause = error.cause
     return {
       ... shape,
-      message: error.cause instanceof ZodError
-        ? get_validation_message(error.cause)
-        : shape.message,
+      message: cause instanceof ZodError
+        ? get_validation_message(cause)
+        // Internal errors keep their message in dev; production must not leak
+        // SQL fragments or SDK internals through the tRPC error envelope.
+        : ! (cause instanceof ApiError) && ! import.meta.dev
+            ? INTERNAL_ERROR_MESSAGE
+            : shape.message,
     }
   },
 })

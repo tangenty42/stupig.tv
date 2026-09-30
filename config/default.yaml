@@ -1,0 +1,149 @@
+# 所有环境共享的基础配置。敏感值不写在 YAML 里，用 ${VAR} 引用 .env 中的
+# 环境变量；${VAR:-} 表示可选、缺省为空字符串。
+# 环境差异写在 development.yaml / production.yaml，深度合并覆盖本文件。
+
+db:
+  host: 1Panel-mysql
+  port: 3306
+  user: stupig_tv
+  password: ${DB_PASSWORD}
+  name: stupig_tv
+
+redis:
+  host: 1panel-redis
+  port: 6379
+  password: ${REDIS_PASSWORD:-}
+
+mqtt:
+  host: 1panel-EMQX
+  port: 1883
+  username: ${MQTT_USERNAME:-}
+  password: ${MQTT_PASSWORD:-}
+  qos: 1
+  topicPrefix: stupig/sync
+  clientIdPrefixServer: server
+  # 服务端事件在 broker 不可达时的排队上限，溢出丢弃最旧事件并记日志
+  publishQueueSize: 100
+  # 浏览器端 WebSocket 连接信息（会下发到客户端）
+  web:
+    wsHost: www.stupig.tv
+    wsPort: 443
+    wssPort: 443
+    clientIdPrefix: web
+
+oss:
+  endpoint: https://cn-nb1.rains3.com
+  region: cn-nb1
+  bucket: static-stupig-tv
+  accessKeyId: ${OSS_ACCESS_KEY_ID}
+  accessKeySecret: ${OSS_ACCESS_KEY_SECRET}
+  forcePathStyle: false
+
+aliyun:
+  accessKeyId: ${ALIYUN_ACCESS_KEY_ID}
+  accessKeySecret: ${ALIYUN_ACCESS_KEY_SECRET}
+  dypns:
+    endpoint: dypnsapi.aliyuncs.com
+    regionId: cn-hongkong
+  sms:
+    signName: 速通互联验证服务
+    templateCode: '100001'
+    schemeName: 蠢猪小组官网
+  captcha:
+    # appId 会下发到浏览器；appKey 仅服务端验签使用
+    appId: 804af2e773219386ce8ff865dac64fbe
+    appKey: ${ALIYUN_CAPTCHA_APP_KEY:-}
+
+site:
+  url: https://www.stupig.tv
+  # 生产由 dev 模式进程提供服务，索引开关无法依赖 NODE_ENV，必须显式声明
+  indexable: true
+  staticBaseUrl: https://stupig.oss.tangenty.cn
+
+app:
+  api:
+    base: /api
+
+  auth:
+    jwt:
+      secret: ${JWT_SECRET}
+      # token 有效期（天）。续期窗口内的 token 会在请求时换发，因此下游所有
+      # 存活期都必须覆盖它和 renewBeforeDays 之间的差距（见 config.ts 校验）
+      expiresInDays: 14
+      renewBeforeDays: 7
+    session:
+      # 空闲窗口：这么久没有任何请求则会话失效；活跃会话不设总寿命上限
+      maxAgeDays: 14
+      # 会话存活期内 token 代数的上限。停留在旧代数的客户端会在每次认证请求时
+      # 被换发新 token（在线心跳持续轮询），所以代数必须有天花板
+      maxTokenGenerations: 8
+    cookie:
+      maxAgeDays: 14
+      tokenName: stupig_session
+      userName: login
+    bcryptRounds: 12
+
+  otp:
+    expiresMinutes: 10
+    debug: false
+    tier1:
+      dailyLimit: 5
+      cooldownMs: 60000
+    tier2:
+      dailyLimit: 5
+      cooldownMs: 1800000
+
+  identity:
+    cookieName: stupig_identity
+    cookieMaxAgeDays: 30
+
+  colorMode:
+    fallback: dark
+    cookieName: stupig_color_mode
+
+  timezone:
+    cookieName: stupig_timezone
+
+  sync:
+    broadcastChannelName: stupig_sync_events
+    clientIdStorageKey: stupig_sync_client_id
+
+  online:
+    timeoutSeconds: 16
+    pingIdleIntervalSeconds: 4
+    pollIntervalSeconds: 4
+
+  avatar:
+    maxSizeMb: 1
+
+  content:
+    story:
+      titleMaxLength: 60
+      labelMaxBytes: 255
+      descMaxBytes: 500
+      coverMaxBytes: 255
+      # markdown 是 mediumtext 列，上限 16777215 字节
+      markdownMaxBytes: 1048576
+    link:
+      fileNameMaxBytes: 255
+    draft:
+      schemaVersion: 2
+      storagePrefix: stupig_content_draft_
+      autosaveDelayMs: 1000
+    upload:
+      handleStorageName: stupig_content_upload_handles
+    redact:
+      # 删减版编辑器解码到 canvas 的最长边。文件大小限制约束不了解码后的体积，
+      # 小 PNG 也可能耗尽标签页内存
+      maxDimension: 8192
+    operationLock:
+      # 作用域附件操作锁的租约。必须长于最慢的结构变更（移动文件夹会逐行重写
+      # 其下所有行），否则租约中途过期会被第二个请求抢占
+      ttlSeconds: 120
+    encrypt:
+      maxSizeMb: 20
+    bilibili:
+      fetchTimeoutMs: 5000
+      cacheTtlMs: 86400000
+      negativeCacheTtlMs: 300000
+      fetchFailureCooldownMs: 300000

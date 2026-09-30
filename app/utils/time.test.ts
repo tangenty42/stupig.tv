@@ -7,6 +7,7 @@ import {
   datetime_build_string,
   datetime_format,
   datetime_read,
+  duration_between,
   duration_build_string,
   duration_format,
   duration_read,
@@ -93,6 +94,21 @@ describe('duration_read', () => {
   it('swaps tuple elements when start is after end', () => {
     const result = duration_read(['2024-01-01T00:00:01Z', '2024-01-01T00:00:00Z'])
     expect(result.second).toBe(1)
+  })
+})
+
+describe('duration_between', () => {
+  it('preserves a full 30-day remainder instead of reducing it modulo 30', () => {
+    const result = duration_between('2026-08-28T12:32:49Z', '2026-09-28T04:40:20Z')
+
+    expect(result).toEqual({
+      year: 0,
+      month: 0,
+      day: 30,
+      hour: 16,
+      minute: 7,
+      second: 31,
+    })
   })
 })
 

@@ -244,8 +244,6 @@
     <MyDialog
       v-model:visible="replace_visible"
       header="替换附件"
-      :pending="replace_pending !== null"
-      :closable="replace_pending === null"
     >
       <div
         class="flex flex-col items-center space-y-3 rounded-sm border border-dashed border-slate-300 p-3 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300"
@@ -265,7 +263,6 @@
             option-label="label"
             option-value="value"
             :allow-empty="false"
-            :disabled="replace_pending !== null"
             size="small"
           />
         </p>
@@ -273,19 +270,16 @@
           ref="replace_file_input"
           type="file"
           class="hidden"
-          :disabled="replace_pending !== null"
           @change="on_replace_file_picked"
         >
       </div>
 
       <template #footer>
         <div class="flex justify-end gap-2">
-          <Button label="取消" severity="secondary" text :disabled="replace_pending !== null" @click="close_replace_dialog" />
+          <Button label="取消" severity="secondary" text @click="close_replace_dialog" />
           <Button
             label="选择新文件"
             severity="warn"
-            :loading="replace_pending !== null"
-            :disabled="replace_pending !== null"
             @click="replace_file_input?.click()"
           >
             <template #icon>
@@ -474,7 +468,6 @@ const rename_confirmed = ref(false)
 const rename_input = ref<{ $el?: HTMLInputElement } | null>(null)
 const replace_visible = ref(false)
 const replace_target = ref<ContentStoryAttachment | null>(null)
-const replace_file = ref<File | null>(null)
 const replace_file_input = ref<HTMLInputElement>()
 const replace_drag_over = ref(false)
 const replace_name_mode = ref<'keep-name' | 'new-name'>('keep-name')
@@ -482,8 +475,6 @@ const replace_name_modes = [
   { label: '保留旧文件名', value: 'keep-name' },
   { label: '使用新文件名', value: 'new-name' },
 ]
-const replace_pending = ref<ContentStoryAttachment | null>(null)
-const replace_progress = ref<{ progress: number, speed: number } | null>(null)
 /** The encrypted image the 删减版 editor is open on, plus its save state. */
 const redact_visible = ref(false)
 const redact_target = ref<ContentStoryAttachment | null>(null)
@@ -516,9 +507,6 @@ const pending_conflict_draft = ref<ContentDraftRecord | null>(null)
 const discard_draft_pending = ref(false)
 let next_upload_id = 1
 
-const upload_scope = computed(() => is_edit.value ? String(story_id.value) : 'new')
-/** Scope id for attachment operations: the story id, or 0 for the orphan staging pool. */
-const content_scope_id = computed(() => is_edit.value ? story_id.value : 0)
 const live_upload_ids = new Set<string>()
 // Last bytes/timestamp sample per file for the live transfer rate.
 const upload_speed_marks = new Map<string, { loaded: number, stamp: number }>()
@@ -527,6 +515,9 @@ interface UploadMeta extends Record<string, unknown> {
   file_name: string
   insert_position: number | null
   local_upload_id: number
+  /** Set on replacement uploads: the stored file this task supersedes. */
+  replace_target?: string
+  replace_mode?: 'keep-name' | 'new-name'
 }
 
 let uppy: Uppy<UploadMeta, AwsBody> | null = null
@@ -554,16 +545,14 @@ const referenced_files = computed(() => {
   return extract_attachment_names(markdown.value)
 })
 
-/** Attachments uploaded from the new-story editor (story_id NULL until create). */
-const new_attachment_scope = useState<ContentAttachmentScope | null>('content_orphan_attachments', () => null)
-const stored_attachments = computed(() => story.value?.attachments ?? new_attachment_scope.value?.attachments ?? [])
+const stored_attachments = computed(() => story.value?.attachments ?? [])
 
 /** Plaintext names that are the 删减版 twin of an encrypted sibling. */
 const abridged_twin_names = computed(() => new Set(
   stored_attachments.value.filter(attachment => attachment.is_encrypted).map(attachment => decrypted_attachment_name(attachment.file_name)),
 ))
 /** Explicitly created folders (server rows); folders implied by file paths are derived in `folder_names`. */
-const attachment_folders = computed(() => story.value?.folders ?? new_attachment_scope.value?.folders ?? [])
+const attachment_folders = computed(() => story.value?.folders ?? [])
 
 // Live-derive from the attachment list (the cover may change before any save);
 // the local-path rule mirrors story_front_cover_url, including subfolder paths.
@@ -601,9 +590,6 @@ const attachment_items = computed<AttachmentListItem[]>(() => {
         kind: 'stored',
         referenced: referenced.has(attachment.file_name),
         is_abridged_twin: abridged_twin_names.value.has(attachment.file_name),
-        ... (replace_pending.value?.file_name === attachment.file_name && replace_progress.value
-          ? { replacing: replace_progress.value }
-          : {}),
       },
     })
   }
@@ -870,7 +856,7 @@ const selection_delete_blocked_reasons = computed(() => delete_blocked_reasons(s
  * without it — the server publishes its lock with the attachment payload and
  * this folds it into the same disabled row state.
  */
-const remote_operation_lock = computed(() => story.value?.operation_lock ?? new_attachment_scope.value?.operation_lock ?? null)
+const remote_operation_lock = computed(() => story.value?.operation_lock ?? null)
 const structure_locked = computed(() => remote_operation_lock.value !== null)
 
 function is_item_moving(item: AttachmentListItem) {
@@ -949,7 +935,7 @@ function file_row_state(item: AttachmentListItem) {
     encrypt_blocked_reasons: encryption_blocked_reasons('encrypt', check_targets),
     decrypt_blocked_reasons: encryption_blocked_reasons('decrypt', check_targets),
     replace_blocked_reasons: item.kind === 'stored' && item.attachment.is_encrypted ? [encrypted_reason] : [],
-    replace_disabled: replace_pending.value !== null,
+    replace_disabled: false,
     retry_disabled: upload_busy.value,
     move_pending: is_item_moving(item),
     structure_locked: structure_locked.value,
@@ -1496,17 +1482,12 @@ async function save_abridged_attachment(file: File) {
     return
   redact_pending.value = true
   try {
-    await content.create_abridged_attachment(content_scope_id.value, target.file_name, file)
+    await content.create_abridged_attachment(story_id.value, target.file_name, file)
     redact_visible.value = false
     redact_target.value = null
-    if (is_edit.value) {
-      story.value = await fetch_story()
-      if (story.value)
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-    }
-    else {
-      apply_scope_payload(await content.list_orphan_attachments())
-    }
+    story.value = await fetch_story()
+    if (story.value)
+      draft_store.advance_base(story.value.markdown, story.value.revision)
     ok('删减版已创建')
   }
   catch (ex) {
@@ -1556,26 +1537,22 @@ async function execute_attachment_encryption(kind: 'encrypt' | 'decrypt', attach
   for (const name of names)
     encrypt_attachment_pending.add(name)
   try {
-    if (kind === 'encrypt')
-      await content.encrypt_attachments(content_scope_id.value, names)
-    else
-      await content.decrypt_attachments(content_scope_id.value, names)
+    const result = kind === 'encrypt'
+      ? await content.encrypt_attachments(story_id.value, names)
+      : await content.decrypt_attachments(story_id.value, names)
+    const succeeded = new Set(result.succeeded)
+    const server_skipped = result.skipped.map(item => ({ name: item.file_name, reason: item.reason }))
     // The server renamed the rows (± .good) and, for a stored story, rewrote
     // the stored markdown; follow the rename in the local draft like a rename.
-    for (const attachment of attachments) {
+    for (const attachment of attachments.filter(attachment => succeeded.has(attachment.file_name))) {
       const new_name = kind === 'encrypt' ? `${attachment.file_name}${encrypted_attachment_suffix}` : decrypted_attachment_name(attachment.file_name)
       markdown.value = rename_attachment_references(markdown.value, attachment.file_name, new_name)
     }
-    if (is_edit.value) {
-      story.value = await fetch_story()
-      if (story.value)
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-    }
-    else {
-      apply_scope_payload(await content.list_orphan_attachments())
-    }
+    story.value = await fetch_story()
+    if (story.value)
+      draft_store.advance_base(story.value.markdown, story.value.revision)
     clear_selection()
-    show_skipped_attachments(skipped, `以下项目无法${kind === 'encrypt' ? '加密' : '取消加密'}，已跳过：`)
+    show_skipped_attachments([... skipped, ... server_skipped], `以下项目无法${kind === 'encrypt' ? '加密' : '取消加密'}，已跳过：`)
   }
   catch (ex) {
     report_operation_error(ex)
@@ -1632,8 +1609,7 @@ catch {
   error('获取档案信息失败')
 }
 
-// Uploads to the orphan pool are blocked now (save the story first), so the
-// new-story editor no longer subscribes to the shared orphan scope.
+// A new story has no attachments: uploads start only after the first save.
 const initial_markdown = is_edit.value
   ? (story.value?.markdown ?? '')
   : story_markdown_template(datetime_build_string(null, '{YYYY}/{M}/{D}'))
@@ -1647,10 +1623,11 @@ draft_store.initialize(initial_markdown, initial_revision)
 // so a remote update never clobbers in-progress work; the attachment list is
 // always safe to adopt.
 if (import.meta.client && is_edit.value) {
-  const { subscribe } = useDataSync()
-  const unsubscribe = subscribe(sync_resource('content_story', story_id.value), async () => {
-    try {
-      const latest_story = await fetch_story()
+  // Synced refetches land in this setter, which applies the dirty-draft merge
+  // rule instead of blindly overwriting the editor state.
+  const synced_story = computed<ContentStoryDetail | null>({
+    get: () => story.value,
+    set: (latest_story) => {
       if (! latest_story)
         return
       if (draft_dirty.value) {
@@ -1660,12 +1637,19 @@ if (import.meta.client && is_edit.value) {
       }
       story.value = latest_story
       draft_store.mark_saved(latest_story.markdown, latest_story.revision)
-    }
-    catch {
-      // transient sync fetch failure — keep the current editor state
-    }
+    },
   })
-  onUnmounted(unsubscribe)
+  const story_sync_loading = ref(false)
+  await useSyncedData<ContentStoryDetail | null>(
+    computed(() => sync_resource('content_story', story_id.value)),
+    fetch_story,
+    synced_story,
+    story_sync_loading,
+    // The setup fetch above already populated the story; this is trigger-only,
+    // and a transient sync fetch failure keeps the current editor state
+    // instead of toasting.
+    { immediate: false, server: false, universal: false, on_error: () => {} },
+  )
 }
 
 onMounted(() => {
@@ -1817,7 +1801,6 @@ function upload_from_file(file: UppyFile<UploadMeta, AwsBody>) {
     speed: 0,
     status,
     message,
-    controller: null,
     insert_position: meta.insert_position,
   })
   next_upload_id = Math.max(next_upload_id, upload.id + 1)
@@ -1839,11 +1822,10 @@ function process_files_for_upload(picks: AttachmentUploadPick[], insert_position
 
   sync_uppy_files(uppy)
 
-  const max_bytes = config.max_content_attachment_size_mb * 1024 * 1024
   const bad_suffix = picks.filter(pick => is_encrypted_attachment(pick.file_name))
   if (bad_suffix.length)
-    error('文件名不能以 .good 结尾')
-  const accepted = picks.filter(pick => pick.file.size <= max_bytes && ! is_encrypted_attachment(pick.file_name))
+    error('文件名中包含非法字段')
+  const accepted = picks.filter(pick => ! is_encrypted_attachment(pick.file_name))
   if (! accepted.length)
     return []
 
@@ -1964,6 +1946,10 @@ function start_upload(task: PendingAttachmentUpload) {
 }
 
 async function confirm_uppy_upload(file: UppyFile<UploadMeta, AwsBody>, response: AwsBody) {
+  if (file.meta.replace_target) {
+    await confirm_replace_upload(file, response.key)
+    return
+  }
   const upload = upload_from_file(file)
   try {
     const attachment = await content.confirm_attachment_upload(story_id.value, response.key, upload.file_name)
@@ -1971,11 +1957,6 @@ async function confirm_uppy_upload(file: UppyFile<UploadMeta, AwsBody>, response
     upload.status = 'completed'
     if (story.value && ! story.value.attachments.some(item => item.file_name === attachment.file_name)) {
       story.value = { ... story.value, attachments: [... story.value.attachments, attachment] }
-    }
-    else if (! story.value) {
-      const scope = new_attachment_scope.value ?? { attachments: [], folders: [], operation_lock: null }
-      if (! scope.attachments.some(item => item.file_name === attachment.file_name))
-        new_attachment_scope.value = { ... scope, attachments: [... scope.attachments, attachment] }
     }
     if (upload.insert_position !== null)
       insert_attachment_markdown(attachment.file_name, attachment.is_image, upload.insert_position)
@@ -1986,6 +1967,34 @@ async function confirm_uppy_upload(file: UppyFile<UploadMeta, AwsBody>, response
       if (task.id !== upload.id && task.file_name === upload.file_name && task.status === 'error')
         remove_upload(task.id)
     }
+  }
+  catch (ex) {
+    upload.status = 'error'
+    upload.message = error_message(ex)
+  }
+}
+
+/** Lands a finished replacement upload: swap the object server-side, then follow the rename in the local draft. */
+async function confirm_replace_upload(file: UppyFile<UploadMeta, AwsBody>, key: string) {
+  const upload = upload_from_file(file)
+  const old_file_name = file.meta.replace_target!
+  try {
+    const replaced = await content.replace_attachment({
+      story_id: story_id.value,
+      old_file_name,
+      key,
+      file_name: upload.file_name,
+      content_type: upload.mime_type,
+      mode: file.meta.replace_mode ?? 'keep-name',
+    })
+    upload.progress = 100
+    upload.status = 'completed'
+    if (replaced.file_name !== old_file_name)
+      markdown.value = rename_attachment_references(markdown.value, old_file_name, replaced.file_name)
+    story.value = await fetch_story()
+    if (story.value)
+      draft_store.advance_base(story.value.markdown, story.value.revision)
+    remove_upload(upload.id)
   }
   catch (ex) {
     upload.status = 'error'
@@ -2080,6 +2089,19 @@ async function retry_upload(upload: PendingAttachmentUpload) {
   const file = instance.getFile(upload.uppy_id)
   if (! file)
     return
+  if (file.progress?.uploadComplete) {
+    // The object already landed and only confirm failed; retryUpload would
+    // skip a completed file (filterFilesToUpload), so rerun the confirm.
+    const key = file.response?.body?.key
+      ?? ('s3Multipart' in file ? (file.s3Multipart as { key?: string } | undefined)?.key : undefined)
+    if (! key) {
+      upload.status = 'error'
+      upload.message = '上传状态丢失，请删除后重新上传'
+      return
+    }
+    await confirm_uppy_upload(file, { key } as AwsBody)
+    return
+  }
   if (! file.data) {
     const resolved = await resolve_upload_file(upload)
     if (! resolved)
@@ -2197,11 +2219,8 @@ function setup_uppy() {
     return
 
   const instance = new UppyCore<UploadMeta, AwsBody>({
-    id: `content-upload-${upload_scope.value}`,
+    id: `content-upload-${story_id.value}`,
     autoProceed: false,
-    restrictions: {
-      maxFileSize: config.max_content_attachment_size_mb * 1024 * 1024,
-    },
   })
   instance.on('file-added', file => upload_from_file(file))
   instance.on('file-removed', (file) => {
@@ -2312,7 +2331,7 @@ function setup_uppy() {
     // finite limit would let a few paused tasks starve every new upload. 0 =
     // unlimited file concurrency; parts of each file still upload sequentially.
     limit: 0,
-    generateObjectKey: () => `content-upload/${upload_scope.value}/${crypto.randomUUID()}`,
+    generateObjectKey: () => `content-upload/${story_id.value}/${crypto.randomUUID()}`,
     signRequest: async request => content.sign_attachment_upload({
       story_id: story_id.value,
       method: request.method,
@@ -2539,16 +2558,11 @@ async function rename_attachment() {
 
   rename_pending.value = true
   try {
-    await content.rename_attachment(content_scope_id.value, current_name, file_name)
+    await content.rename_attachment(story_id.value, current_name, file_name)
     markdown.value = rename_attachment_references(markdown.value, current_name, file_name)
-    if (is_edit.value) {
-      story.value = await fetch_story()
-      if (story.value) {
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-      }
-    }
-    else {
-      apply_scope_payload(await content.list_orphan_attachments())
+    story.value = await fetch_story()
+    if (story.value) {
+      draft_store.advance_base(story.value.markdown, story.value.revision)
     }
     rename_visible.value = false
   }
@@ -2575,13 +2589,8 @@ function report_operation_error(ex: unknown) {
 
 /** Adopt a folder/file operation's scope payload into the local state. */
 function apply_scope_payload(payload: ContentAttachmentScope) {
-  if (is_edit.value) {
-    if (story.value)
-      story.value = { ... story.value, attachments: payload.attachments, folders: payload.folders }
-  }
-  else {
-    new_attachment_scope.value = payload
-  }
+  if (story.value)
+    story.value = { ... story.value, attachments: payload.attachments, folders: payload.folders }
 }
 
 function on_attachment_create_folder(parent: string | null) {
@@ -2617,7 +2626,7 @@ async function create_folder() {
 
   folder_pending.value = true
   try {
-    apply_scope_payload(await content.create_folder(content_scope_id.value, path))
+    apply_scope_payload(await content.create_folder(story_id.value, path))
     expand_folder(path)
     folder_visible.value = false
   }
@@ -2819,7 +2828,7 @@ function on_attachment_delete_selection(event: MouseEvent) {
 async function delete_folder(folder: string) {
   delete_folder_pending.add(folder)
   try {
-    apply_scope_payload(await content.delete_folder(content_scope_id.value, folder))
+    apply_scope_payload(await content.delete_folder(story_id.value, folder))
   }
   catch (ex) {
     report_operation_error(ex)
@@ -2840,35 +2849,24 @@ async function delete_folder_with_attachments(folder: string, requested: string[
     return
   }
   delete_folder_pending.add(folder)
+  let server_skipped: { name: string, reason: string }[] = []
   try {
-    if (is_edit.value) {
-      if (! base_revision.value)
-        throw new Error('缺少档案基础版本，请刷新页面后重试')
-      for (const name of split.deletable)
-        delete_attachment_pending.add(name)
-      await content.update_story(story_id.value, {
-        markdown: markdown.value,
-        base_revision: base_revision.value,
-        delete_files: split.deletable,
-      })
-      story.value = await fetch_story()
-      if (story.value)
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-    }
-    else {
-      for (const name of split.deletable) {
-        delete_attachment_pending.add(name)
-        try {
-          await content.delete_orphan_attachment(name)
-        }
-        finally {
-          delete_attachment_pending.delete(name)
-        }
-      }
-    }
+    if (! base_revision.value)
+      throw new Error('缺少档案基础版本，请刷新页面后重试')
+    for (const name of split.deletable)
+      delete_attachment_pending.add(name)
+    const result = await content.update_story(story_id.value, {
+      markdown: markdown.value,
+      base_revision: base_revision.value,
+      delete_files: split.deletable,
+    })
+    server_skipped = result.skipped.map(item => ({ name: item.file_name, reason: item.reason }))
+    story.value = await fetch_story()
+    if (story.value)
+      draft_store.advance_base(story.value.markdown, story.value.revision)
     // A file that survived keeps the folder alive; deleting it would be a 409.
     if (! split.blocked.length)
-      apply_scope_payload(await content.delete_folder(content_scope_id.value, folder))
+      apply_scope_payload(await content.delete_folder(story_id.value, folder))
   }
   catch (ex) {
     if (get_error_status(ex) === 409 && await show_save_conflict())
@@ -2880,7 +2878,10 @@ async function delete_folder_with_attachments(folder: string, requested: string[
       delete_attachment_pending.delete(name)
     delete_folder_pending.delete(folder)
   }
-  show_delete_skipped(split.skipped_names)
+  show_skipped_attachments([
+    ... split.skipped_names.map(name => ({ name, reason: delete_reference_reason })),
+    ... server_skipped,
+  ], '以下项目无法删除，已跳过：')
 }
 
 async function on_attachment_move(file_names: string[], target_folder: string | null) {
@@ -2952,23 +2953,18 @@ async function execute_attachment_moves(
   }
   move_attachment_pending.value = { ... pending, moves: planned }
   try {
-    const moved = await content.move_attachments(content_scope_id.value, planned)
+    const result = await content.move_attachments(story_id.value, planned)
+    const succeeded = new Set(result.succeeded)
+    const server_skipped = result.skipped.map(item => ({ name: item.file_name, reason: item.reason }))
     // Follow the rename in the local markdown whether or not the draft is
-    // dirty: in edit mode the server rewrote the stored markdown, so leaving
-    // the editor on the old names would make the tab dirty against the new
-    // base and its next save would revert the rename.
-    apply_local_attachment_moves(planned)
-    if (is_edit.value) {
-      story.value = await fetch_story()
-      if (story.value)
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-    }
-    else {
-      const scope = new_attachment_scope.value
-      if (scope)
-        new_attachment_scope.value = { ... scope, attachments: moved }
-    }
-    show_skipped_attachments(skipped, '以下附件无法移动，已跳过：')
+    // dirty: the server rewrote the stored markdown, so leaving the editor on
+    // the old names would make the tab dirty against the new base and its next
+    // save would revert the rename.
+    apply_local_attachment_moves(planned.filter(move => succeeded.has(move.file_name)))
+    story.value = await fetch_story()
+    if (story.value)
+      draft_store.advance_base(story.value.markdown, story.value.revision)
+    show_skipped_attachments([... skipped, ... server_skipped], '以下附件无法移动，已跳过：')
     return true
   }
   catch (ex) {
@@ -2993,16 +2989,11 @@ async function move_folder_to(source_folder: string, new_folder: string) {
   }))
   move_attachment_pending.value = { names, target: attachment_folder_of(new_folder), moves, source_folder, new_folder }
   try {
-    const payload = await content.move_folder(content_scope_id.value, source_folder, new_folder)
+    await content.move_folder(story_id.value, source_folder, new_folder)
     apply_local_attachment_moves(moves)
-    if (is_edit.value) {
-      story.value = await fetch_story()
-      if (story.value)
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-    }
-    else {
-      apply_scope_payload(payload)
-    }
+    story.value = await fetch_story()
+    if (story.value)
+      draft_store.advance_base(story.value.markdown, story.value.revision)
     return true
   }
   catch (ex) {
@@ -3016,7 +3007,6 @@ async function move_folder_to(source_folder: string, new_folder: string) {
 
 function open_replace_dialog(attachment: ContentStoryAttachment) {
   replace_target.value = attachment
-  replace_file.value = null
   replace_name_mode.value = 'keep-name'
   replace_drag_over.value = false
   if (replace_file_input.value) {
@@ -3026,38 +3016,30 @@ function open_replace_dialog(attachment: ContentStoryAttachment) {
 }
 
 function close_replace_dialog() {
-  if (replace_pending.value)
-    return
   replace_visible.value = false
   replace_target.value = null
-  replace_file.value = null
   replace_drag_over.value = false
 }
 
 function on_replace_file_picked(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0] ?? null
-  if (file) {
-    replace_file.value = file
-    void do_replace()
-  }
+  if (file)
+    start_replace_upload(file)
 }
 
 function on_replace_drop(event: DragEvent) {
   replace_drag_over.value = false
   const file = event.dataTransfer?.files?.[0] ?? null
-  if (file) {
-    replace_file.value = file
-    void do_replace()
-  }
+  if (file)
+    start_replace_upload(file)
 }
 
 function on_replace_paste(event: ClipboardEvent) {
   const file = event.clipboardData?.files?.[0] ?? null
   if (file) {
     event.preventDefault()
-    replace_file.value = file
-    void do_replace()
+    start_replace_upload(file)
   }
 }
 
@@ -3072,60 +3054,42 @@ watch(replace_visible, (visible) => {
   }
 })
 
-async function do_replace() {
+/**
+ * Queues the replacement as an upload task: it rides the same Uppy pipeline as
+ * any upload (multipart, pause/resume, refresh recovery), and the staged object
+ * only becomes the file's content when confirm_replace_upload lands the mutation.
+ */
+function start_replace_upload(file: File) {
   const target = replace_target.value
-  const file = replace_file.value
-  if (! target || ! file || replace_pending.value)
+  if (! target || ! uppy)
     return
-
-  replace_pending.value = target
-  replace_progress.value = reactive({ progress: 0, speed: 0 })
-  // Close the dialog right away: live progress is shown on the attachment card.
-  replace_visible.value = false
-
-  // Track bytes/time deltas to report a live transfer rate.
-  let last_loaded = 0
-  let last_stamp = performance.now()
-
-  try {
-    const replaced = await content.replace_attachment(content_scope_id.value, target.file_name, file, replace_name_mode.value, (progress, loaded) => {
-      const state = replace_progress.value
-      if (! state)
-        return
-      state.progress = progress
-      const now = performance.now()
-      const elapsed = (now - last_stamp) / 1000
-      if (elapsed >= 0.3 && loaded >= last_loaded) {
-        state.speed = (loaded - last_loaded) / elapsed
-        last_loaded = loaded
-        last_stamp = now
-      }
-    })
-    if (replaced.file_name !== target.file_name) {
-      markdown.value = rename_attachment_references(markdown.value, target.file_name, replaced.file_name)
-    }
-    if (is_edit.value) {
-      story.value = await fetch_story()
-      if (story.value) {
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-      }
-    }
-    else {
-      apply_scope_payload(await content.list_orphan_attachments())
-    }
+  close_replace_dialog()
+  if (replace_file_input.value)
+    replace_file_input.value.value = ''
+  if (is_encrypted_attachment(file.name)) {
+    error('文件名中包含非法字段')
+    return
   }
-  catch (ex) {
-    report_operation_error(ex)
+  sync_uppy_files(uppy)
+  // A queued replacement of the same target (or a same-named upload) is
+  // superseded by this pick; Uppy also refuses duplicate file ids.
+  for (const existing of uppy.getFiles()) {
+    if (existing.meta.replace_target === target.file_name || existing.meta.file_name === file.name)
+      uppy.removeFile(existing.id)
   }
-  finally {
-    replace_pending.value = null
-    replace_progress.value = null
-    replace_target.value = null
-    replace_file.value = null
-    if (replace_file_input.value) {
-      replace_file_input.value.value = ''
-    }
-  }
+  const file_id = uppy.addFile({
+    name: file.name,
+    type: file.type,
+    data: file,
+    meta: {
+      file_name: file.name,
+      insert_position: null,
+      local_upload_id: next_upload_id ++,
+      replace_target: target.file_name,
+      replace_mode: replace_name_mode.value,
+    },
+  })
+  void uppy.retryUpload(file_id)
 }
 
 function confirm_delete_attachment(event: Event, attachment: ContentStoryAttachment) {
@@ -3148,13 +3112,6 @@ async function delete_attachment(attachment: ContentStoryAttachment) {
 
   delete_attachment_pending.add(attachment.file_name)
   try {
-    if (! is_edit.value) {
-      await content.delete_orphan_attachment(attachment.file_name)
-      const scope = new_attachment_scope.value
-      if (scope)
-        new_attachment_scope.value = { ... scope, attachments: scope.attachments.filter(item => item.file_name !== attachment.file_name) }
-      return
-    }
     if (! base_revision.value) {
       throw new Error('缺少档案基础版本，请刷新页面后重试')
     }
@@ -3187,11 +3144,12 @@ async function delete_selected_attachments(folders: string[], attachments: Conte
   }
   for (const folder of split.deletable_folders)
     delete_folder_pending.add(folder)
+  let result = { deleted: 0, skipped: [] as { file_name: string, reason: string }[] }
   try {
-    const deleted = await delete_attachments(deletable_attachments)
-    if (deleted === deletable_attachments.length) {
+    result = await delete_attachments(deletable_attachments)
+    if (result.deleted === deletable_attachments.length) {
       for (const folder of split.deletable_folders)
-        apply_scope_payload(await content.delete_folder(content_scope_id.value, folder))
+        apply_scope_payload(await content.delete_folder(story_id.value, folder))
       clear_selection()
     }
   }
@@ -3199,68 +3157,42 @@ async function delete_selected_attachments(folders: string[], attachments: Conte
     for (const folder of split.deletable_folders)
       delete_folder_pending.delete(folder)
   }
-  show_delete_skipped(split.skipped_names)
+  show_skipped_attachments([
+    ... split.skipped_names.map(name => ({ name, reason: delete_reference_reason })),
+    ... result.skipped.map(item => ({ name: item.file_name, reason: item.reason })),
+  ], '以下项目无法删除，已跳过：')
 }
 
 // Sequential deletes: each pass refetches the story and advances the base revision.
 async function delete_attachments(attachments: ContentStoryAttachment[]) {
   let deleted = 0
-  if (is_edit.value) {
-    for (const attachment of attachments)
-      delete_attachment_pending.add(attachment.file_name)
-    try {
-      if (! base_revision.value)
-        throw new Error('缺少档案基础版本，请刷新页面后重试')
-      await content.update_story(story_id.value, {
-        markdown: markdown.value,
-        base_revision: base_revision.value,
-        delete_files: attachments.map(attachment => attachment.file_name),
-      })
-      story.value = await fetch_story()
-      if (story.value)
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-      deleted = attachments.length
-    }
-    catch (ex) {
-      if (get_error_status(ex) === 409 && await show_save_conflict())
-        return 0
-      report_operation_error(ex)
-    }
-    finally {
-      for (const attachment of attachments)
-        delete_attachment_pending.delete(attachment.file_name)
-    }
-    return deleted
-  }
-  for (const attachment of attachments) {
+  const skipped: { file_name: string, reason: string }[] = []
+  for (const attachment of attachments)
     delete_attachment_pending.add(attachment.file_name)
-    try {
-      if (! is_edit.value) {
-        await content.delete_orphan_attachment(attachment.file_name)
-        const scope = new_attachment_scope.value
-        if (scope)
-          new_attachment_scope.value = { ... scope, attachments: scope.attachments.filter(item => item.file_name !== attachment.file_name) }
-        deleted ++
-        continue
-      }
-      if (! base_revision.value)
-        throw new Error('缺少档案基础版本，请刷新页面后重试')
-      await content.delete_attachment(story_id.value, attachment.file_name, markdown.value, base_revision.value)
-      story.value = await fetch_story()
-      if (story.value)
-        draft_store.advance_base(story.value.markdown, story.value.revision)
-      deleted ++
-    }
-    catch (ex) {
-      // One orphan gone stops the batch: the rest are as stale as this one.
-      report_operation_error(ex)
-      break
-    }
-    finally {
-      delete_attachment_pending.delete(attachment.file_name)
-    }
+  try {
+    if (! base_revision.value)
+      throw new Error('缺少档案基础版本，请刷新页面后重试')
+    const result = await content.update_story(story_id.value, {
+      markdown: markdown.value,
+      base_revision: base_revision.value,
+      delete_files: attachments.map(attachment => attachment.file_name),
+    })
+    skipped.push(... result.skipped)
+    story.value = await fetch_story()
+    if (story.value)
+      draft_store.advance_base(story.value.markdown, story.value.revision)
+    deleted = attachments.length
   }
-  return deleted
+  catch (ex) {
+    if (get_error_status(ex) === 409 && await show_save_conflict())
+      return { deleted: 0, skipped }
+    report_operation_error(ex)
+  }
+  finally {
+    for (const attachment of attachments)
+      delete_attachment_pending.delete(attachment.file_name)
+  }
+  return { deleted, skipped }
 }
 
 function on_save_click() {
@@ -3289,8 +3221,7 @@ function on_save_click() {
 async function do_create() {
   save_pending.value = true
   try {
-    // The orphan staging pool is gone: a new story never has files to claim.
-    const result = await content.create_story(markdown.value, [])
+    const result = await content.create_story(markdown.value)
 
     draft_store.discard()
     ok('档案已创建')
