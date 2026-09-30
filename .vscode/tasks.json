@@ -1,0 +1,48 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build production",
+			"type": "shell",
+			"command": "pnpm",
+			"windows": {
+				"command": "pnpm.cmd"
+			},
+			"args": [
+				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Typecheck",
+			"type": "shell",
+			"command": "pnpm",
+			"windows": {
+				"command": "pnpm.cmd"
+			},
+			"args": [
+				"exec",
+				"nuxt",
+				"typecheck"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Test",
+			"type": "shell",
+			"command": "pnpm",
+			"windows": {
+				"command": "pnpm.cmd"
+			},
+			"args": [
+				"test"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		}
+	]
+}
