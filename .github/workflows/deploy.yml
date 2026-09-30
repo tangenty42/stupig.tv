@@ -1,0 +1,40 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push image
+        run: |
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ vars.ACR_REGISTRY }}" \
+            -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+          IMAGE="${{ vars.ACR_REGISTRY }}/${{ vars.ACR_NAMESPACE }}/stupig-tv"
+          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy to server
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${{ vars.SSH_PORT }}" -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -p "${{ vars.SSH_PORT }}" "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
+            "cd ${{ vars.DEPLOY_DIR }} \
+             && echo '${{ secrets.ACR_PASSWORD }}' | docker login '${{ vars.ACR_REGISTRY }}' -u '${{ secrets.ACR_USERNAME }}' --password-stdin \
+             && docker compose pull \
+             && docker compose up -d \
+             && docker image prune -f"

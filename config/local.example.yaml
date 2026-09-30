@@ -1,0 +1,19 @@
+# config/local.yaml 模板：复制为 config/local.yaml 后按需修改（local.yaml 不进仓库）。
+# 本机覆盖层，优先级高于 default.yaml 和 {NODE_ENV}.yaml。
+# 下面是 Windows 本地开发（docker-compose.dev.yml 起的 MySQL/Redis/EMQX）的典型配置：
+
+db:
+  host: 127.0.0.1
+
+redis:
+  host: 127.0.0.1
+
+mqtt:
+  host: 127.0.0.1
+  web:
+    wsHost: localhost
+    wsPort: 8083
+
+site:
+  url: http://localhost:3042
+  indexable: false

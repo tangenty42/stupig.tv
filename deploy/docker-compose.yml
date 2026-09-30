@@ -1,0 +1,20 @@
+# 服务器端部署编排。放在服务器的 DEPLOY_DIR 下，与同目录的 .env（密钥）配套。
+# MySQL/Redis/EMQX 复用 1Panel 容器，app 加入其 bridge 网络后用容器名互访。
+services:
+  app:
+    image: ${ACR_IMAGE:-registry.cn-hangzhou.aliyuncs.com/stupig/stupig-tv}:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+    ports:
+      # 只绑回环，外部流量由 openresty 反代进来
+      - '127.0.0.1:3042:3042'
+    networks:
+      - infra
+
+networks:
+  infra:
+    # 1Panel 容器的共享网络名；用 docker network ls 确认后写入 .env 的 ONEPANEL_NETWORK
+    name: ${ONEPANEL_NETWORK:-1panel-network}
+    external: true

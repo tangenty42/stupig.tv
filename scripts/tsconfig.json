@@ -1,0 +1,18 @@
+{
+  // 让编辑器/tsx 识别 scripts/*.ts 里的 @server、@shared 别名。
+  // 不继承 .nuxt 的 tsconfig——那些是 Nuxt 生成物，scripts 是独立 Node 脚本。
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@server": ["../server"],
+      "@server/*": ["../server/*"],
+      "@shared/*": ["../server/shared/*"]
+    },
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["./**/*.ts", "../server/**/*.ts"]
+}

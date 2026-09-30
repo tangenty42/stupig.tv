@@ -22,12 +22,13 @@ logs
 .env
 .env.*
 !.env.example
-config.*
-!config.example.*
+config/local.yaml
 
 # Lock files
 *-lock.yaml
 *-lock.json
+# CI 构建需要可复现依赖树，lockfile 必须入库
+!pnpm-lock.yaml
 
 # PNPM store
 .pnpm-store
