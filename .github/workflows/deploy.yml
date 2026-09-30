@@ -19,7 +19,7 @@ jobs:
         run: |
           echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ vars.ACR_REGISTRY }}" \
             -u "${{ secrets.ACR_USERNAME }}" --password-stdin
-          IMAGE="${{ vars.ACR_REGISTRY }}/${{ vars.ACR_NAMESPACE }}/stupig-tv"
+          IMAGE="${{ vars.ACR_REGISTRY }}/${{ vars.ACR_NAMESPACE }}/${{ vars.ACR_IMAGE_NAME || 'stupig-tv' }}"
           docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
           docker push "$IMAGE:${{ github.sha }}"
           docker push "$IMAGE:latest"

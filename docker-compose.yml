@@ -3,7 +3,7 @@
 # .env 放本文件旁边，密钥由 compose 注入容器，不进镜像。
 services:
   app:
-    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/stupig-tv:latest
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/${ACR_IMAGE_NAME:-stupig-tv}:latest
     restart: unless-stopped
     env_file: .env
     environment:
