@@ -21,10 +21,14 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           echo "${{ secrets.ACR_PASSWORD }}" | docker login "${IMAGE%%/*}" \
             -u "${{ secrets.ACR_USERNAME }}" --password-stdin
-          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
-          docker push "$IMAGE:${{ github.sha }}"
+          # 只推 :latest：个人项目不指望镜像级回滚（回滚 = 重跑旧 commit 的 workflow），
+          # 免得 ACR 里积一堆 :sha tag
+          docker build -t "$IMAGE:latest" .
           docker push "$IMAGE:latest"
 
+      # 只能 prune -f（清悬空镜像）。严禁改成 -a：这台主机与 1panel 共用，
+      # -a 会删掉其他站点正在用的镜像（它们对 docker 而言"未使用"，却是别的
+      # 站点的运行基础），且被删的往往是从上游拉不到的历史镜像，无法恢复。
       - name: Deploy to server
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
