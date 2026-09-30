@@ -58,4 +58,32 @@ describe('维护脚本产物', () => {
     // 别名指向的是打包期路径，不该以 import 形式留在产物里
     expect(source).not.toMatch(/from ["']@(server|shared)\//)
   })
+
+  it('迁移产物同样能在容器里跑起来（只读 --status，不写库）', async () => {
+    const env = {
+      ... process.env,
+      NODE_ENV: 'production',
+      DB_PASSWORD: 'placeholder',
+      JWT_SECRET: 'p'.repeat(40),
+      ALIYUN_ACCESS_KEY_ID: 'placeholder',
+      ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
+      OSS_ACCESS_KEY_ID: 'placeholder',
+      OSS_ACCESS_KEY_SECRET: 'placeholder',
+    }
+    const migrate = resolve(work_dir, 'migrate.mjs')
+    await cp(resolve(project_root, '.output/server/maintenance/migrate.mjs'), migrate)
+
+    let failure: { stderr?: string, stdout?: string } | undefined
+    try {
+      // temp 目录里没有 migrations/，也没有可连接的库，但两件事都不该是模块加载错误
+      await run(process.execPath, [migrate, '--status'], { cwd: work_dir, env })
+    }
+    catch (error) {
+      failure = error as typeof failure
+    }
+
+    // 断言必须拒连：既证明产物真的走到了建连，也保证这个测试永远不会连上真库
+    expect(failure?.stderr).toMatch(/ECONNREFUSED/)
+    expect(failure?.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Dynamic require|Cannot find module/)
+  }, 60_000)
 })

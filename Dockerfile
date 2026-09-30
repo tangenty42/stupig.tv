@@ -10,8 +10,8 @@ COPY . .
 # 固定 production 覆盖层，免得构建机的 NODE_ENV 影响 config/*.yaml 合并结果。
 ENV NODE_ENV=production
 RUN pnpm build
-# 维护脚本（OSS 对账清理）打成自包含单文件塞进 .output：运行时镜像里没有源码、
-# 没有 tsx、也不装 node_modules，1panel 的"容器内执行"定时任务直接 node 跑它
+# 运维脚本（迁移、OSS 对账清理）打成自包含单文件塞进 .output：运行时镜像里没有
+# 源码、没有 tsx、也不装 node_modules，靠 node 直接跑
 RUN pnpm maintenance:build
 
 FROM node:24-slim
@@ -21,5 +21,9 @@ ENV NODE_ENV=production \
 COPY --from=build /app/.output ./.output
 # 运行时从 cwd 读取 config/*.yaml（server/shared/config.ts），.env 由 compose env_file 注入
 COPY config ./config
+# 迁移以挂载/复制的文件为准（不进 .output），启动时自动应用
+COPY migrations ./migrations
 EXPOSE 3042
-CMD ["node", ".output/server/index.mjs"]
+# 先迁移再起服务：迁移失败就让容器起不来（restart 策略下会重试），
+# 带上病结构继续跑只会更糟。exec 让 node 接管 PID 1，信号能正常送达。
+CMD ["sh", "-c", "node .output/server/maintenance/migrate.mjs && exec node .output/server/index.mjs"]
