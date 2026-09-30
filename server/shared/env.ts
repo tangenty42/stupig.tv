@@ -1,4 +1,6 @@
-import { config } from './config'
+import { load_config } from './config'
+
+const config = load_config()
 
 const node_env = ['development', 'test', 'production'].includes(process.env.NODE_ENV ?? '')
   ? process.env.NODE_ENV as 'development' | 'test' | 'production'

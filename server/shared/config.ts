@@ -10,26 +10,28 @@ load_dotenv({ path: resolve(process.cwd(), '.env') })
 
 const env_var_pattern = /\$\{([A-Z0-9_]+)(?::-([^}]*))?\}/g
 
-// 递归替换字符串中的 ${VAR} / ${VAR:-default}。引用了未设置且无默认值的环境
-// 变量时直接抛错——密钥缺失应当在启动时炸掉，而不是带病运行。
-function interpolate(value: unknown): unknown {
+// 递归替换字符串中的 ${VAR} / ${VAR:-default}。无默认值且未设置（或为空）的
+// 变量替换为空串并记入 missing，由调用方决定是否致命：运行期（load_config）
+// 必须报错，构建期（load_public_config）只要 public 白名单，缺密钥也得能出产物。
+function interpolate(value: unknown, missing: Set<string>): unknown {
   if (typeof value === 'string') {
     return value.replace(env_var_pattern, (match, name: string, fallback?: string) => {
+      if (fallback !== undefined) {
+        return process.env[name] ?? fallback
+      }
       const env_value = process.env[name]
-      if (env_value === undefined) {
-        if (fallback !== undefined) {
-          return fallback
-        }
-        throw new Error(`YAML 配置引用了这个，不知何意味：${name} (${match})`)
+      if (! env_value) {
+        missing.add(name)
+        return ''
       }
       return env_value
     })
   }
   if (Array.isArray(value)) {
-    return value.map(interpolate)
+    return value.map(item => interpolate(item, missing))
   }
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, interpolate(item)]))
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, interpolate(item, missing)]))
   }
   return value
 }
@@ -52,7 +54,9 @@ const config_schema = z.object({
     host: z.string().min(1),
     port: z.number(),
     user: z.string().min(1),
-    password: z.string().min(1),
+    // 以下密钥类字段值来自 .env；缺失/为空由 load_config 统一报错（见 required 校验），
+    // 构建期不校验，所以这里只约束类型
+    password: z.string(),
     name: z.string().min(1),
   }),
   redis: z.object({
@@ -80,13 +84,13 @@ const config_schema = z.object({
     endpoint: z.string().min(1),
     region: z.string().min(1),
     bucket: z.string().min(1),
-    accessKeyId: z.string().min(1),
-    accessKeySecret: z.string().min(1),
+    accessKeyId: z.string(),
+    accessKeySecret: z.string(),
     forcePathStyle: z.boolean(),
   }),
   aliyun: z.object({
-    accessKeyId: z.string().min(1),
-    accessKeySecret: z.string().min(1),
+    accessKeyId: z.string(),
+    accessKeySecret: z.string(),
     dypns: z.object({
       endpoint: z.string().min(1),
       regionId: z.string().min(1),
@@ -112,7 +116,8 @@ const config_schema = z.object({
     }),
     auth: z.object({
       jwt: z.object({
-        secret: z.string().min(32),
+        // 长度下限在 load_config 里校验（构建期密钥为空，schema 不能卡长度）
+        secret: z.string(),
         expiresInDays: z.number().positive(),
         renewBeforeDays: z.number().min(0),
       }),
@@ -214,7 +219,7 @@ const config_schema = z.object({
 
 export type AppConfig = z.infer<typeof config_schema>
 
-export function load_config(): AppConfig {
+function load_layers(): { tree: unknown, missing_environment: Set<string> } {
   const env_name = process.env.NODE_ENV ?? 'development'
   const config_dir = resolve(process.cwd(), 'config')
 
@@ -232,11 +237,36 @@ export function load_config(): AppConfig {
     }
   }
 
-  const result = config_schema.safeParse(interpolate(merged))
+  const missing_environment = new Set<string>()
+  return { tree: interpolate(merged, missing_environment), missing_environment }
+}
+
+function parse_tree(tree: unknown): AppConfig {
+  const result = config_schema.safeParse(tree)
   if (! result.success) {
     throw new Error(`Invalid configuration: ${result.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`)
   }
   return result.data
 }
 
-export const config = load_config()
+// 服务端运行时的唯一入口：密钥缺失（含空值）或 JWT 过短都应在启动时炸掉，
+// 而不是带病运行。刻意不做模块级 eager 导出：构建期工具只取 public 白名单，
+// 不能因为构建机没有 .env 就加载失败。
+export function load_config(): AppConfig {
+  const { tree, missing_environment } = load_layers()
+  if (missing_environment.size) {
+    throw new Error(`.env 缺少必需的密钥：${[... missing_environment].sort().join('、')}（config/*.yaml 通过插值引用它们）`)
+  }
+  const parsed = parse_tree(tree)
+  if (parsed.app.auth.jwt.secret.length < 32) {
+    throw new Error('JWT_SECRET 至少需要 32 个字符')
+  }
+  return parsed
+}
+
+// nuxt.config 专用：构建期只需要 runtimeConfig.public 白名单（其中不含任何密钥），
+// 而构建机（Dockerfile/CI）没有 .env，所以这条路径不校验密钥，只保证结构可用。
+// 客户端可见的那部分来自 config/*.yaml 的字面量，与密钥无关。
+export function load_public_config(): AppConfig {
+  return parse_tree(load_layers().tree)
+}

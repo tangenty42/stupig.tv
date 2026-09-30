@@ -1,6 +1,10 @@
 import { resolve } from 'node:path'
 import Aura from '@primeuix/themes/aura'
-import { config } from './server/shared/config'
+import { load_public_config } from './server/shared/config'
+
+// 构建期没有 .env（Dockerfile/CI），而这里只需要下发到客户端的白名单，所以走
+// load_public_config：不校验密钥，密钥由运行时的 load_config 负责。
+const config = load_public_config()
 
 // 客户端可见配置的白名单映射。配置本体在 config/*.yaml，schema 与类型推导在
 // server/shared/config.ts；只有这里列出的字段会通过 runtimeConfig.public 下发。
