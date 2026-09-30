@@ -11,9 +11,6 @@
     },
     {
       "path": "./.nuxt/tsconfig.node.json"
-    },
-    {
-      "path": "./scripts/tsconfig.json"
     }
   ],
   // https://nuxt.com/docs/guide/concepts/typescript
