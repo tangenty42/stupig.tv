@@ -209,8 +209,7 @@ export default defineNuxtConfig({
   site: {
     url: public_config.site_url,
     name: 'Stupig 蠢猪小组',
-    // Production is served by a dev-mode process, so indexing can't rely on
-    // NODE_ENV — it's an explicit switch.
+    // indexable 由 config 显式声明（本地在 local.yaml 覆盖为 false），不依赖 NODE_ENV
     indexable: public_config.site_indexable,
   },
   sitemap: {
