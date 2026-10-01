@@ -364,7 +364,7 @@ import { form_default, form_schema } from '@shared/schemas'
 import { sync_resource } from '@shared/types/sync'
 
 import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
+import utc from 'dayjs/plugin/utc.js'
 import { useCaptcha } from '~/composables/useCaptcha'
 import { avatar_url } from '~/utils/avatar'
 

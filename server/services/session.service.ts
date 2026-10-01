@@ -5,7 +5,7 @@ import { db } from '@server/lib/db'
 import { get_client_ip } from '@server/lib/session'
 import { env } from '@shared/env'
 import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
+import utc from 'dayjs/plugin/utc.js'
 
 dayjs.extend(utc)
 

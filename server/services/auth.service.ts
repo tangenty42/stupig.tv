@@ -16,7 +16,7 @@ import { normalize_permission_grants } from '@shared/permissions'
 import { phone_schema } from '@shared/schemas'
 import bcrypt from 'bcryptjs'
 import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
+import utc from 'dayjs/plugin/utc.js'
 
 dayjs.extend(utc)
 
