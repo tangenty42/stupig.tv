@@ -1,4 +1,5 @@
 import antfu from '@antfu/eslint-config'
+import localRules from './eslint.local-rules.mjs'
 
 export default antfu(
   {
@@ -56,6 +57,14 @@ export default antfu(
     rules: {
       // Console is the server logger
       'no-console': 'off',
+    },
+  },
+  {
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/no-extensionless-package-subpath': 'error',
     },
   },
 )

@@ -13,7 +13,7 @@ import { env } from '@shared/env'
 import { has_permission, normalize_permission_grants } from '@shared/permissions'
 import bcrypt from 'bcryptjs'
 import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
+import utc from 'dayjs/plugin/utc.js'
 
 dayjs.extend(utc)
 
