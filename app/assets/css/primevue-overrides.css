@@ -1,6 +1,10 @@
-/* PrimeVue design token overrides — must load AFTER primevue core CSS */
+/* PrimeVue design token overrides. PrimeVue 4.5 injects its theme variables
+   (also on `:root,:host`) at runtime into the end of <head>, so in production
+   builds they land AFTER this stylesheet and would win the cascade. `html:root`
+   bumps specificity so these overrides always beat the theme, regardless of
+   injection order. */
 
-:root {
+html:root {
   --p-inputtext-invalid-placeholder-color: var(--p-inputtext-placeholder-color);
 
   --p-toast-blur: 16px;
