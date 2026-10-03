@@ -12,10 +12,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: ${APP_PORT}
-      # runtimeConfig.public 在构建期烘焙，而构建镜像时没有 .env（.dockerignore），
-      # 所以镜像里的 mqtt_web_url 是空串；这里用 Nuxt 的 NUXT_PUBLIC_* 覆盖在容器
-      # 启动时注入 .env 的真值，随 SSR 下发给浏览器。改地址只需重启容器，无需重建镜像。
-      NUXT_PUBLIC_MQTT_WEB_URL: ${MQTT_WEB_URL}
+      # 浏览器侧的 MQTT 地址不需要在这里映射：镜像自带的 docker-entrypoint.sh 会用
+      # .env 里的 MQTT_WEB_URL 派生 NUXT_PUBLIC_MQTT_WEB_URL（CI 只推镜像，compose
+      # 文件在服务器上单独维护，映射写在这里会与镜像走岔）。
     ports:
       # 只绑回环，外部流量由 openresty 反代进来
       - 127.0.0.1:${APP_PORT}:${APP_PORT}

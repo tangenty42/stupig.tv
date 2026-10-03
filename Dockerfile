@@ -25,6 +25,14 @@ COPY config ./config
 # 迁移以挂载/复制的文件为准（不进 .output），启动时自动应用
 COPY migrations ./migrations
 EXPOSE 3042
+# 浏览器侧的 MQTT 地址只能运行期注入，派生逻辑必须随镜像发布（见 docker-entrypoint.sh：
+# compose 文件是服务器上单独维护的，CI 只推镜像，放在那里会走岔）。
+# sed 是必需的：Windows 工作区里这个脚本可能是 CRLF，而 #!/bin/sh\r 会让 exec 直接
+# 报 "no such file or directory" —— 容器起不来，且只有真跑起来才看得见。chmod 同理，
+# Windows 检出没有可执行位。
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
 # 先迁移再起服务：迁移失败就让容器起不来（restart 策略下会重试），
 # 带上病结构继续跑只会更糟。exec 让 node 接管 PID 1，信号能正常送达。
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["sh", "-c", "node .output/server/maintenance/migrate.mjs && exec node .output/server/index.mjs"]
