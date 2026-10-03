@@ -3,7 +3,7 @@
 # 宿主机端口全部来自 .env：无默认值，未设置 compose 会直接报错。
 # config/*.yaml 引用同一批变量——改端口只改 .env，两处自动一致。
 # MySQL 的账号密码同样来自 .env，经下方 environment 注入容器，与
-# config/development.yaml 里插值出的连接密码永远一致。
+# config/default.yaml 里 db.password 插值出的连接密码永远一致。
 
 services:
   mysql:

@@ -4,16 +4,17 @@ import jwt, { JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  env: {
-    JWT_SECRET: 'unit-test-secret-with-at-least-32-characters',
-    JWT_EXPIRES_IN_DAYS: 30,
-    AUTH_TOKEN_COOKIE_NAME: 'auth_token',
-    AUTH_USER_COOKIE_NAME: 'auth_user',
-    COOKIE_MAX_AGE_DAYS: 45,
+  config: {
+    app: {
+      auth: {
+        jwt: { secret: 'unit-test-secret-with-at-least-32-characters', expiresInDays: 30 },
+        cookie: { tokenName: 'auth_token', userName: 'auth_user', maxAgeDays: 45 },
+      },
+    },
   },
 }))
 
-vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
 
 const {
   clear_auth_token_cookie,
@@ -65,7 +66,7 @@ describe('sign_auth_token', () => {
     const { token } = sign_auth_token(42)
     const payload = decode(token)
 
-    expect(jwt.verify(token, mocks.env.JWT_SECRET)).toMatchObject(payload)
+    expect(jwt.verify(token, mocks.config.app.auth.jwt.secret)).toMatchObject(payload)
     expect(payload.sub).toBe(42)
     expect(typeof payload.jti).toBe('string')
     expect(payload.jti).not.toHaveLength(0)
@@ -84,7 +85,7 @@ describe('sign_auth_token', () => {
     const { token, exp } = sign_auth_token(42)
 
     expect(exp).toBe(decode(token).exp)
-    expect(exp).toBe(now + mocks.env.JWT_EXPIRES_IN_DAYS * 86400)
+    expect(exp).toBe(now + mocks.config.app.auth.jwt.expiresInDays * 86400)
   })
 
   it('sets iat alongside exp so the renewal window is computable', () => {
@@ -102,7 +103,7 @@ describe('verify_auth_token', () => {
   })
 
   it('rejects an expired token', () => {
-    const expired = jwt.sign({ sub: 7, jti: 'old' }, mocks.env.JWT_SECRET, { expiresIn: - 60 })
+    const expired = jwt.sign({ sub: 7, jti: 'old' }, mocks.config.app.auth.jwt.secret, { expiresIn: - 60 })
 
     expect(() => verify_auth_token(expired)).toThrow(TokenExpiredError)
   })
@@ -123,7 +124,7 @@ describe('verify_auth_token', () => {
     ['a non-numeric sub', { sub: '7', jti: 'x' }],
     ['a non-string jti', { sub: 7, jti: 12 }],
   ])('rejects a token with %s even when the signature is valid', (_label, payload) => {
-    const token = jwt.sign(payload, mocks.env.JWT_SECRET, { expiresIn: 600 })
+    const token = jwt.sign(payload, mocks.config.app.auth.jwt.secret, { expiresIn: 600 })
 
     expect(() => verify_auth_token(token)).toThrow(ApiError)
 
@@ -153,7 +154,7 @@ describe('is_auth_token_expiring', () => {
   })
 
   it('is false for a freshly issued token when the window is zero', () => {
-    expect(is_auth_token_expiring(now() + mocks.env.JWT_EXPIRES_IN_DAYS * 86400, 0)).toBe(false)
+    expect(is_auth_token_expiring(now() + mocks.config.app.auth.jwt.expiresInDays * 86400, 0)).toBe(false)
   })
 })
 
@@ -193,7 +194,7 @@ describe('auth token cookie', () => {
       secure: true,
       sameSite: 'lax',
       path: '/',
-      maxAge: mocks.env.COOKIE_MAX_AGE_DAYS * 86400,
+      maxAge: mocks.config.app.auth.cookie.maxAgeDays * 86400,
     })
   })
 
@@ -225,7 +226,7 @@ describe('set_auth_user_cookie', () => {
 
     expect(name).toBe('auth_user')
     expect(JSON.parse(value)).toMatchObject({ id: 7, username: 'tester', is_admin: false })
-    expect(options).toMatchObject({ sameSite: 'lax', path: '/', maxAge: mocks.env.COOKIE_MAX_AGE_DAYS * 86400 })
+    expect(options).toMatchObject({ sameSite: 'lax', path: '/', maxAge: mocks.config.app.auth.cookie.maxAgeDays * 86400 })
     expect(options).not.toHaveProperty('httpOnly')
   })
 })

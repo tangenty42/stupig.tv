@@ -3,10 +3,16 @@ import { ApiError } from '@server/errors/ApiError'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  env: {
-    JWT_SECRET: 'unit-test-secret-with-at-least-32-characters',
-    JWT_EXPIRES_IN_DAYS: 30,
-    JWT_RENEW_BEFORE_DAYS: 7,
+  config: {
+    app: {
+      auth: {
+        jwt: {
+          secret: 'unit-test-secret-with-at-least-32-characters',
+          expiresInDays: 30,
+          renewBeforeDays: 7,
+        },
+      },
+    },
   },
   session: {
     get_auth_token_from_cookie: vi.fn(),
@@ -23,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   sessions: { refresh_login_session: vi.fn() },
 }))
 
-vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
 vi.mock('@server/lib/session', () => mocks.session)
 vi.mock('@server/lib/db', () => ({ db: mocks.db }))
 vi.mock('@server/services/session.service', () => mocks.sessions)
@@ -161,7 +167,7 @@ describe('require_auth_user token renewal', () => {
 
     await require_auth_user(create_event())
 
-    expect(mocks.session.is_auth_token_expiring).toHaveBeenCalledWith(1_800_000_000, mocks.env.JWT_RENEW_BEFORE_DAYS)
+    expect(mocks.session.is_auth_token_expiring).toHaveBeenCalledWith(1_800_000_000, mocks.config.app.auth.jwt.renewBeforeDays)
     expect(mocks.sessions.refresh_login_session).toHaveBeenCalledWith({
       session_id: 11,
       presented_generation_id: 21,

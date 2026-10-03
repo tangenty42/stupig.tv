@@ -20,15 +20,17 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }))
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn() }))
-vi.mock('@shared/env', () => ({
-  env: {
-    OSS_ENDPOINT: 'https://oss.example.test',
-    OSS_REGION: 'test-region',
-    OSS_FORCE_PATH_STYLE: true,
-    OSS_ACCESS_KEY_ID: 'test-key',
-    OSS_ACCESS_KEY_SECRET: 'test-secret',
-    OSS_BUCKET: 'test-bucket',
-  },
+vi.mock('@shared/config', () => ({
+  runtime_config: () => ({
+    oss: {
+      endpoint: 'https://oss.example.test',
+      region: 'test-region',
+      forcePathStyle: true,
+      accessKeyId: 'test-key',
+      accessKeySecret: 'test-secret',
+      bucket: 'test-bucket',
+    },
+  }),
 }))
 
 const { delete_object_best_effort } = await import('@server/lib/storage')

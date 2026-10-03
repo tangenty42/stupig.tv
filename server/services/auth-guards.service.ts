@@ -7,8 +7,10 @@ import { db } from '@server/lib/db'
 import { get_auth_token_from_cookie, get_client_ip, is_auth_token_expiring, make_token_hash, set_auth_token_cookie, set_auth_user_cookie, sign_auth_token, verify_auth_token } from '@server/lib/session'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { refresh_login_session } from '@server/services/session.service'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
 import { has_permission, normalize_permission_grants } from '@shared/permissions'
+
+const config = runtime_config()
 
 declare module 'h3' {
   interface H3EventContext {
@@ -117,7 +119,7 @@ export async function require_auth_user(event: H3Event) {
   const is_older_generation = ! record.is_newest_generation
 
   if (! is_ssr_prefetch) {
-    const rotate = ! is_older_generation && is_auth_token_expiring(payload.exp, env.JWT_RENEW_BEFORE_DAYS)
+    const rotate = ! is_older_generation && is_auth_token_expiring(payload.exp, config.app.auth.jwt.renewBeforeDays)
     const signed = rotate ? sign_auth_token(record.id) : null
     const next = signed
       ? { hash: await make_token_hash(signed.token), exp: signed.exp }

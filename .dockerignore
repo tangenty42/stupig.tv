@@ -8,7 +8,7 @@ dist
 .env
 .env.*
 !.env.example
-# 本机覆盖（db/redis/mqtt 指向 127.0.0.1）绝不能进镜像
+# 本机覆盖绝不能进镜像（local.yaml 不进仓库，模板见 config/local.example.yaml）
 config/local.yaml
 .tmp-*
 *.log

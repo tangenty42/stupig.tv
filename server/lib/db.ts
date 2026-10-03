@@ -1,12 +1,14 @@
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
 import mysql from 'mysql2/promise'
 
+const config = runtime_config()
+
 const pool = mysql.createPool({
-  host: env.DB_HOST,
-  port: env.DB_PORT,
-  user: env.DB_USER,
-  password: env.DB_PASSWORD,
-  database: env.DB_NAME,
+  host: config.db.host,
+  port: config.db.port,
+  user: config.db.user,
+  password: config.db.password,
+  database: config.db.name,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,

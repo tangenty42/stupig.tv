@@ -11,7 +11,9 @@ import {
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { error_fields, log_error } from '@server/lib/log'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
+
+const config = runtime_config()
 
 interface StoredObject {
   key: string
@@ -35,12 +37,12 @@ function strip_etag(etag: string | undefined) {
 
 function get_client() {
   client ??= new S3Client({
-    endpoint: env.OSS_ENDPOINT,
-    region: env.OSS_REGION,
-    forcePathStyle: env.OSS_FORCE_PATH_STYLE,
+    endpoint: config.oss.endpoint,
+    region: config.oss.region,
+    forcePathStyle: config.oss.forcePathStyle,
     credentials: {
-      accessKeyId: env.OSS_ACCESS_KEY_ID,
-      secretAccessKey: env.OSS_ACCESS_KEY_SECRET,
+      accessKeyId: config.oss.accessKeyId,
+      secretAccessKey: config.oss.accessKeySecret,
     },
   })
   return client
@@ -48,7 +50,7 @@ function get_client() {
 
 export async function put_object(key: string, body: Uint8Array, content_type: string | null) {
   const result = await get_client().send(new PutObjectCommand({
-    Bucket: env.OSS_BUCKET,
+    Bucket: config.oss.bucket,
     Key: key,
     Body: body,
     ContentType: content_type || undefined,
@@ -60,7 +62,7 @@ export async function put_object(key: string, body: Uint8Array, content_type: st
 /** Downloads an object's bytes (server-side transforms like attachment encryption). */
 export async function get_object(key: string) {
   const result = await get_client().send(new GetObjectCommand({
-    Bucket: env.OSS_BUCKET,
+    Bucket: config.oss.bucket,
     Key: key,
   }))
   return new Uint8Array(await result.Body!.transformToByteArray())
@@ -71,12 +73,12 @@ export async function signed_object_url(command: unknown, expires_in: number) {
 }
 
 function copy_source(key: string) {
-  return `${env.OSS_BUCKET}/${key.split('/').map(encodeURIComponent).join('/')}`
+  return `${config.oss.bucket}/${key.split('/').map(encodeURIComponent).join('/')}`
 }
 
 export async function copy_object(source_key: string, target_key: string) {
   const result = await get_client().send(new CopyObjectCommand({
-    Bucket: env.OSS_BUCKET,
+    Bucket: config.oss.bucket,
     Key: target_key,
     CopySource: copy_source(source_key),
     MetadataDirective: 'COPY',
@@ -88,7 +90,7 @@ export async function copy_object(source_key: string, target_key: string) {
 // so deletes go through single-object requests.
 export async function delete_object(key: string) {
   await get_client().send(new DeleteObjectCommand({
-    Bucket: env.OSS_BUCKET,
+    Bucket: config.oss.bucket,
     Key: key,
   }))
 }
@@ -109,7 +111,7 @@ export async function delete_prefix(prefix: string) {
   let continuation_token: string | undefined
   do {
     const page = await get_client().send(new ListObjectsV2Command({
-      Bucket: env.OSS_BUCKET,
+      Bucket: config.oss.bucket,
       Prefix: prefix,
       ContinuationToken: continuation_token,
     }))
@@ -121,7 +123,7 @@ export async function delete_prefix(prefix: string) {
 
 export async function head_object(key: string) {
   const result = await get_client().send(new HeadObjectCommand({
-    Bucket: env.OSS_BUCKET,
+    Bucket: config.oss.bucket,
     Key: key,
   }))
   return {
@@ -136,7 +138,7 @@ export async function list_objects(prefix = '') {
   let continuation_token: string | undefined
   do {
     const page = await get_client().send(new ListObjectsV2Command({
-      Bucket: env.OSS_BUCKET,
+      Bucket: config.oss.bucket,
       Prefix: prefix,
       ContinuationToken: continuation_token,
     }))
@@ -162,7 +164,7 @@ export async function list_multipart_uploads(prefix = '') {
 
   do {
     const page = await get_client().send(new ListMultipartUploadsCommand({
-      Bucket: env.OSS_BUCKET,
+      Bucket: config.oss.bucket,
       Prefix: prefix,
       KeyMarker: key_marker,
       UploadIdMarker: upload_id_marker,
@@ -187,7 +189,7 @@ export async function list_multipart_uploads(prefix = '') {
 
 export async function abort_multipart_upload(key: string, upload_id: string) {
   await get_client().send(new AbortMultipartUploadCommand({
-    Bucket: env.OSS_BUCKET,
+    Bucket: config.oss.bucket,
     Key: key,
     UploadId: upload_id,
   }))

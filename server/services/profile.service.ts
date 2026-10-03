@@ -9,11 +9,13 @@ import { check_otp_sms } from '@server/lib/sms'
 import { delete_object_best_effort, put_object } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
 import { has_permission, normalize_permission_grants } from '@shared/permissions'
 import bcrypt from 'bcryptjs'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
+
+const config = runtime_config()
 
 dayjs.extend(utc)
 
@@ -118,7 +120,7 @@ export const select_profile_row_sql = `
 export async function get_profile(viewer: AuthUser | null, target_id: number) {
   const [rows] = await db.execute<UserRow[]>(
     `${select_profile_row_sql} WHERE u.id = ?`,
-    [env.ONLINE_TIMEOUT_SECONDS, target_id],
+    [config.app.online.timeoutSeconds, target_id],
   )
 
   const user = rows[0]
@@ -171,7 +173,7 @@ export async function change_profile_password(user_id: number, payload: ChangePa
     throw new ApiError(400, '旧密码不正确')
   }
 
-  const new_hash = await bcrypt.hash(payload.new_password, env.BCRYPT_ROUNDS)
+  const new_hash = await bcrypt.hash(payload.new_password, config.app.auth.bcryptRounds)
   await db.execute(
     'UPDATE users SET password_hash = ? WHERE id = ?',
     [new_hash, user_id],
@@ -197,7 +199,7 @@ export async function change_profile_password_by_otp(auth_user: AuthUser, payloa
 }
 
 export async function reset_profile_password(user_id: number, new_password: string) {
-  const new_hash = await bcrypt.hash(new_password, env.BCRYPT_ROUNDS)
+  const new_hash = await bcrypt.hash(new_password, config.app.auth.bcryptRounds)
   await db.execute(
     'UPDATE users SET password_hash = ? WHERE id = ?',
     [new_hash, user_id],
