@@ -12,9 +12,11 @@ Learn more about us at our official website [stupig.tv](https://www.stupig.tv).
 - Reverse-proxy your EMQX WebSocket endpoint (`http://127.0.0.1:8083/mqtt`) with SSL
   under a dedicated host like `mqtt.example.com`, then set `MQTT_WEB_URL` in `.env`
   to the full browser-facing address (e.g. `wss://mqtt.example.com/mqtt`, no port needed
-  behind the reverse proxy). The image is built without a `.env`, so the browser value
-  is injected at container start via `NUXT_PUBLIC_MQTT_WEB_URL` (`docker-compose.yml`);
-  changing it only needs a container restart, not a rebuild. The server asserts at startup
+  behind the reverse proxy). The image is built without a `.env`, so the browser value is
+  derived at container start by the image's own entrypoint from `MQTT_WEB_URL` (see
+  `docker-entrypoint.sh`); changing it only needs a container restart, not a rebuild. The
+  server asserts at startup that the derived value matches `MQTT_WEB_URL`, so a mismatch
+  keeps the container down instead of silently handing the browser an empty broker URL. The server asserts at startup
   that the injected value matches `MQTT_WEB_URL`, so a missing or stale injection keeps the
   container down instead of silently handing the browser an empty broker URL
 - Migrations under `migrations/` are applied automatically when the container starts
