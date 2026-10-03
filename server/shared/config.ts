@@ -52,7 +52,9 @@ function deep_merge(base: unknown, override: unknown): unknown {
 const config_schema = z.object({
   db: z.object({
     host: z.string().min(1),
-    port: z.number(),
+    // 端口走 ${VAR} 插值（见 development.yaml），interpolate 只产出字符串，故
+    // coerce 归一为 number；以下各端口字段同理
+    port: z.coerce.number(),
     user: z.string().min(1),
     // 以下密钥类字段值来自 .env；缺失/为空由 load_config 统一报错（见 required 校验），
     // 构建期不校验，所以这里只约束类型
@@ -61,12 +63,12 @@ const config_schema = z.object({
   }),
   redis: z.object({
     host: z.string().min(1),
-    port: z.number(),
+    port: z.coerce.number(),
     password: z.string().optional(),
   }),
   mqtt: z.object({
     host: z.string().min(1),
-    port: z.number(),
+    port: z.coerce.number(),
     username: z.string().optional(),
     password: z.string().optional(),
     qos: z.number(),
@@ -75,7 +77,7 @@ const config_schema = z.object({
     publishQueueSize: z.number().int().min(1),
     web: z.object({
       wsHost: z.string().min(1),
-      wsPort: z.number(),
+      wsPort: z.coerce.number(),
       wssPort: z.number(),
       clientIdPrefix: z.string().min(1),
     }),
@@ -106,7 +108,7 @@ const config_schema = z.object({
     }),
   }),
   site: z.object({
-    url: z.url(),
+    url: z.url({ protocol: /^https?$/, hostname: z.hostname() }),
     indexable: z.boolean(),
     staticBaseUrl: z.string(),
   }),
