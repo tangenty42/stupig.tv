@@ -6,7 +6,8 @@ COPY package.json pnpm-lock.yaml ./
 # --ignore-scripts: postinstall 的 nuxt prepare / git hooks 需要完整源码与 .git，构建阶段跳过
 RUN corepack enable && pnpm install --frozen-lockfile --ignore-scripts
 COPY . .
-# 构建期的 public 配置由 load_public_config 读取，不校验密钥，所以无需 .env。
+# 构建期的 public 配置由 load_public_config 读取：不校验密钥与连接信息（插值字段
+# 允许为空），所以无需 .env。客户端唯一需要的插值字段在容器启动时注入（compose）。
 # 固定 production 覆盖层，免得构建机的 NODE_ENV 影响 config/*.yaml 合并结果。
 ENV NODE_ENV=production
 RUN pnpm build

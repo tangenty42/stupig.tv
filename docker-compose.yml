@@ -12,11 +12,17 @@ services:
     environment:
       NODE_ENV: production
       PORT: ${APP_PORT}
+      # runtimeConfig.public 在构建期烘焙，而构建镜像时没有 .env（.dockerignore），
+      # 所以镜像里的 mqtt_web_url 是空串；这里用 Nuxt 的 NUXT_PUBLIC_* 覆盖在容器
+      # 启动时注入 .env 的真值，随 SSR 下发给浏览器。改地址只需重启容器，无需重建镜像。
+      NUXT_PUBLIC_MQTT_WEB_URL: ${MQTT_WEB_URL}
     ports:
       # 只绑回环，外部流量由 openresty 反代进来
       - 127.0.0.1:${APP_PORT}:${APP_PORT}
     healthcheck:
-      test: [CMD, node, -e, 'fetch(`http://127.0.0.1:${process.env.APP_PORT}/`).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      # 端口由 compose 从 .env 的 APP_PORT 插值（与上面的 PORT / ports 同源），
+      # 别写成容器内的 ${process.env.APP_PORT}：compose 会先按自己的格式解析而报错
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:${APP_PORT}/").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
       interval: 30s
       timeout: 5s
       retries: 3
