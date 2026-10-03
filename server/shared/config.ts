@@ -285,8 +285,8 @@ export function runtime_config(): AppConfig {
 // nuxt.config 专用：构建期只需要 runtimeConfig.public 白名单（其中不含任何密钥），
 // 而构建机（Dockerfile/CI）没有 .env，所以这条路径不校验密钥与连接信息：${VAR}
 // 无默认值的字段插值成空串也能出产物，空值由运行期的 load_config 拦截。客户端
-// 可见的那部分来自 config/*.yaml 的字面量；唯一插值字段 mqtt.web.wsUrl 在容器启动
-// 时由 NUXT_PUBLIC_MQTT_WEB_URL 覆盖（见 docker-compose.yml）。
+// 可见的那部分来自 config/*.yaml 的字面量；唯一插值字段 mqtt.web.wsUrl 由容器的入口
+// 脚本从 MQTT_WEB_URL 派生注入（见 docker-entrypoint.sh）。
 export function load_public_config(): AppConfig {
   return parse_tree(load_layers().tree)
 }
@@ -294,7 +294,8 @@ export function load_public_config(): AppConfig {
 // 「构建期烘焙不了、必须运行期注入」的 public 白名单字段：键是 runtimeConfig.public 里的
 // 名字，值是它必须等于什么——同一份 .env 推出的配置，也就是服务端自己在用的那份。
 // 构建机没有 .env，这类字段在镜像里只能是空串，唯一来源是容器启动时的 NUXT_PUBLIC_<键>
-// （见 docker-compose.yml）。server/plugins/public-config-guard.ts 在启动时按这张表断言，
+// （镜像入口脚本从 MQTT_WEB_URL 派生，见 docker-entrypoint.sh）。server/plugins/public-config-guard.ts
+// 在启动时按这张表断言，
 // 所以以后白名单里再加 .env 插值的字段，只要在这里补一行就算接上了守卫。
 export function runtime_injected_public(config: AppConfig): Record<string, unknown> {
   return {
