@@ -26,7 +26,9 @@ vi.mock('@server/lib/sync', () => ({
 vi.mock('@server/services/session.service', () => ({
   logout_session: vi.fn(),
 }))
-vi.mock('@shared/env', () => ({ env: {} }))
+vi.mock('@shared/config', () => ({
+  runtime_config: () => ({ app: { auth: { bcryptRounds: 10 }, online: { timeoutSeconds: 16 } } }),
+}))
 
 const { upload_profile_avatar } = await import('@server/services/profile.service')
 

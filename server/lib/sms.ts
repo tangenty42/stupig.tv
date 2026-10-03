@@ -3,7 +3,9 @@ import DypnsapiModule, { CheckSmsVerifyCodeRequest, SendSmsVerifyCodeRequest } f
 import { Config } from '@alicloud/openapi-client'
 import { ApiError } from '@server/errors/ApiError'
 import { error_fields, log_error } from '@server/lib/log'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
+
+const config = runtime_config()
 
 function is_dypnsapi_module_default(value: unknown): value is { default: typeof DypnsapiClass } {
   return typeof value === 'object' && value !== null && 'default' in value
@@ -15,10 +17,10 @@ const Dypnsapi = is_dypnsapi_module_default(DypnsapiModule)
   : DypnsapiModule as unknown as typeof DypnsapiClass
 
 const client = new Dypnsapi(new Config({
-  accessKeyId: env.ALIYUN_ACCESS_KEY_ID,
-  accessKeySecret: env.ALIYUN_ACCESS_KEY_SECRET,
-  endpoint: env.ALIYUN_DYPNSAPI_ENDPOINT,
-  regionId: env.ALIYUN_DYPNSAPI_REGION_ID,
+  accessKeyId: config.aliyun.accessKeyId,
+  accessKeySecret: config.aliyun.accessKeySecret,
+  endpoint: config.aliyun.dypns.endpoint,
+  regionId: config.aliyun.dypns.regionId,
 }))
 
 interface SendOtpSmsInput {
@@ -27,23 +29,23 @@ interface SendOtpSmsInput {
 }
 
 export async function send_otp_sms(input: SendOtpSmsInput) {
-  if (env.OTP_DEBUG) {
+  if (config.app.otp.debug) {
     return
   }
 
   const request = new SendSmsVerifyCodeRequest({
     phoneNumber: input.phone,
-    signName: env.OTP_SMS_SIGN_NAME,
-    templateCode: env.OTP_SMS_TEMPLATE_CODE,
+    signName: config.aliyun.sms.signName,
+    templateCode: config.aliyun.sms.templateCode,
     templateParam: JSON.stringify({
       code: '##code##',
-      min: `${env.OTP_EXPIRES_MINUTES}`,
+      min: `${config.app.otp.expiresMinutes}`,
     }),
-    schemeName: env.OTP_SMS_SCHEME_NAME,
+    schemeName: config.aliyun.sms.schemeName,
     codeLength: 6,
     codeType: 1,
-    validTime: env.OTP_EXPIRES_MINUTES * 60,
-    returnVerifyCode: env.OTP_DEBUG,
+    validTime: config.app.otp.expiresMinutes * 60,
+    returnVerifyCode: config.app.otp.debug,
     outId: input.out_id,
   })
 
@@ -68,14 +70,14 @@ interface CheckOtpSmsInput {
 }
 
 export async function check_otp_sms(input: CheckOtpSmsInput) {
-  if (env.OTP_DEBUG) {
+  if (config.app.otp.debug) {
     return
   }
 
   const request = new CheckSmsVerifyCodeRequest({
     phoneNumber: input.phone,
     verifyCode: input.code,
-    schemeName: env.OTP_SMS_SCHEME_NAME,
+    schemeName: config.aliyun.sms.schemeName,
   })
 
   try {

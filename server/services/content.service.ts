@@ -12,11 +12,13 @@ import { random_file_token } from '@server/lib/random'
 import { copy_object, delete_object_best_effort, get_object, head_object, put_object, signed_object_url } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { create_folder_rows, delete_attachment_rows, delete_folder_rows, delete_rows_by_ids, delete_story_attachment_rows, get_scope_attachment, get_scope_object_keys, get_story_object_keys, insert_attachment_row, list_cover_urls, list_folder_subtree_rows, list_scope_attachments, list_scope_encryption_keys, list_scope_file_rows, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id, update_attachment_row_encryption, update_attachment_row_object } from '@server/services/content-attachments.service'
+import { runtime_config } from '@shared/config'
 import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, extract_story_reference_titles, is_encrypted_attachment, link_file_name_byte_length, parse_story_markdown, redactable_attachment_mime, rename_attachment_references, rename_story_references, sanitize_attachment_file_name, sanitize_attachment_path } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
-import { env } from '@shared/env'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 import { has_permission } from '@shared/permissions'
+
+const config = runtime_config()
 
 interface StoryRow extends RowDataPacket {
   id: number
@@ -49,11 +51,11 @@ interface StoryRevisionRow extends RowDataPacket {
 }
 
 const content_markdown_config = {
-  title_max_length: env.CONTENT_STORY_TITLE_MAX_LENGTH,
-  label_max_bytes: env.CONTENT_STORY_LABEL_MAX_BYTES,
-  desc_max_bytes: env.CONTENT_STORY_DESC_MAX_BYTES,
-  cover_max_bytes: env.CONTENT_STORY_COVER_MAX_BYTES,
-  markdown_max_bytes: env.CONTENT_STORY_MARKDOWN_MAX_BYTES,
+  title_max_length: config.app.content.story.titleMaxLength,
+  label_max_bytes: config.app.content.story.labelMaxBytes,
+  desc_max_bytes: config.app.content.story.descMaxBytes,
+  cover_max_bytes: config.app.content.story.coverMaxBytes,
+  markdown_max_bytes: config.app.content.story.markdownMaxBytes,
 } satisfies ContentMarkdownConfig
 
 const upload_url_expires_seconds = 15 * 60
@@ -72,7 +74,7 @@ export async function sign_attachment_upload(input: ContentUploadSignRequest) {
   assert_content_upload_key(input.story_id, input.key)
   await get_story(input.story_id)
 
-  const common = { Bucket: env.OSS_BUCKET, Key: input.key }
+  const common = { Bucket: config.oss.bucket, Key: input.key }
   let command
   let return_key = false
   if (input.method === 'PUT' && input.upload_id && input.part_number) {
@@ -108,7 +110,7 @@ export async function sign_attachment_upload(input: ContentUploadSignRequest) {
 export async function confirm_attachment_upload(story_id: number, key: string, raw_file_name: string) {
   assert_content_upload_key(story_id, key)
   const object = await head_object(key)
-  const base_name = sanitize_attachment_path(raw_file_name, env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
+  const base_name = sanitize_attachment_path(raw_file_name, config.app.content.link.fileNameMaxBytes)
   // A signed upload can outlive its story, so the scope is revalidated here.
   await get_story(story_id)
   const file_name = resolve_attachment_name(base_name, await list_scope_paths(story_id), 'suffix')
@@ -735,7 +737,7 @@ function suffixed_attachment_name(file_name: string, ext: string) {
   const base = attachment_base_name(file_name)
   const stem = ext ? base.slice(0, - ext.length) : base
   const suffix = `-${random_file_token()}`
-  const stem_limit = env.CONTENT_LINK_FILE_NAME_MAX_BYTES - link_file_name_byte_length(suffix) - link_file_name_byte_length(ext)
+  const stem_limit = config.app.content.link.fileNameMaxBytes - link_file_name_byte_length(suffix) - link_file_name_byte_length(ext)
   return attachment_path_join(attachment_folder_of(file_name), `${sanitize_attachment_file_name(stem, Math.max(stem_limit, 1))}${suffix}${ext}`)
 }
 
@@ -944,7 +946,7 @@ async function transform_attachment_encryption(story_id: number, kind: 'encrypt'
       return { attachments, succeeded: [], skipped }
     }
     if (encrypting) {
-      const max_bytes = env.MAX_CONTENT_ENCRYPT_SIZE_MB * 1024 * 1024
+      const max_bytes = config.app.content.encrypt.maxSizeMb * 1024 * 1024
       for (const row of [... targets]) {
         if (Number(row.file_size) > max_bytes) {
           skipped.push({ file_name: row.file_name, reason: '文件太大' })
@@ -1261,7 +1263,7 @@ export async function replace_attachment(
     throw new ApiError(409, '已加密的附件不能替换，请先取消加密')
 
   const object = await head_object(key)
-  const new_name = sanitize_attachment_file_name(raw_file_name || 'file', env.CONTENT_LINK_FILE_NAME_MAX_BYTES)
+  const new_name = sanitize_attachment_file_name(raw_file_name || 'file', config.app.content.link.fileNameMaxBytes)
   // The scope's files and folders share one path space, so a replacement has to
   // clear both before it can take a name.
   const existing = await list_scope_paths(story_id)

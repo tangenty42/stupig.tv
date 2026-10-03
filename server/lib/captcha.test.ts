@@ -2,13 +2,14 @@ import { createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  env: {
-    CAPTCHA_APP_ID: 'app-id-123',
-    CAPTCHA_APP_KEY: 'app-key-456',
+  config: {
+    aliyun: {
+      captcha: { appId: 'app-id-123', appKey: 'app-key-456' },
+    },
   },
 }))
 
-vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
 
 const { verify_captcha } = await import('@server/lib/captcha')
 
@@ -46,14 +47,14 @@ afterEach(() => {
 
 describe('verify_captcha', () => {
   it('skips validation entirely when the captcha is not configured', async () => {
-    const app_id = mocks.env.CAPTCHA_APP_ID
-    mocks.env.CAPTCHA_APP_ID = ''
+    const app_id = mocks.config.aliyun.captcha.appId
+    mocks.config.aliyun.captcha.appId = ''
 
     try {
       await expect(verify_captcha(undefined)).resolves.toBeUndefined()
     }
     finally {
-      mocks.env.CAPTCHA_APP_ID = app_id
+      mocks.config.aliyun.captcha.appId = app_id
     }
 
     expect(fetch_mock).not.toHaveBeenCalled()
@@ -76,14 +77,14 @@ describe('verify_captcha', () => {
 
     const [url, init] = fetch_mock.mock.calls[0] as [string, { method: string, headers: Record<string, string>, body: string }]
 
-    expect(url).toBe(`https://captcha.alicaptcha.com/validate?captcha_id=${encodeURIComponent(mocks.env.CAPTCHA_APP_ID)}`)
+    expect(url).toBe(`https://captcha.alicaptcha.com/validate?captcha_id=${encodeURIComponent(mocks.config.aliyun.captcha.appId)}`)
     expect(init.method).toBe('POST')
     expect(init.headers['Content-Type']).toBe('application/x-www-form-urlencoded')
 
     const body = new URLSearchParams(init.body)
     expect(Object.fromEntries(body)).toEqual({
       ... valid_params,
-      sign_token: createHmac('sha256', mocks.env.CAPTCHA_APP_KEY).update(valid_params.lot_number).digest('hex'),
+      sign_token: createHmac('sha256', mocks.config.aliyun.captcha.appKey).update(valid_params.lot_number).digest('hex'),
     })
   })
 

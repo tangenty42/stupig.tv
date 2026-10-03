@@ -233,7 +233,8 @@ function load_layers(): { tree: unknown, missing_environment: Set<string> } {
 
   let merged: unknown = {}
   // local.yaml：可选的本机覆盖（gitignore，不进仓库），优先级最高——
-  // 用于开发者的本地环境差异（如 Windows 本地 MySQL/Redis/EMQX 指向 127.0.0.1）。
+  // 用于 .env 覆盖不到的配置项（主机名/端口/账号已在 .env，见 .env.example
+  // 与 config/local.example.yaml）。
   for (const file of ['default.yaml', `${env_name}.yaml`, 'local.yaml']) {
     const path = resolve(config_dir, file)
     if (! existsSync(path)) {
@@ -270,6 +271,15 @@ export function load_config(): AppConfig {
     throw new Error('JWT_SECRET 至少需要 32 个字符')
   }
   return parsed
+}
+
+// 运行期配置单例：首次取值时加载并缓存。刻意保持懒加载——构建期工具（nuxt.config.ts）
+// 只调 load_public_config，不能因为 import 本模块就去读 .env：镜像构建机没有 .env，
+// load_config 会直接把构建打挂。
+let runtime_config_cache: AppConfig | undefined
+
+export function runtime_config(): AppConfig {
+  return runtime_config_cache ??= load_config()
 }
 
 // nuxt.config 专用：构建期只需要 runtimeConfig.public 白名单（其中不含任何密钥），

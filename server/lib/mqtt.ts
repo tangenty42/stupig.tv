@@ -1,16 +1,18 @@
 import { error_fields, log_error, log_info } from '@server/lib/log'
+import { runtime_config } from '@shared/config'
 import mqtt from 'mqtt'
-import { env } from '../shared/env'
+
+const config = runtime_config()
 
 function server_client_id() {
-  return `${env.MQTT_CLIENT_ID_PREFIX_SERVER}_${process.pid}_${Date.now()}`
+  return `${config.mqtt.clientIdPrefixServer}_${process.pid}_${Date.now()}`
 }
 
 function broker_url() {
-  const auth = env.MQTT_USERNAME && env.MQTT_PASSWORD
-    ? `${encodeURIComponent(env.MQTT_USERNAME)}:${encodeURIComponent(env.MQTT_PASSWORD)}@`
+  const auth = config.mqtt.username && config.mqtt.password
+    ? `${encodeURIComponent(config.mqtt.username)}:${encodeURIComponent(config.mqtt.password)}@`
     : ''
-  return `mqtt://${auth}${env.MQTT_HOST}:${env.MQTT_PORT}`
+  return `mqtt://${auth}${config.mqtt.host}:${config.mqtt.port}`
 }
 
 let client: mqtt.MqttClient | null = null
@@ -31,7 +33,7 @@ function flush_pending(client: mqtt.MqttClient) {
   const queued = pending
   pending = []
   for (const { resource, payload } of queued) {
-    client.publish(sync_topic(resource), payload, { qos: env.MQTT_QOS as 0 | 1 | 2 })
+    client.publish(sync_topic(resource), payload, { qos: config.mqtt.qos as 0 | 1 | 2 })
   }
 }
 
@@ -73,7 +75,7 @@ export function get_mqtt_client() {
 }
 
 export function sync_topic(resource: string) {
-  return `${env.MQTT_TOPIC_PREFIX}/${resource}`
+  return `${config.mqtt.topicPrefix}/${resource}`
 }
 
 // The broker may be unreachable for seconds at a time (reconnectPeriod is 5s),
@@ -84,16 +86,16 @@ export function publish_sync(resource: string, payload: string) {
   const mqtt = get_mqtt_client()
 
   if (mqtt?.connected) {
-    mqtt.publish(sync_topic(resource), payload, { qos: env.MQTT_QOS as 0 | 1 | 2 })
+    mqtt.publish(sync_topic(resource), payload, { qos: config.mqtt.qos as 0 | 1 | 2 })
     return
   }
 
-  if (pending.length >= env.MQTT_PUBLISH_QUEUE_SIZE) {
+  if (pending.length >= config.mqtt.publishQueueSize) {
     pending.shift()
     dropped_total += 1
     log_error('mqtt-publish-dropped', {
       resource,
-      queue_size: env.MQTT_PUBLISH_QUEUE_SIZE,
+      queue_size: config.mqtt.publishQueueSize,
       dropped_total,
     })
   }

@@ -1,8 +1,10 @@
 import type { User } from '@shared/types/user'
 import type { H3Event } from 'h3'
 import { ApiError } from '@server/errors/ApiError'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
 import jwt from 'jsonwebtoken'
+
+const config = runtime_config()
 
 function verify_jwt_payload(payload: jwt.JwtPayload) {
   if (typeof payload.sub !== 'number' || typeof payload.jti !== 'string' || typeof payload.iat !== 'number' || typeof payload.exp !== 'number') {
@@ -19,8 +21,8 @@ function verify_jwt_payload(payload: jwt.JwtPayload) {
 export function sign_auth_token(user_id: number) {
   const token = jwt.sign(
     { sub: user_id, jti: crypto.randomUUID() },
-    env.JWT_SECRET,
-    { expiresIn: env.JWT_EXPIRES_IN_DAYS * 86400 },
+    config.app.auth.jwt.secret,
+    { expiresIn: config.app.auth.jwt.expiresInDays * 86400 },
   )
 
   // Read `exp` back off the signed token instead of recomputing it from
@@ -32,7 +34,7 @@ export function sign_auth_token(user_id: number) {
 }
 
 export function verify_auth_token(token: string) {
-  const decoded = jwt.verify(token, env.JWT_SECRET)
+  const decoded = jwt.verify(token, config.app.auth.jwt.secret)
   if (typeof decoded === 'string') {
     throw new ApiError(401, '登录状态已过期，请重新登录')
   }
@@ -52,7 +54,7 @@ export async function make_token_hash(token: string) {
 }
 
 export function get_auth_token_from_cookie(event: H3Event) {
-  return getCookie(event, env.AUTH_TOKEN_COOKIE_NAME) || null
+  return getCookie(event, config.app.auth.cookie.tokenName) || null
 }
 
 // The token is a bearer credential, so the cookie is written only by the server
@@ -68,14 +70,14 @@ const AUTH_COOKIE_OPTIONS = {
 } as const
 
 export function set_auth_token_cookie(event: H3Event, token: string) {
-  setCookie(event, env.AUTH_TOKEN_COOKIE_NAME, token, {
+  setCookie(event, config.app.auth.cookie.tokenName, token, {
     ... AUTH_COOKIE_OPTIONS,
-    maxAge: env.COOKIE_MAX_AGE_DAYS * 86400,
+    maxAge: config.app.auth.cookie.maxAgeDays * 86400,
   })
 }
 
 export function clear_auth_token_cookie(event: H3Event) {
-  deleteCookie(event, env.AUTH_TOKEN_COOKIE_NAME, AUTH_COOKIE_OPTIONS)
+  deleteCookie(event, config.app.auth.cookie.tokenName, AUTH_COOKIE_OPTIONS)
 }
 
 // The header renders from this cookie, and unlike the token it is readable by
@@ -89,10 +91,10 @@ export function clear_auth_token_cookie(event: H3Event) {
 // The value is JSON since the client decodes it with JSON.parse; h3 encodes the
 // string with encodeURIComponent, which is what Nuxt's useCookie expects.
 export function set_auth_user_cookie(event: H3Event, user: User) {
-  setCookie(event, env.AUTH_USER_COOKIE_NAME, JSON.stringify(user), {
+  setCookie(event, config.app.auth.cookie.userName, JSON.stringify(user), {
     sameSite: 'lax',
     path: '/',
-    maxAge: env.COOKIE_MAX_AGE_DAYS * 86400,
+    maxAge: config.app.auth.cookie.maxAgeDays * 86400,
   })
 }
 

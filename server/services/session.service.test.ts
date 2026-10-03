@@ -2,19 +2,19 @@ import type { H3Event } from 'h3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  env: {
-    JWT_SECRET: 'unit-test-secret-with-at-least-32-characters',
-    JWT_EXPIRES_IN_DAYS: 30,
-    AUTH_TOKEN_COOKIE_NAME: 'auth_token',
-    AUTH_USER_COOKIE_NAME: 'auth_user',
-    COOKIE_MAX_AGE_DAYS: 45,
-    SESSION_MAX_AGE_DAYS: 14,
-    SESSION_MAX_TOKEN_GENERATIONS: 5,
-    ONLINE_TIMEOUT_SECONDS: 300,
+  config: {
+    app: {
+      auth: {
+        jwt: { secret: 'unit-test-secret-with-at-least-32-characters', expiresInDays: 30 },
+        cookie: { tokenName: 'auth_token', userName: 'auth_user', maxAgeDays: 45 },
+        session: { maxAgeDays: 14, maxTokenGenerations: 5 },
+      },
+      online: { timeoutSeconds: 300 },
+    },
   },
 }))
 
-vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
 
 const db_holder = vi.hoisted(() => ({
   db: { getConnection: vi.fn(), execute: vi.fn() },
@@ -185,7 +185,7 @@ describe('create_login_session', () => {
     expect(fake.last('INSERT INTO user_login_sessions')!.params).toEqual([
       7,
       'device-a',
-      new Date(now + mocks.env.SESSION_MAX_AGE_DAYS * 86_400_000),
+      new Date(now + mocks.config.app.auth.session.maxAgeDays * 86_400_000),
       '203.0.113.1',
       '203.0.113.1',
       'vitest',
@@ -259,7 +259,7 @@ describe('refresh_login_session', () => {
     })
 
     expect(applied).toBe(false)
-    expect(fake.last('UPDATE user_login_sessions')!.params).toEqual(['203.0.113.1', mocks.env.SESSION_MAX_AGE_DAYS, 5])
+    expect(fake.last('UPDATE user_login_sessions')!.params).toEqual(['203.0.113.1', mocks.config.app.auth.session.maxAgeDays, 5])
     expect(fake.find('WHERE NOT EXISTS')).toHaveLength(0)
     // The trim still runs: a session whose cookie never updates must not grow
     // its generation family without bound.
@@ -322,7 +322,7 @@ describe('refresh_login_session', () => {
   })
 
   it('bounds the family to the newest generations, keeping the one just issued', async () => {
-    const limit = mocks.env.SESSION_MAX_TOKEN_GENERATIONS
+    const limit = mocks.config.app.auth.session.maxTokenGenerations
     // One generation per id, all belonging to this session, so the trim has to
     // pick which end of the range to keep.
     const fake = await use_fake_db({
@@ -417,7 +417,7 @@ describe('get_login_sessions', () => {
     // token hash, which the client can read.
     expect(sql).toContain('(id <=> ?) AS is_current')
     expect(sql).not.toContain('token_hash')
-    expect(params).toEqual([mocks.env.ONLINE_TIMEOUT_SECONDS, 11, 7, mocks.env.ONLINE_TIMEOUT_SECONDS])
+    expect(params).toEqual([mocks.config.app.online.timeoutSeconds, 11, 7, mocks.config.app.online.timeoutSeconds])
   })
 
   it('leaves every session unmarked when no current session is given', async () => {

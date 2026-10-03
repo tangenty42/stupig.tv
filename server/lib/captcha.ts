@@ -1,6 +1,8 @@
 import { createHmac } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
+
+const config = runtime_config()
 
 interface CaptchaParams {
   lot_number?: string
@@ -10,7 +12,7 @@ interface CaptchaParams {
 }
 
 export async function verify_captcha(params: CaptchaParams | undefined) {
-  if (! env.CAPTCHA_APP_ID) {
+  if (! config.aliyun.captcha.appId) {
     return
   }
 
@@ -18,11 +20,11 @@ export async function verify_captcha(params: CaptchaParams | undefined) {
     throw new ApiError(400, 'Wow~这招厉害！')
   }
 
-  const sign_token = createHmac('sha256', env.CAPTCHA_APP_KEY!)
+  const sign_token = createHmac('sha256', config.aliyun.captcha.appKey!)
     .update(params.lot_number)
     .digest('hex')
 
-  const url = `https://captcha.alicaptcha.com/validate?captcha_id=${encodeURIComponent(env.CAPTCHA_APP_ID)}`
+  const url = `https://captcha.alicaptcha.com/validate?captcha_id=${encodeURIComponent(config.aliyun.captcha.appId)}`
 
   const body = new URLSearchParams({
     lot_number: params.lot_number,

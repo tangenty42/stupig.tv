@@ -3,9 +3,11 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 
 import { db } from '@server/lib/db'
 import { get_client_ip } from '@server/lib/session'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
+
+const config = runtime_config()
 
 dayjs.extend(utc)
 
@@ -57,7 +59,7 @@ export async function create_login_session(
   identity_token: string,
   device: DeviceContext,
 ) {
-  const expires_at = dayjs().utc().add(env.SESSION_MAX_AGE_DAYS, 'day')
+  const expires_at = dayjs().utc().add(config.app.auth.session.maxAgeDays, 'day')
     .toDate()
 
   const connection = await db.getConnection()
@@ -172,7 +174,7 @@ export async function refresh_login_session(params: {
        WHERE id = ?`,
       [
         last_seen_ip,
-        env.SESSION_MAX_AGE_DAYS,
+        config.app.auth.session.maxAgeDays,
         session_id,
       ],
     )
@@ -205,7 +207,7 @@ export async function refresh_login_session(params: {
     // The limit is inlined because MySQL rejects a placeholder there in prepared
     // statements (ER_WRONG_ARGUMENTS); it is a validated config integer, never
     // user input.
-    const keep_generations = Math.max(1, Math.trunc(env.SESSION_MAX_TOKEN_GENERATIONS))
+    const keep_generations = Math.max(1, Math.trunc(config.app.auth.session.maxTokenGenerations))
     await connection.execute(
       `DELETE FROM user_login_session_tokens
        WHERE session_id = ?
@@ -265,7 +267,7 @@ export async function get_login_sessions(
          ELSE 2
        END ASC,
        id DESC`,
-    [env.ONLINE_TIMEOUT_SECONDS, current_session_id, user_id, env.ONLINE_TIMEOUT_SECONDS],
+    [config.app.online.timeoutSeconds, current_session_id, user_id, config.app.online.timeoutSeconds],
   )
 
   const records = rows.map(row => ({

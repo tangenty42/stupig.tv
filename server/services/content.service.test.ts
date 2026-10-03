@@ -5,10 +5,18 @@ import { CONTENT_PRIVATE_DENIED_TEXT } from '@shared/content-private'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  env: {
-    OSS_BUCKET: 'unit-test-bucket',
-    CONTENT_OPERATION_LOCK_TTL_SECONDS: 60,
-    MAX_CONTENT_ENCRYPT_SIZE_MB: 10,
+  config: {
+    oss: { bucket: 'unit-test-bucket' },
+    app: {
+      content: {
+        // 故事/链接的长度上限只影响 markdown 渲染，这里不 pin；留空对象保持与
+        // 迁移前同样的取值（undefined），不改变这些测试覆盖的行为
+        story: {},
+        link: {},
+        operationLock: { ttlSeconds: 60 },
+        encrypt: { maxSizeMb: 10 },
+      },
+    },
   },
   signed_object_url: vi.fn(async () => 'https://signed.example.test/upload'),
   get_object: vi.fn(),
@@ -22,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   get_connection: vi.fn(),
 }))
 
-vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
 vi.mock('@server/lib/db', () => ({ db: { execute: mocks.db_execute, getConnection: mocks.get_connection } }))
 vi.mock('@server/lib/storage', () => ({
   signed_object_url: mocks.signed_object_url,

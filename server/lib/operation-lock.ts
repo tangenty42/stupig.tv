@@ -2,7 +2,9 @@ import type { ContentOperationKind, ContentOperationLock } from '@shared/types/c
 import type { RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
+
+const config = runtime_config()
 
 // Scope-level mutual exclusion for content attachment structure changes. The
 // lock is a single row per scope (`story_id`) carrying a lease, which gives
@@ -44,7 +46,7 @@ export async function acquire_operation_lock(scope_id: number, kind: ContentOper
        kind = IF(expires_at < NOW(), VALUES(kind), kind),
        token = IF(expires_at < NOW(), VALUES(token), token),
        expires_at = IF(expires_at < NOW(), VALUES(expires_at), expires_at)`,
-    [scope_id, kind, token, env.CONTENT_OPERATION_LOCK_TTL_SECONDS],
+    [scope_id, kind, token, config.app.content.operationLock.ttlSeconds],
   )
   const [rows] = await db.execute<LockTokenRow[]>(
     'SELECT token FROM content_operation_locks WHERE scope_id = ?',
