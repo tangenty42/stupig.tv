@@ -173,12 +173,7 @@ export function broadcast_login(user_id: number) {
 }
 
 function broker_ws_url() {
-  const config = useRuntimeConfig().public
-  const host = config.mqtt_ws_host
-  const is_secure = typeof location !== 'undefined' && location.protocol === 'https:'
-  const port = is_secure ? config.mqtt_wss_port : config.mqtt_ws_port
-  const protocol = is_secure ? 'wss' : 'ws'
-  return `${protocol}://${host}:${port}/mqtt`
+  return useRuntimeConfig().public.mqtt_web_url
 }
 
 function broker_client_id() {

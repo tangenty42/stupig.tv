@@ -6,7 +6,7 @@ db:
   host: ${MYSQL_HOST}
   port: ${MYSQL_PORT}
   user: stupig_tv
-  password: ${DB_PASSWORD}
+  password: ${MYSQL_PASSWORD}
   name: stupig_tv
 
 redis:
@@ -24,11 +24,11 @@ mqtt:
   clientIdPrefixServer: server
   # 服务端事件在 broker 不可达时的排队上限，溢出丢弃最旧事件并记日志
   publishQueueSize: 100
-  # 浏览器端 WebSocket 连接信息（会下发到客户端）
+  # 浏览器端 WebSocket 连接信息（会下发到客户端）。
+  # 完整 URL：生产经反代+SSL（wss://mqtt.example.com/mqtt，无需端口），
+  # 开发直连本机（ws://localhost:8083/mqtt）
   web:
-    wsHost: ${MQTT_WS_HOST}
-    wsPort: 443
-    wssPort: 443
+    wsUrl: ${MQTT_WEB_URL}
     clientIdPrefix: web
 
 oss:

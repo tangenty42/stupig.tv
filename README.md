@@ -9,7 +9,10 @@ Learn more about us at our official website [stupig.tv](https://www.stupig.tv).
 # Deployment
 
 - Wire up your MySQL and Redis instance
-- Wire up your EMQX WebSocket endpoint like `http://127.0.0.1:8083` to `<your-domain>/mqtt`
+- Reverse-proxy your EMQX WebSocket endpoint (`http://127.0.0.1:8083/mqtt`) with SSL
+  under a dedicated host like `mqtt.example.com`, then set `MQTT_WEB_URL` in `.env`
+  to the full browser-facing address (e.g. `wss://mqtt.example.com/mqtt`, no port needed
+  behind the reverse proxy)
 - Migrations under `migrations/` are applied automatically when the container starts
   (the `CMD` runs the bundled runner before the server; a failure keeps the container down
   on purpose). Existing databases whose schema was built by hand need a one-off

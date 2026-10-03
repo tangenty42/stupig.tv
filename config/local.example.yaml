@@ -1,0 +1,11 @@
+# config/local.yaml 模板：复制为 config/local.yaml 后按需修改（local.yaml 不进仓库）。
+# 本机覆盖层，优先级高于 default.yaml 和 {NODE_ENV}.yaml。
+#
+# 何时需要它：主机名、端口、账号密码都在 .env（见 .env.example），只有当你想
+# 覆盖的配置项不在 .env 变量体系里、又不想改进仓库的 YAML 时才需要本文件。
+# 典型场景：本机 dev server 不在默认端口，临时改 site.url。
+#
+# 示例：
+#
+# site:
+#   url: http://localhost:3043
