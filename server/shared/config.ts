@@ -280,3 +280,14 @@ export function load_config(): AppConfig {
 export function load_public_config(): AppConfig {
   return parse_tree(load_layers().tree)
 }
+
+// 「构建期烘焙不了、必须运行期注入」的 public 白名单字段：键是 runtimeConfig.public 里的
+// 名字，值是它必须等于什么——同一份 .env 推出的配置，也就是服务端自己在用的那份。
+// 构建机没有 .env，这类字段在镜像里只能是空串，唯一来源是容器启动时的 NUXT_PUBLIC_<键>
+// （见 docker-compose.yml）。server/plugins/public-config-guard.ts 在启动时按这张表断言，
+// 所以以后白名单里再加 .env 插值的字段，只要在这里补一行就算接上了守卫。
+export function runtime_injected_public(config: AppConfig): Record<string, unknown> {
+  return {
+    mqtt_web_url: config.mqtt.web.wsUrl,
+  }
+}
