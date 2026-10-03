@@ -16,8 +16,8 @@ const secret_keys = [
   'OSS_ACCESS_KEY_SECRET',
 ]
 
-// default.yaml 的连接信息全靠插值，这些不是密钥（故不在 load_config 的缺失
-// 检查里），但缺了会过不了 schema 校验，测试统一给占位值
+// default.yaml 的连接信息也全靠插值（无默认值），运行路径缺了同样起不来；
+// 构建路径必须能在全部缺失的情况下活着，所以只在跑 load_config 的用例里补上
 const connection_stubs = {
   MYSQL_HOST: '127.0.0.1',
   MYSQL_PORT: '3306',
@@ -26,6 +26,12 @@ const connection_stubs = {
   MQTT_HOST: '127.0.0.1',
   MQTT_TCP_PORT: '1883',
   MQTT_WEB_URL: 'ws://localhost:8083/mqtt',
+}
+
+function stub_connection_env() {
+  for (const [key, value] of Object.entries(connection_stubs)) {
+    vi.stubEnv(key, value)
+  }
 }
 
 const { load_config, load_public_config } = await import('./config')
@@ -41,8 +47,8 @@ beforeEach(() => {
   for (const key of secret_keys) {
     vi.stubEnv(key, undefined)
   }
-  for (const [key, value] of Object.entries(connection_stubs)) {
-    vi.stubEnv(key, value)
+  for (const key of Object.keys(connection_stubs)) {
+    vi.stubEnv(key, undefined)
   }
 })
 
@@ -56,17 +62,28 @@ afterEach(() => {
 
 describe('load_config（服务端运行时）', () => {
   it('缺少密钥时抛错，并点名缺失的环境变量', () => {
+    stub_connection_env()
     expect(() => load_config()).toThrowError(/MYSQL_PASSWORD/)
     expect(() => load_config()).toThrowError(/JWT_SECRET/)
     expect(() => load_config()).toThrowError(/OSS_ACCESS_KEY/)
   })
 
+  it('缺少连接信息时同样抛错，并点名变量', () => {
+    for (const key of secret_keys) {
+      process.env[key] = 'x'.repeat(40)
+    }
+    expect(() => load_config()).toThrowError(/MYSQL_HOST/)
+    expect(() => load_config()).toThrowError(/MQTT_WEB_URL/)
+  })
+
   it('空值视同缺失', () => {
+    stub_connection_env()
     process.env.MYSQL_PASSWORD = ''
     expect(() => load_config()).toThrowError(/MYSQL_PASSWORD/)
   })
 
   it('jWT_SECRET 短于 32 字符被拒', () => {
+    stub_connection_env()
     for (const key of secret_keys) {
       process.env[key] = 'x'.repeat(40)
     }
@@ -75,6 +92,7 @@ describe('load_config（服务端运行时）', () => {
   })
 
   it('密钥齐备时正常加载', () => {
+    stub_connection_env()
     for (const key of secret_keys) {
       process.env[key] = key === 'JWT_SECRET' ? 'y'.repeat(40) : 'placeholder'
     }
@@ -92,9 +110,10 @@ describe('load_public_config（构建期）', () => {
     expect(config.app.content.draft.schemaVersion).toBeGreaterThan(0)
   })
 
-  it('密钥字段为空串，但结构校验照常生效', () => {
+  it('插值字段为空串，但结构校验照常生效', () => {
     const config = load_public_config()
     expect(config.db.password).toBe('')
+    expect(config.db.host).toBe('')
     expect(config.oss.accessKeySecret).toBe('')
   })
 })
