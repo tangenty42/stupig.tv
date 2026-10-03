@@ -3,7 +3,9 @@ import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import { error_fields, log_warn } from '@server/lib/log'
 import { redis } from '@server/lib/redis'
 import { bilibili_target_key, parse_bilibili_href } from '@shared/bilibili'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
+
+const config = runtime_config()
 
 interface ViewApiResponse {
   code: number
@@ -72,7 +74,7 @@ async function cached(key: string) {
 // Positive entries persist (no PX) until a refresh overwrites them; only
 // negative results expire on their own.
 async function remember(key: string, card: BilibiliVideoCard | null) {
-  if (! card && env.BILIBILI_NEGATIVE_CACHE_TTL_MS <= 0) {
+  if (! card && config.app.content.bilibili.negativeCacheTtlMs <= 0) {
     return
   }
   try {
@@ -81,7 +83,7 @@ async function remember(key: string, card: BilibiliVideoCard | null) {
       await redis.set(cache_key(key), JSON.stringify(entry))
     }
     else {
-      await redis.set(cache_key(key), JSON.stringify(entry), 'PX', env.BILIBILI_NEGATIVE_CACHE_TTL_MS)
+      await redis.set(cache_key(key), JSON.stringify(entry), 'PX', config.app.content.bilibili.negativeCacheTtlMs)
     }
   }
   catch (error) {
@@ -123,7 +125,7 @@ async function fetch_view_api(target: { kind: 'bvid', id: string } | { kind: 'ai
   const query = target.kind === 'bvid' ? `bvid=${target.id}` : `aid=${target.id}`
   const response = await fetch(`https://api.bilibili.com/x/web-interface/view?${query}`, {
     headers: request_headers,
-    signal: AbortSignal.timeout(env.BILIBILI_FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(config.app.content.bilibili.fetchTimeoutMs),
   })
   if (response.status === 412) {
     throw new RiskControlError('Bilibili view API banned this IP (HTTP 412)')
@@ -156,7 +158,7 @@ async function fetch_watch_page_card(target: { kind: 'bvid', id: string } | { ki
   const path = target.kind === 'bvid' ? target.id : `av${target.id}`
   const response = await fetch(`https://www.bilibili.com/video/${path}/`, {
     headers: { ... request_headers, Accept: 'text/html' },
-    signal: AbortSignal.timeout(env.BILIBILI_FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(config.app.content.bilibili.fetchTimeoutMs),
   })
   if (! response.ok) {
     throw new Error(`Bilibili watch page HTTP ${response.status}`)
@@ -174,7 +176,7 @@ async function resolve_short_link(code: string): Promise<BilibiliLinkTarget | nu
   const response = await fetch(`https://b23.tv/${code}`, {
     headers: request_headers,
     redirect: 'manual',
-    signal: AbortSignal.timeout(env.BILIBILI_FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(config.app.content.bilibili.fetchTimeoutMs),
   })
   const location = response.headers.get('location')
   return location ? parse_bilibili_href(location) : null
@@ -200,13 +202,13 @@ export async function get_bilibili_video_card(target: BilibiliLinkTarget) {
   const key = bilibili_target_key(target)
   const entry = await cached(key)
   if (entry) {
-    const fresh_for = entry.card ? env.BILIBILI_CACHE_TTL_MS : env.BILIBILI_NEGATIVE_CACHE_TTL_MS
+    const fresh_for = entry.card ? config.app.content.bilibili.cacheTtlMs : config.app.content.bilibili.negativeCacheTtlMs
     if (Date.now() - entry.stored_at < fresh_for) {
       return entry.card
     }
     // A recently failed refresh means upstream is likely banning us; serve
     // the stale card through the cooldown instead of retrying per request.
-    if (entry.failed_at && Date.now() - entry.failed_at < env.BILIBILI_FETCH_FAILURE_COOLDOWN_MS) {
+    if (entry.failed_at && Date.now() - entry.failed_at < config.app.content.bilibili.fetchFailureCooldownMs) {
       return entry.card
     }
   }

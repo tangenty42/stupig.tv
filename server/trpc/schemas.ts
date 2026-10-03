@@ -1,12 +1,14 @@
+import { runtime_config } from '@shared/config'
 import { attachment_name_segment_violation, link_file_name_byte_length } from '@shared/content-markdown'
-import { env } from '@shared/env'
 import { is_valid_permission_grant, normalize_permission_grants } from '@shared/permissions'
 import { form_schema, phone_schema } from '@shared/schemas'
 import * as z from 'zod'
 
+const config = runtime_config()
+
 const markdown_input = z.string()
   .min(1, '内容不能为空')
-  .refine(value => link_file_name_byte_length(value) <= env.CONTENT_STORY_MARKDOWN_MAX_BYTES, '内容太长了')
+  .refine(value => link_file_name_byte_length(value) <= config.app.content.story.markdownMaxBytes, '内容太长了')
 
 const captcha_input = z.object({
   lot_number: z.string().optional(),
@@ -55,7 +57,7 @@ const attachment_path_input = z.string()
   .trim()
   .min(1, '文件名不能为空')
   .superRefine((name, ctx) => name.split('/').forEach(segment => assert_valid_name_segment(segment, ctx)))
-  .refine(name => link_file_name_byte_length(name) <= env.CONTENT_LINK_FILE_NAME_MAX_BYTES, '文件名太长')
+  .refine(name => link_file_name_byte_length(name) <= config.app.content.link.fileNameMaxBytes, '文件名太长')
 
 /**
  * A (possibly nested) folder path being CREATED or RENAMED, which is therefore

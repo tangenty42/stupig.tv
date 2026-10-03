@@ -8,8 +8,10 @@ import { db } from '@server/lib/db'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { format_profile_row, select_profile_row_sql } from '@server/services/profile.service'
 import { logout_all_user_sessions } from '@server/services/session.service'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
 import { normalize_permission_grants } from '@shared/permissions'
+
+const config = runtime_config()
 
 interface CountRow extends RowDataPacket {
   total: number
@@ -81,7 +83,7 @@ export async function list_users(
      WHERE ${where_clause}
      ORDER BY u.id DESC
      LIMIT ? OFFSET ?`,
-    [env.ONLINE_TIMEOUT_SECONDS, ... params, String(page_size), String(offset)],
+    [config.app.online.timeoutSeconds, ... params, String(page_size), String(offset)],
   )
 
   return {

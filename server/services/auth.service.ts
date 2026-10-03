@@ -11,12 +11,14 @@ import { check_otp_sms, send_otp_sms } from '@server/lib/sms'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { create_login_session, logout_session } from '@server/services/session.service'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
 import { normalize_permission_grants } from '@shared/permissions'
 import { phone_schema } from '@shared/schemas'
 import bcrypt from 'bcryptjs'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
+
+const config = runtime_config()
 
 dayjs.extend(utc)
 
@@ -72,7 +74,7 @@ export async function register_user(event: H3Event, payload: AuthRegisterInput, 
     throw new ApiError(409, '用户名或手机号已存在')
   }
 
-  const password_hash = await bcrypt.hash(payload.password, env.BCRYPT_ROUNDS)
+  const password_hash = await bcrypt.hash(payload.password, config.app.auth.bcryptRounds)
 
   const [result] = await db.execute<ResultSetHeader>(
     'INSERT INTO users (username, phone, password_hash) VALUES (?, ?, ?)',
@@ -190,10 +192,10 @@ export async function get_otp_cooldown(input: AuthOtpCooldownInput) {
 }
 
 function calc_otp_send_tier(sent_count: number) {
-  if (sent_count < env.OTP_TIER1_DAILY_LIMIT) {
+  if (sent_count < config.app.otp.tier1.dailyLimit) {
     return 1
   }
-  else if (sent_count < env.OTP_TIER1_DAILY_LIMIT + env.OTP_TIER2_DAILY_LIMIT) {
+  else if (sent_count < config.app.otp.tier1.dailyLimit + config.app.otp.tier2.dailyLimit) {
     return 2
   }
   else {
@@ -217,7 +219,7 @@ export async function send_otp(payload: AuthSendOtpInput, meta: { identity_token
 
   let cooldown_until: Date
   if (tier_current !== 0) {
-    const cooldown_ms = tier_last === 1 ? env.OTP_TIER1_COOLDOWN_MS : env.OTP_TIER2_COOLDOWN_MS
+    const cooldown_ms = tier_last === 1 ? config.app.otp.tier1.cooldownMs : config.app.otp.tier2.cooldownMs
     const out_id = `${meta.identity_token}-${Date.now()}`
 
     await send_otp_sms({ phone: payload.phone, out_id })

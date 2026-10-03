@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
-import { env } from '@shared/env'
+import { runtime_config } from '@shared/config'
+
+const config = runtime_config()
 
 declare module 'h3' {
   interface H3EventContext {
@@ -11,15 +13,15 @@ declare module 'h3' {
 // event.context.identity_token. Used by the OTP endpoints (rate limiting) and by
 // login (to associate a session row with a device).
 export default defineEventHandler((event) => {
-  let identity_token = getCookie(event, env.IDENTITY_COOKIE_NAME)
+  let identity_token = getCookie(event, config.app.identity.cookieName)
 
   if (! identity_token) {
     identity_token = crypto.randomUUID()
-    setCookie(event, env.IDENTITY_COOKIE_NAME, identity_token, {
+    setCookie(event, config.app.identity.cookieName, identity_token, {
       // httpOnly: true,
       sameSite: 'lax',
       secure: true,
-      maxAge: env.IDENTITY_COOKIE_MAX_AGE_DAYS * 86400,
+      maxAge: config.app.identity.cookieMaxAgeDays * 86400,
     })
   }
 

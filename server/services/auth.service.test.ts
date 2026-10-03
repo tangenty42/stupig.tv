@@ -3,14 +3,17 @@ import bcrypt from 'bcryptjs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  env: {
-    JWT_SECRET: 'unit-test-secret-with-at-least-32-characters',
-    JWT_EXPIRES_IN_DAYS: 30,
-    BCRYPT_ROUNDS: 4,
-    OTP_TIER1_DAILY_LIMIT: 5,
-    OTP_TIER1_COOLDOWN_MS: 60_000,
-    OTP_TIER2_DAILY_LIMIT: 5,
-    OTP_TIER2_COOLDOWN_MS: 300_000,
+  config: {
+    app: {
+      auth: {
+        jwt: { secret: 'unit-test-secret-with-at-least-32-characters', expiresInDays: 30 },
+        bcryptRounds: 4,
+      },
+      otp: {
+        tier1: { dailyLimit: 5, cooldownMs: 60_000 },
+        tier2: { dailyLimit: 5, cooldownMs: 300_000 },
+      },
+    },
   },
   db: { execute: vi.fn(), getConnection: vi.fn() },
   captcha: { verify_captcha: vi.fn() },
@@ -26,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   sync: { publish_refresh: vi.fn() },
 }))
 
-vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
 vi.mock('@server/lib/db', () => ({ db: mocks.db }))
 vi.mock('@server/lib/captcha', () => mocks.captcha)
 vi.mock('@server/lib/sms', () => mocks.sms)
@@ -113,7 +116,7 @@ describe('send_otp rate limiting', () => {
       DEVICE,
       PHONE,
       'login',
-      new Date(Date.now() + mocks.env.OTP_TIER1_COOLDOWN_MS),
+      new Date(Date.now() + mocks.config.app.otp.tier1.cooldownMs),
     ])
   })
 
@@ -122,7 +125,7 @@ describe('send_otp rate limiting', () => {
 
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
-    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.env.OTP_TIER1_COOLDOWN_MS))
+    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.config.app.otp.tier1.cooldownMs))
   })
 
   it('uses the long cooldown once the sender has already sent from the second tier', async () => {
@@ -130,22 +133,22 @@ describe('send_otp rate limiting', () => {
 
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
-    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.env.OTP_TIER2_COOLDOWN_MS))
+    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.config.app.otp.tier2.cooldownMs))
   })
 
   it('still uses the short cooldown for the send that crosses into the second tier', async () => {
     // The cooldown is picked from the tier the previous send belonged to, so the
     // 5th send -- the first one counted into tier 2 -- opens tier 1's short window.
-    use_otp_log(mocks.env.OTP_TIER1_DAILY_LIMIT)
+    use_otp_log(mocks.config.app.otp.tier1.dailyLimit)
 
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
     expect(mocks.sms.send_otp_sms).toHaveBeenCalledTimes(1)
-    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.env.OTP_TIER1_COOLDOWN_MS))
+    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.config.app.otp.tier1.cooldownMs))
   })
 
   it('closes the window for the rest of the UTC day on the last allowed send', async () => {
-    use_otp_log(mocks.env.OTP_TIER1_DAILY_LIMIT + mocks.env.OTP_TIER2_DAILY_LIMIT - 1)
+    use_otp_log(mocks.config.app.otp.tier1.dailyLimit + mocks.config.app.otp.tier2.dailyLimit - 1)
 
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
@@ -154,7 +157,7 @@ describe('send_otp rate limiting', () => {
   })
 
   it('refuses to send once the daily cap is reached, without calling the provider', async () => {
-    use_otp_log(mocks.env.OTP_TIER1_DAILY_LIMIT + mocks.env.OTP_TIER2_DAILY_LIMIT)
+    use_otp_log(mocks.config.app.otp.tier1.dailyLimit + mocks.config.app.otp.tier2.dailyLimit)
 
     await expect(send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE }))
       .rejects.toMatchObject({ statusCode: 429, message: '已达到发送上限' })

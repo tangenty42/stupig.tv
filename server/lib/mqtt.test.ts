@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
-  const env = {
-    MQTT_HOST: 'mqtt-host',
-    MQTT_PORT: 1883,
-    MQTT_USERNAME: '',
-    MQTT_PASSWORD: '',
-    MQTT_QOS: 1,
-    MQTT_TOPIC_PREFIX: 'test/sync',
-    MQTT_CLIENT_ID_PREFIX_SERVER: 'server',
-    MQTT_PUBLISH_QUEUE_SIZE: 2,
+  const config = {
+    mqtt: {
+      host: 'mqtt-host',
+      port: 1883,
+      username: '',
+      password: '',
+      qos: 1,
+      topicPrefix: 'test/sync',
+      clientIdPrefixServer: 'server',
+      publishQueueSize: 2,
+    },
   }
 
   function create_client() {
@@ -36,7 +38,7 @@ const mocks = vi.hoisted(() => {
   }
 
   return {
-    env,
+    config,
     client: create_client(),
     create_client,
     connect: vi.fn(),
@@ -47,7 +49,7 @@ vi.mock('mqtt', () => ({
   default: { connect: mocks.connect },
 }))
 
-vi.mock('@shared/env', () => ({ env: mocks.env }))
+vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
 
 async function load_module() {
   vi.resetModules()
