@@ -3,20 +3,20 @@
 # 环境差异写在 development.yaml / production.yaml，深度合并覆盖本文件。
 
 db:
-  host: 1Panel-mysql
-  port: 3306
+  host: ${MYSQL_HOST}
+  port: ${MYSQL_PORT}
   user: stupig_tv
   password: ${DB_PASSWORD}
   name: stupig_tv
 
 redis:
-  host: 1panel-redis
-  port: 6379
+  host: ${REDIS_HOST}
+  port: ${REDIS_PORT}
   password: ${REDIS_PASSWORD:-}
 
 mqtt:
-  host: 1panel-EMQX
-  port: 1883
+  host: ${MQTT_HOST}
+  port: ${MQTT_TCP_PORT}
   username: ${MQTT_USERNAME:-}
   password: ${MQTT_PASSWORD:-}
   qos: 1
@@ -26,7 +26,7 @@ mqtt:
   publishQueueSize: 100
   # 浏览器端 WebSocket 连接信息（会下发到客户端）
   web:
-    wsHost: www.stupig.tv
+    wsHost: ${MQTT_WS_HOST}
     wsPort: 443
     wssPort: 443
     clientIdPrefix: web

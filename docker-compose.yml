@@ -1,5 +1,5 @@
-# 服务器端编排：应用容器接入 1panel 的 Docker 网络，直连 1Panel-mysql /
-# 1panel-redis / 1panel-EMQX（见 config/default.yaml 的 host 名）。
+# 服务器端编排：应用容器接入外部 Docker 网络（EXTERNAL_DOCKER_NETWORK，
+# 当前为 1panel 的网络），直连该网络里的 MySQL / Redis / EMQX。
 # .env 放本文件旁边，密钥由 compose 注入容器，不进镜像。
 
 services:
@@ -11,12 +11,12 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      PORT: 3042
+      PORT: ${APP_PORT}
     ports:
       # 只绑回环，外部流量由 openresty 反代进来
-      - 127.0.0.1:3042:3042
+      - 127.0.0.1:${APP_PORT}:${APP_PORT}
     healthcheck:
-      test: [CMD, node, -e, 'fetch("http://127.0.0.1:3042/").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      test: [CMD, node, -e, 'fetch(`http://127.0.0.1:${process.env.APP_PORT}/`).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -24,5 +24,5 @@ services:
 
 networks:
   default:
-    name: ${PANEL_NETWORK}
+    name: ${EXTERNAL_DOCKER_NETWORK:?请在 .env 中设置 EXTERNAL_DOCKER_NETWORK}
     external: true
