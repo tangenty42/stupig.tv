@@ -8,7 +8,6 @@
       <img
         :src="story_front_cover_url(static_url, story.cover, story.cover_url)"
         :alt="cover_alt(story.cover, story.cover_label, story.title)"
-        referrerpolicy="no-referrer"
       >
     </span>
     <div class="story-card-body">
