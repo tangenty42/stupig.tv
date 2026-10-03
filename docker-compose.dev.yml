@@ -12,7 +12,7 @@ services:
     ports:
       - '${MYSQL_PORT:?请在 .env 中设置 MYSQL_PORT}:3306'
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_DEV_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_DEV_ROOT_PASSWORD}
       MYSQL_DATABASE: stupig_tv
       MYSQL_USER: stupig_tv
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
@@ -35,7 +35,7 @@ services:
     ports:
       - '${MQTT_TCP_PORT:?请在 .env 中设置 MQTT_TCP_PORT}:1883' # TCP，服务端 publish 用
       - '${MQTT_WS_PORT:?请在 .env 中设置 MQTT_WS_PORT}:8083' # WebSocket，浏览器 useDataSync 用
-      - '${EMQX_DASHBOARD_PORT:?请在 .env 中设置 EMQX_DASHBOARD_PORT}:18083' # Dashboard（admin/public）
+      - '${EMQX_DEV_DASHBOARD_PORT:?请在 .env 中设置 EMQX_DEV_DASHBOARD_PORT}:18083' # Dashboard（admin/public）
     environment:
       EMQX_DASHBOARD__DEFAULT_PASSWORD: public
 
@@ -43,12 +43,12 @@ services:
     image: phpmyadmin:5-apache
     restart: unless-stopped
     ports:
-      - '${PHPMYADMIN_PORT:?请在 .env 中设置 PHPMYADMIN_PORT}:80'
+      - '${PHPMYADMIN_DEV_PORT:?请在 .env 中设置 PHPMYADMIN_DEV_PORT}:80'
     environment:
       PMA_HOST: mysql
       # 免登录直接进（仅本地开发，别带去服务器）
       PMA_USER: root
-      PMA_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      PMA_PASSWORD: ${MYSQL_DEV_ROOT_PASSWORD}
     depends_on:
       - mysql
 

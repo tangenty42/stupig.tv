@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -20,8 +20,6 @@ beforeAll(async () => {
   await rm(work_dir, { recursive: true, force: true })
   await mkdir(work_dir, { recursive: true })
   await cp(resolve(project_root, 'config'), resolve(work_dir, 'config'), { recursive: true })
-  // 指向一个必然拒连的端口：不碰数据库也能确认"已经走到建连"
-  await writeFile(resolve(work_dir, 'config/local.yaml'), 'db:\n  host: 127.0.0.1\n  port: 1\n')
   if (process.platform === 'win32') {
     await run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'pnpm maintenance:build'], { cwd: project_root })
   }
@@ -31,18 +29,28 @@ beforeAll(async () => {
   await cp(build_output, bundle)
 }, 120_000)
 
+// 维护脚本在生产容器里跑（NODE_ENV=production，只有 default.yaml 生效），
+// 其连接信息全靠插值；env 变量把主机指向本机的关闭端口，必然拒连
+const bundle_env = {
+  NODE_ENV: 'production',
+  MYSQL_HOST: '127.0.0.1',
+  MYSQL_PORT: '1',
+  MYSQL_PASSWORD: 'placeholder',
+  REDIS_HOST: '127.0.0.1',
+  REDIS_PORT: '1',
+  MQTT_HOST: '127.0.0.1',
+  MQTT_TCP_PORT: '1',
+  MQTT_WEB_URL: 'ws://localhost:8083/mqtt',
+  JWT_SECRET: 'p'.repeat(40),
+  ALIYUN_ACCESS_KEY_ID: 'placeholder',
+  ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
+  OSS_ACCESS_KEY_ID: 'placeholder',
+  OSS_ACCESS_KEY_SECRET: 'placeholder',
+}
+
 describe('维护脚本产物', () => {
   it('脱离工作区（无 node_modules）也能加载并走到建连', async () => {
-    const env = {
-      ... process.env,
-      NODE_ENV: 'production',
-      DB_PASSWORD: 'placeholder',
-      JWT_SECRET: 'p'.repeat(40),
-      ALIYUN_ACCESS_KEY_ID: 'placeholder',
-      ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
-      OSS_ACCESS_KEY_ID: 'placeholder',
-      OSS_ACCESS_KEY_SECRET: 'placeholder',
-    }
+    const env = { ... process.env, ... bundle_env }
 
     let failure: { stderr?: string, stdout?: string } | undefined
     try {
@@ -65,16 +73,7 @@ describe('维护脚本产物', () => {
   })
 
   it('迁移产物同样能在容器里跑起来（只读 --status，不写库）', async () => {
-    const env = {
-      ... process.env,
-      NODE_ENV: 'production',
-      DB_PASSWORD: 'placeholder',
-      JWT_SECRET: 'p'.repeat(40),
-      ALIYUN_ACCESS_KEY_ID: 'placeholder',
-      ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
-      OSS_ACCESS_KEY_ID: 'placeholder',
-      OSS_ACCESS_KEY_SECRET: 'placeholder',
-    }
+    const env = { ... process.env, ... bundle_env }
     const migrate = resolve(work_dir, 'migrate.mjs')
     await cp(resolve(project_root, '.output/server/maintenance/migrate.mjs'), migrate)
 

@@ -76,9 +76,7 @@ const config_schema = z.object({
     clientIdPrefixServer: z.string().min(1),
     publishQueueSize: z.number().int().min(1),
     web: z.object({
-      wsHost: z.string().min(1),
-      wsPort: z.coerce.number(),
-      wssPort: z.number(),
+      wsUrl: z.url({ protocol: /^wss?$/ }),
       clientIdPrefix: z.string().min(1),
     }),
   }),
@@ -108,7 +106,7 @@ const config_schema = z.object({
     }),
   }),
   site: z.object({
-    url: z.url({ protocol: /^https?$/, hostname: z.hostname() }),
+    url: z.url({ protocol: /^https?$/ }),
     indexable: z.boolean(),
     staticBaseUrl: z.string(),
   }),

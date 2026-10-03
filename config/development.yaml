@@ -5,17 +5,11 @@
 
 # MySQL 密码与 docker-compose.dev.yml 创建容器时注入的 ${MYSQL_PASSWORD}
 # 是同一变量，两边天然一致；Redis 容器无密码。
-db:
-  password: ${MYSQL_PASSWORD}
-
 redis:
-  password: ""
+  password: ''
 
-mqtt:
-  web:
-    # 浏览器走宿主机回环，与服务端连接的 ${MQTT_HOST} 解耦
-    wsHost: localhost
-    wsPort: ${MQTT_WS_PORT}
+oss:
+  bucket: static-stupig-tv-dev
 
 site:
   url: http://localhost:${APP_PORT}
