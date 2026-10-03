@@ -14,7 +14,9 @@ Learn more about us at our official website [stupig.tv](https://www.stupig.tv).
   to the full browser-facing address (e.g. `wss://mqtt.example.com/mqtt`, no port needed
   behind the reverse proxy). The image is built without a `.env`, so the browser value
   is injected at container start via `NUXT_PUBLIC_MQTT_WEB_URL` (`docker-compose.yml`);
-  changing it only needs a container restart, not a rebuild
+  changing it only needs a container restart, not a rebuild. The server asserts at startup
+  that the injected value matches `MQTT_WEB_URL`, so a missing or stale injection keeps the
+  container down instead of silently handing the browser an empty broker URL
 - Migrations under `migrations/` are applied automatically when the container starts
   (the `CMD` runs the bundled runner before the server; a failure keeps the container down
   on purpose). Existing databases whose schema was built by hand need a one-off
