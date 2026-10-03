@@ -3,7 +3,9 @@ import Aura from '@primeuix/themes/aura'
 import { load_public_config } from './server/shared/config'
 
 // 构建期没有 .env（Dockerfile/CI），而这里只需要下发到客户端的白名单，所以走
-// load_public_config：不校验密钥，密钥由运行时的 load_config 负责。
+// load_public_config：不校验密钥与连接信息，插值字段允许为空。白名单里唯一来自
+// .env 的 mqtt_web_url 在镜像里就是空串，运行期由容器的 NUXT_PUBLIC_MQTT_WEB_URL
+// 覆盖（见 docker-compose.yml）；其余密钥/连接信息由运行时的 load_config 负责。
 const config = load_public_config()
 
 // 客户端可见配置的白名单映射。配置本体在 config/*.yaml，schema 与类型推导在

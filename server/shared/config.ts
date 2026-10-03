@@ -49,12 +49,19 @@ function deep_merge(base: unknown, override: unknown): unknown {
   return override === undefined ? base : override
 }
 
+// 主机名等连接信息在 default.yaml 里用 ${VAR} 插值（无默认值）：构建机
+// （Dockerfile/CI）没有 .env，未设置的变量插值为空串，所以这类字段只约束类型，
+// 不能卡非空，否则镜像根本构建不出来。运行期不需要靠 schema 拦空值——load_config
+// 的缺失检查（interpolate 记下的 missing_environment）会先一步报错。
+const env_host = z.string()
+const env_port = z.coerce.number()
+
 const config_schema = z.object({
   db: z.object({
-    host: z.string().min(1),
+    host: env_host,
     // 端口走 ${VAR} 插值（见 development.yaml），interpolate 只产出字符串，故
     // coerce 归一为 number；以下各端口字段同理
-    port: z.coerce.number(),
+    port: env_port,
     user: z.string().min(1),
     // 以下密钥类字段值来自 .env；缺失/为空由 load_config 统一报错（见 required 校验），
     // 构建期不校验，所以这里只约束类型
@@ -62,13 +69,13 @@ const config_schema = z.object({
     name: z.string().min(1),
   }),
   redis: z.object({
-    host: z.string().min(1),
-    port: z.coerce.number(),
+    host: env_host,
+    port: env_port,
     password: z.string().optional(),
   }),
   mqtt: z.object({
-    host: z.string().min(1),
-    port: z.coerce.number(),
+    host: env_host,
+    port: env_port,
     username: z.string().optional(),
     password: z.string().optional(),
     qos: z.number(),
@@ -76,7 +83,8 @@ const config_schema = z.object({
     clientIdPrefixServer: z.string().min(1),
     publishQueueSize: z.number().int().min(1),
     web: z.object({
-      wsUrl: z.url({ protocol: /^wss?$/ }),
+      // 构建期为空串（见 env_host）；一旦有值，仍必须是合法的 ws/wss 地址
+      wsUrl: z.union([z.literal(''), z.url({ protocol: /^wss?$/ })]),
       clientIdPrefix: z.string().min(1),
     }),
   }),
@@ -249,13 +257,13 @@ function parse_tree(tree: unknown): AppConfig {
   return result.data
 }
 
-// 服务端运行时的唯一入口：密钥缺失（含空值）或 JWT 过短都应在启动时炸掉，
-// 而不是带病运行。刻意不做模块级 eager 导出：构建期工具只取 public 白名单，
+// 服务端运行时的唯一入口：密钥/连接信息缺失（含空值）或 JWT 过短都应在启动时
+// 炸掉，而不是带病运行。刻意不做模块级 eager 导出：构建期工具只取 public 白名单，
 // 不能因为构建机没有 .env 就加载失败。
 export function load_config(): AppConfig {
   const { tree, missing_environment } = load_layers()
   if (missing_environment.size) {
-    throw new Error(`.env 缺少必需的密钥：${[... missing_environment].sort().join('、')}（config/*.yaml 通过插值引用它们）`)
+    throw new Error(`.env 缺少必需的环境变量：${[... missing_environment].sort().join('、')}（config/*.yaml 通过插值引用它们）`)
   }
   const parsed = parse_tree(tree)
   if (parsed.app.auth.jwt.secret.length < 32) {
@@ -265,8 +273,10 @@ export function load_config(): AppConfig {
 }
 
 // nuxt.config 专用：构建期只需要 runtimeConfig.public 白名单（其中不含任何密钥），
-// 而构建机（Dockerfile/CI）没有 .env，所以这条路径不校验密钥，只保证结构可用。
-// 客户端可见的那部分来自 config/*.yaml 的字面量，与密钥无关。
+// 而构建机（Dockerfile/CI）没有 .env，所以这条路径不校验密钥与连接信息：${VAR}
+// 无默认值的字段插值成空串也能出产物，空值由运行期的 load_config 拦截。客户端
+// 可见的那部分来自 config/*.yaml 的字面量；唯一插值字段 mqtt.web.wsUrl 在容器启动
+// 时由 NUXT_PUBLIC_MQTT_WEB_URL 覆盖（见 docker-compose.yml）。
 export function load_public_config(): AppConfig {
   return parse_tree(load_layers().tree)
 }
