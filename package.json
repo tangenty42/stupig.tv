@@ -2,6 +2,7 @@
   "name": "stupig-tv",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@12.10.1",
   "scripts": {
     "build": "nuxt build",
     "storage:cleanup": "tsx --tsconfig scripts/tsconfig.json scripts/cleanup-orphan-attachments.ts",
