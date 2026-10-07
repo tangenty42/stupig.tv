@@ -1,4 +1,5 @@
 import type { AuthUser } from '@server/types/auth'
+import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { encrypt_attachment } from '@server/lib/attachment-crypto'
 import { attachment_name_conflict_message } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_DENIED_TEXT } from '@shared/content-private'
@@ -15,10 +16,11 @@ const mocks = vi.hoisted(() => ({
         link: {},
         operationLock: { ttlSeconds: 60 },
         encrypt: { maxSizeMb: 10 },
+        download: { urlTtlSeconds: 300 },
       },
     },
   },
-  signed_object_url: vi.fn(async () => 'https://signed.example.test/upload'),
+  signed_object_url: vi.fn(async (_command?: unknown, _expires_in?: number) => 'https://signed.example.test/upload'),
   get_object: vi.fn(),
   put_object: vi.fn(),
   delete_object_best_effort: vi.fn(),
@@ -52,7 +54,7 @@ vi.mock('@server/lib/sync', async () => ({
   publish_refresh: mocks.publish_refresh,
 }))
 
-const { confirm_attachment_upload, create_abridged_attachment, create_folder, decrypt_attachments, encrypt_attachments, get_story, move_attachment, move_attachments, move_folder, rename_attachment, replace_attachment, sign_attachment_upload } = await import('@server/services/content.service')
+const { confirm_attachment_upload, create_abridged_attachment, create_folder, decrypt_attachments, encrypt_attachments, get_story, move_attachment, move_attachments, move_folder, rename_attachment, replace_attachment, sign_attachment_download, sign_attachment_upload } = await import('@server/services/content.service')
 
 function stub_story_row(story_id: number, markdown = '') {
   mocks.db_execute.mockImplementation(async (sql: string) => {
@@ -125,6 +127,109 @@ describe('sign_attachment_upload staging key validation', () => {
   it('rejects the new scope for persisted stories', async () => {
     await expect(sign_attachment_upload({ story_id: 42, method: 'PUT', key: `content-upload/new/${crypto.randomUUID()}` }))
       .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
+    expect(mocks.signed_object_url).not.toHaveBeenCalled()
+  })
+})
+
+describe('sign_attachment_download', () => {
+  const story_row = {
+    id: 42,
+    title: 't',
+    label: '',
+    description: '',
+    cover: '',
+    cover_label: '',
+    cover_version: null,
+    event_precision: 'day',
+    event_dates: '[]',
+    markdown: '',
+    created_at: '',
+    updated_at: '',
+    revision: 1,
+  }
+
+  function file_row(overrides: Partial<{ file_name: string, object_key: string, encryption_key: string | null }>) {
+    return {
+      id: 77,
+      story_id: 42,
+      is_folder: 0,
+      file_name: 'docs/report.PDF',
+      object_key: 'content/att/77',
+      mime_type: 'application/pdf',
+      file_size: 10,
+      version: 'v1',
+      encryption_key: null,
+      ... overrides,
+    }
+  }
+
+  /** Answers the story read and the row-by-name read; everything else is empty. */
+  function stub_story_and_file(row: ReturnType<typeof file_row> | null) {
+    mocks.db_execute.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM content_stories'))
+        return [[story_row], []]
+      if (sql.includes('file_name IN'))
+        return [row ? [row] : [], []]
+      return [[], []]
+    })
+  }
+
+  beforeEach(() => {
+    mocks.signed_object_url.mockClear()
+    mocks.db_execute.mockReset()
+  })
+
+  it('signs a GET that saves the row under its display name', async () => {
+    stub_story_and_file(file_row({}))
+    const result = await sign_attachment_download(42, 'docs/report.PDF')
+
+    expect(result.url).toBe('https://signed.example.test/upload')
+    const command = mocks.signed_object_url.mock.calls[0]![0] as GetObjectCommand
+    expect(command).toBeInstanceOf(GetObjectCommand)
+    expect(command.input.Bucket).toBe('unit-test-bucket')
+    expect(command.input.Key).toBe('content/att/77')
+    // Folder stripped, extension lowercased, RFC 5987 encoded.
+    expect(command.input.ResponseContentDisposition).toBe(`attachment; filename*=UTF-8''report.pdf`)
+    expect(mocks.signed_object_url.mock.calls[0]![1]).toBe(mocks.config.app.content.download.urlTtlSeconds)
+  })
+
+  it('percent-encodes a CJK name for the filename* parameter', async () => {
+    stub_story_and_file(file_row({ file_name: '照片.PNG', object_key: 'content/att/cjk' }))
+    await sign_attachment_download(42, '照片.PNG')
+
+    const command = mocks.signed_object_url.mock.calls[0]![0] as GetObjectCommand
+    expect(command.input.ResponseContentDisposition).toBe(`attachment; filename*=UTF-8''%E7%85%A7%E7%89%87.png`)
+  })
+
+  it('escapes the characters encodeURIComponent leaves bare in an ext-value', async () => {
+    // `'` delimits the ext-value and the rest are not valid there, so a name
+    // like this has to survive the round trip through the header verbatim.
+    stub_story_and_file(file_row({ file_name: `报告 (1).pdf` }))
+    await sign_attachment_download(42, `报告 (1).pdf`)
+
+    const command = mocks.signed_object_url.mock.calls[0]![0] as GetObjectCommand
+    expect(command.input.ResponseContentDisposition)
+      .toBe(`attachment; filename*=UTF-8''%E6%8A%A5%E5%91%8A%20%281%29.pdf`)
+  })
+
+  it('refuses an unknown attachment', async () => {
+    stub_story_and_file(null)
+    await expect(sign_attachment_download(42, 'gone.pdf'))
+      .rejects.toMatchObject({ statusCode: 404, message: '附件不存在或已被删除' })
+    expect(mocks.signed_object_url).not.toHaveBeenCalled()
+  })
+
+  it('refuses an encrypted row: its object is ciphertext', async () => {
+    stub_story_and_file(file_row({ file_name: 'secret.png.good', encryption_key: 'key' }))
+    await expect(sign_attachment_download(42, 'secret.png.good'))
+      .rejects.toMatchObject({ statusCode: 400, message: '加密的附件请在页面中下载' })
+    expect(mocks.signed_object_url).not.toHaveBeenCalled()
+  })
+
+  it('refuses a story that does not exist', async () => {
+    mocks.db_execute.mockResolvedValue([[], []])
+    await expect(sign_attachment_download(99, 'x.pdf'))
+      .rejects.toMatchObject({ statusCode: 404, message: '档案不存在或已被删除' })
     expect(mocks.signed_object_url).not.toHaveBeenCalled()
   })
 })
@@ -528,6 +633,38 @@ describe('attachment name guard', () => {
 
     await expect(rename_attachment(5, 'photo.png', 'photo-2.png')).resolves.toBeTruthy()
     expect(connection.commit).toHaveBeenCalled()
+  })
+
+  it('lowercases the extension on rename', async () => {
+    // Extensions are normalized to lowercase on the way in, so a rename to
+    // `photo.PNG` stores `photo.png` and the stored name stays canonical.
+    stub_scope([file_row('photo.png')])
+
+    await expect(rename_attachment(5, 'photo.png', 'photo.PNG'))
+      .resolves.toMatchObject({ file_name: 'photo.png' })
+  })
+
+  it('lowercases the plaintext extension when renaming an encrypted file', async () => {
+    // The `.good` marker is the last dot, so the case fix has to look past it:
+    // the client sends the locked tail `.[ext].good` verbatim.
+    stub_scope([file_row('photo.png.good', 10, 'a2V5')])
+
+    await rename_attachment(5, 'photo.png.good', 'renamed.PNG.good')
+
+    // Assert the stored name rather than the return value: the stub answers any
+    // name lookup with the same row, so only the write proves the normalization.
+    const update = mocks.db_execute.mock.calls.find(call => String(call[0]).startsWith('UPDATE content_story_attachments SET file_name'))
+    expect(update?.[1]).toEqual(['renamed.png.good', 5, 'photo.png.good'])
+  })
+
+  it('refuses a rename that only an uppercase marker would make legal', async () => {
+    // `photo.png.GOOD` lowercases to `photo.png.good`, which is the reserved
+    // marker. Normalizing after the marker check would let it through as a
+    // freshly-appended encryption suffix on a plaintext row.
+    stub_scope([file_row('photo.png')])
+
+    await expect(rename_attachment(5, 'photo.png', 'photo.png.GOOD'))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('.good') })
   })
 
   it('lets a folder move land on the folder that already answers to the name', async () => {

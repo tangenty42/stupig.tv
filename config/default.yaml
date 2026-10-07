@@ -132,6 +132,10 @@ app:
       autosaveDelayMs: 1000
     upload:
       handleStorageName: stupig_content_upload_handles
+    download:
+      # 附件下载签名 URL 的有效期（秒）。签名只在点击下载那一刻签发，过期后
+      # 重新点击即可再签，短窗口足够一次下载开始
+      urlTtlSeconds: 300
     redact:
       # 删减版编辑器解码到 canvas 的最长边。文件大小限制约束不了解码后的体积，
       # 小 PNG 也可能耗尽标签页内存

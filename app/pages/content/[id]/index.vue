@@ -30,6 +30,7 @@
       <MyHeightSection ref="attachment_section" tag="section" class="section-card-collapse mt-6">
         <MyContentAttachmentList
           :rows="attachment_rows"
+          :story_id="story.id"
           :upload_busy="false"
           readonly
           layout="stack"

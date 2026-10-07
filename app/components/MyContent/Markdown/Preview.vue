@@ -33,8 +33,8 @@
 import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import type { RenderEnvironment } from '~/utils/content/markdown/types'
-import { attachment_base_name, decrypted_attachment_name, strip_front_matter } from '@shared/content-markdown'
-import { download_attachment } from '~/utils/content/attachment'
+import { strip_front_matter } from '@shared/content-markdown'
+import { attachment_is_media, open_decrypted_attachment, save_url_as } from '~/utils/content/attachment'
 import { decrypted_blob_url, decrypting_urls } from '~/utils/content/attachment-crypto'
 import { setup_carousels } from '~/utils/content/carousel'
 import { observe_cropped_images } from '~/utils/content/cropped-images'
@@ -155,11 +155,11 @@ const encrypted_by_url = computed(() => {
   return map
 })
 
-/** Non-image plaintext attachments, keyed by their (static) object URL. */
-const download_attachments_by_url = computed(() => {
+/** Plaintext attachments, keyed by their (static) object URL; media open inline, the rest download. */
+const plain_attachments_by_url = computed(() => {
   const map = new Map<string, ContentStoryAttachment>()
   for (const attachment of props.attachments) {
-    if (! attachment.is_encrypted && ! attachment.is_image)
+    if (! attachment.is_encrypted)
       map.set(static_url(attachment.url), attachment)
   }
   return map
@@ -260,8 +260,8 @@ function mark_card_decrypting(link: HTMLAnchorElement) {
   }
 }
 
-/** Downloads an encrypted file card's plaintext under its pre-encryption name. */
-async function download_encrypted(link: HTMLAnchorElement) {
+/** Opens an encrypted file card's plaintext, saving it when it is not viewable media. */
+async function open_encrypted(link: HTMLAnchorElement) {
   const attachment = encrypted_by_url.value.get(link.href)
   if (! attachment?.encryption_key)
     return
@@ -271,11 +271,9 @@ async function download_encrypted(link: HTMLAnchorElement) {
   }
   const restore = mark_card_decrypting(link)
   try {
-    const blob_url = await decrypted_blob_url(link.href, attachment.encryption_key, attachment.mime_type)
-    const anchor = document.createElement('a')
-    anchor.href = blob_url
-    anchor.download = attachment_base_name(decrypted_attachment_name(attachment.file_name))
-    anchor.click()
+    // Called, not awaited-then-called: the helper opens the tab for media as its
+    // first statement, which has to happen inside this click's gesture.
+    await open_decrypted_attachment(link.href, attachment)
   }
   catch {
     toast_error('加密附件解密失败')
@@ -286,8 +284,17 @@ async function download_encrypted(link: HTMLAnchorElement) {
 }
 
 /** Saves a plaintext attachment under its row name instead of opening the nameless object URL. */
-function download_plain(attachment: ContentStoryAttachment) {
-  download_attachment(static_url, attachment)
+async function download_plain(attachment: ContentStoryAttachment) {
+  const story_id = props.storyId
+  if (! story_id)
+    return
+  try {
+    const { url } = await api.content.sign_attachment_download(story_id, attachment.file_name)
+    save_url_as(url)
+  }
+  catch {
+    toast_error('附件下载失败')
+  }
 }
 
 // Post-render DOM behaviors (carousel wiring, sticky heading sections,
@@ -364,17 +371,17 @@ function on_preview_click(event: MouseEvent) {
     const encrypted_link = event.target.closest<HTMLAnchorElement>('a[data-encrypted]')
     if (encrypted_link) {
       event.preventDefault()
-      // Abridged mode hands over the plaintext twin directly.
+      // Abridged mode hands over the plaintext twin; media stay viewable.
       if (encrypted_link.dataset.abridged === '1' && encrypted_link.dataset.twinUrl) {
-        const twin = download_attachments_by_url.value.get(encrypted_link.dataset.twinUrl)
-        if (twin) {
-          download_plain(twin)
+        const twin = plain_attachments_by_url.value.get(encrypted_link.dataset.twinUrl)
+        if (twin && ! attachment_is_media(twin)) {
+          void download_plain(twin)
           return
         }
         window.open(encrypted_link.dataset.twinUrl, '_blank', 'noopener,noreferrer')
         return
       }
-      void download_encrypted(encrypted_link)
+      void open_encrypted(encrypted_link)
       return
     }
   }
@@ -383,14 +390,14 @@ function on_preview_click(event: MouseEvent) {
     open_image_preview(image)
     return
   }
-  // A plain attachment link is a download; images above keep their preview, and
-  // encrypted cards were handled before this.
+  // A plain attachment link saves under its row name; media stay viewable and
+  // keep their native tab navigation, and encrypted cards were handled before.
   if (event.target instanceof HTMLElement) {
     const link = event.target.closest<HTMLAnchorElement>('a[href]')
-    const attachment = link ? download_attachments_by_url.value.get(link.href) : undefined
-    if (attachment) {
+    const attachment = link ? plain_attachments_by_url.value.get(link.href) : undefined
+    if (attachment && ! attachment_is_media(attachment)) {
       event.preventDefault()
-      download_plain(attachment)
+      void download_plain(attachment)
       return
     }
   }

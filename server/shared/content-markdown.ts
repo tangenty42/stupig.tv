@@ -537,6 +537,13 @@ export function attachment_base_name(file_name: string) {
   return file_name.slice(file_name.lastIndexOf('/') + 1)
 }
 
+/** The name with its extension lowercased (`A.PNG` → `A.png`); a name with no extension passes through. */
+export function lowercased_attachment_extension(file_name: string) {
+  const dot = file_name.lastIndexOf('.')
+  // dot 0 is a leading dot that IS the name (`.good`), not an extension separator.
+  return dot > 0 ? `${file_name.slice(0, dot)}${file_name.slice(dot).toLowerCase()}` : file_name
+}
+
 // Encrypted attachments carry a `.good` suffix (appended by the server-side
 // encrypt step, which also swaps the object for the ciphertext). The original
 // mime type stays on the row, so the suffix is display-level only.
@@ -549,6 +556,30 @@ export function is_encrypted_attachment(file_name: string) {
 /** The name an encrypted attachment had before encryption (`a.png.good` → `a.png`). */
 export function decrypted_attachment_name(file_name: string) {
   return is_encrypted_attachment(file_name) ? file_name.slice(0, - encrypted_attachment_suffix.length) : file_name
+}
+
+/**
+ * The name an attachment is saved under: its base name, encryption marker
+ * stripped, extension lowercased — legacy rows may still carry an uppercase
+ * extension, while new and renamed ones arrive normalized.
+ */
+export function attachment_download_name(file_name: string) {
+  return lowercased_attachment_extension(attachment_base_name(decrypted_attachment_name(file_name)))
+}
+
+/**
+ * Lowercase a stored name's extension, keeping any `.good` marker in place.
+ *
+ * The marker is itself the last dot, so lowercasing the final suffix alone
+ * would leave the real extension (`secret.PNG.good` → `secret.PNG.good`) — the
+ * plaintext extension has to be normalized first and the marker re-appended.
+ * This is the rule every name boundary uses; `lowercased_attachment_extension`
+ * is the primitive underneath it.
+ */
+export function normalized_attachment_extension(file_name: string) {
+  if (! is_encrypted_attachment(file_name))
+    return lowercased_attachment_extension(file_name)
+  return `${lowercased_attachment_extension(decrypted_attachment_name(file_name))}${encrypted_attachment_suffix}`
 }
 
 /**
@@ -769,9 +800,8 @@ export function link_file_name_byte_length(name: string) {
   return new TextEncoder().encode(name).length
 }
 
-/** Normalize an uploaded file name; must match what the server stores. `max_bytes` comes from env (common filesystems cap one name at 255 bytes). */
-export function sanitize_attachment_file_name(raw: string, max_bytes: number) {
-  const base = raw.replaceAll('\\', '/').split('/').pop() ?? ''
+/** Strip what storage and a Markdown link cannot carry, and cap the byte length. */
+function clean_attachment_segment(base: string, max_bytes: number) {
   let cleaned = base.replace(link_file_name_illegal_chars, '').trim().replace(/^\.+/, '').replace(/\.+$/, '')
   if (link_file_name_reserved_base.test(cleaned.split('.')[0] ?? '')) {
     cleaned = `_${cleaned}`
@@ -789,11 +819,43 @@ export function sanitize_attachment_file_name(raw: string, max_bytes: number) {
   return truncated || 'file'
 }
 
-/** Normalize a (possibly nested) upload path (`folder/name.png`) the way the server stores it. */
+/** The last segment of a (possibly nested) upload path. */
+function last_path_segment(raw: string) {
+  return raw.replaceAll('\\', '/').split('/').pop() ?? ''
+}
+
+/**
+ * Normalize one path segment; must match what the server stores. `max_bytes`
+ * comes from env (common filesystems cap one name at 255 bytes).
+ *
+ * Deliberately leaves the case alone: a folder segment's dots are part of its
+ * name, not an extension, so `My.Folder` keeps the case it was uploaded with.
+ */
+export function sanitize_attachment_segment(raw: string, max_bytes: number) {
+  return clean_attachment_segment(last_path_segment(raw), max_bytes)
+}
+
+/**
+ * Normalize an uploaded file name — one segment, plus its extension.
+ *
+ * The extension is lowercased here and only here: the mime map matches it
+ * case-insensitively anyway, and normalizing keeps one stored name for the same
+ * bytes. It runs before the byte cap because lowercasing can change a
+ * character's byte length, and the cap has to hold for the stored name.
+ */
+export function sanitize_attachment_file_name(raw: string, max_bytes: number) {
+  return clean_attachment_segment(normalized_attachment_extension(last_path_segment(raw)), max_bytes)
+}
+
+/** Normalize a (possibly nested) upload path (`folder/name.png`); only the last segment is a file name. */
 export function sanitize_attachment_path(raw: string, max_bytes: number) {
-  const segments = raw.replaceAll('\\', '/').split('/').filter(Boolean)
-    .map(segment => sanitize_attachment_file_name(segment, max_bytes))
-  return segments.join('/') || 'file'
+  const parts = raw.replaceAll('\\', '/').split('/').filter(Boolean)
+  const last = parts.length - 1
+  return parts
+    .map((part, index) => index === last
+      ? sanitize_attachment_file_name(part, max_bytes)
+      : sanitize_attachment_segment(part, max_bytes))
+    .join('/') || 'file'
 }
 
 /** Story-local URL used inside Markdown attachment links. */

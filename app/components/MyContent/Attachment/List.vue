@@ -49,6 +49,7 @@
       <template v-for="row in rows" :key="row.key">
         <MyContentAttachmentCard
           :row="row"
+          :story_id="story_id"
           :readonly="readonly"
           :data-row-key="row.key"
           :data-folder="row_data_folder(row)"
@@ -104,6 +105,8 @@ type FileMenuItem = MenuItem & { icon_name?: string }
 interface Props {
   /** Pre-built flat rows (folders + files, in display order) from the page. */
   rows: MyContentAttachmentRow[]
+  /** Owning story; the signed download URL is requested against it. */
+  story_id: number
   upload_busy: boolean
   /** Whether the root is the current move target (background highlight). */
   move_to_root?: boolean

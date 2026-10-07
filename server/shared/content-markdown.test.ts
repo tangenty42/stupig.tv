@@ -2,6 +2,7 @@ import type { ContentMarkdownConfig } from './content-markdown'
 import { describe, expect, it } from 'vitest'
 import {
   attachment_base_name,
+  attachment_download_name,
   attachment_name_segment_violation,
   attachment_path_violation,
   compare_attachment_names,
@@ -12,10 +13,16 @@ import {
   folder_images,
   is_attachment_folder,
   is_encrypted_attachment,
+  link_file_name_byte_length,
+  lowercased_attachment_extension,
+  normalized_attachment_extension,
   parse_story_markdown,
   redactable_attachment_mime,
   rename_attachment_references,
   rename_story_references,
+  sanitize_attachment_file_name,
+  sanitize_attachment_path,
+  sanitize_attachment_segment,
   split_attachment_editable_name,
 } from './content-markdown'
 
@@ -308,6 +315,76 @@ describe('encrypted attachment naming', () => {
   it('keeps a .good file whose stem already looks like one intact', () => {
     // Only the suffix comes off, so a name that itself ends in `good` survives.
     expect(decrypted_attachment_name('a.good.good')).toBe('a.good')
+  })
+})
+
+describe('extension normalization', () => {
+  it('lowercases the extension of a stored name', () => {
+    expect(lowercased_attachment_extension('Photo.PNG')).toBe('Photo.png')
+    expect(lowercased_attachment_extension('clip.Mp4')).toBe('clip.mp4')
+    // Only the last segment counts: folder names are untouched.
+    expect(lowercased_attachment_extension('Docs/report.PDF')).toBe('Docs/report.pdf')
+  })
+
+  it('passes names without an extension through unchanged', () => {
+    expect(lowercased_attachment_extension('README')).toBe('README')
+    // A leading dot is the name itself (the `.good` marker), not a separator.
+    expect(lowercased_attachment_extension('.good')).toBe('.good')
+  })
+
+  it('sanitizes uploads to a lowercase extension', () => {
+    expect(sanitize_attachment_file_name('IMG_2026.JPG', 255)).toBe('IMG_2026.jpg')
+    expect(sanitize_attachment_file_name('照片.PNG', 255)).toBe('照片.png')
+  })
+
+  // A folder's dots are part of its name, not an extension, so only the final
+  // segment of an upload path is normalized.
+  it('leaves a folder segment exactly as uploaded', () => {
+    expect(sanitize_attachment_segment('My.Folder', 255)).toBe('My.Folder')
+    expect(sanitize_attachment_segment('v1.2.Docs', 255)).toBe('v1.2.Docs')
+  })
+
+  it('normalizes only the last segment of a nested upload path', () => {
+    expect(sanitize_attachment_path('My.Folder/a.TXT', 255)).toBe('My.Folder/a.txt')
+    expect(sanitize_attachment_path('v1.2.Docs/报告.PDF', 255)).toBe('v1.2.Docs/报告.pdf')
+  })
+
+  // Only the extension is case-mapped, and a non-ASCII one can grow when
+  // lowercased (İ is 2 bytes, its lowercase is 3). Normalizing before the cap is
+  // what keeps the stored name inside it. The broken order still passes the
+  // ASCII cases, so this is the case that pins the sequence.
+  it('holds the byte cap over the normalized name', () => {
+    const result = sanitize_attachment_file_name('file.İ', 7)
+    expect(link_file_name_byte_length(result)).toBeLessThanOrEqual(7)
+  })
+})
+
+describe('normalized_attachment_extension', () => {
+  // The marker is the last dot, so lowercasing the final suffix alone would
+  // leave the plaintext extension behind it untouched.
+  it('reaches the extension underneath a .good marker', () => {
+    expect(normalized_attachment_extension('secret.PNG.good')).toBe('secret.png.good')
+    // Already-normalized names are returned unchanged, marker and all.
+    expect(normalized_attachment_extension('secret.png.good')).toBe('secret.png.good')
+  })
+
+  it('matches the plain rule for a name with no marker', () => {
+    expect(normalized_attachment_extension('Photo.PNG')).toBe('Photo.png')
+    expect(normalized_attachment_extension('README')).toBe('README')
+  })
+
+  it('normalizes a .good name supplied at a boundary', () => {
+    // An upload arrives through the sanitizer, which has to normalize the real
+    // extension even when the name carries the marker.
+    expect(sanitize_attachment_file_name('a.PNG.good', 255)).toBe('a.png.good')
+  })
+})
+
+describe('attachment_download_name', () => {
+  it('saves under the base name, marker stripped and extension lowercased', () => {
+    expect(attachment_download_name('docs/report.PDF')).toBe('report.pdf')
+    expect(attachment_download_name('a/b/secret.PNG.good')).toBe('secret.png')
+    expect(attachment_download_name('裸名.txt')).toBe('裸名.txt')
   })
 })
 

@@ -1,5 +1,6 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
-import { attachment_base_name, decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
+import { attachment_download_name, decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
+import { decrypted_blob_url } from './attachment-crypto'
 
 /**
  * The public "删减版" of an encrypted attachment: the plaintext sibling named
@@ -303,41 +304,87 @@ export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' |
 }
 
 /**
- * Object URL that makes the browser save the object under `file_name`.
- *
- * An attachment object is stored under a uuid key and served inline, so neither
- * the URL nor the response headers carry a usable name: opening it plainly
- * either renders the file in a tab or saves it as the uuid. The static host
- * applies a `response-content-disposition` override, which names the download
- * from the row's display name without proxying the bytes — the response keeps
- * streaming, so a large attachment is never buffered client-side.
- *
- * Takes the root-relative object URL, like `story_front_cover_url`.
+ * Triggers a browser save of `url`. For an http(s) URL the save name comes from
+ * the response's Content-Disposition (see the signed download URL); `name` only
+ * names blob: URLs, where no headers exist.
  */
-export function attachment_download_url(static_url: (path: string) => string, url: string, file_name: string) {
-  const resolved = static_url(url)
-  const separator = resolved.includes('?') ? '&' : '?'
-  // RFC 5987 ext-value for the inner name, then the whole header value as one
-  // query parameter: its own `;`, `=` and spaces have to be encoded too, and a
-  // single decode restores it as the response header server-side.
-  const name = encodeURIComponent(attachment_base_name(decrypted_attachment_name(file_name)))
-    // encodeURIComponent leaves these bare, and `'` is the ext-value delimiter.
-    .replace(/['()*!]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
-  return `${resolved}${separator}response-content-disposition=${encodeURIComponent(`attachment; filename*=UTF-8''${name}`)}`
+export function save_url_as(url: string, name?: string) {
+  const anchor = document.createElement('a')
+  anchor.href = url
+  if (name)
+    anchor.download = name
+  anchor.click()
 }
 
 /**
- * Saves an attachment's object under its row name. The click is a plain
- * download navigation, so the host streams the bytes; only the name rides on
- * the URL (see `attachment_download_url`).
+ * Whether the row is viewable in a browser tab (image, video, audio): it opens
+ * inline by default and is exempt from the forced download; a download stays
+ * available as its own action.
  */
-export function download_attachment(static_url: (path: string) => string, attachment: Pick<ContentStoryAttachment, 'url' | 'file_name'>) {
-  const anchor = document.createElement('a')
-  anchor.href = attachment_download_url(static_url, attachment.url, attachment.file_name)
-  // The disposition override names the download on the wire; the attribute only
-  // applies where the host is same-origin, and is ignored otherwise.
-  anchor.download = attachment_base_name(decrypted_attachment_name(attachment.file_name))
-  anchor.click()
+export function attachment_is_media(attachment: Pick<ContentStoryAttachment, 'mime_type'>) {
+  return /^(?:image|video|audio)\//.test(attachment.mime_type ?? '')
+}
+
+/** The viewer an attachment's leading action opens it in. */
+export type AttachmentLeadingAction = 'preview' | 'open' | 'download'
+
+/**
+ * The leading action for an attachment: images preview in the lightbox, other
+ * media opens in a tab, everything else downloads.
+ *
+ * Encrypted rows are not distinguished here — they reach the same action through
+ * the decrypt path instead of the object URL, which is what keeps a private
+ * video as openable as a public one.
+ */
+export function attachment_leading_action(attachment: Pick<ContentStoryAttachment, 'is_image' | 'mime_type'>): AttachmentLeadingAction {
+  if (attachment.is_image)
+    return 'preview'
+  return attachment_is_media(attachment) ? 'open' : 'download'
+}
+
+/**
+ * Decrypts an encrypted attachment and hands the plaintext to the browser:
+ * media opens in a new tab, anything else is saved under its display name.
+ *
+ * The tab is opened before the await, because a window opened after decryption
+ * falls outside the click's user gesture and the browser blocks it. `noopener`
+ * is unusable on that pre-open window — it returns null, leaving nothing to
+ * navigate — so the opener link is severed by hand instead.
+ *
+ * `save` forces the save for media too, which is what the attachment list's
+ * separate 下载 entry needs.
+ */
+async function hand_over_decrypted(cipher_url: string, attachment: ContentStoryAttachment, save: boolean) {
+  const key = attachment.encryption_key
+  if (! key)
+    throw new Error('附件缺少解密密钥')
+  const tab = ! save && attachment_is_media(attachment) ? window.open('', '_blank') : null
+  if (tab)
+    tab.opener = null
+  try {
+    const blob_url = await decrypted_blob_url(cipher_url, key, attachment.mime_type)
+    // A null tab means the browser blocked the popup, not that the viewer asked
+    // for a file, so the save is the fallback that still delivers the content.
+    if (! tab)
+      save_url_as(blob_url, attachment_download_name(attachment.file_name))
+    else if (! tab.closed)
+      tab.location.replace(blob_url)
+  }
+  catch (ex) {
+    // The pre-opened tab is still blank; leave no stray tab behind.
+    tab?.close()
+    throw ex
+  }
+}
+
+/** Opens an encrypted attachment's plaintext: media in a tab, anything else saved. */
+export function open_decrypted_attachment(cipher_url: string, attachment: ContentStoryAttachment) {
+  return hand_over_decrypted(cipher_url, attachment, false)
+}
+
+/** Saves an encrypted attachment's plaintext under its display name, media included. */
+export function save_decrypted_attachment(cipher_url: string, attachment: ContentStoryAttachment) {
+  return hand_over_decrypted(cipher_url, attachment, true)
 }
 
 /**

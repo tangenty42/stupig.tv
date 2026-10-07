@@ -17,6 +17,7 @@ import {
   move_folder,
   rename_attachment,
   replace_attachment,
+  sign_attachment_download,
   sign_attachment_upload,
   update_story,
 } from '@server/services/content.service'
@@ -70,6 +71,12 @@ export const content_router = router({
   signAttachmentUpload: content_admin_procedure
     .input(api_schema.content.sign_attachment_upload)
     .mutation(({ input }) => sign_attachment_upload(input)),
+
+  // Signing grants nothing the nameless object URL doesn't already grant — the
+  // signature only names the download — so viewers sign directly.
+  signAttachmentDownload: public_procedure
+    .input(api_schema.content.sign_attachment_download)
+    .mutation(({ input }) => sign_attachment_download(input.story_id, input.file_name)),
 
   confirmAttachmentUpload: content_admin_procedure
     .input(api_schema.content.confirm_attachment_upload)

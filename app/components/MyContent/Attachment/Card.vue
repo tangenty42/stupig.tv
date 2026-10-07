@@ -75,7 +75,7 @@ import type { ContentStoryAttachment } from '@shared/types/content'
 import type { MenuItem } from 'primevue/menuitem'
 import type { MyContentAttachmentRow } from '~/utils/content/attachment'
 import { attachment_base_name, CONTENT_ATTACHMENT_DENIED_TEXT, decrypted_attachment_name, encrypted_attachment_suffix, is_encrypted_attachment, redactable_attachment_mime } from '@shared/content-markdown'
-import { download_attachment, file_icon } from '~/utils/content/attachment'
+import { attachment_is_media, attachment_leading_action, file_icon, open_decrypted_attachment, save_decrypted_attachment, save_url_as } from '~/utils/content/attachment'
 import { decrypted_blob_url, decrypting_urls } from '~/utils/content/attachment-crypto'
 import { format_bytes, format_speed } from '~/utils/size'
 
@@ -86,6 +86,8 @@ type MenuOpenEvent = Pick<MouseEvent, 'pageX' | 'pageY' | 'stopPropagation' | 'p
 
 interface Props {
   row: MyContentAttachmentRow
+  /** Owning story; the signed download URL is requested against it. */
+  story_id: number
   readonly?: boolean
 }
 
@@ -123,6 +125,7 @@ const emit = defineEmits<{
 }>()
 
 const static_url = useStaticUrl()
+const api = useApi()
 const { info: toast_info, error: toast_error } = useMyToast()
 
 const row_el = ref<HTMLElement>()
@@ -351,7 +354,7 @@ const menu_items = computed<AttachmentMenuItem[]>(() => {
       return [{ label: CONTENT_ATTACHMENT_DENIED_TEXT, icon_name: 'lucide:ban', disabled: true }]
     if (is_decrypting.value)
       return [{ label: '解密中', icon_name: 'lucide:loader-circle', spin: true, disabled: true }]
-    return [{ label: '打开附件', icon_name: 'lucide:external-link', command: open_file }]
+    return open_download_items(file)
   }
   if (current_folder) {
     if (selection_count.value > 1)
@@ -375,14 +378,13 @@ const menu_items = computed<AttachmentMenuItem[]>(() => {
     // A right-clicked member of a multi-selection gets the batch actions only.
     if (selection_count.value > 1)
       return [... encryption_items(state.value.delete_disabled), delete_item('file')]
+    const leading: AttachmentMenuItem[] = denied_access.value
+      ? [{ label: CONTENT_ATTACHMENT_DENIED_TEXT, icon_name: 'lucide:ban', disabled: true }]
+      : is_decrypting.value
+        ? [{ label: '解密中', icon_name: 'lucide:loader-circle', spin: true, disabled: true }]
+        : open_download_items(file)
     const items: AttachmentMenuItem[] = [
-      denied_access.value
-        ? { label: CONTENT_ATTACHMENT_DENIED_TEXT, icon_name: 'lucide:ban', disabled: true }
-        : is_decrypting.value
-          ? { label: '解密中', icon_name: 'lucide:loader-circle', spin: true, disabled: true }
-          : file.is_image
-            ? { label: '预览', icon_name: 'lucide:eye', command: () => void preview_file(file) }
-            : { label: '打开', icon_name: 'lucide:external-link', command: open_file },
+      ... leading,
       { label: '复制 Markdown 代码', icon_name: 'lucide:copy', command: () => emit('copy') },
     ]
     items.push(
@@ -467,22 +469,53 @@ const upload_status_text = computed(() => {
   return ''
 })
 
-/** Downloads the decrypted plaintext of an encrypted attachment under its original name. */
+/** Opens an encrypted attachment: media in a tab, anything else saved under its name. */
 async function open_decrypted(file: ContentStoryAttachment) {
-  const url = static_url(file.url)
   if (is_decrypting.value) {
     toast_info('解密中，请稍候')
     return
   }
   try {
-    const blob_url = await decrypted_blob_url(url, file.encryption_key!, file.mime_type)
-    const anchor = document.createElement('a')
-    anchor.href = blob_url
-    anchor.download = attachment_base_name(decrypted_attachment_name(file.file_name))
-    anchor.click()
+    await open_decrypted_attachment(static_url(file.url), file)
   }
   catch {
     toast_error('加密附件解密失败')
+  }
+}
+
+/** Saves an encrypted attachment's plaintext even when it is viewable media. */
+async function download_decrypted(file: ContentStoryAttachment) {
+  if (is_decrypting.value) {
+    toast_info('解密中，请稍候')
+    return
+  }
+  try {
+    await save_decrypted_attachment(static_url(file.url), file)
+  }
+  catch {
+    toast_error('加密附件解密失败')
+  }
+}
+
+/** One in-flight signature at a time; a second click just waits for the first. */
+let download_signing = false
+
+/** Signs the object GET on demand, then saves it under its row name (see sign_attachment_download). */
+async function download_signed(file: ContentStoryAttachment) {
+  if (download_signing) {
+    toast_info('下载准备中，请稍候')
+    return
+  }
+  download_signing = true
+  try {
+    const { url } = await api.content.sign_attachment_download(props.story_id, file.file_name)
+    save_url_as(url)
+  }
+  catch {
+    toast_error('附件下载失败')
+  }
+  finally {
+    download_signing = false
   }
 }
 
@@ -494,13 +527,35 @@ function open_file() {
     void open_decrypted(file)
     return
   }
-  // Images stay viewable; every other type is a download, since the object URL
-  // itself carries no file name to save it under.
-  if (file.is_image) {
+  // Media opens inline in a tab; everything else saves under its row name,
+  // since the object URL itself carries no file name to save it under.
+  if (attachment_is_media(file)) {
     window.open(static_url(file.url), '_blank', 'noopener,noreferrer')
     return
   }
-  download_attachment(static_url, file)
+  void download_signed(file)
+}
+
+/**
+ * The leading file menu entries: images preview, other media open in a tab, and
+ * every file gets a named download. An encrypted row has no usable object URL —
+ * its bytes are ciphertext — so both actions go through the client-side decrypt.
+ */
+function open_download_items(file: ContentStoryAttachment): AttachmentMenuItem[] {
+  const encrypted = Boolean(file.is_encrypted && file.encryption_key)
+  const leading = attachment_leading_action(file)
+  return [
+    ... (leading === 'preview'
+      ? [{ label: '预览', icon_name: 'lucide:eye', command: () => void preview_file(file) } satisfies AttachmentMenuItem]
+      : leading === 'open'
+        ? [{ label: '打开', icon_name: 'lucide:external-link', command: () => void open_file() } satisfies AttachmentMenuItem]
+        : []),
+    {
+      label: '下载',
+      icon_name: 'lucide:download',
+      command: encrypted ? () => void download_decrypted(file) : () => void download_signed(file),
+    },
+  ]
 }
 
 /** Preview decrypts first when the image is encrypted, so the lightbox never sees ciphertext. */
