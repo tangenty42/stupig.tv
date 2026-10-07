@@ -67,3 +67,8 @@
 
 - After type refactors or import changes on either the frontend or the backend, run `npx nuxt typecheck` to type-check the whole workspace. Type errors must be resolved before considering the task complete.
 - Avoid adding new external dependencies unless there is a clear, justified need. The project already uses PrimeVue, Tailwind, and Nuxt icons.
+
+## Git & Commits
+
+- Commit messages are single-line English, imperative mood, sentence case, no scope prefix and no trailer — match the existing history (`git log --oneline`).
+- Never append `Co-authored-by` or any other trailer unless the user explicitly asks for it in that conversation.
