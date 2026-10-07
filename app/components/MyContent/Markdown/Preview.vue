@@ -34,6 +34,7 @@ import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import type { RenderEnvironment } from '~/utils/content/markdown/types'
 import { attachment_base_name, decrypted_attachment_name, strip_front_matter } from '@shared/content-markdown'
+import { download_attachment } from '~/utils/content/attachment'
 import { decrypted_blob_url, decrypting_urls } from '~/utils/content/attachment-crypto'
 import { setup_carousels } from '~/utils/content/carousel'
 import { observe_cropped_images } from '~/utils/content/cropped-images'
@@ -153,8 +154,20 @@ const encrypted_by_url = computed(() => {
   }
   return map
 })
+
+/** Non-image plaintext attachments, keyed by their (static) object URL. */
+const download_attachments_by_url = computed(() => {
+  const map = new Map<string, ContentStoryAttachment>()
+  for (const attachment of props.attachments) {
+    if (! attachment.is_encrypted && ! attachment.is_image)
+      map.set(static_url(attachment.url), attachment)
+  }
+  return map
+})
+
 /** Ciphertext URL → decrypted blob URL, filled as decryptions land. */
 const decrypted_urls = reactive(new Map<string, string>())
+
 /** The lightbox shows decrypted blob URLs where available. */
 const lightbox_images = computed(() => render_result.value.images.map(url => decrypted_urls.get(url) ?? url))
 
@@ -272,6 +285,11 @@ async function download_encrypted(link: HTMLAnchorElement) {
   }
 }
 
+/** Saves a plaintext attachment under its row name instead of opening the nameless object URL. */
+function download_plain(attachment: ContentStoryAttachment) {
+  download_attachment(static_url, attachment)
+}
+
 // Post-render DOM behaviors (carousel wiring, sticky heading sections,
 // cropped-image markers) live in app/utils/content/*; here we only
 // orchestrate them after each render and keep their cleanup handles.
@@ -346,8 +364,13 @@ function on_preview_click(event: MouseEvent) {
     const encrypted_link = event.target.closest<HTMLAnchorElement>('a[data-encrypted]')
     if (encrypted_link) {
       event.preventDefault()
-      // Abridged mode opens the plaintext twin directly.
+      // Abridged mode hands over the plaintext twin directly.
       if (encrypted_link.dataset.abridged === '1' && encrypted_link.dataset.twinUrl) {
+        const twin = download_attachments_by_url.value.get(encrypted_link.dataset.twinUrl)
+        if (twin) {
+          download_plain(twin)
+          return
+        }
         window.open(encrypted_link.dataset.twinUrl, '_blank', 'noopener,noreferrer')
         return
       }
@@ -359,6 +382,17 @@ function on_preview_click(event: MouseEvent) {
   if (image) {
     open_image_preview(image)
     return
+  }
+  // A plain attachment link is a download; images above keep their preview, and
+  // encrypted cards were handled before this.
+  if (event.target instanceof HTMLElement) {
+    const link = event.target.closest<HTMLAnchorElement>('a[href]')
+    const attachment = link ? download_attachments_by_url.value.get(link.href) : undefined
+    if (attachment) {
+      event.preventDefault()
+      download_plain(attachment)
+      return
+    }
   }
   const folder = folder_from_event(event)
   if (folder) {
@@ -589,14 +623,6 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 .story-body :deep(.private-inline) {
   @apply border-amber-400 bg-amber-50/40 dark:border-amber-600 dark:bg-amber-950/20;
-}
-
-/* Inline-chip icons center on the CJK glyph center: baseline alignment sits
-   2px high, middle 2px low — -0.125em (the Font Awesome / Iconify inline
-   convention) lands in between. Harmless on flex-card icons, where
-   vertical-align is ignored. */
-.story-body :deep(.chip-icon) {
-  @apply align-[-0.125em];
 }
 
 .story-body :deep(.private-inline-icon),

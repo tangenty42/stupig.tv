@@ -6,7 +6,9 @@
     "build": "nuxt build",
     "storage:cleanup": "tsx --tsconfig scripts/tsconfig.json scripts/cleanup-orphan-attachments.ts",
     "db:dump:dev": "tsx --tsconfig scripts/tsconfig.json scripts/dump-desensitized.ts",
-    "dev": "nuxt dev --host 0.0.0.0 --port ${APP_PORT}",
+    "dev": "nuxt dev --host 0.0.0.0",
+    "dev:services": "docker compose -f docker-compose.dev.yml up -d",
+    "dev:all": "pnpm dev:services && pnpm dev",
     "generate": "nuxt generate",
     "maintenance:build": "esbuild scripts/cleanup-orphan-attachments.ts --bundle --platform=node --format=esm --target=node24 --alias:@shared=./server/shared --alias:@server=./server --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=.output/server/maintenance/cleanup.mjs && esbuild scripts/migrate.ts --bundle --platform=node --format=esm --target=node24 --alias:@shared=./server/shared --alias:@server=./server --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" --outfile=.output/server/maintenance/migrate.mjs",
     "migrate": "tsx --tsconfig scripts/tsconfig.json scripts/migrate.ts",
@@ -15,7 +17,6 @@
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "prepare": "simple-git-hooks",
-    "start": "PORT=${APP_PORT} node .output/server/index.mjs",
     "test": "vitest run"
   },
   "dependencies": {
@@ -84,7 +85,7 @@
     "esbuild": "0.28.1",
     "eslint": "^10.7.0",
     "lint-staged": "^17.2.0",
-    "nuxt": "^4.5.1",
+    "nuxt": "4.5.2",
     "simple-git-hooks": "^2.13.1",
     "tailwindcss": "^3.4.19",
     "tsx": "^4.23.15",

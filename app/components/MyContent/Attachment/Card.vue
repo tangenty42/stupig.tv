@@ -75,7 +75,7 @@ import type { ContentStoryAttachment } from '@shared/types/content'
 import type { MenuItem } from 'primevue/menuitem'
 import type { MyContentAttachmentRow } from '~/utils/content/attachment'
 import { attachment_base_name, CONTENT_ATTACHMENT_DENIED_TEXT, decrypted_attachment_name, encrypted_attachment_suffix, is_encrypted_attachment, redactable_attachment_mime } from '@shared/content-markdown'
-import { file_icon } from '~/utils/content/attachment'
+import { download_attachment, file_icon } from '~/utils/content/attachment'
 import { decrypted_blob_url, decrypting_urls } from '~/utils/content/attachment-crypto'
 import { format_bytes, format_speed } from '~/utils/size'
 
@@ -494,7 +494,13 @@ function open_file() {
     void open_decrypted(file)
     return
   }
-  window.open(static_url(file.url), '_blank', 'noopener,noreferrer')
+  // Images stay viewable; every other type is a download, since the object URL
+  // itself carries no file name to save it under.
+  if (file.is_image) {
+    window.open(static_url(file.url), '_blank', 'noopener,noreferrer')
+    return
+  }
+  download_attachment(static_url, file)
 }
 
 /** Preview decrypts first when the image is encrypted, so the lightbox never sees ciphertext. */

@@ -285,7 +285,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
       // Plain link: a chain icon marks it as a link on the left; wrap the
       // label so it can truncate; link_close closes the span and appends the
       // out icon at the END of the label.
-      return `${rendered_link}<span class="link-card-icon chip-icon iconify i-lucide:link" aria-hidden="true"></span><span class="link-card-tag">链接</span><span class="link-card-label">`
+      return `${rendered_link}<span class="link-card-icon iconify i-lucide:link" aria-hidden="true"></span><span class="link-card-tag">链接</span><span class="link-card-label">`
     }
     return `${rendered_link}<span class="file-card-icon iconify i-${file_card.icon}" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">${file_card.name ? md.utils.escapeHtml(file_card.name) : ''}`
   }
@@ -318,7 +318,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
     }
     const file_card = tokens[idx]?.meta?.file_card as FileCardData | undefined
     if (! file_card) {
-      return `</span><span class="link-card-open chip-icon iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
+      return `</span><span class="link-card-open iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
     }
     const encrypted_tag = file_card.encrypted ? `<span class="file-card-encrypted-tag">${file_card.abridged ? '机密附件·删减版' : '机密附件'}</span>` : ''
     // Permitted viewer with a plaintext twin: bottom bar toggles full/abridged.

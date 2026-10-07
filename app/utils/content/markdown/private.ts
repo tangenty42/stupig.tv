@@ -28,7 +28,7 @@ export const private_blocks_plugin: StoryMarkdownPlugin = (md, ctx) => {
   md.renderer.rules.content_private_inline = (tokens, idx, _options, env) => {
     const gaps = chip_gap_classes(tokens, idx, idx, 'card')
     const gap_class = gaps.length ? ` ${gaps.join(' ')}` : ''
-    return `<span class="private-inline${gap_class}"><span class="iconify i-lucide:lock-keyhole-open private-inline-icon chip-icon" aria-hidden="true"></span><span class="private-inline-tag">机密内容</span>${md.renderInline(tokens[idx]!.content, env)}</span>`
+    return `<span class="private-inline${gap_class}"><span class="iconify i-lucide:lock-keyhole-open private-inline-icon" aria-hidden="true"></span><span class="private-inline-tag">机密内容</span>${md.renderInline(tokens[idx]!.content, env)}</span>`
   }
 
   // The denied placeholder arrives as raw html_inline (the server swapped it

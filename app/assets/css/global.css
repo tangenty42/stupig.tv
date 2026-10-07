@@ -57,6 +57,18 @@
   h2 {
     @apply !text-xl font-semibold text-slate-600 dark:text-slate-300;
   }
+
+  /* Icons ship as `inline-block` boxes sitting on the text baseline, which
+     leaves them ~1.5-2px above the centre of a CJK glyph: ideographs are
+     centred on the em box, not on the font's ascent/descent, so the right
+     offset is baseline-relative rather than font-dependent. -0.125em is the
+     Iconify / Font Awesome inline convention and lands the icon centre on the
+     glyph centre for every font we measured. vertical-align is ignored once
+     an icon is a flex or grid item, so an icon that must line up with
+     adjacent text has to live in an inline box, not in the same flex row. */
+  .iconify {
+    vertical-align: -0.125em;
+  }
 }
 
 @keyframes card-in {

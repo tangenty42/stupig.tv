@@ -17,8 +17,14 @@ const class_computed = computed(() => {
 </script>
 
 <style scoped>
+  /* inline-flex (not inline): the pill's height then follows the line box
+     instead of the font's ascent/descent, so it no longer stretches or
+     shrinks with whichever CJK font the platform resolved, and the glyphs
+     stay centred in it. */
   .badge {
     @apply
+      inline-flex
+      items-center
       rounded-full
       px-2
       py-1

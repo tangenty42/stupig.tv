@@ -1,6 +1,6 @@
 <template>
   <MyBadge outlined type="info" :title="resolved.description || undefined">
-    <span class="inline-flex items-center gap-1"><MyIcon name="lucide:key-round" />{{ resolved.name }}·{{ resolved.level_name }}</span>
+    <span><MyIcon name="lucide:key-round" class="me-1" />{{ resolved.name }}·{{ resolved.level_name }}</span>
   </MyBadge>
 </template>
 

@@ -8,7 +8,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('SSR error logging', () => {
+describe('sSR error logging', () => {
   it('logs the original app error with request context before rendering fails', () => {
     const output = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.stubGlobal('useRequestEvent', () => ({

@@ -1,5 +1,5 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
-import { decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
+import { attachment_base_name, decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
 
 /**
  * The public "删减版" of an encrypted attachment: the plaintext sibling named
@@ -300,6 +300,44 @@ export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' |
   if (['csv', 'xls', 'xlsx', 'ods'].includes(extension))
     return 'lucide:sheet'
   return 'lucide:file'
+}
+
+/**
+ * Object URL that makes the browser save the object under `file_name`.
+ *
+ * An attachment object is stored under a uuid key and served inline, so neither
+ * the URL nor the response headers carry a usable name: opening it plainly
+ * either renders the file in a tab or saves it as the uuid. The static host
+ * applies a `response-content-disposition` override, which names the download
+ * from the row's display name without proxying the bytes — the response keeps
+ * streaming, so a large attachment is never buffered client-side.
+ *
+ * Takes the root-relative object URL, like `story_front_cover_url`.
+ */
+export function attachment_download_url(static_url: (path: string) => string, url: string, file_name: string) {
+  const resolved = static_url(url)
+  const separator = resolved.includes('?') ? '&' : '?'
+  // RFC 5987 ext-value for the inner name, then the whole header value as one
+  // query parameter: its own `;`, `=` and spaces have to be encoded too, and a
+  // single decode restores it as the response header server-side.
+  const name = encodeURIComponent(attachment_base_name(decrypted_attachment_name(file_name)))
+    // encodeURIComponent leaves these bare, and `'` is the ext-value delimiter.
+    .replace(/['()*!]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `${resolved}${separator}response-content-disposition=${encodeURIComponent(`attachment; filename*=UTF-8''${name}`)}`
+}
+
+/**
+ * Saves an attachment's object under its row name. The click is a plain
+ * download navigation, so the host streams the bytes; only the name rides on
+ * the URL (see `attachment_download_url`).
+ */
+export function download_attachment(static_url: (path: string) => string, attachment: Pick<ContentStoryAttachment, 'url' | 'file_name'>) {
+  const anchor = document.createElement('a')
+  anchor.href = attachment_download_url(static_url, attachment.url, attachment.file_name)
+  // The disposition override names the download on the wire; the attribute only
+  // applies where the host is same-origin, and is ignored otherwise.
+  anchor.download = attachment_base_name(decrypted_attachment_name(attachment.file_name))
+  anchor.click()
 }
 
 /**

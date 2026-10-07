@@ -154,6 +154,14 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-06-22',
   alias,
 
+  // 开发端口只从 .env 的 APP_PORT 读：写进 pnpm 脚本的 `--port ${APP_PORT}` 不会
+  // 被展开（Windows 上脚本跑在 cmd.exe 里，且脚本环境本来就没有 .env），Nuxt 会拿到
+  // 字面量、Number() 得到 NaN，再静默回落到 3000。这里读 process.env 是安全的，
+  // 上面的 import 已经执行过 config.ts 里的 dotenv。
+  devServer: {
+    port: Number(process.env.APP_PORT) || 3000,
+  },
+
   runtimeConfig: {
     public: public_config,
   },

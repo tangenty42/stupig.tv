@@ -6,6 +6,25 @@ We are the smart **Stupig**s!
 
 Learn more about us at our official website [stupig.tv](https://www.stupig.tv).
 
+# Local development
+
+Dependencies (MySQL, Redis, EMQX, phpMyAdmin) run in Docker via `docker-compose.dev.yml`;
+the Nuxt dev server runs on the host and reads the same `.env`.
+
+```sh
+cp .env.example .env   # first time only: fill in the secrets, keep the local ports as-is
+pnpm install
+pnpm dev:all           # start the dependency services, then run the dev server
+```
+
+- `pnpm dev:services` — start the dependency services only
+  (`docker compose -f docker-compose.dev.yml up -d`; safe to re-run)
+- `pnpm dev` — run the dev server only, with the dependency services already up
+- `docker compose -f docker-compose.dev.yml down` — stop the dependency services
+  (add `-v` to also drop the MySQL volume)
+
+Every port, host and credential comes from `.env`; start from `.env.example`.
+
 # Deployment
 
 - Wire up your MySQL and Redis instance
