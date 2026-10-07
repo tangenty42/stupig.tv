@@ -10,9 +10,8 @@
       class="flex cursor-pointer items-center gap-2.5 rounded-full px-2 py-1 transition sm:hover:bg-[var(--p-content-hover-background)]"
     >
       <MyAvatar :user="profile" size="small" />
-      <div class="hidden sm:flex items-center gap-2 pe-1">
-        <span class="text-sm font-medium">{{ profile.username }}</span>
-        <MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="text-emerald-500" />
+      <div class="hidden sm:inline pe-1">
+        <span class="text-sm font-medium">{{ profile.username }}</span><MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="ms-2 text-emerald-500" />
       </div>
     </div>
 
@@ -29,9 +28,8 @@
         <div class="mb-4 flex items-center gap-3.5">
           <MyAvatar :user="profile" size="medium" previewable />
           <div class="w-full flex flex-col gap-1">
-            <span class="font-medium inline-flex items-center gap-1">
-              <span>{{ profile.username }}</span>
-              <MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="text-emerald-500" />
+            <span class="font-medium">
+              <span>{{ profile.username }}</span><MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="ms-1 text-emerald-500" />
             </span>
             <span class="text-xs text-slate-500">UID #{{ profile.id }}</span>
           </div>

@@ -435,7 +435,7 @@ describe('plain link cards', () => {
   it('renders a chain icon on the left of the label', () => {
     const { html } = render('[标签](https://example.com/x)\n')
 
-    expect(html).toContain('link-card-icon chip-icon iconify i-lucide:link')
+    expect(html).toContain('link-card-icon iconify i-lucide:link')
     expect(html).toContain('link-card-label')
     // link-chip marks the wrappable inline variant.
     expect(html).toContain('link-chip')

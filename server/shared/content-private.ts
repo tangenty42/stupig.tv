@@ -163,7 +163,7 @@ export const CONTENT_PRIVATE_DENIED_TEXT = '你无权查看此机密内容'
 // still rendered, grayed out, so the layout hints that something exists here
 // without leaking it. Rendered as raw HTML by the markdown pipeline.
 export const CONTENT_PRIVATE_BLOCK_PLACEHOLDER = `<div class="private-block-denied"><span class="iconify i-lucide:ban" aria-hidden="true"></span><span>${CONTENT_PRIVATE_DENIED_TEXT}</span></div>`
-export const CONTENT_PRIVATE_INLINE_PLACEHOLDER = `<span class="private-inline-denied"><span class="iconify i-lucide:ban chip-icon" aria-hidden="true"></span>${CONTENT_PRIVATE_DENIED_TEXT}</span>`
+export const CONTENT_PRIVATE_INLINE_PLACEHOLDER = `<span class="private-inline-denied"><span class="iconify i-lucide:ban" aria-hidden="true"></span>${CONTENT_PRIVATE_DENIED_TEXT}</span>`
 
 // Cheap prescan so stories without the tag never pay for a tokenize.
 const private_scan_pattern = /<good[\s>]/

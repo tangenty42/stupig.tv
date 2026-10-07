@@ -13,10 +13,10 @@
     <div class="story-card-body">
       <span class="story-card-title">
         <span>{{ story.title }}</span>
-        <span v-if="pinned" class="ms-2 inline-flex items-center gap-0.5 align-baseline text-xs font-bold text-slate-400 dark:text-slate-500">
-          <MyIcon name="lucide:pin" />
-          <span>置顶</span>
-        </span>
+        <span
+          v-if="pinned"
+          class="ms-2 text-xs font-bold text-slate-400 dark:text-slate-500"
+        ><MyIcon name="lucide:pin" class="me-0.5" /><span>置顶</span></span>
       </span>
       <span v-if="story.desc" class="story-card-desc">{{ story.desc }}</span>
       <div class="mt-2 w-full flex flex-wrap items-end gap-2">

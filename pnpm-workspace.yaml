@@ -1,6 +1,21 @@
+shellEmulator: true
+
+# pnpm 12 defaults to a 24h quarantine: no version published more recently than
+# this is installed. It is the whole supply-chain guard here, so it is written
+# down explicitly — which also makes it strict (resolution fails instead of
+# falling back to a fresh version).
+#
+# trustPolicy (no-downgrade) stays off: it compares publish dates across all
+# release lines, so it blocks well-attested packages — every semver 6.x release
+# or the whole cssnano family — and no version of those can satisfy it.
+minimumReleaseAge: 1440
+
 allowBuilds:
-  '@alicloud/openapi-core': set this to true or false
-  '@parcel/watcher': set this to true or false
-  core-js: set this to true or false
-  esbuild: set this to true or false
-  simple-git-hooks: set this to true or false
+  # postinstall only picks the TS version for its own published output
+  '@alicloud/openapi-core': false
+  '@parcel/watcher': true
+  # postinstall only prints a funding banner
+  core-js: false
+  # postinstall validates/links the platform binary
+  esbuild: true
+  simple-git-hooks: true

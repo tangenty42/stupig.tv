@@ -34,13 +34,13 @@
 
           <div class="mt-3 flex flex-wrap items-center gap-2">
             <MyBadge v-if="user.is_verified" outlined type="success">
-              <span class="inline-flex items-center gap-1"><MyIcon name="lucide:badge-check" />认证</span>
+              <span><MyIcon name="lucide:badge-check" class="me-1" />认证</span>
             </MyBadge>
             <MyBadge v-if="user.is_admin" outlined type="warning">
-              <span class="inline-flex items-center gap-1"><MyIcon name="lucide:shield-check" />管理员</span>
+              <span><MyIcon name="lucide:shield-check" class="me-1" />管理员</span>
             </MyBadge>
             <MyBadge v-if="user.is_banned" outlined type="error">
-              <span class="inline-flex items-center gap-1"><MyIcon name="lucide:ban" />已封禁</span>
+              <span><MyIcon name="lucide:ban" class="me-1" />已封禁</span>
             </MyBadge>
             <MyPermissionBadge v-for="grant in user.permissions" :key="grant.field" :grant="grant" />
           </div>

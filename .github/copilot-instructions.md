@@ -3,7 +3,7 @@
 ## Environment & Runtime
 
 - This project runs inside a Docker container; the Copilot session is in a Dev Container, so `pnpm` commands can run directly in the shell.
-- The app is usually started with `pnpm dev` (`nuxt dev --host 0.0.0.0 --port 3042`) and is normally already running in the background. It watches files, rebuilds, and provides HMR. Before launching another `pnpm dev` instance, check whether the dev server is already active (e.g., `curl -s http://localhost:3042` or check the running terminal). If it is running, do not start a second one. Avoid `nuxt build`, `nuxt prepare`, or `nuxt generate` during development unless explicitly requested.
+- The app is usually started with `pnpm dev` (`nuxt dev --host 0.0.0.0`; the port comes from `APP_PORT` in `.env`, 3042 in the shipped `.env.example`) and is normally already running in the background. It watches files, rebuilds, and provides HMR. Before launching another `pnpm dev` instance, check whether the dev server is already active (e.g., `curl -s http://localhost:3042` or check the running terminal). If it is running, do not start a second one. Avoid `nuxt build`, `nuxt prepare`, or `nuxt generate` during development unless explicitly requested.
 - Package manager is **pnpm**; do not introduce `npm` or `yarn` lock files.
 - Node is configured for ESM (`"type": "module"`).
 

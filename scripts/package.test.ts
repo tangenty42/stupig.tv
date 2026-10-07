@@ -128,6 +128,19 @@ describe('package.json 脚本', () => {
     expect([... offenders]).toEqual([])
   })
 
+  it('脚本不依赖 shell 变量展开（Windows 上脚本跑在 cmd.exe 里，不会展开）', () => {
+    // 教训：dev 曾经是 `nuxt dev --host 0.0.0.0 --port ${APP_PORT}`，start 曾经是
+    // `PORT=${APP_PORT} node ...`。cmd.exe 只认 %VAR%，而 pnpm 脚本的环境里本来
+    // 就没有 .env，所以 ${APP_PORT} 永远原样传下去：Nuxt 拿到字面量、Number() 得到
+    // NaN，get-port-please 把它丢掉后回落到 3000 —— 端口静默变成 3000 而不是 .env
+    // 里的 3042。dev 端口现在由 nuxt.config 的 devServer 读 APP_PORT（见该处注释），
+    // 生产端口由 compose 注入的 PORT 决定，脚本不再参与。
+    const offenders = Object.entries(pkg.scripts)
+      .filter(([, script]) => /\$\{/.test(script))
+      .map(([name]) => name)
+    expect(offenders).toEqual([])
+  })
+
   it('守卫本身有效：这个检查能认出幽灵依赖', () => {
     // 用一个确实存在于 .bin 且未声明的命令自检，否则测试可能在空转
     const phantom = [... available_bins].find(bin => ! declared.has(bin))

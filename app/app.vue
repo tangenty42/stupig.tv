@@ -115,11 +115,11 @@
       <Tabs v-model:value="lor">
         <TabList>
           <Tab value="login">
-            <MyIcon name="lucide:user-check" class="me-1 align-middle" />
+            <MyIcon name="lucide:user-check" class="me-1" />
             登录
           </Tab>
           <Tab value="register">
-            <MyIcon name="lucide:circle-plus" class="me-1 align-middle" />
+            <MyIcon name="lucide:circle-plus" class="me-1" />
             注册
           </Tab>
         </TabList>

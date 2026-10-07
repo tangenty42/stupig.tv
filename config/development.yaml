@@ -14,6 +14,7 @@ oss:
 site:
   url: http://localhost:${APP_PORT}
   indexable: false
+  staticBaseUrl: https://stupig-dev.oss.tangenty.cn
 
 app:
   otp:

@@ -124,7 +124,7 @@
         </h2>
 
         <MyBadge v-if="profile.is_admin" outlined type="warning">
-          <span class="inline-flex items-center gap-1"><MyIcon name="lucide:shield-check" />管理员·全部权限</span>
+          <span><MyIcon name="lucide:shield-check" class="me-1" />管理员·全部权限</span>
         </MyBadge>
 
         <div v-else class="flex flex-wrap gap-2">
