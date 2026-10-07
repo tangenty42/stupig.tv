@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "nuxt": {
+      "type": "http",
+      "url": "https://nuxt.com/mcp",
+      "tools": [
+        "*"
+      ]
+    },
+    "primevue": {
+      "type": "local",
+      "command": "node",
+      "args": [
+        ".mcp/primevue/node_modules/@primevue/mcp/dist/index.js"
+      ],
+      "tools": [
+        "*"
+      ]
+    },
+    "mdn": {
+      "type": "http",
+      "url": "https://mcp.mdn.mozilla.net"
+    }
+  }
+}
