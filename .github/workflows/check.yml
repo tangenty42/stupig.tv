@@ -1,0 +1,114 @@
+# 持续集成检查：lint + typecheck + 单测 + 迁移全量重放。
+#
+# 背景：deploy.yml 只有构建部署，迁移 SQL 过去要到生产容器启动时才第一次被
+# 验证。本工作流把验证前置到合入前：
+#   - check：与本地一致的 pnpm lint / nuxt typecheck / pnpm test；
+#   - migrations：对全新 MySQL 8.4 从空库跑完整迁移链，再跑第二遍验证
+#     执行器的"全部已应用"幂等路径，最后用 information_schema 断言结构落地。
+#
+# 后续（未包含在本草案）：
+#   - 迁移重放结果与 stupig_tv.sql 参考 schema 的 drift 对比（需先写导出脚本）；
+#   - 在分支保护里把 check / migrations 设为必需状态检查（deploy.yml 不变）。
+
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支新提交取消旧的检查运行；部署工作流有自己的 concurrency，不受影响
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # 不带 --ignore-scripts：postinstall 的 nuxt prepare 是 typecheck 的前置
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+
+      - run: npx nuxt typecheck
+
+      - run: pnpm test
+
+  migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          # 与应用配置（config/default.yaml 的 db.user/db.name）对齐
+          MYSQL_DATABASE: stupig_tv
+          MYSQL_USER: stupig_tv
+          MYSQL_PASSWORD: ci-mysql-password
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD}"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # load_config 会校验 config/*.yaml 引用的全部无默认值插值变量，
+      # 与迁移无关的密钥也给占位值；NODE_ENV=production 避开
+      # development.yaml 的 site.url（${APP_PORT}）插值
+      - name: Apply migrations on a fresh database
+        env:
+          NODE_ENV: production
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_PASSWORD: ci-mysql-password
+          JWT_SECRET: ci-jwt-secret-not-a-real-secret-32ch
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: '6379'
+          MQTT_HOST: 127.0.0.1
+          MQTT_TCP_PORT: '1883'
+          MQTT_WEB_URL: ws://localhost:8083/mqtt
+          OSS_ACCESS_KEY_ID: ci-oss-key-id
+          OSS_ACCESS_KEY_SECRET: ci-oss-key-secret
+          ALIYUN_ACCESS_KEY_ID: ci-aliyun-key-id
+          ALIYUN_ACCESS_KEY_SECRET: ci-aliyun-key-secret
+        run: |
+          pnpm migrate
+          # 第二遍：全部已记录，应直接判 up to date（执行器幂等路径）
+          pnpm migrate
+          pnpm migrate --status
+
+      - name: Verify schema landed
+        run: |
+          TABLES=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
+            -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv'")
+          # 7 张基线表 + 执行器自建的 schema_migrations
+          if [ "$TABLES" != "8" ]; then
+            echo "expected 8 tables, got $TABLES"
+            exit 1
+          fi
+          mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
+            -e "SELECT filename, applied_at FROM schema_migrations ORDER BY filename"
