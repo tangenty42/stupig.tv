@@ -156,6 +156,10 @@ export const api_schema = {
       part_number: z.coerce.number().int().min(1).max(10_000).optional(),
       content_type: z.string().max(255).nullable().optional(),
     }),
+    sign_attachment_download: z.object({
+      story_id: z.coerce.number().int().positive(),
+      file_name: z.string().min(1).max(255),
+    }),
     confirm_attachment_upload: z.object({
       story_id: z.coerce.number().int().positive(),
       key: z.string().min(1).max(512),

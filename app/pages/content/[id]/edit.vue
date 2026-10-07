@@ -1017,6 +1017,7 @@ const file_rows = computed<MyContentAttachmentRow[]>(() => {
 
 const file_list_props = computed(() => ({
   rows: file_rows.value,
+  story_id: story_id.value,
   upload_busy: upload_busy.value,
   move_to_root: move_attachment_pending.value?.target === null,
   root_drag_over: root_drag_over.value,
@@ -2558,8 +2559,12 @@ async function rename_attachment() {
 
   rename_pending.value = true
   try {
-    await content.rename_attachment(story_id.value, current_name, file_name)
-    markdown.value = rename_attachment_references(markdown.value, current_name, file_name)
+    // The server owns the stored name: it normalizes the extension, so the
+    // reference rewrite has to use the name that was actually stored rather
+    // than the one the prompt produced — otherwise the draft would reference a
+    // path no row answers to and the save would treat it as unreferenced.
+    const renamed = await content.rename_attachment(story_id.value, current_name, file_name)
+    markdown.value = rename_attachment_references(markdown.value, current_name, renamed.file_name)
     story.value = await fetch_story()
     if (story.value) {
       draft_store.advance_base(story.value.markdown, story.value.revision)

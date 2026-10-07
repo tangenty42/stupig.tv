@@ -188,6 +188,11 @@ export function useApi() {
       return trpc_call(trpc.content.signAttachmentUpload.mutate(payload))
     },
 
+    /** Signs a short-lived object GET that saves the attachment under its row name. */
+    async sign_attachment_download(story_id: number, file_name: string) {
+      return trpc_call(trpc.content.signAttachmentDownload.mutate({ story_id, file_name }))
+    },
+
     async confirm_attachment_upload(story_id: number, key: string, file_name: string) {
       return trpc_call(trpc.content.confirmAttachmentUpload.mutate({ story_id, key, file_name }))
     },

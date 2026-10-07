@@ -3,7 +3,7 @@ import type { ContentMarkdownConfig, ContentStoryMeta } from '@shared/content-ma
 import type { ContentAttachmentBatchResult, ContentBatchSkipped, ContentOperationKind, ContentStoryAttachment, ContentStoryDetail, ContentUploadSignRequest } from '@shared/types/content'
 import type { Connection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { extname } from 'node:path'
-import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, ListPartsCommand, PutObjectCommand, UploadPartCommand } from '@aws-sdk/client-s3'
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, GetObjectCommand, ListPartsCommand, PutObjectCommand, UploadPartCommand } from '@aws-sdk/client-s3'
 import { ApiError } from '@server/errors/ApiError'
 import { decrypt_attachment, encrypt_attachment } from '@server/lib/attachment-crypto'
 import { db } from '@server/lib/db'
@@ -13,7 +13,7 @@ import { copy_object, delete_object_best_effort, get_object, head_object, put_ob
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { create_folder_rows, delete_attachment_rows, delete_folder_rows, delete_rows_by_ids, delete_story_attachment_rows, get_scope_attachment, get_scope_object_keys, get_story_object_keys, insert_attachment_row, list_cover_urls, list_folder_subtree_rows, list_scope_attachments, list_scope_encryption_keys, list_scope_file_rows, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id, update_attachment_row_encryption, update_attachment_row_object } from '@server/services/content-attachments.service'
 import { runtime_config } from '@shared/config'
-import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, extract_story_reference_titles, is_encrypted_attachment, link_file_name_byte_length, parse_story_markdown, redactable_attachment_mime, rename_attachment_references, rename_story_references, sanitize_attachment_file_name, sanitize_attachment_path } from '@shared/content-markdown'
+import { attachment_ancestor_folders, attachment_base_name, attachment_download_name, attachment_folder_of, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, extract_story_reference_titles, is_encrypted_attachment, link_file_name_byte_length, normalized_attachment_extension, parse_story_markdown, redactable_attachment_mime, rename_attachment_references, rename_story_references, sanitize_attachment_file_name, sanitize_attachment_path, sanitize_attachment_segment } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 import { has_permission } from '@shared/permissions'
@@ -105,6 +105,39 @@ export async function sign_attachment_upload(input: ContentUploadSignRequest) {
     url: await signed_object_url(command, upload_url_expires_seconds),
     ... (return_key ? { key: input.key } : {}),
   }
+}
+
+/** RFC 5987 ext-value: encodeURIComponent minus the few characters it leaves bare. */
+function rfc5987_ext_value(value: string) {
+  return encodeURIComponent(value).replace(/['()*!]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
+/**
+ * Signs a short-lived object GET that saves the attachment under its row name.
+ *
+ * The object itself is public but nameless (a uuid key, no stored
+ * Content-Disposition), so the name rides on the signature's
+ * `response-content-disposition` override — the browser then saves the file
+ * under it while the host keeps streaming the bytes.
+ */
+export async function sign_attachment_download(story_id: number, file_name: string) {
+  await get_story(story_id)
+  const rows = await list_scope_file_rows(story_id, [file_name])
+  const row = rows[0]
+  if (! row)
+    throw new ApiError(404, '附件不存在或已被删除')
+  // The object at the row's key is ciphertext; naming it after the plaintext
+  // would hand out a corrupt file. Encrypted rows download through the
+  // client-side decrypt path, never through this signature.
+  if (row.encryption_key !== null)
+    throw new ApiError(400, '加密的附件请在页面中下载')
+
+  const url = await signed_object_url(new GetObjectCommand({
+    Bucket: config.oss.bucket,
+    Key: row.object_key!,
+    ResponseContentDisposition: `attachment; filename*=UTF-8''${rfc5987_ext_value(attachment_download_name(row.file_name))}`,
+  }), config.app.content.download.urlTtlSeconds)
+  return { url }
 }
 
 export async function confirm_attachment_upload(story_id: number, key: string, raw_file_name: string) {
@@ -738,7 +771,9 @@ function suffixed_attachment_name(file_name: string, ext: string) {
   const stem = ext ? base.slice(0, - ext.length) : base
   const suffix = `-${random_file_token()}`
   const stem_limit = config.app.content.link.fileNameMaxBytes - link_file_name_byte_length(suffix) - link_file_name_byte_length(ext)
-  return attachment_path_join(attachment_folder_of(file_name), `${sanitize_attachment_file_name(stem, Math.max(stem_limit, 1))}${suffix}${ext}`)
+  // The stem is not a file name — the extension is appended separately and
+  // already lowercased by the caller — so this cleans the segment only.
+  return attachment_path_join(attachment_folder_of(file_name), `${sanitize_attachment_segment(stem, Math.max(stem_limit, 1))}${suffix}${ext}`)
 }
 
 /**
@@ -813,11 +848,16 @@ function assert_attachment_name_available(name: string, existing: Iterable<strin
  * transition. Legality therefore applies to the name with the marker stripped.
  */
 function resolve_renamed_attachment_name(old_file_name: string, new_file_name: string, existing: Iterable<string>) {
-  if (is_encrypted_attachment(old_file_name) !== is_encrypted_attachment(new_file_name))
+  // The extension is normalized before the guards: lowering it after the
+  // encryption-marker check could flip a legal `a.png.GOOD` into the reserved
+  // `.good` marker the check had just cleared. The marker-aware normalizer
+  // reaches the plaintext extension underneath an existing `.good`.
+  const normalized = normalized_attachment_extension(new_file_name)
+  if (is_encrypted_attachment(old_file_name) !== is_encrypted_attachment(normalized))
     throw new ApiError(400, `不能通过重命名增删 ${encrypted_attachment_suffix} 后缀`)
-  assert_attachment_name_legal(decrypted_attachment_name(new_file_name))
-  assert_attachment_name_available(new_file_name, existing, old_file_name)
-  return new_file_name
+  assert_attachment_name_legal(decrypted_attachment_name(normalized))
+  assert_attachment_name_available(normalized, existing, old_file_name)
+  return normalized
 }
 
 export async function delete_attachment(story_id: number, file_name: string, markdown: string, base_revision: number, can_private: boolean) {

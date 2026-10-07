@@ -194,6 +194,9 @@ const config_schema = z.object({
       upload: z.object({
         handleStorageName: z.string().min(1),
       }),
+      download: z.object({
+        urlTtlSeconds: z.number().int().min(60),
+      }),
       redact: z.object({
         maxDimension: z.number().int().min(1),
       }),
