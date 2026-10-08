@@ -209,30 +209,9 @@ export const api_schema = {
     }),
     update_story: public_id_input.extend(content_story_update.shape),
     delete_story: public_id_input,
-    sign_attachment_upload: z.object({
-      story_id: z.coerce.number().int().positive(),
-      method: z.enum(['PUT', 'POST', 'GET', 'DELETE']),
-      key: z.string().min(1).max(512),
-      upload_id: z.string().min(1).max(256).optional(),
-      part_number: z.coerce.number().int().min(1).max(10_000).optional(),
-      content_type: z.string().max(255).nullable().optional(),
-    }),
     sign_attachment_download: z.object({
       story_id: z.coerce.number().int().positive(),
       file_name: z.string().min(1).max(255),
-    }),
-    confirm_attachment_upload: z.object({
-      story_id: z.coerce.number().int().positive(),
-      key: z.string().min(1).max(512),
-      file_name: z.string().min(1).max(255),
-    }),
-    replace_attachment: z.object({
-      story_id: z.coerce.number().int().positive(),
-      old_file_name: z.string().min(1).max(255),
-      mode: z.enum(['keep-name', 'new-name']),
-      key: z.string().min(1).max(512),
-      file_name: z.string().min(1).max(255),
-      content_type: z.string().max(255).nullable(),
     }),
     rename_attachment: content_scope_input.extend({
       old_file_name: z.string().min(1).max(255),

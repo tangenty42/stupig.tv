@@ -168,7 +168,7 @@ vi.mock('@server/lib/sync', async () => ({
   publish_refresh: mocks.publish_refresh,
 }))
 
-const { confirm_attachment_upload, create_abridged_attachment, create_folder, decrypt_attachments, encrypt_attachments, get_story, move_attachment, move_attachments, move_folder, rename_attachment, replace_attachment, sign_attachment_download, sign_attachment_upload } = await import('@server/services/content.service')
+const { apply_attachment_replace, create_abridged_attachment, create_folder, decrypt_attachments, encrypt_attachments, get_story, move_attachment, move_attachments, move_folder, rename_attachment, sign_attachment_download } = await import('@server/services/content.service')
 
 beforeEach(() => {
   task_sim.reset()
@@ -196,58 +196,6 @@ function stub_story_row(story_id: number, markdown = '') {
     return [[], []]
   })
 }
-
-describe('sign_attachment_upload staging key validation', () => {
-  beforeEach(() => {
-    mocks.signed_object_url.mockClear()
-    mocks.db_execute.mockReset()
-    mocks.db_execute.mockResolvedValue([[], []])
-  })
-  // Uploads start only after the story exists; story_id 0 never gets a signature.
-  it('rejects new-scope keys for unsaved stories (story_id 0)', async () => {
-    const key = `content-upload/new/${crypto.randomUUID()}`
-    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key }))
-      .rejects.toMatchObject({ name: 'ApiError', statusCode: 400, message: '上传凭证无效' })
-    expect(mocks.signed_object_url).not.toHaveBeenCalled()
-  })
-
-  it('rejects multipart creation under the new scope', async () => {
-    const key = `content-upload/new/${crypto.randomUUID()}`
-    await expect(sign_attachment_upload({ story_id: 0, method: 'POST', key }))
-      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
-  })
-
-  // Regression guard: a key under content-upload/0/ matches story_id 0's
-  // prefix, so the story lookup is what stops it from being signed.
-  it('rejects the numeric zero prefix for unsaved stories', async () => {
-    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key: `content-upload/0/${crypto.randomUUID()}` }))
-      .rejects.toMatchObject({ name: 'ApiError', statusCode: 404, message: '档案不存在或已被删除' })
-    expect(mocks.signed_object_url).not.toHaveBeenCalled()
-  })
-
-  it('rejects keys scoped to a persisted story for unsaved stories', async () => {
-    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key: `content-upload/42/${crypto.randomUUID()}` }))
-      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
-  })
-
-  it('rejects keys whose suffix is not a plain token', async () => {
-    await expect(sign_attachment_upload({ story_id: 0, method: 'PUT', key: 'content-upload/new/name.with.dots' }))
-      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
-  })
-
-  it('accepts keys under the matching story prefix', async () => {
-    stub_story_row(42)
-    const key = `content-upload/42/${crypto.randomUUID()}`
-    const result = await sign_attachment_upload({ story_id: 42, method: 'PUT', key })
-    expect(result.key).toBe(key)
-  })
-
-  it('rejects the new scope for persisted stories', async () => {
-    await expect(sign_attachment_upload({ story_id: 42, method: 'PUT', key: `content-upload/new/${crypto.randomUUID()}` }))
-      .rejects.toMatchObject({ statusCode: 400, message: '上传凭证无效' })
-    expect(mocks.signed_object_url).not.toHaveBeenCalled()
-  })
-})
 
 describe('sign_attachment_download', () => {
   const story_row = {
@@ -904,7 +852,7 @@ describe('attachment name guard', () => {
     // plaintext bytes marked encrypted and render the file unopenable.
     stub_scope([file_row('photo.png.good', 10, 'a2V5')])
 
-    await expect(replace_attachment(5, 'photo.png.good', 'content-upload/5/replacement', 'photo.png', 'image/png', 'keep-name'))
+    await expect(apply_attachment_replace(5, 'photo.png.good', 'content-upload/5/replacement', 'photo.png', 'image/png', 'keep-name'))
       .rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('已加密') })
     expect(mocks.copy_object).not.toHaveBeenCalled()
   })
@@ -912,7 +860,7 @@ describe('attachment name guard', () => {
   it('still replaces a plaintext attachment', async () => {
     stub_scope([file_row('photo.png', 10)])
 
-    await expect(replace_attachment(5, 'photo.png', 'content-upload/5/replacement', 'photo.png', 'image/png', 'keep-name'))
+    await expect(apply_attachment_replace(5, 'photo.png', 'content-upload/5/replacement', 'photo.png', 'image/png', 'keep-name'))
       .resolves.toBeTruthy()
     expect(mocks.copy_object).toHaveBeenCalled()
   })
@@ -1071,67 +1019,5 @@ describe('attachment encryption transform', () => {
 
     expect(result.succeeded).toEqual([])
     expect(result.skipped).toEqual([{ file_name: 'ghost.png', reason: '附件不存在或已被删除' }])
-  })
-})
-
-/**
- * Folders exist implicitly through the files under them, so an uploaded folder
- * used to vanish the moment its last file was deleted. Recording the folder
- * when it first receives a file is what keeps the structure the author uploaded.
- */
-describe('folder rows materialized by uploads', () => {
-  const story_row = {
-    id: 5,
-    title: 't',
-    label: '',
-    description: '',
-    cover: '',
-    cover_label: '',
-    cover_version: null,
-    event_precision: 'day',
-    event_dates: '[]',
-    markdown: '',
-    created_at: '',
-    updated_at: '',
-    revision: 1,
-  }
-
-  /** Every folder row the service asked to insert, as `folder name` strings. */
-  function inserted_folders() {
-    return mocks.db_execute.mock.calls
-      .filter(([sql]) => String(sql).includes('is_folder, file_name'))
-      .map(([, params]) => String((params as unknown[])[1]))
-  }
-
-  function stub_scope() {
-    mocks.db_execute.mockImplementation(async (sql: string) => {
-      if (sql.includes('FROM content_stories'))
-        return [[story_row], []]
-      if (sql.includes('SELECT * FROM content_story_attachments'))
-        return [[{ ... story_row, id: 10, is_folder: 0, file_name: 'cards/sub/photo.png', object_key: 'k', mime_type: 'image/png', file_size: 3, version: 'v1', encryption_key: null, story_id: 5 }], []]
-      return [[], []]
-    })
-  }
-
-  beforeEach(() => {
-    mocks.db_execute.mockReset()
-    mocks.db_execute.mockResolvedValue([[], []])
-    mocks.put_object.mockReset()
-    mocks.put_object.mockResolvedValue('etag-1')
-    mocks.delete_object_best_effort.mockReset()
-    mocks.delete_object_best_effort.mockResolvedValue(undefined)
-    mocks.head_object.mockResolvedValue({ size: 3, content_type: 'image/png', etag: 'e1' })
-    mocks.copy_object.mockResolvedValue('e2')
-  })
-
-  it('records the folders of a signed upload too, since that is the path folder uploads take', async () => {
-    // The browser uploads straight to storage and confirms afterwards, so the
-    // folder rows have to be created on this path or not at all.
-    stub_scope()
-    const key = `content-upload/5/${crypto.randomUUID()}`
-
-    await confirm_attachment_upload(5, key, 'cards/sub/photo.png')
-
-    expect(inserted_folders()).toEqual(['cards', 'cards/sub'])
   })
 })
