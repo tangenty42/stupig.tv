@@ -17,4 +17,3 @@ config/local.yaml
 .github
 docs
 docker-compose.dev.yml
-stupig_tv.sql
