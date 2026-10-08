@@ -60,6 +60,36 @@ export default antfu(
     },
   },
   {
+    files: ['**/*.?([cm])js'],
+    rules: {
+      // eslint-plugin-unused-imports@4.4.1 resolves no-unused-vars to the
+      // @typescript-eslint rule whenever that package is present, and the TS
+      // rule misreads plain espree scopes: every local binding in a JS file is
+      // reported as "only used as a type" (false positive). Plain JS files use
+      // the base rule with the same options; TS files keep the plugin rule.
+      'no-unused-vars': ['error', { args: 'after-used', argsIgnorePattern: '^_', ignoreRestSiblings: true, vars: 'all', varsIgnorePattern: '^_' }],
+      'unused-imports/no-unused-vars': 'off',
+      // The base rule already flags unused imports in JS files; without this
+      // they would be reported twice.
+      'unused-imports/no-unused-imports': 'off',
+    },
+  },
+  {
+    files: ['pnpm-workspace.yaml'],
+    rules: {
+      // antfu enforces trustPolicy: no-downgrade and minimumReleaseAgeExcludePrune
+      // on top of these; both are deliberately unset (see the comment in
+      // pnpm-workspace.yaml — no-downgrade blocks well-attested packages, and
+      // ExcludePrune only cleans minimumReleaseAgeExclude, which we don't use).
+      'pnpm/yaml-enforce-settings': ['error', {
+        settings: {
+          minimumReleaseAge: 1440,
+          shellEmulator: true,
+        },
+      }],
+    },
+  },
+  {
     plugins: {
       local: localRules,
     },
