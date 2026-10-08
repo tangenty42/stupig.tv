@@ -329,11 +329,64 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 | **0. 拆分预热**（✅ 已完成，2026-10-08） | `content_locks` 表 + 锁管理器内部替换 operation-lock（保持 409 语义）；按 §10 拆 service（不改行为） | 全部既有测试绿（546）+ typecheck + lint；锁语义单测（operation-lock.test.ts）；迁移在开发库真实执行 |
 | **1. 任务内核**（✅ 已完成，2026-10-08） | 任务表、runner plugin、路径锁 + 续租、preflight；move/rename/folder/delete 四类纯 DB 操作切换为任务（旧端点转同步包装，tRPC 形状不变）；新增 preflightTask/createTask/cancelTask/listScopeTasks 端点 | 状态机、排队/冲突/超时/中断恢复、锁前缀冲突矩阵、preflight 逐项判定测试；既有 57 个 content 服务测试不改断言、全程走任务管线通过 |
 | **2. 上传任务化**（✅ 已完成，2026-10-08） | signTaskParts/reportTaskItem/resume、上传任务化（服务端准备 + 客户端灌字节）、实时进度事件；前端 task-uploader 替换 Uppy、pending 行来自服务端任务；旧上传端点删除 | task-uploader（12 测试）+ 任务 store（27 测试）+ task-row 投影（9 测试）+ 服务端 task-api 测试；`@uppy/*` 依赖移除；lint/typecheck/668 测试全绿 |
-| **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行（重活只需 1 个任务项）；redact 模态框接任务流 | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
+| **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行（重活只需 1 个任务项）；redact 模态框接任务流。**详规见 §13.1** | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
 | **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 抽离 §11 的 composable/store 并瘦身收尾、Pinia store 落定 | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
 | **5. 方言清单** | content-dialect 收编 + `create_story_editor` 工厂 + Preview composable 抽取 | 清单完备性测试；渲染快照对比不变 |
 
 每阶段独立可上线、可回滚（阶段 1-3 旧端点包装层即回滚阀）。
+
+### 13.1 阶段 3 详规（加解密 / 删减版 / 替换任务化）
+
+> 状态：**计划，未开工**（2026-10-08 定稿）。以下所有"现状"行均指 `main` 上的实现。
+
+#### 目标（要消掉的三个具体痛点）
+
+1. **请求内长事务**：`encryptAttachments` / `decryptAttachments` 现在是同步 tRPC mutation，服务端要逐个 `get_object` → 转换 → `put_object`，整批完成才返回。20 GB 批量会把 HTTP 请求挂住数分钟，客户端只能干等（今天靠 `encrypt_attachment_pending` 在本地灰掉这些行）。
+2. **scope 级独占锁**：整批走 `with_attachment_lock(story_id, kind)`（`attachment-structure.service.ts:57`），一个文件的加密把整个 scope 的结构操作全挡住；而锁租约（`operationLock.ttlSeconds`）与请求时长无关，长批量必须靠心跳续租才能不被 sweeper 抢走。
+3. **规则双份实现**：客户端 `split_encryption_targets` / `encryption_skip_reason` / `encryption_target_taken`（`edit.vue:754-779`、`791`）与服务端判定重复，注释里也写明"批内有一个不合法就整批拒绝，所以前端自己先拆"。任务化后服务端逐项给判定与结果，这套前端规则可以删掉。
+
+#### 任务化设计
+
+| kind | payload | 任务项 | 锁路径（`task_lock_paths`） | 执行者 |
+|---|---|---|---|---|
+| `encrypt` | `{ file_names: string[] }` | 每文件一项（`action: 'encrypt'`） | 每项的 `file_name` + 其目标名（`<name>.good`） | runner 异步 |
+| `decrypt` | `{ file_names: string[] }` | 每文件一项（`action: 'decrypt'`） | 每项的 `file_name` + 其目标名（去掉 `.good`） | runner 异步 |
+| `redact` | `{ source_file_name: string, content_type: string, size: number }` | 单项（`action: 'redact'`） | 源文件路径 + 其双胞胎名 | **客户端灌字节**（复用 §6 传输管线） |
+
+- **锁路径含目标名**：加解密会改名（±`.good`）并改写正文引用，语义同 `rename`（§6），所以源与目标都要锁——这正是把 scope 锁换成路径锁后能保住的互斥。
+- **`redact` 复用传输管线**：删减版是客户端在画布上导出的位图，天然是"上传一份字节 + 落一行 + 物化文件夹"。它走 `execute_redact_task` 准备 staging（单 PUT 或 multipart 由 `upload_part_size` 决定）→ 客户端 `task-uploader` 灌字节 → `finalize_transfer_item` 落到 `apply_abridged_attachment`（把今天 `create_abridged_attachment` 的落行部分抽成 `upload.service.ts` 里的核心函数，签名与 `apply_attachment_replace` 同构）。**MIME 嗅探与"源必须已加密"的校验留在 prepare 阶段**，不合格直接 `skipped` + `reason`，客户端不必先算。
+- **`encrypt` 的尺寸上限**：`config.app.content.encrypt.maxSizeMb` 的判定从客户端（`encryption_skip_reason`）与服务端（transform 内）双双移到 preflight + 执行器，只保留服务端一处。
+
+#### 服务端改造
+
+1. `task-operations.service.ts` 新增三个执行器（沿用现有 `ContentTaskOutcome` 约定）：
+   - `execute_encryption_task(task, items, kind)`：**逐项**做"下载 → 转换 → put 新对象 → 单事务更新行 + 改写引用 → 删旧对象 → `publish_attachment_change`"，每项落 `done`/`skipped`（带 `reason`）。**这不是把现有 transform 原样搬过来**：现状是"全部上传完再一次事务提交"，中途失败会回滚整批（并删掉已上传的新对象）；逐项提交换来的是可中断、部分成功与真进度，代价是 N 次小事务（可接受，单项的 DB 部分只有 2 条 UPDATE）。
+   - 名称冲突仍用现有的 `attachment_path_taken` + `attachment_name_conflict_message` 在同一项内判定（目标名被本批其他项预占时按序让位，与今天 `planned/available` 的逻辑一致）。
+   - `execute_redact_task(task, items)`：prepare（校验 + staging）+ `{ complete: false }`，落行交给 `finalize_transfer_item` 的 `redact` 分支。
+2. **执行期心跳**（阶段 3 的关键新增件）：`dispatch_task` 目前只在传输任务上依赖客户端心跳；加解密是**服务端长时间执行**，必须自己续租。做法：dispatch 在调用执行器前起一个 `setInterval(heartbeat_task + renew_task_locks, task.heartbeatSeconds)`，执行器 settle 后清掉；续租失败（锁被抢/任务被取消）时置一个中止标记，执行器在**每个任务项之间**检查它并提前收尾（已完成的项保持 `done`，剩余项 `skipped: '任务已取消'`）。纯 DB 任务（毫秒级）不启这个定时器，避免无谓往返。
+3. `preflight_task` 增加 `encrypt` / `decrypt` / `redact` 分支，逐项给 `ok` + `reason`（复用 `encryption_skip_reason` 的服务端等价物——即把 `edit.vue` 里的规则搬进来，成为唯一一份）。
+4. `schemas.ts` 的 `task_kind` 枚举与 `task_payload_schemas` 增加三种 kind；`content_admin_procedure` 的权限门槛保持不变（execute 阶段不重复鉴权，沿用"建任务时快照权限"的既有约定，如 delete 的 `can_private`）。
+
+#### 前端改造
+
+1. 删除 `split_encryption_targets` / `encryption_skip_reason` / `encryption_target_taken` / `execute_attachment_encryption`；右键与批量入口改为：`preflight` → 有可执行项就建任务 → 行进入 pending；`ok: false` 的项用现有 `show_skipped_attachments` 报告原因（措辞不变）。
+2. **行投影扩展**（§11 目标的前置一步）：`PendingUploadRow` 泛化成 `PendingTaskRow`（加 `kind`、`action`、`is_transfer`），`task-row.ts` 的投影为纯服务端项产出 `status: 'uploading'` + `indeterminate` 进度。`MyContentAttachmentCard` 的 upload 分支增加"无字节进度"的表现（文案「加密中/解密中」，不给速率、不显示百分比）。
+3. 删减版模态框：`redact_pending` 的 FormData 上传换成 `createTask('redact', …)` + `start_uploads`-同构的驱动（同一个 store、同一个 uploader，`size`/`content_type` 从导出的 Blob 取）。成功/失败提示与今天一致。
+4. 三个旧端点（`encryptAttachments` / `decryptAttachments` / `createAbridgedAttachment`）连同 `with_attachment_lock` 的 `encrypt/decrypt/redact` 用法在阶段 3 收尾时删除——`with_attachment_lock` 只留给尚未任务化的操作（阶段 3 后它应只剩结构类操作，届时再评估是否彻底移除 scope 锁）。
+
+#### 测试
+
+- 执行器：逐项成功/跳过矩阵（已加密、未加密、超限、目标名冲突、解密失败坏数据）、逐项事务的"第 2 项失败不影响第 1 项"、目标名互斥（同批两项争一个名字）。
+- 心跳：执行器执行中续租（假时钟推进到 `heartbeatSeconds`，断言 `renew_task_locks` 被调用）；续租失败 → 剩余项被跳过且任务终态正确。
+- redact：prepare 的校验（源未加密/格式不支持/MIME 不符）、finalize 落行 + 物化文件夹（借用 `task-operations.test.ts` 现有 mock）。
+- preflight：三种 kind 的逐项判定与 `edit.vue` 原规则逐条对照（作为"规则只有一份"的回归证明）。
+- 客户端：行投影（非传输项 → 卡片）、右键/批量的 refused 项报告。
+
+#### 风险与决策点
+
+- **逐项提交 vs 单事务**：见上，倾向逐项（可中断 + 部分成功 + 进度）。若你认为"整批一致性"更重要（要么全成要么全不动），这一条要先定，因为它决定执行器结构与测试。
+- **长批量的可中断性**：中止只在任务项边界生效，单个 20 GB 文件的下载/上传仍可能跑很久；任务项粒度的进度对单文件大文件不够细腻（与上传任务同一限制）。
+- **锁粒度变化的影响面**：从 scope 锁换成路径锁后，加密进行中的文件会被它的源/目标路径挡住（预期），但**同 scope 的其他文件不再被挡**——这是本阶段的收益，也需要在 UI 的 `structure_locked`（今天把任一活跃锁折叠成全局禁用）上放开到按路径禁用（与阶段 4 的 preflight 接线是同一件事，可提前到这里做一半）。
 
 ## 14. 测试策略（在既有测试规范上追加）
 
