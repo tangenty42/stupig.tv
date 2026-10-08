@@ -51,8 +51,8 @@ export const content_task_transitions = {
   paused: ['queued', 'cancelled'],
   cancelling: ['cancelled', 'failed'],
   done: [],
-  /** A failed task (e.g. interrupted mid-flight) can be re-queued for resume. */
-  failed: ['queued'],
+  /** A failed task can be re-queued for resume, or written off by cancelling it. */
+  failed: ['queued', 'cancelled'],
   cancelled: [],
 } as const satisfies Record<ContentTaskStatus, readonly ContentTaskStatus[]>
 
@@ -308,4 +308,33 @@ export async function update_task_item(task_id: number, item_id: number, patch: 
 /** The statuses list_scope_tasks treats as live; exported for the runner's sweeps. */
 export function is_terminal_task_status(status: ContentTaskStatus) {
   return terminal_statuses.includes(status)
+}
+
+/** Every task that reached a terminal state before the retention window opened. */
+export async function list_expired_tasks(): Promise<number[]> {
+  const [rows] = await db.execute<TaskRow[]>(
+    `SELECT id FROM content_tasks
+     WHERE status IN ('done', 'failed', 'cancelled')
+       AND updated_at < DATE_SUB(NOW(), INTERVAL ? HOUR)
+     ORDER BY id LIMIT 500`,
+    [config.app.content.task.retentionHours],
+  )
+  return rows.map(row => Number(row.id))
+}
+
+/**
+ * Drops a finished task and its items. The DELETE is guarded on the status, so
+ * a task that was re-queued for resume between the caller's read and this call
+ * is left alone (and its items with it) — the caller must not discard a stage it
+ * no longer owns.
+ */
+export async function delete_finished_task(task_id: number) {
+  const [result] = await db.execute<ResultSetHeader>(
+    'DELETE FROM content_tasks WHERE id = ? AND status IN (\'done\', \'failed\', \'cancelled\')',
+    [task_id],
+  )
+  if (! result.affectedRows)
+    return false
+  await db.execute('DELETE FROM content_task_items WHERE task_id = ?', [task_id])
+  return true
 }

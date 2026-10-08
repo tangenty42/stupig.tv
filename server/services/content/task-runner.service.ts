@@ -2,12 +2,12 @@ import type { RowDataPacket } from 'mysql2/promise'
 import type { ContentTaskWithItems } from './task.service'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
-import { log_error } from '@server/lib/log'
+import { error_fields, log_error } from '@server/lib/log'
 import { acquire_path_locks, release_path_locks, release_task_locks, renew_task_locks } from '@server/lib/operation-lock'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { runtime_config } from '@shared/config'
-import { execute_task, task_lock_paths } from './task-operations.service'
-import { get_task, heartbeat_task, is_terminal_task_status, list_queued_tasks, publish_task_state, transition_task } from './task.service'
+import { discard_task_staging, execute_task, task_lock_paths } from './task-operations.service'
+import { delete_finished_task, get_task, heartbeat_task, is_terminal_task_status, list_expired_tasks, list_queued_tasks, publish_task_state, transition_task } from './task.service'
 
 const config = runtime_config()
 
@@ -166,6 +166,7 @@ async function tick() {
   try {
     await sweep_expired_locks()
     await fail_stale_queued_tasks()
+    await purge_expired_tasks()
     for (const { task } of await list_queued_tasks()) {
       try {
         await dispatch_task(task.id)
@@ -208,4 +209,34 @@ async function fail_stale_queued_tasks() {
   for (const row of rows) {
     await transition_task(Number(row.id), 'failed', { error: '操作冲突，请稍后再试' }).catch(() => {})
   }
+}
+
+/**
+ * Deletes tasks past the retention window, releasing what they staged first.
+ *
+ * A failed transfer keeps its stage on purpose — that is exactly what a resume
+ * continues from — so its objects outlive the failure and are only released
+ * here, once the row (and with it the ability to resume) is gone. The stage is
+ * discarded only after the guarded delete claimed the row, so a task that was
+ * resumed in the meantime keeps both its row and its parts.
+ */
+async function purge_expired_tasks() {
+  for (const task_id of await list_expired_tasks()) {
+    const expired = await get_task(task_id)
+    if (! expired)
+      continue
+    if (! await delete_finished_task(task_id))
+      continue
+    await discard_task_staging(expired.items).catch((error) => {
+      log_error('content task staging purge failed', {
+        task_id,
+        ... error_fields(error),
+      })
+    })
+  }
+}
+
+/** Runs one sweep+dispatch pass; exported so tests can drive the tick without a timer. */
+export async function run_task_tick() {
+  await tick()
 }
