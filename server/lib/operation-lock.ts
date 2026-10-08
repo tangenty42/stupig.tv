@@ -11,6 +11,10 @@ const config = runtime_config()
 // two properties the in-memory guards of a single browser tab cannot: it is
 // shared across tabs/users, and a crashed request self-heals once the lease
 // expires instead of wedging the scope.
+//
+// Rows live in content_locks at path '' (the whole scope). Path-granular rows
+// arrive with the attachment task runner (docs/content-task-refactor.md); until
+// then every operation locks the scope, so contention semantics are unchanged.
 
 interface LockTokenRow extends RowDataPacket {
   token: string
@@ -40,8 +44,8 @@ export interface AcquiredOperationLock {
 export async function acquire_operation_lock(scope_id: number, kind: ContentOperationKind): Promise<AcquiredOperationLock> {
   const token = crypto.randomUUID()
   await db.execute(
-    `INSERT INTO content_operation_locks (scope_id, kind, token, expires_at)
-     VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND))
+    `INSERT INTO content_locks (scope_id, path, kind, token, expires_at)
+     VALUES (?, '', ?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND))
      ON DUPLICATE KEY UPDATE
        kind = IF(expires_at < NOW(), VALUES(kind), kind),
        token = IF(expires_at < NOW(), VALUES(token), token),
@@ -49,7 +53,7 @@ export async function acquire_operation_lock(scope_id: number, kind: ContentOper
     [scope_id, kind, token, config.app.content.operationLock.ttlSeconds],
   )
   const [rows] = await db.execute<LockTokenRow[]>(
-    'SELECT token FROM content_operation_locks WHERE scope_id = ?',
+    'SELECT token FROM content_locks WHERE scope_id = ? AND path = \'\'',
     [scope_id],
   )
   // A live lease is never rewritten, so the token is stable between the two
@@ -62,7 +66,7 @@ export async function acquire_operation_lock(scope_id: number, kind: ContentOper
 /** Frees the lock, but only while this holder still owns it — after a steal the old holder must not clear the new one's lease. */
 export async function release_operation_lock(lock: AcquiredOperationLock) {
   await db.execute(
-    'DELETE FROM content_operation_locks WHERE scope_id = ? AND token = ?',
+    'DELETE FROM content_locks WHERE scope_id = ? AND path = \'\' AND token = ?',
     [lock.scope_id, lock.token],
   )
 }
@@ -70,7 +74,7 @@ export async function release_operation_lock(lock: AcquiredOperationLock) {
 /** The scope's live lock, as rendered by peers to disable the controls an operation would collide with. */
 export async function get_operation_lock(scope_id: number): Promise<ContentOperationLock | null> {
   const [rows] = await db.execute<LockRow[]>(
-    'SELECT kind, expires_at FROM content_operation_locks WHERE scope_id = ? AND expires_at >= NOW()',
+    'SELECT kind, expires_at FROM content_locks WHERE scope_id = ? AND path = \'\' AND expires_at >= NOW()',
     [scope_id],
   )
   const row = rows[0]

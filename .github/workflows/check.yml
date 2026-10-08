@@ -110,11 +110,14 @@ jobs:
 
       - name: Verify schema landed
         run: |
-          TABLES=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
-            -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv'")
-          # 7 张基线表 + 执行器自建的 schema_migrations
-          if [ "$TABLES" != "8" ]; then
-            echo "expected 8 tables, got $TABLES"
+          # 关键结构断言（数量断言太脆，每次迁移都要改）：
+          # 任务锁表已就位、旧 scope 锁表已移除
+          NEW=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
+            -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = 'content_locks'")
+          OLD=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
+            -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = 'content_operation_locks'")
+          if [ "$NEW" != "1" ] || [ "$OLD" != "0" ]; then
+            echo "content_locks=$NEW (want 1), content_operation_locks=$OLD (want 0)"
             exit 1
           fi
           mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
