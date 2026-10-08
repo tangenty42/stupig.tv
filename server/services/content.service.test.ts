@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
         story: {},
         link: {},
         operationLock: { ttlSeconds: 60 },
+        upload: { urlTtlSeconds: 900, partSizeMb: 8, signBatchSize: 20, maxSizeMb: 20480 },
+        task: { heartbeatSeconds: 30, queuedTimeoutSeconds: 300, retentionHours: 24, sweepIntervalSeconds: 60 },
         encrypt: { maxSizeMb: 10 },
         download: { urlTtlSeconds: 300 },
       },
@@ -156,6 +158,8 @@ vi.mock('@server/lib/operation-lock', () => ({
   get_operation_lock: vi.fn(async () => null),
   acquire_path_locks: vi.fn(async (scope_id: number, paths: string[], task_id: number) => ({ acquired: true as const, lock: { scope_id, task_id, token: 'test-token', paths } })),
   release_path_locks: vi.fn(async () => {}),
+  release_task_locks: vi.fn(async () => {}),
+  renew_task_locks: vi.fn(async () => 1),
   list_scope_locks: vi.fn(async () => []),
 }))
 

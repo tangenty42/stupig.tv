@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   published: [] as string[],
   transitioned: [] as { id: number, to: string }[],
   transition_error_once: false,
+  execute_incomplete: false,
 }))
 
 function make_task(id: number, status = 'queued'): ContentTaskWithItems {
@@ -62,6 +63,11 @@ vi.mock('@server/services/content/task.service', () => ({
     state.transitioned.push({ id, to })
   }),
   is_terminal_task_status: (status: string) => ['done', 'failed', 'cancelled'].includes(status),
+  heartbeat_task: vi.fn(async (id: number) => {
+    const entry = state.tasks.get(id)
+    if (! entry || entry.task.status !== 'running')
+      throw new ApiError(409, '任务状态已变化，请刷新后重试')
+  }),
 }))
 
 vi.mock('@server/services/content/task-operations.service', () => ({
@@ -70,6 +76,8 @@ vi.mock('@server/services/content/task-operations.service', () => ({
     state.executed.push(task.id)
     if (state.execute_error)
       throw state.execute_error
+    // 传输类任务返回 complete: false（留给客户端回报），默认按纯 DB 任务处理
+    return { complete: state.execute_incomplete !== true }
   }),
 }))
 
@@ -82,6 +90,10 @@ vi.mock('@server/lib/operation-lock', () => ({
   release_path_locks: vi.fn(async (lock: { task_id: number }) => {
     state.lock_released.push([lock.task_id])
   }),
+  release_task_locks: vi.fn(async (scope_id: number, task_id: number) => {
+    state.lock_released.push([scope_id, task_id])
+  }),
+  renew_task_locks: vi.fn(async () => 1),
 }))
 
 vi.mock('@server/lib/sync', () => ({
@@ -106,6 +118,7 @@ beforeEach(() => {
   state.published = []
   state.transitioned = []
   state.transition_error_once = false
+  state.execute_incomplete = false
 })
 
 describe('dispatch_task', () => {
@@ -116,9 +129,22 @@ describe('dispatch_task', () => {
 
     expect(state.executed).toEqual([1])
     expect(state.transitioned.map(entry => entry.to)).toEqual(['running', 'done'])
-    expect(state.lock_released).toEqual([[1]])
+    expect(state.lock_released).toEqual([[42, 1]])
     expect(state.published).toEqual(['content_story_tasks:42'])
     expect(state.tasks.get(1)?.task.status).toBe('done')
+  })
+
+  it('传输类任务（执行器不完成）：保持 running 并继续持锁，等客户端回报', async () => {
+    state.tasks.set(1, make_task(1))
+    state.execute_incomplete = true
+
+    await dispatch_task(1)
+
+    expect(state.executed).toEqual([1])
+    expect(state.transitioned.map(entry => entry.to)).toEqual(['running'])
+    // 锁不释放：上传任务的全部主张就建立在这些路径锁上
+    expect(state.lock_released).toEqual([])
+    expect(state.tasks.get(1)?.task.status).toBe('running')
   })
 
   it('锁冲突时留在队列，不执行、不改状态', async () => {
@@ -148,7 +174,7 @@ describe('dispatch_task', () => {
 
     expect(state.tasks.get(1)?.task.status).toBe('failed')
     expect(state.tasks.get(1)?.task.error).toBe('附件不存在或已被删除')
-    expect(state.lock_released).toEqual([[1]])
+    expect(state.lock_released).toEqual([[42, 1]])
   })
 
   it('状态迁移竞态（他人抢先 running）：安静让位，不执行、不标失败', async () => {

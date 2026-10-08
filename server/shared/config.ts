@@ -193,6 +193,10 @@ const config_schema = z.object({
       }),
       upload: z.object({
         handleStorageName: z.string().min(1),
+        partSizeMb: z.number().int().min(5),
+        signBatchSize: z.number().int().min(1).max(1000),
+        urlTtlSeconds: z.number().int().min(60),
+        maxSizeMb: z.number().int().min(1),
       }),
       download: z.object({
         urlTtlSeconds: z.number().int().min(60),

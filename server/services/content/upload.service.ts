@@ -11,7 +11,7 @@ import { attachment_ancestor_folders, attachment_download_name, attachment_folde
 
 const config = runtime_config()
 
-const upload_url_expires_seconds = 15 * 60
+const upload_url_expires_seconds = config.app.content.upload.urlTtlSeconds
 
 function content_upload_key_prefix(story_id: number) {
   return `content-upload/${story_id}/`
@@ -148,7 +148,7 @@ function get_form_file(form: FormData, field: string) {
  * A directory that is empty to begin with still cannot arrive this way: a
  * picker yields no files for it, which is what 新建文件夹 is for.
  */
-async function materialize_attachment_folders(story_id: number, file_name: string) {
+export async function materialize_attachment_folders(story_id: number, file_name: string) {
   const ancestors = attachment_ancestor_folders(file_name)
   if (ancestors.length)
     await create_folder_rows(story_id, ancestors)
@@ -248,6 +248,22 @@ export async function replace_attachment(
   mode: 'keep-name' | 'new-name',
 ) {
   assert_content_upload_key(story_id, key)
+  return await apply_attachment_replace(story_id, old_file_name, key, raw_file_name, content_type, mode)
+}
+
+/**
+ * The lock-free core of replace_attachment; the task executor calls this with
+ * path locks already held. `key` is already-uploaded bytes (the legacy path
+ * validates its staging prefix before calling, the task path allocated it).
+ */
+export async function apply_attachment_replace(
+  story_id: number,
+  old_file_name: string,
+  key: string,
+  raw_file_name: string,
+  content_type: string | null,
+  mode: 'keep-name' | 'new-name',
+) {
   const story = await get_story(story_id)
   const attachments = story.attachments
   const attachment = attachments.find(item => item.file_name === old_file_name)

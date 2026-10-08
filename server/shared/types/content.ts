@@ -89,6 +89,9 @@ export type ContentOperationKind = 'move' | 'rename' | 'folder_create' | 'folder
  */
 export type ContentTaskKind = 'upload' | 'replace' | 'move' | 'rename' | 'delete' | 'encrypt' | 'decrypt' | 'redact' | 'folder_create' | 'folder_delete' | 'folder_rename'
 
+/** Item actions that wait on the client's bytes; the rest are server-only. */
+export const content_task_transfer_actions = ['upload', 'replace'] as const
+
 /** Task lifecycle: queued → running → done/failed/cancelled; running ↔ paused only for transfer tasks. */
 export type ContentTaskStatus = 'queued' | 'running' | 'paused' | 'cancelling' | 'done' | 'failed' | 'cancelled'
 
@@ -172,6 +175,59 @@ export interface ContentTaskFolderDeletePayload {
 export interface ContentTaskFolderRenamePayload {
   source_folder: string
   new_folder: string
+}
+
+/* ---- Transfer payloads (upload / replace) ---- */
+
+export interface ContentTaskUploadEntry {
+  /** The attachment path the client wants; conflicts resolve to a suffixed name at finalize. */
+  path: string
+  size: number
+  mime_type: string | null
+  /** Editor caret offset to insert the reference at once the item lands. */
+  insert_position?: number | null
+}
+
+export interface ContentTaskUploadPayload {
+  uploads: ContentTaskUploadEntry[]
+}
+
+export interface ContentTaskReplacePayload {
+  old_file_name: string
+  mode: 'keep-name' | 'new-name'
+  size: number
+  mime_type: string | null
+  /** The incoming file name, which decides the result in `new-name` mode. */
+  file_name: string
+  content_type: string | null
+}
+
+/** One part the client still has to PUT, with its signed URL. */
+export interface ContentTaskPart {
+  part_number: number
+  url: string
+}
+
+export interface ContentTaskPartPlan {
+  parts: ContentTaskPart[]
+  /** Bytes per part; null for single-PUT items. */
+  part_size: number | null
+  /** Multipart upload id; null for single-PUT items. */
+  upload_id: string | null
+}
+
+export interface ContentTaskUploadedPart {
+  part_number: number
+  etag: string
+  size: number
+}
+
+/** What a resuming client needs to continue an interrupted transfer. */
+export interface ContentTaskResumeState {
+  staging_key: string
+  upload_id: string | null
+  part_size: number | null
+  uploaded_parts: ContentTaskUploadedPart[]
 }
 
 /**

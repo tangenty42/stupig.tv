@@ -132,6 +132,17 @@ app:
       autosaveDelayMs: 1000
     upload:
       handleStorageName: stupig_content_upload_handles
+      # 分片上传的片大小（MiB）。小于等于此值的文件走单次 PUT，避免为小文件
+      # 付出 multipart 的三次往返
+      partSizeMb: 8
+      # 单次预签的分片数上限：预签 URL 有有效期，一次签完整批会在超长文件上过期
+      signBatchSize: 20
+      # 预签上传 URL 的有效期（秒）。分片 URL 与单次 PUT URL 共用；短窗口足够
+      # 上传，过期后客户端重新预签即可
+      urlTtlSeconds: 900
+      # 单文件大小上限（MiB）。分片大小 × 最大分片数 = 80 GiB 的协议上限，
+      # 这里取一个更保守的业务上限，挡住"客户端声明 10 TB"这类荒谬输入
+      maxSizeMb: 20480
     download:
       # 附件下载签名 URL 的有效期（秒）。签名只在点击下载那一刻签发，过期后
       # 重新点击即可再签，短窗口足够一次下载开始

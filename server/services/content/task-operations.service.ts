@@ -1,17 +1,22 @@
-import type { ContentPathLock, ContentTask, ContentTaskDeletePayload, ContentTaskFolderCreatePayload, ContentTaskFolderDeletePayload, ContentTaskFolderRenamePayload, ContentTaskItem, ContentTaskKind, ContentTaskMovePayload, ContentTaskRenamePayload } from '@shared/types/content'
+import type { ContentPathLock, ContentStoryAttachment, ContentTask, ContentTaskDeletePayload, ContentTaskFolderCreatePayload, ContentTaskFolderDeletePayload, ContentTaskFolderRenamePayload, ContentTaskItem, ContentTaskKind, ContentTaskMovePayload, ContentTaskRenamePayload, ContentTaskReplacePayload, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
 import { list_scope_locks } from '@server/lib/operation-lock'
-import { list_scope_attachments, list_scope_folders, list_scope_paths } from '@server/services/content-attachments.service'
-import { attachment_ancestor_folders, attachment_base_name, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, extract_attachment_names } from '@shared/content-markdown'
-import { apply_attachment_moves, apply_attachment_rename, apply_folder_create, apply_folder_delete, apply_folder_rename, resolve_attachment_name, resolve_renamed_attachment_name } from './attachment-structure.service'
+import { complete_multipart_upload, copy_object, create_multipart_upload, delete_object_best_effort, head_object, list_parts } from '@server/lib/storage'
+import { get_scope_attachment, insert_attachment_row, list_scope_attachments, list_scope_folders, list_scope_paths } from '@server/services/content-attachments.service'
+import { runtime_config } from '@shared/config'
+import { attachment_ancestor_folders, attachment_base_name, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, extract_attachment_names, sanitize_attachment_path } from '@shared/content-markdown'
+import { apply_attachment_moves, apply_attachment_rename, apply_folder_create, apply_folder_delete, apply_folder_rename, publish_attachment_change, resolve_attachment_name, resolve_renamed_attachment_name } from './attachment-structure.service'
 import { get_story, update_story } from './story.service'
 import { update_task_item } from './task.service'
+import { apply_attachment_replace, materialize_attachment_folders } from './upload.service'
+
+const config = runtime_config()
 
 /**
  * Task executors: apply one task against the scope with its path locks already
- * held by the runner, and report per-item outcomes. Phase 1 covers the pure-DB
- * kinds; upload/replace (transfer) and encrypt/decrypt/redact (OSS transforms)
- * arrive with phases 2 and 3.
+ * held by the runner, and report per-item outcomes. Pure-DB kinds finish inside
+ * the dispatch; transfer kinds (upload/replace) only *prepare* here and are
+ * finished by the client's reportTaskItem once the bytes have landed.
  */
 
 /** Lock paths per kind, derived from the payload alone (no DB read). */
@@ -34,6 +39,16 @@ export function task_lock_paths(kind: ContentTaskKind, payload: Record<string, u
       const { file_names, folders } = payload as unknown as ContentTaskDeletePayload
       return [... new Set([... file_names, ... folders])]
     }
+    case 'upload': {
+      const { uploads } = payload as unknown as ContentTaskUploadPayload
+      return [... new Set(uploads.map(entry => entry.path))]
+    }
+    case 'replace': {
+      const { old_file_name, mode, file_name } = payload as unknown as ContentTaskReplacePayload
+      // keep-name swaps only the object, so the old path is the whole claim;
+      // new-name lands on a name of its own and has to claim that too.
+      return mode === 'new-name' ? [... new Set([old_file_name, file_name])] : [old_file_name]
+    }
     case 'folder_create':
       return [(payload as unknown as ContentTaskFolderCreatePayload).folder]
     case 'folder_delete':
@@ -48,7 +63,7 @@ export function task_lock_paths(kind: ContentTaskKind, payload: Record<string, u
 }
 
 /** Task items per kind, derived from the payload alone. */
-export function task_item_paths(kind: ContentTaskKind, payload: Record<string, unknown>): { path: string, action: string }[] {
+export function task_item_paths(kind: ContentTaskKind, payload: Record<string, unknown>): { path: string, action: string, bytes_total?: number }[] {
   switch (kind) {
     case 'move': {
       const { moves } = payload as unknown as ContentTaskMovePayload
@@ -65,6 +80,15 @@ export function task_item_paths(kind: ContentTaskKind, payload: Record<string, u
         ... [... new Set(folders)].map(path => ({ path, action: 'folder_delete' })),
       ]
     }
+    case 'upload': {
+      const { uploads } = payload as unknown as ContentTaskUploadPayload
+      return [... new Set(uploads.map(entry => entry.path))]
+        .map(path => ({ path, action: 'upload', bytes_total: uploads.find(entry => entry.path === path)?.size ?? 0 }))
+    }
+    case 'replace': {
+      const replace = payload as unknown as ContentTaskReplacePayload
+      return [{ path: replace.old_file_name, action: 'replace', bytes_total: replace.size }]
+    }
     case 'folder_create':
       return [{ path: (payload as unknown as ContentTaskFolderCreatePayload).folder, action: 'folder_create' }]
     case 'folder_delete':
@@ -76,7 +100,18 @@ export function task_item_paths(kind: ContentTaskKind, payload: Record<string, u
   }
 }
 
-export async function execute_task(task: ContentTask, items: ContentTaskItem[]) {
+/** Bytes per part for a transfer; null means the file is small enough for one PUT. */
+export function upload_part_size(bytes_total: number) {
+  const part = config.app.content.upload.partSizeMb * 1024 * 1024
+  return bytes_total > part ? part : null
+}
+
+export interface ContentTaskOutcome {
+  /** false when the client still owes bytes (transfer kinds); the task stays running. */
+  complete: boolean
+}
+
+export async function execute_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
   switch (task.kind) {
     case 'move':
       return execute_move_task(task, items)
@@ -84,6 +119,10 @@ export async function execute_task(task: ContentTask, items: ContentTaskItem[]) 
       return execute_rename_task(task, items)
     case 'delete':
       return execute_delete_task(task, items)
+    case 'upload':
+      return execute_upload_task(task, items)
+    case 'replace':
+      return execute_replace_task(task, items)
     case 'folder_create':
       return execute_folder_create_task(task, items)
     case 'folder_delete':
@@ -99,7 +138,11 @@ function item_of(items: ContentTaskItem[], path: string, action: string) {
   return items.find(item => item.path === path && item.action === action)
 }
 
-async function execute_move_task(task: ContentTask, items: ContentTaskItem[]) {
+function error_message_of(error: unknown) {
+  return error instanceof Error ? error.message : '操作失败'
+}
+
+async function execute_move_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
   const payload = task.payload as unknown as ContentTaskMovePayload
   const result = await apply_attachment_moves(task.scope_id, payload.moves)
   const renamed = new Map(result.succeeded.map(item => [item.old_file_name, item.new_file_name]))
@@ -113,17 +156,19 @@ async function execute_move_task(task: ContentTask, items: ContentTaskItem[]) {
     // Not in either list: a same-path move, which is a no-op by definition.
     await update_task_item(task.id, item.id, { status: 'done', result: { new_path: renamed.get(item.path) ?? item.path } })
   }
+  return { complete: true }
 }
 
-async function execute_rename_task(task: ContentTask, items: ContentTaskItem[]) {
+async function execute_rename_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
   const payload = task.payload as unknown as ContentTaskRenamePayload
   const row = await apply_attachment_rename(task.scope_id, payload.old_file_name, payload.new_file_name)
   const item = item_of(items, payload.old_file_name, 'rename')
   if (item)
     await update_task_item(task.id, item.id, { status: 'done', result: { new_path: row.file_name } })
+  return { complete: true }
 }
 
-async function execute_delete_task(task: ContentTask, items: ContentTaskItem[]) {
+async function execute_delete_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
   const payload = task.payload as unknown as ContentTaskDeletePayload
   // Files go through the revision-checked save, exactly like the editor's
   // delete flow: references are removed in the same write that drops the rows.
@@ -152,34 +197,179 @@ async function execute_delete_task(task: ContentTask, items: ContentTaskItem[]) 
     catch (error) {
       await update_task_item(task.id, item.id, {
         status: 'failed',
-        result: { reason: error instanceof ApiError ? error.message : '删除失败' },
+        result: { reason: error_message_of(error) },
       })
     }
   }
+  return { complete: true }
 }
 
-async function execute_folder_create_task(task: ContentTask, items: ContentTaskItem[]) {
+/* ------------------------------------------------------------------------- */
+/* Transfer tasks: prepare here, the client finishes them                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Prepares one upload item: settles the staging key, decides single-PUT vs
+ * multipart and leaves the item `active` for the client to fill. The final
+ * attachment name is deliberately NOT resolved here — the scope's paths are
+ * arbitrated at finalize time, under the same lock, so a long upload cannot
+ * reserve a name against everything else that happens meanwhile (§6.1).
+ */
+async function execute_upload_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
+  const payload = task.payload as unknown as ContentTaskUploadPayload
+  for (const item of items) {
+    const entry = payload.uploads.find(upload => upload.path === item.path)
+    if (! entry) {
+      await update_task_item(task.id, item.id, { status: 'skipped', result: { reason: '缺少上传信息' } })
+      continue
+    }
+    try {
+      // Legality only: an empty existing set leaves the conflict policy moot,
+      // so this rejects illegal names and nothing else.
+      resolve_attachment_name(entry.path, [], 'suffix')
+    }
+    catch (error) {
+      await update_task_item(task.id, item.id, { status: 'skipped', result: { reason: error_message_of(error) } })
+      continue
+    }
+    // A resumed task already has its staging key; re-allocating would orphan
+    // the parts the client already uploaded under the old one.
+    if (item.staging_key) {
+      await update_task_item(task.id, item.id, { status: 'active' })
+      continue
+    }
+    const staging_key = `content-upload/${task.scope_id}/${crypto.randomUUID()}`
+    const part_size = upload_part_size(entry.size)
+    const upload_id = part_size ? await create_multipart_upload(staging_key, entry.mime_type) : null
+    await update_task_item(task.id, item.id, { status: 'active', staging_key, upload_id, part_size })
+  }
+  // The client owns the rest of this task's life: reportTaskItem lands the
+  // bytes and completes it, so dispatch must not finish it here.
+  return { complete: false }
+}
+
+/** Prepares a replacement: one staged object that will take the old row's place. */
+async function execute_replace_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
+  const payload = task.payload as unknown as ContentTaskReplacePayload
+  const item = item_of(items, payload.old_file_name, 'replace')
+  if (! item)
+    return { complete: true }
+  const attachments = await list_scope_attachments(task.scope_id)
+  const target = attachments.find(attachment => attachment.file_name === payload.old_file_name)
+  if (! target) {
+    await update_task_item(task.id, item.id, { status: 'skipped', result: { reason: '附件不存在或已被删除' } })
+    return { complete: true }
+  }
+  // A replacement swaps the object but not the row's key, so replacing an
+  // encrypted file would leave a key on plaintext bytes: the client would try
+  // to decrypt readable content and the file would end up unopenable. 取消加密
+  // is the operation that owns that transition.
+  if (target.is_encrypted) {
+    await update_task_item(task.id, item.id, { status: 'skipped', result: { reason: '已加密' } })
+    return { complete: true }
+  }
+  const staging_key = `content-upload/${task.scope_id}/${crypto.randomUUID()}`
+  const part_size = upload_part_size(payload.size)
+  const upload_id = part_size ? await create_multipart_upload(staging_key, payload.content_type) : null
+  await update_task_item(task.id, item.id, { status: 'active', staging_key, upload_id, part_size })
+  return { complete: false }
+}
+
+/**
+ * Lands a finished transfer item: completes the multipart (if any), then hands
+ * the staged object to the same code the legacy upload path uses. Runs under
+ * the task's path locks, which is what makes the name arbitration safe.
+ */
+export async function finalize_transfer_item(task: ContentTask, item: ContentTaskItem, parts: ContentTaskUploadedPart[]): Promise<ContentStoryAttachment> {
+  if (! item.staging_key)
+    throw new ApiError(409, '任务项缺少暂存对象')
+  if (item.upload_id)
+    await complete_multipart_upload(item.staging_key, item.upload_id, parts)
+
+  if (item.action === 'replace') {
+    const payload = task.payload as unknown as ContentTaskReplacePayload
+    return await apply_attachment_replace(
+      task.scope_id,
+      payload.old_file_name,
+      item.staging_key,
+      payload.file_name,
+      payload.content_type,
+      payload.mode,
+    )
+  }
+
+  const payload = task.payload as unknown as ContentTaskUploadPayload
+  const entry = payload.uploads.find(upload => upload.path === item.path)
+  const object = await head_object(item.staging_key)
+  const base_name = sanitize_attachment_path(entry?.path ?? item.path, config.app.content.link.fileNameMaxBytes)
+  // The authoritative conflict pass: the planned path was locked, so this
+  // normally returns it unchanged; a name that appeared anyway still lands
+  // (suffixed) instead of failing an upload the user already paid for.
+  const file_name = resolve_attachment_name(base_name, await list_scope_paths(task.scope_id), 'suffix')
+  const target_key = `content/att/${crypto.randomUUID()}`
+  const etag = await copy_object(item.staging_key, target_key)
+  await delete_object_best_effort(item.staging_key)
+  const version = etag ?? object.etag ?? String(Date.now())
+  try {
+    await insert_attachment_row({
+      story_id: task.scope_id,
+      file_name,
+      object_key: target_key,
+      mime_type: attachment_mime_type(file_name),
+      file_size: object.size,
+      version,
+    })
+  }
+  catch (error) {
+    await delete_object_best_effort(target_key)
+    throw error
+  }
+  await materialize_attachment_folders(task.scope_id, file_name)
+  await publish_attachment_change(task.scope_id)
+  const row = await get_scope_attachment(task.scope_id, file_name)
+  if (! row)
+    throw new ApiError(500, '附件写入失败，请重试')
+  return row
+}
+
+/** The stage a resuming client needs: where the bytes go and which parts already landed. */
+export async function transfer_item_resume_state(item: ContentTaskItem) {
+  if (! item.staging_key)
+    throw new ApiError(409, '任务项尚未开始')
+  return {
+    staging_key: item.staging_key,
+    upload_id: item.upload_id,
+    part_size: item.part_size,
+    // A single-PUT item has no parts to inventory: the client re-sends it whole.
+    uploaded_parts: item.upload_id ? await list_parts(item.staging_key, item.upload_id) : [],
+  }
+}
+
+async function execute_folder_create_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
   const payload = task.payload as unknown as ContentTaskFolderCreatePayload
   await apply_folder_create(task.scope_id, payload.folder)
   const item = item_of(items, payload.folder, 'folder_create')
   if (item)
     await update_task_item(task.id, item.id, { status: 'done' })
+  return { complete: true }
 }
 
-async function execute_folder_delete_task(task: ContentTask, items: ContentTaskItem[]) {
+async function execute_folder_delete_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
   const payload = task.payload as unknown as ContentTaskFolderDeletePayload
   await apply_folder_delete(task.scope_id, payload.folder)
   const item = item_of(items, payload.folder, 'folder_delete')
   if (item)
     await update_task_item(task.id, item.id, { status: 'done' })
+  return { complete: true }
 }
 
-async function execute_folder_rename_task(task: ContentTask, items: ContentTaskItem[]) {
+async function execute_folder_rename_task(task: ContentTask, items: ContentTaskItem[]): Promise<ContentTaskOutcome> {
   const payload = task.payload as unknown as ContentTaskFolderRenamePayload
   await apply_folder_rename(task.scope_id, payload.source_folder, payload.new_folder)
   const item = item_of(items, payload.source_folder, 'folder_rename')
   if (item)
     await update_task_item(task.id, item.id, { status: 'done', result: { new_path: payload.new_folder } })
+  return { complete: true }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -192,6 +382,8 @@ export interface ContentTaskPreflightItem {
   ok: boolean
   /** Populated when ok is false; the same message the executor would produce. */
   reason: string | null
+  /** The name an upload will land under when its planned one is taken (conflict resolved by suffix). */
+  suggested_name?: string | null
 }
 
 export interface ContentTaskPreflight {
@@ -273,6 +465,43 @@ export async function preflight_task(scope_id: number, kind: ContentTaskKind, pa
           return { ... item, ok: false, reason: '文件夹不存在或已被删除' }
         if (attachments.some(attachment => attachment.file_name.startsWith(`${item.path}/`)))
           return { ... item, ok: false, reason: '文件夹内仍有附件，无法删除' }
+        return { ... item, ok: true, reason: null }
+      })
+      break
+    }
+    case 'upload': {
+      const { uploads } = payload as unknown as ContentTaskUploadPayload
+      // Per ENTRY, not per task item: a batch legitimately holds two files that
+      // plan the same path (the client resolves them from these suggestions),
+      // and task_item_paths collapses those by design.
+      const claimed = [... paths]
+      verdicts = uploads.map((entry) => {
+        const base = { path: entry.path, action: 'upload', ok: true, reason: null as string | null }
+        if (entry.size <= 0)
+          return { ... base, ok: false, reason: '文件为空' }
+        try {
+          // Uploads step aside with a suffix instead of refusing, so a taken
+          // name is not a verdict of "no" — it is a different name to show.
+          const suggested = resolve_attachment_name(entry.path, claimed, 'suffix')
+          claimed.push(suggested)
+          return { ... base, suggested_name: suggested === entry.path ? null : suggested }
+        }
+        catch (error) {
+          return { ... base, ok: false, reason: error_message_of(error) }
+        }
+      })
+      break
+    }
+    case 'replace': {
+      const replace = payload as unknown as ContentTaskReplacePayload
+      verdicts = items.map((item) => {
+        const target = attachments.find(attachment => attachment.file_name === replace.old_file_name)
+        if (! target)
+          return { ... item, ok: false, reason: '附件不存在或已被删除' }
+        if (target.is_encrypted)
+          return { ... item, ok: false, reason: '已加密' }
+        if (replace.size <= 0)
+          return { ... item, ok: false, reason: '文件为空' }
         return { ... item, ok: true, reason: null }
       })
       break
