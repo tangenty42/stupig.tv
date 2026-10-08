@@ -170,6 +170,10 @@ app:
       # 一个，刷新/换标签页就认不出自己）
       clientIdStorageName: stupig_content_task_client_id
     encrypt:
+      # 单文件加密上限（MiB）。加解密在服务端整块处理（读整对象 → 内存转换 →
+      # 整块写回，见 lib/attachment-crypto.ts），所以这个值就是该路径的内存与
+      # 耗时的上限——调大它需要先把转换改成流式（AES-GCM 单 tag 认整段，格式
+      # 会变，历史密文不兼容）。解密不校验此值：现存密文都出自这条加密路径。
       maxSizeMb: 20
     bilibili:
       fetchTimeoutMs: 5000
