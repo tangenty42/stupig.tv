@@ -342,6 +342,7 @@ export async function transfer_item_resume_state(item: ContentTaskItem) {
     part_size: item.part_size,
     // A single-PUT item has no parts to inventory: the client re-sends it whole.
     uploaded_parts: item.upload_id ? await list_parts(item.staging_key, item.upload_id) : [],
+    sign_batch_size: config.app.content.upload.signBatchSize,
   }
 }
 

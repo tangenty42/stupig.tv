@@ -111,7 +111,7 @@ export async function sign_task_parts(input: { task_id: number, item_id: number,
         : await signed_put_url(item.staging_key, content_type, config.app.content.upload.urlTtlSeconds),
     })
   }
-  return { parts: urls, part_size: item.part_size, upload_id: item.upload_id }
+  return { parts: urls, part_size: item.part_size, upload_id: item.upload_id, sign_batch_size: config.app.content.upload.signBatchSize }
 }
 
 /** The content type a staged object will be stored with, taken from the task payload. */

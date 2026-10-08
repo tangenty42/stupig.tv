@@ -152,7 +152,7 @@ describe('sign_task_parts', () => {
       { key: 'content-upload/42/x', upload_id: 'up-1', part_number: 2 },
     ])
     expect(plan.parts.map(part => part.part_number)).toEqual([1, 2])
-    expect(plan).toMatchObject({ part_size: 50, upload_id: 'up-1' })
+    expect(plan).toMatchObject({ part_size: 50, upload_id: 'up-1', sign_batch_size: 2 })
     // 每次传输调用都续租
     expect(state.touched).toEqual([9])
   })
