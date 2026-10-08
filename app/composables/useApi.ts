@@ -1,6 +1,6 @@
 import type { AppRouter } from '@server/trpc/router'
 import type { PermissionGrant } from '@shared/permissions'
-import type { ContentAttachmentReplaceRequest, ContentStoryDetail, ContentTaskKind, ContentTaskUploadedPart, ContentUploadSignRequest } from '@shared/types/content'
+import type { ContentStoryDetail, ContentTaskKind, ContentTaskUploadedPart } from '@shared/types/content'
 import type { inferRouterInputs } from '@trpc/server'
 
 type RouterInputs = inferRouterInputs<AppRouter>
@@ -184,28 +184,13 @@ export function useApi() {
       return trpc_call(trpc.content.getBilibiliVideoCards.query({ hrefs }))
     },
 
-    async sign_attachment_upload(payload: ContentUploadSignRequest) {
-      return trpc_call(trpc.content.signAttachmentUpload.mutate(payload))
-    },
-
     /** Signs a short-lived object GET that saves the attachment under its row name. */
     async sign_attachment_download(story_id: number, file_name: string) {
       return trpc_call(trpc.content.signAttachmentDownload.mutate({ story_id, file_name }))
     },
 
-    async confirm_attachment_upload(story_id: number, key: string, file_name: string) {
-      return trpc_call(trpc.content.confirmAttachmentUpload.mutate({ story_id, key, file_name }))
-    },
-
     async rename_attachment(id: number, old_file_name: string, file_name: string) {
       return trpc_call(trpc.content.renameAttachment.mutate({ id, old_file_name, file_name }))
-    },
-
-    async replace_attachment(payload: ContentAttachmentReplaceRequest) {
-      // The staged object the payload references was uploaded through the
-      // editor's Uppy instance (signed by signAttachmentUpload), so this call
-      // is only the land-the-row mutation.
-      return trpc_call(trpc.content.replaceAttachment.mutate(payload))
     },
 
     /** Uploads the redacted bitmap the 删减版 editor exported for an encrypted image. */

@@ -1,7 +1,6 @@
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { get_bilibili_video_cards } from '@server/services/bilibili.service'
 import {
-  confirm_attachment_upload,
   create_abridged_attachment,
   create_story,
   decrypt_attachments,
@@ -9,9 +8,7 @@ import {
   encrypt_attachments,
   get_story,
   list_stories,
-  replace_attachment,
   sign_attachment_download,
-  sign_attachment_upload,
   update_story,
 } from '@server/services/content.service'
 import { cancel_content_task, create_content_task, create_folder, delete_attachment, delete_folder, move_attachment, move_attachments, move_folder, rename_attachment, report_task_item, resume_content_task, resume_task_item, sign_task_parts } from '@server/services/content/task-api.service'
@@ -64,19 +61,11 @@ export const content_router = router({
     .input(api_schema.content.delete_story)
     .mutation(({ input }) => delete_story(input.id)),
 
-  signAttachmentUpload: content_admin_procedure
-    .input(api_schema.content.sign_attachment_upload)
-    .mutation(({ input }) => sign_attachment_upload(input)),
-
   // Signing grants nothing the nameless object URL doesn't already grant — the
   // signature only names the download — so viewers sign directly.
   signAttachmentDownload: public_procedure
     .input(api_schema.content.sign_attachment_download)
     .mutation(({ input }) => sign_attachment_download(input.story_id, input.file_name)),
-
-  confirmAttachmentUpload: content_admin_procedure
-    .input(api_schema.content.confirm_attachment_upload)
-    .mutation(({ input }) => confirm_attachment_upload(input.story_id, input.key, input.file_name)),
 
   renameAttachment: content_admin_procedure
     .input(api_schema.content.rename_attachment)
@@ -85,17 +74,6 @@ export const content_router = router({
       input.old_file_name,
       input.file_name,
       ctx.auth_user.id,
-    )),
-
-  replaceAttachment: content_admin_procedure
-    .input(api_schema.content.replace_attachment)
-    .mutation(({ input }) => replace_attachment(
-      input.story_id,
-      input.old_file_name,
-      input.key,
-      input.file_name,
-      input.content_type,
-      input.mode,
     )),
 
   deleteAttachment: content_admin_procedure
