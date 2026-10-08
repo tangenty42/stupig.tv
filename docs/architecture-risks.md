@@ -193,6 +193,8 @@ catch (error) {
 
 优先级：**中**。
 
+**现状（2026-10-08 部分已实施）：** 执行器（[scripts/migrate.ts](../scripts/migrate.ts)）自带版本记录表、checksum 篡改检测、`GET_LOCK` 命名锁和 `--baseline` 接管；存量结构已固化为 `migrations/20261008000000_init_schema.sql`，开发库与生产库均完成 baseline 登记，容器启动自动幂等执行增量迁移。CI（[check.yml](../.github/workflows/check.yml)）在全新 MySQL 8.4 上做空库全量重放 + 二次执行幂等验证，并前置 lint/typecheck/单测。未做：参考 schema drift 自动检测、dev 启动时的 pending 迁移警告、执行耗时记录。
+
 ### 9. 生产可观测性不足
 
 当前主要依赖 `console` 日志，难以完整回答以下问题：
@@ -267,7 +269,7 @@ catch (error) {
 
 1. 拆分 `content.service.ts`；
 2. 抽象 `SyncRuntime`；
-3. 建立正式数据库迁移执行记录；
+3. ~~建立正式数据库迁移执行记录~~（已完成，见上文 #8 现状）；
 4. 增加结构化日志、request ID 和关键指标；
 5. 让批量操作返回结构化部分成功结果。
 

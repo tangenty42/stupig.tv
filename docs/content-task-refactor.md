@@ -303,6 +303,8 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 
 ## 13. 阶段计划与验收
 
+> 前置条件（**已完成**，2026-10-08）：迁移系统接管——`migrations/20261008000000_init_schema.sql` 基线登记（开发库 + 生产库）、check.yml 空库全量迁移验证进入 CI。此后三张新表与 DROP `content_operation_locks` 只是普通的增量迁移。
+
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **0. 拆分预热**（暂缓开工） | 按 §10 拆 service（不改行为）；edit.vue 抽出 §11 的 composable/store（不改行为）；`content_locks` 表 + 锁管理器内部替换 operation-lock（保持 409 语义） | 全部既有测试绿；`npx nuxt typecheck`、`pnpm lint` 通过；锁并发回归测试 |
