@@ -59,7 +59,7 @@ edit.vue 承担了五种交织的职责：
 - **服务端编排传输**：后端分解任务为任务项、分配 staging key、预签分片、管理 multipart 状态；前端上传器只负责"按 URL PUT 字节并回报"。
 - **规则单一权威**：preflight 与 runner 执行时跑同一份校验代码（@shared + service 层），客户端不再重写规则。
 
-## 3. 数据模型（迁移 SQL 另行提供，不修改 [stupig_tv.sql](../stupig_tv.sql)）
+## 3. 数据模型（迁移 SQL 另行提供；`migrations/` 是结构的唯一事实源）
 
 ```sql
 -- 任务：一次用户操作
