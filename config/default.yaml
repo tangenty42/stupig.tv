@@ -165,6 +165,10 @@ app:
       retentionHours: 24
       # sweeper 间隔：回收过期锁、清算中断任务与残留上传
       sweepIntervalSeconds: 60
+      # 浏览器侧"安装实例 ID"的 localStorage 键名。用途仅是"本机可续传"提示，
+      # 不是授权边界；与 sync 的 sessionStorage 客户端 ID 有意分开（后者每标签页
+      # 一个，刷新/换标签页就认不出自己）
+      clientIdStorageName: stupig_content_task_client_id
     encrypt:
       maxSizeMb: 20
     bilibili:

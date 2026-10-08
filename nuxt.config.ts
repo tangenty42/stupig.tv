@@ -30,6 +30,7 @@ const public_config = {
   content_draft_storage_prefix: config.app.content.draft.storagePrefix,
   content_draft_autosave_delay_ms: config.app.content.draft.autosaveDelayMs,
   content_upload_handle_storage_name: config.app.content.upload.handleStorageName,
+  content_task_client_id_storage_name: config.app.content.task.clientIdStorageName,
   static_base_url: config.site.staticBaseUrl,
   site_url: config.site.url,
   site_indexable: config.site.indexable,
