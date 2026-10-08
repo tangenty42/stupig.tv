@@ -335,22 +335,21 @@
 <script setup lang="ts">
 import type { ContentStoryMeta } from '@shared/content-markdown'
 import type { ContentAttachmentScope, ContentStoryAttachment, ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
-import type { AwsBody } from '@uppy/aws-s3'
-import type { Uppy, UppyFile } from '@uppy/core'
 import type MyContentMarkdownEditor from '~/components/MyContent/Markdown/Editor.vue'
 import type { ContentDraftRecord } from '~/stores/contentDraft'
-import type { AttachmentListItem, AttachmentUploadPick, MyContentAttachmentRow, PendingAttachmentUpload } from '~/utils/content/attachment'
+import type { UploadEntry } from '~/stores/contentTasks'
+import type { AttachmentListItem, AttachmentUploadPick, MyContentAttachmentRow } from '~/utils/content/attachment'
+import type { PendingUploadRow } from '~/utils/content/task-row'
 import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, compare_attachment_names, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, is_encrypted_attachment, link_file_name_illegal_chars, parse_story_markdown, rename_attachment_references, split_attachment_editable_name, story_markdown_template } from '@shared/content-markdown'
 import { has_permission } from '@shared/permissions'
 import { sync_resource } from '@shared/types/sync'
-import AwsS3 from '@uppy/aws-s3'
-import UppyCore from '@uppy/core'
-import GoldenRetriever from '@uppy/golden-retriever'
 import { storeToRefs } from 'pinia'
 import { useContentDraftStore } from '~/stores/contentDraft'
+import { useContentTasksStore } from '~/stores/contentTasks'
 import { attachment_picks_from_data_transfer } from '~/utils/content/attachment'
 import { content_attachment_drag_file_names, content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, get_content_attachment_drag_data, get_content_folder_drag_data, set_content_attachment_drag_data, set_content_folder_drag_data } from '~/utils/content/attachment-drag'
 import { format_event_range } from '~/utils/content/event'
+import { pending_upload_card, pending_upload_status } from '~/utils/content/task-row'
 import { delete_upload_file_handle, load_upload_file_handle, save_upload_file_handle } from '~/utils/content/upload-file-handle'
 
 definePageMeta({
@@ -386,6 +385,8 @@ const story_id = computed(() => is_edit.value ? Number(raw_id.value) : 0)
 const draft_story_id = is_edit.value ? story_id.value : null
 
 const draft_store = useContentDraftStore(draft_story_id)
+/** The server-side attachment task state for this story, plus this client's drivers. */
+const tasks_store = useContentTasksStore(story_id.value)
 const {
   markdown,
   base_revision,
@@ -453,7 +454,7 @@ const header_date = computed(() => {
  */
 type AttachmentRenameTarget
   = | { kind: 'stored', attachment: ContentStoryAttachment }
-    | { kind: 'upload', task: PendingAttachmentUpload }
+    | { kind: 'pick', pick: UploadEntry }
 
 const save_pending = ref(false)
 const delete_pending = ref(false)
@@ -500,27 +501,13 @@ const rename_folder_target = ref<string | null>(null)
 const rename_folder_name = ref('')
 const delete_folder_pending = reactive(new Set<string>())
 const markdown_editor = ref<InstanceType<typeof MyContentMarkdownEditor>>()
-const pending_uploads = ref<PendingAttachmentUpload[]>([])
-const upload_busy = ref(false)
+/** A pasted file parked until its name is settled; the task is only created on accept. */
+const held_pick = ref<UploadEntry | null>(null)
+/** Any transfer running right now, for the controls that must not race one. */
+const upload_busy = computed(() => tasks_store.transferring)
 const draft_conflict_visible = ref(false)
 const pending_conflict_draft = ref<ContentDraftRecord | null>(null)
 const discard_draft_pending = ref(false)
-let next_upload_id = 1
-
-const live_upload_ids = new Set<string>()
-// Last bytes/timestamp sample per file for the live transfer rate.
-const upload_speed_marks = new Map<string, { loaded: number, stamp: number }>()
-
-interface UploadMeta extends Record<string, unknown> {
-  file_name: string
-  insert_position: number | null
-  local_upload_id: number
-  /** Set on replacement uploads: the stored file this task supersedes. */
-  replace_target?: string
-  replace_mode?: 'keep-name' | 'new-name'
-}
-
-let uppy: Uppy<UploadMeta, AwsBody> | null = null
 
 const preview_visible = ref(false)
 const preview_images = ref<string[]>([])
@@ -593,22 +580,12 @@ const attachment_items = computed<AttachmentListItem[]>(() => {
       },
     })
   }
-  for (const task of pending_uploads.value) {
+  for (const row of tasks_store.pending_rows) {
     items.push({
-      key: `upload:${task.id}`,
+      key: upload_selection_key(row.item_id),
       kind: 'upload',
-      task,
-      card: {
-        kind: 'upload',
-        file_name: task.file_name,
-        mime_type: task.mime_type,
-        file_size: task.file_size,
-        status: task.status,
-        progress: task.progress,
-        speed: task.speed,
-        message: task.message,
-        can_resume: Boolean(task.file || task.handle),
-      },
+      row,
+      card: pending_upload_card(row),
     })
   }
   // Re-sort because pending uploads are merged in above; the server only orders
@@ -619,7 +596,7 @@ const attachment_items = computed<AttachmentListItem[]>(() => {
 
 /** The storage path of any item (stored or pending upload), so uploads nest under their folders too. */
 function item_file_name(item: AttachmentListItem) {
-  return item.kind === 'stored' ? item.attachment.file_name : item.task.file_name
+  return item.kind === 'stored' ? item.attachment.file_name : item.row.path
 }
 
 function item_folder(item: AttachmentListItem) {
@@ -714,8 +691,8 @@ function folder_selection_key(path: string) {
   return `folder:${path}`
 }
 
-function upload_selection_key(id: number) {
-  return `upload:${id}`
+function upload_selection_key(item_id: number) {
+  return `upload:${item_id}`
 }
 
 /** The selection key an attachment item participates in (stored → file:, upload → upload:). */
@@ -739,7 +716,7 @@ function clear_stored_selection() {
   }
 }
 
-const selected_upload_tasks = computed(() => pending_uploads.value.filter(task => selection.has(upload_selection_key(task.id))))
+const selected_upload_rows = computed(() => tasks_store.pending_rows.filter(row => selection.has(upload_selection_key(row.item_id))))
 
 const selected_file_names = computed(() => [... selection]
   .filter(key => key.startsWith('file:'))
@@ -1760,128 +1737,71 @@ async function show_save_conflict() {
   return true
 }
 
-function upload_from_file(file: UppyFile<UploadMeta, AwsBody>) {
-  const meta = file.meta
-  const file_name = meta.file_name || file.name
-  const existing = pending_uploads.value.find(upload => upload.uppy_id === file.id)
-  const progress = file.progress
-  const missing_file = file.isGhost || ! file.data
-  const data_type = file.data instanceof Blob ? file.data.type : null
-  const status = file.error
-    ? 'error'
-    : progress?.uploadComplete
-      ? 'completed'
-      : missing_file
-        ? 'paused'
-        : file.isPaused
-          ? 'paused'
-          : progress?.uploadStarted
-            ? 'uploading'
-            : 'queued'
-  const message = file.error ?? (missing_file ? '文件未恢复，请重新选择' : null)
-  if (existing) {
-    existing.file = file.data as File | null
-    existing.file_name = file_name
-    existing.file_size = file.data?.size ?? file.size ?? 0
-    existing.mime_type = file.type || data_type || null
-    // Monotonic like the upload-progress handler: state syncs must not regress.
-    existing.progress = Math.max(existing.progress, progress?.percentage ?? 0)
-    existing.status = status
-    existing.message = message
-    return existing
-  }
-  const upload = reactive<PendingAttachmentUpload>({
-    id: meta.local_upload_id ?? next_upload_id ++,
-    uppy_id: file.id,
-    file: file.data as File | null,
-    handle: null,
-    file_name,
-    file_size: file.data?.size ?? file.size ?? 0,
-    mime_type: file.type || data_type || null,
-    progress: progress?.percentage ?? 0,
-    speed: 0,
-    status,
-    message,
-    insert_position: meta.insert_position,
-  })
-  next_upload_id = Math.max(next_upload_id, upload.id + 1)
-  pending_uploads.value.push(upload)
-  return upload
+/** The IndexedDB key a pick's source handle is remembered under, so a refresh can resume without a picker. */
+function upload_handle_key(path: string) {
+  return `${story_id.value}:${path}`
 }
 
-/** `start: false` queues the files without uploading, for callers that rename them first. */
-function process_files_for_upload(picks: AttachmentUploadPick[], insert_position?: number | null, options: { start?: boolean } = {}) {
+/** The bytes a landed item's reference is inserted at; the caret lives here, not on the server. */
+function upload_landing_handler(pick: AttachmentUploadPick, insert_position: number | null) {
+  return (attachment: ContentStoryAttachment) => {
+    // The story's own list arrives through the content_story refresh; merging
+    // here just keeps the row visible until it does.
+    if (story.value && ! story.value.attachments.some(item => item.file_name === attachment.file_name))
+      story.value = { ... story.value, attachments: [... story.value.attachments, attachment] }
+    if (insert_position !== null)
+      insert_attachment_markdown(attachment.file_name, attachment.is_image, insert_position)
+    void delete_upload_file_handle(upload_handle_db_name, upload_handle_key(pick.file_name)).catch(() => {})
+  }
+}
+
+/**
+ * Hands a batch of picked files to the task queue. The queue owns the transfer,
+ * the name arbitration and the progress; this only does what the server cannot:
+ * reject the shared-name rules early, remember resumable handles, and report
+ * whichever entries the preflight refused.
+ */
+async function upload_picks(picks: AttachmentUploadPick[], insert_position: number | null) {
   // The orphan staging pool is gone: uploads start only after the story exists.
   if (! is_edit.value) {
     if (picks.length)
       error('请先保存档案，再上传附件')
-    return []
+    return
   }
-  const { start: start_uploads = true } = options
-  if (! uppy || ! picks.length)
-    return []
-
-  sync_uppy_files(uppy)
+  if (! picks.length)
+    return
 
   const bad_suffix = picks.filter(pick => is_encrypted_attachment(pick.file_name))
   if (bad_suffix.length)
     error('文件名中包含非法字段')
   const accepted = picks.filter(pick => ! is_encrypted_attachment(pick.file_name))
   if (! accepted.length)
-    return []
+    return
 
   for (const pick of accepted)
     expand_folder(attachment_folder_of(pick.file_name))
 
-  const new_files = accepted.filter((pick) => {
-    const existing = uppy?.getFiles().find(file => file.meta.file_name === pick.file_name && ! file.progress?.uploadComplete)
-    if (existing) {
-      if (existing.isGhost || ! existing.data) {
-        uppy?.removeFile(existing.id)
-        return true
-      }
-      upload_from_file(existing)
-      return false
-    }
-    const completed = uppy?.getFiles().find(file => file.meta.file_name === pick.file_name)
-    if (completed)
-      uppy?.removeFile(completed.id)
-    return true
-  })
-  const added_ids: string[] = []
-  const started: PendingAttachmentUpload[] = []
-  for (const pick of new_files) {
-    const file_id = uppy.addFile({
-      name: pick.file_name,
-      type: pick.file.type,
-      data: pick.file,
-      meta: {
-        file_name: pick.file_name,
-        insert_position: insert_position ?? null,
-        local_upload_id: next_upload_id ++,
-      },
+  const entries: UploadEntry[] = accepted.map(pick => ({
+    file: pick.file,
+    file_name: pick.file_name,
+    insert_position,
+    on_landed: upload_landing_handler(pick, insert_position),
+  }))
+  const result = await tasks_store.start_uploads(entries)
+  for (const refusal of result.rejected)
+    error(`${attachment_base_name(refusal.path)}：${refusal.reason}`)
+
+  // The handle is stored under the picked path; a name the server had to suffix
+  // simply loses the hint and asks for the file again on a later resume.
+  for (const pick of accepted) {
+    if (! pick.handle)
+      continue
+    void save_upload_file_handle(upload_handle_db_name, upload_handle_key(pick.file_name), {
+      file_name: pick.file.name,
+      file_size: pick.file.size,
+      handle: pick.handle,
     })
-    added_ids.push(file_id)
-    const task = pending_uploads.value.find(upload => upload.uppy_id === file_id)
-    if (task) {
-      started.push(task)
-      if (pick.handle) {
-        task.handle = pick.handle
-        void save_upload_file_handle(upload_handle_db_name, `${uppy.getID()}!${file_id}`, {
-          file_name: pick.file.name,
-          file_size: pick.file.size,
-          handle: pick.handle,
-        })
-      }
-    }
   }
-  // Start only the newly added files: uppy.upload() would also retry errored
-  // tasks, and resumeAll() would unpause tasks the user paused on purpose.
-  if (start_uploads) {
-    for (const file_id of added_ids)
-      void uppy.retryUpload(file_id)
-  }
-  return started
 }
 
 function insert_attachment_markdown(file_name: string, is_image: boolean, position: number | null) {
@@ -1895,7 +1815,7 @@ function insert_attachment_markdown(file_name: string, is_image: boolean, positi
 }
 
 function on_attachment_files_picked(picks: AttachmentUploadPick[]) {
-  process_files_for_upload(picks)
+  void upload_picks(picks, null)
 }
 
 async function on_attachment_drop(event: DragEvent) {
@@ -1907,7 +1827,7 @@ async function on_attachment_drop(event: DragEvent) {
       void on_attachment_move(names, null)
     return
   }
-  process_files_for_upload(await attachment_picks_from_data_transfer(event.dataTransfer))
+  void upload_picks(await attachment_picks_from_data_transfer(event.dataTransfer), null)
 }
 
 // Fullscreen drops outside the list and the editor (preview pane, dividers,
@@ -1927,110 +1847,30 @@ function on_attachment_drop_outside(event: DragEvent) {
 }
 
 function on_editor_files_dropped(picks: AttachmentUploadPick[], position: number | null) {
-  process_files_for_upload(picks, position)
+  void upload_picks(picks, position)
 }
 
 function on_editor_files_pasted(picks: AttachmentUploadPick[], position: number | null) {
-  // Held back until the name is settled: the confirm call names the row, so a
-  // name arriving after it landed would take a second, server-side rename.
-  const started = process_files_for_upload(picks, position, { start: false })
   // Only a lone paste is worth naming; a batch keeps the names it came with.
-  if (started.length !== 1) {
-    for (const task of started)
-      start_upload(task)
+  if (picks.length !== 1) {
+    void upload_picks(picks, position)
     return
   }
-  open_rename_dialog({ kind: 'upload', task: started[0]! })
-}
-function start_upload(task: PendingAttachmentUpload) {
-  void uppy?.retryUpload(task.uppy_id)
-}
-
-async function confirm_uppy_upload(file: UppyFile<UploadMeta, AwsBody>, response: AwsBody) {
-  if (file.meta.replace_target) {
-    await confirm_replace_upload(file, response.key)
-    return
-  }
-  const upload = upload_from_file(file)
-  try {
-    const attachment = await content.confirm_attachment_upload(story_id.value, response.key, upload.file_name)
-    upload.progress = 100
-    upload.status = 'completed'
-    if (story.value && ! story.value.attachments.some(item => item.file_name === attachment.file_name)) {
-      story.value = { ... story.value, attachments: [... story.value.attachments, attachment] }
-    }
-    if (upload.insert_position !== null)
-      insert_attachment_markdown(attachment.file_name, attachment.is_image, upload.insert_position)
-    remove_upload(upload.id)
-    // An earlier interrupted attempt of the same file may linger as an
-    // errored card next to this success; drop it so the file shows once.
-    for (const task of pending_uploads.value) {
-      if (task.id !== upload.id && task.file_name === upload.file_name && task.status === 'error')
-        remove_upload(task.id)
-    }
-  }
-  catch (ex) {
-    upload.status = 'error'
-    upload.message = error_message(ex)
-  }
+  // Held back until the name is settled: the task is created with the final
+  // name, so a name arriving later would take a second, server-side rename.
+  const pick: UploadEntry = { ... picks[0]!, insert_position: position }
+  held_pick.value = pick
+  open_rename_dialog({ kind: 'pick', pick })
 }
 
-/** Lands a finished replacement upload: swap the object server-side, then follow the rename in the local draft. */
-async function confirm_replace_upload(file: UppyFile<UploadMeta, AwsBody>, key: string) {
-  const upload = upload_from_file(file)
-  const old_file_name = file.meta.replace_target!
-  try {
-    const replaced = await content.replace_attachment({
-      story_id: story_id.value,
-      old_file_name,
-      key,
-      file_name: upload.file_name,
-      content_type: upload.mime_type,
-      mode: file.meta.replace_mode ?? 'keep-name',
-    })
-    upload.progress = 100
-    upload.status = 'completed'
-    if (replaced.file_name !== old_file_name)
-      markdown.value = rename_attachment_references(markdown.value, old_file_name, replaced.file_name)
-    story.value = await fetch_story()
-    if (story.value)
-      draft_store.advance_base(story.value.markdown, story.value.revision)
-    remove_upload(upload.id)
-  }
-  catch (ex) {
-    upload.status = 'error'
-    upload.message = error_message(ex)
-  }
-}
-
-/** Recovers a NoSuchUpload error: confirm a possibly landed object, else restart the multipart upload cleanly. */
-async function recover_nosuch_upload(instance: Uppy<UploadMeta, AwsBody>, file: UppyFile<UploadMeta, AwsBody>, upload: PendingAttachmentUpload) {
-  upload.status = 'uploading'
-  upload.message = null
-  const multipart = 's3Multipart' in file ? file.s3Multipart as { key?: string } | undefined : undefined
-  if (multipart?.key) {
-    // confirm_uppy_upload flips the status to completed or error itself.
-    await confirm_uppy_upload(file, { key: multipart.key } as AwsBody)
-    if (upload.status as string === 'completed')
-      return
-    upload.status = 'uploading'
-    upload.message = null
-  }
-  // Genuinely stale uploadId: drop the multipart state so the retry starts fresh.
-  instance.setFileState(file.id, { s3Multipart: undefined } as Partial<typeof file>)
-  void instance.retryUpload(file.id).catch((ex) => {
-    upload.status = 'error'
-    upload.message = error_message(ex)
-  })
-}
-
-/** Recover the source file for a data-less task: handle permission (A), then picker (B). */
-async function resolve_upload_file(upload: PendingAttachmentUpload): Promise<File | null> {
-  const record = uppy
-    ? await load_upload_file_handle(upload_handle_db_name, `${uppy.getID()}!${upload.uppy_id}`).catch(() => null)
-    : null
+/**
+ * The bytes a row needs, preferring what this client already holds: the picked
+ * File, then the remembered File System Access handle, then a picker. Returns
+ * null when the user declines or picks a different file.
+ */
+async function resolve_upload_file(row: PendingUploadRow): Promise<File | null> {
+  const record = await load_upload_file_handle(upload_handle_db_name, upload_handle_key(row.path)).catch(() => null)
   if (record) {
-    upload.handle = record.handle
     let permission: PermissionState | null = null
     try {
       const handle = record.handle
@@ -2050,11 +1890,10 @@ async function resolve_upload_file(upload: PendingAttachmentUpload): Promise<Fil
       const file = await record.handle.getFile().catch(() => null)
       if (file && file.name === record.file_name && file.size === record.file_size)
         return file
-      return null
     }
   }
-  const expected_name = record?.file_name ?? attachment_base_name(upload.file_name)
-  const expected_size = record?.file_size ?? upload.file_size
+  const expected_name = record?.file_name ?? attachment_base_name(row.path)
+  const expected_size = record?.file_size ?? row.bytes_total
   return await pick_resume_file(expected_name, expected_size)
 }
 
@@ -2083,270 +1922,107 @@ function pick_resume_file(expected_name: string, expected_size: number): Promise
   })
 }
 
-async function retry_upload(upload: PendingAttachmentUpload) {
-  if (! uppy)
+/**
+ * Continues a row: drives it from the bytes this client holds, or asks for them
+ * again. The uploader skips the parts the server already has, so re-running a
+ * partly finished transfer is the resume.
+ */
+async function continue_upload(row: PendingUploadRow) {
+  const entry = tasks_store.tasks.find(candidate => candidate.task.id === row.task_id)
+  // Only an item the server has prepared can be driven: a queued one is still
+  // waiting for its turn, and the runner flips it to active when it gets it.
+  if (entry?.items.find(candidate => candidate.id === row.item_id)?.status !== 'active')
     return
-  const instance = uppy
-  const file = instance.getFile(upload.uppy_id)
+
+  const local = tasks_store.local_item(row.item_id)
+  if (local) {
+    await tasks_store.resume_item(row.item_id, local)
+    return
+  }
+
+  const file = await resolve_upload_file(row)
   if (! file)
     return
-  if (file.progress?.uploadComplete) {
-    // The object already landed and only confirm failed; retryUpload would
-    // skip a completed file (filterFilesToUpload), so rerun the confirm.
-    const key = file.response?.body?.key
-      ?? ('s3Multipart' in file ? (file.s3Multipart as { key?: string } | undefined)?.key : undefined)
-    if (! key) {
-      upload.status = 'error'
-      upload.message = '上传状态丢失，请删除后重新上传'
-      return
-    }
-    await confirm_uppy_upload(file, { key } as AwsBody)
-    return
-  }
-  if (! file.data) {
-    const resolved = await resolve_upload_file(upload)
-    if (! resolved)
-      return
-    instance.setFileState(upload.uppy_id, { data: resolved, isGhost: false })
-  }
-  upload.message = null
-  upload.status = 'uploading'
-  void instance.retryUpload(upload.uppy_id).catch((ex) => {
-    upload.status = 'error'
-    upload.message = error_message(ex)
+  await tasks_store.resume_item(row.item_id, {
+    file,
+    // The caret is long gone after a refresh, so a resumed landing only refreshes.
+    insert_position: null,
+    on_landed: upload_landing_handler({ file, file_name: row.path }, null),
   })
 }
 
-async function pause_upload(upload: PendingAttachmentUpload) {
-  if (! uppy)
-    return
-  const instance = uppy
-  const file = instance.getFile(upload.uppy_id)
-  if (! file)
-    return
-
-  // The card toggles between "暂停上传" and "继续上传" based on task.status;
-  // drive the action off that (not `file.isPaused`) so a restored ghost that
-  // never got paused still resumes instead of pausing again.
-  const resuming = upload.status === 'paused' || upload.status === 'queued'
-  if (! resuming) {
-    const is_paused = instance.pauseResume(upload.uppy_id)
-    if (is_paused !== undefined)
-      upload.status = is_paused ? 'paused' : 'uploading'
+/** The card's 暂停/继续 toggle: abort the local transfer, or start it again. */
+async function toggle_upload(row: PendingUploadRow) {
+  if (row.is_driving) {
+    tasks_store.pause_item(row.item_id)
     return
   }
+  await continue_upload(row)
+}
 
-  if (live_upload_ids.has(upload.uppy_id)) {
-    instance.pauseResume(upload.uppy_id)
-    upload.status = 'uploading'
+/**
+ * Retries a failed row: an item the server still holds open continues from where
+ * it stopped, while one it already finished with (refused, or reaped by the
+ * sweeper) needs a task of its own — driven again it would only 409.
+ */
+async function retry_upload(row: PendingUploadRow) {
+  const entry = tasks_store.tasks.find(candidate => candidate.task.id === row.task_id)
+  const item = entry?.items.find(candidate => candidate.id === row.item_id)
+  if (item && item.status !== 'active' && item.status !== 'pending') {
+    const local = tasks_store.local_item(row.item_id)
+    await tasks_store.remove(row.task_id)
+    if (local)
+      await upload_picks([{ file: local.file, file_name: row.path }], local.insert_position)
     return
   }
-
-  if (! file.data) {
-    const resolved = await resolve_upload_file(upload)
-    if (! resolved)
-      return
-    instance.setFileState(upload.uppy_id, { data: resolved, isGhost: false })
-  }
-  instance.setFileState(upload.uppy_id, { isPaused: false, error: null })
-  const restored_upload_id = Object.entries(instance.getState().currentUploads)
-    .find(([, current]) => current.fileIDs.includes(upload.uppy_id))?.[0]
-  const resume = restored_upload_id
-    ? instance.restore(restored_upload_id)
-    : instance.retryUpload(upload.uppy_id)
-  upload.message = null
-  upload.status = 'uploading'
-  void resume.catch(async (ex) => {
-    try {
-      await instance.retryUpload(upload.uppy_id)
-    }
-    catch (retry_ex) {
-      upload.status = 'error'
-      upload.message = error_message(retry_ex || ex)
-    }
-  })
+  await continue_upload(row)
 }
 
-function cancel_upload(upload: PendingAttachmentUpload) {
-  live_upload_ids.delete(upload.uppy_id)
-  uppy?.removeFile(upload.uppy_id)
-  remove_upload(upload.id, false)
-}
-
-function remove_upload(id: number, remove_from_uppy = true) {
-  const upload = pending_uploads.value.find(item => item.id === id)
-  if (remove_from_uppy && upload)
-    uppy?.removeFile(upload.uppy_id)
-  pending_uploads.value = pending_uploads.value.filter(upload => upload.id !== id)
-}
-
-/** Batch-resume every selected paused/queued upload (continues multipart where it left off). */
+/** Batch-resume every selected paused upload (continues the multipart where it left off). */
 function batch_start_selected_uploads() {
-  const tasks = selected_upload_tasks.value.filter(task => task.status === 'paused' || task.status === 'queued')
-  for (const task of tasks)
-    void pause_upload(task)
+  for (const row of selected_upload_rows.value) {
+    if (pending_upload_status(row) !== 'paused')
+      continue
+    void continue_upload(row).catch(report_operation_error)
+  }
 }
 
 /** Batch-pause every selected actively uploading task. */
 function batch_pause_selected_uploads() {
-  const tasks = selected_upload_tasks.value.filter(task => task.status === 'uploading')
-  for (const task of tasks)
-    void pause_upload(task)
+  for (const row of selected_upload_rows.value) {
+    if (row.is_driving)
+      tasks_store.pause_item(row.item_id)
+  }
 }
 
-/** Batch-cancel (and remove) every selected upload task, after confirmation. */
+/** Batch-remove every selected upload row, cancelling the ones still live. */
 function batch_delete_selected_uploads(event: MouseEvent) {
-  const tasks = [... selected_upload_tasks.value]
-  if (! tasks.length)
+  const rows = [... selected_upload_rows.value]
+  if (! rows.length)
     return
-  confirm_require(event, `确定要删除选中的 ${tasks.length} 个上传任务吗？`, () => {
-    for (const task of tasks)
-      cancel_upload(task)
+  confirm_require(event, `确定要删除选中的 ${rows.length} 个上传任务吗？`, () => {
+    for (const row of rows)
+      void tasks_store.remove(row.task_id).catch(report_operation_error)
     clear_selection()
   }, {
     acceptProps: { label: '删除', severity: 'danger' },
   })
 }
 
-function sync_uppy_files(instance: Uppy<UploadMeta, AwsBody>) {
-  for (const file of instance.getFiles()) {
-    if (! file.progress?.uploadComplete)
-      upload_from_file(file)
-  }
+/**
+ * Live progress for this scope's tasks: the event carries the state itself, so
+ * it is applied straight to the store — the periodic `sync` refresh stays for
+ * membership changes, which need a fetch.
+ */
+if (import.meta.client && is_edit.value) {
+  const unsubscribe_tasks = useDataSync().subscribe(sync_resource('content_story_tasks', story_id.value), (event) => {
+    if (event?.type !== 'task_progress' || ! event.task_snapshot)
+      return
+    tasks_store.apply_snapshot(event.task_snapshot)
+  })
+  onBeforeUnmount(unsubscribe_tasks)
+  onMounted(() => void tasks_store.load().catch(report_operation_error))
 }
-
-function setup_uppy() {
-  if (! import.meta.client || uppy || ! is_edit.value)
-    return
-
-  const instance = new UppyCore<UploadMeta, AwsBody>({
-    id: `content-upload-${story_id.value}`,
-    autoProceed: false,
-  })
-  instance.on('file-added', file => upload_from_file(file))
-  instance.on('file-removed', (file) => {
-    upload_speed_marks.delete(file.id)
-    void delete_upload_file_handle(upload_handle_db_name, `${instance.getID()}!${file.id}`).catch(() => {})
-  })
-  instance.on('upload-start', (files) => {
-    for (const file of files)
-      live_upload_ids.add(file.id)
-  })
-  instance.on('upload-progress', (file, progress) => {
-    if (! file)
-      return
-    const upload = upload_from_file(file)
-    live_upload_ids.add(file.id)
-    upload.status = 'uploading'
-    // A retried part restarts its byte counter at 0; never move the bar backwards.
-    const percent = progress.bytesTotal ? Math.round(progress.bytesUploaded / progress.bytesTotal * 100) : 0
-    if (percent > upload.progress)
-      upload.progress = percent
-    // Bytes/time delta for a live transfer rate; skipped while the counter regresses.
-    const now = performance.now()
-    let mark = upload_speed_marks.get(file.id)
-    if (! mark) {
-      mark = { loaded: 0, stamp: now }
-      upload_speed_marks.set(file.id, mark)
-    }
-    const elapsed = (now - mark.stamp) / 1000
-    if (elapsed >= 0.3 && progress.bytesUploaded >= mark.loaded) {
-      upload.speed = (progress.bytesUploaded - mark.loaded) / elapsed
-      upload_speed_marks.set(file.id, { loaded: progress.bytesUploaded, stamp: now })
-    }
-    upload_busy.value = true
-  })
-  instance.on('upload-error', (file, upload_error) => {
-    if (! file)
-      return
-    const upload = upload_from_file(file)
-    live_upload_ids.delete(file.id)
-    upload_speed_marks.delete(file.id)
-    // A lost complete-ack (passive interruption mid-multipart) resurfaces as
-    // NoSuchUpload while the object may have landed already: try confirming
-    // before erroring; a missing object means a genuinely stale uploadId,
-    // which is stripped so the retry starts a fresh multipart upload.
-    if (/NoSuchUpload/.test(upload_error.message) && 's3Multipart' in file && file.s3Multipart) {
-      void recover_nosuch_upload(instance, file, upload)
-      return
-    }
-    upload.status = 'error'
-    upload.speed = 0
-    upload.message = upload_error.message
-    upload_busy.value = false
-  })
-  instance.on('upload-pause', (file, is_paused) => {
-    if (! file)
-      return
-    const upload = upload_from_file(file)
-    // Drop the sample so a resume recalibrates instead of averaging in the pause.
-    upload_speed_marks.delete(file.id)
-    upload.speed = 0
-    // Keep the id in live_upload_ids while paused: the uploader instance (and
-    // its queue slot) stays alive, so resume must go through pauseResume
-    // rather than restore(), which would spawn a duplicate uploader.
-    upload.status = is_paused ? 'paused' : 'uploading'
-  })
-  instance.on('upload-success', (file, response) => {
-    if (! file || ! response?.body?.key)
-      return
-    live_upload_ids.delete(file.id)
-    upload_speed_marks.delete(file.id)
-    void confirm_uppy_upload(file, response.body)
-  })
-  instance.on('restored', () => {
-    sync_uppy_files(instance)
-    for (const file of instance.getFiles()) {
-      const multipart = 's3Multipart' in file ? file.s3Multipart : undefined
-      if (! multipart)
-        continue
-      const upload = upload_from_file(file)
-      if (file.data) {
-        upload.status = 'uploading'
-        upload.message = null
-        void instance.retryUpload(file.id).catch((ex) => {
-          upload.status = 'error'
-          upload.message = error_message(ex)
-        })
-      }
-      else {
-        // Blob was too big for GoldenRetriever; try the File System Access handle.
-        upload.status = 'paused'
-        upload.message = null
-        void load_upload_file_handle(upload_handle_db_name, `${instance.getID()}!${file.id}`)
-          .then((record) => {
-            if (record)
-              upload.handle = record.handle
-          })
-          .catch(() => {})
-      }
-    }
-  })
-  instance.on('complete', () => {
-    upload_busy.value = false
-  })
-  instance.use(AwsS3, {
-    shouldUseMultipart: file => (file.size ?? 0) > 5 * 1024 * 1024,
-    getChunkSize: () => 8 * 1024 * 1024,
-    // Paused uploads hold their queue slots (their promises stay pending), so a
-    // finite limit would let a few paused tasks starve every new upload. 0 =
-    // unlimited file concurrency; parts of each file still upload sequentially.
-    limit: 0,
-    generateObjectKey: () => `content-upload/${story_id.value}/${crypto.randomUUID()}`,
-    signRequest: async request => content.sign_attachment_upload({
-      story_id: story_id.value,
-      method: request.method,
-      key: request.key,
-      ... ('uploadId' in request ? { upload_id: request.uploadId } : {}),
-      ... ('partNumber' in request ? { part_number: request.partNumber } : {}),
-    }),
-  })
-  instance.use(GoldenRetriever, { serviceWorker: false })
-  sync_uppy_files(instance)
-  uppy = instance
-}
-
-onMounted(setup_uppy)
 
 function on_attachment_copy(item: AttachmentListItem) {
   if (item.kind === 'stored')
@@ -2370,18 +2046,20 @@ function on_attachment_delete(event: MouseEvent, item: AttachmentListItem) {
 
 function on_attachment_retry(item: AttachmentListItem) {
   if (item.kind === 'upload')
-    retry_upload(item.task)
+    void retry_upload(item.row).catch(report_operation_error)
 }
 
 function on_attachment_pause(item: AttachmentListItem) {
   if (item.kind === 'upload')
-    pause_upload(item.task)
+    void toggle_upload(item.row).catch(report_operation_error)
 }
 
 function on_attachment_cancel(event: MouseEvent, item: AttachmentListItem) {
   if (item.kind !== 'upload')
     return
-  confirm_require(event, '确定要取消该文件的上传吗？', () => cancel_upload(item.task), {
+  confirm_require(event, '确定要取消该文件的上传吗？', () => {
+    void tasks_store.cancel(item.row.task_id).catch(report_operation_error)
+  }, {
     acceptProps: { label: '取消上传', severity: 'danger' },
   })
 }
@@ -2389,7 +2067,9 @@ function on_attachment_cancel(event: MouseEvent, item: AttachmentListItem) {
 function on_attachment_remove(event: MouseEvent, item: AttachmentListItem) {
   if (item.kind !== 'upload')
     return
-  confirm_require(event, '确定要移除该上传任务吗？', () => remove_upload(item.task.id), {
+  confirm_require(event, '确定要移除该上传任务吗？', () => {
+    void tasks_store.remove(item.row.task_id).catch(report_operation_error)
+  }, {
     acceptProps: { label: '移除', severity: 'danger' },
   })
 }
@@ -2436,27 +2116,15 @@ function attachment_extension(file_name: string) {
   return split_attachment_editable_name(file_name).locked
 }
 
-/**
- * Renames an in-flight upload. The card reads the task and the confirm call
- * reads the uppy meta, so both must move together — an event between the two
- * would otherwise put the old name back.
- */
-function set_upload_file_name(task: PendingAttachmentUpload, file_name: string) {
-  const file = uppy?.getFile(task.uppy_id)
-  if (file)
-    uppy?.setFileMeta(task.uppy_id, { ... file.meta, file_name })
-  task.file_name = file_name
-}
-
 function rename_target_name(target: AttachmentRenameTarget) {
-  return target.kind === 'upload' ? target.task.file_name : target.attachment.file_name
+  return target.kind === 'pick' ? target.pick.file_name : target.attachment.file_name
 }
 
 /** The name the prompt is editing, for the byte cap on the field. */
 const rename_source_name = computed(() => rename_target.value ? rename_target_name(rename_target.value) : '')
 
 /** The prompt holds a pasted upload rather than a stored file: "cancel" drops that paste. */
-const rename_cancel_label = computed(() => rename_target.value?.kind === 'upload' ? '取消上传' : '取消')
+const rename_cancel_label = computed(() => rename_target.value?.kind === 'pick' ? '取消上传' : '取消')
 
 /** Storage path the prompt's current text would apply; null while the field is empty. */
 function rename_target_path(target: AttachmentRenameTarget) {
@@ -2494,11 +2162,11 @@ const rename_conflict = computed(() => {
   if (violation)
     return violation
   const taken = [... stored_scope_paths.value]
-  if (target.kind === 'upload') {
-    for (const task of pending_uploads.value) {
-      if (task.id !== target.task.id)
-        taken.push(task.file_name)
-    }
+  // A pending upload elsewhere in the list is a name this one cannot take
+  // either — the first to finalize wins and the rest get suffixed.
+  if (target.kind === 'pick') {
+    for (const row of tasks_store.pending_rows)
+      taken.push(row.path)
   }
   // A stored file is being renamed, so its own row does not count against it;
   // a paste has no row yet, and the uploads it must not land on were just added.
@@ -2516,21 +2184,20 @@ function open_rename_dialog(target: AttachmentRenameTarget) {
   void nextTick(() => rename_input.value?.$el?.select())
 }
 
-// The prompt's exit releases the paste it was holding, so it can never sit in
-// the queue unnamed: an accepted name uploads it, cancel or dismissal drops it.
+// The prompt's exit releases the paste it was holding, so it can never be lost
+// unnamed: an accepted name uploads it, cancel or dismissal drops it.
 watch(rename_visible, (visible) => {
   if (visible)
     return
   const target = rename_target.value
   const confirmed = rename_confirmed.value
+  const path = target ? rename_target_path(target) : null
   rename_target.value = null
+  held_pick.value = null
   rename_confirmed.value = false
-  if (target?.kind !== 'upload')
+  if (target?.kind !== 'pick' || ! confirmed)
     return
-  if (confirmed)
-    start_upload(target.task)
-  else
-    cancel_upload(target.task)
+  void upload_picks([{ ... target.pick, file_name: path ?? target.pick.file_name }], target.pick.insert_position ?? null)
 })
 
 async function rename_attachment() {
@@ -2541,13 +2208,11 @@ async function rename_attachment() {
 
   const current_name = rename_target_name(target)
 
-  // A queued upload has no row yet, so the name only has to reach the confirm
-  // call, which reads it from the task and the uppy meta kept in step with it.
-  // The flag is what tells the watch's release that this name was accepted.
-  if (target.kind === 'upload') {
+  // A held-back paste has no row yet, so the name only has to reach the task
+  // that this paste is about to create. The flag is what tells the watch's
+  // release that this name was accepted.
+  if (target.kind === 'pick') {
     rename_confirmed.value = true
-    if (file_name !== current_name)
-      set_upload_file_name(target.task, file_name)
     rename_visible.value = false
     return
   }
@@ -3030,21 +2695,21 @@ function on_replace_file_picked(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0] ?? null
   if (file)
-    start_replace_upload(file)
+    void start_replace_upload(file)
 }
 
 function on_replace_drop(event: DragEvent) {
   replace_drag_over.value = false
   const file = event.dataTransfer?.files?.[0] ?? null
   if (file)
-    start_replace_upload(file)
+    void start_replace_upload(file)
 }
 
 function on_replace_paste(event: ClipboardEvent) {
   const file = event.clipboardData?.files?.[0] ?? null
   if (file) {
     event.preventDefault()
-    start_replace_upload(file)
+    void start_replace_upload(file)
   }
 }
 
@@ -3060,14 +2725,15 @@ watch(replace_visible, (visible) => {
 })
 
 /**
- * Queues the replacement as an upload task: it rides the same Uppy pipeline as
- * any upload (multipart, pause/resume, refresh recovery), and the staged object
- * only becomes the file's content when confirm_replace_upload lands the mutation.
+ * Queues the replacement as a transfer task: it rides the same pipeline as any
+ * upload (multipart, pause/resume, refresh recovery), and the staged object only
+ * becomes the file's content when the task's finalize lands the mutation.
  */
-function start_replace_upload(file: File) {
+async function start_replace_upload(file: File) {
   const target = replace_target.value
-  if (! target || ! uppy)
+  if (! target)
     return
+  const mode = replace_name_mode.value
   close_replace_dialog()
   if (replace_file_input.value)
     replace_file_input.value.value = ''
@@ -3075,26 +2741,23 @@ function start_replace_upload(file: File) {
     error('文件名中包含非法字段')
     return
   }
-  sync_uppy_files(uppy)
-  // A queued replacement of the same target (or a same-named upload) is
-  // superseded by this pick; Uppy also refuses duplicate file ids.
-  for (const existing of uppy.getFiles()) {
-    if (existing.meta.replace_target === target.file_name || existing.meta.file_name === file.name)
-      uppy.removeFile(existing.id)
-  }
-  const file_id = uppy.addFile({
-    name: file.name,
-    type: file.type,
-    data: file,
-    meta: {
-      file_name: file.name,
-      insert_position: null,
-      local_upload_id: next_upload_id ++,
-      replace_target: target.file_name,
-      replace_mode: replace_name_mode.value,
+
+  const result = await tasks_store.start_replace({
+    file,
+    old_file_name: target.file_name,
+    mode,
+    on_landed: async (attachment) => {
+      // A new-name replacement renames the row, so the draft's references have
+      // to follow it; a keep-name one only swaps the bytes behind the name.
+      if (attachment.file_name !== target.file_name)
+        markdown.value = rename_attachment_references(markdown.value, target.file_name, attachment.file_name)
+      story.value = await fetch_story()
+      if (story.value)
+        draft_store.advance_base(story.value.markdown, story.value.revision)
     },
   })
-  void uppy.retryUpload(file_id)
+  for (const refusal of result.rejected)
+    error(refusal.reason)
 }
 
 function confirm_delete_attachment(event: Event, attachment: ContentStoryAttachment) {
