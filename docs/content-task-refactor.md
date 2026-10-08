@@ -382,11 +382,16 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 - preflight：三种 kind 的逐项判定与 `edit.vue` 原规则逐条对照（作为"规则只有一份"的回归证明）。
 - 客户端：行投影（非传输项 → 卡片）、右键/批量的 refused 项报告。
 
-#### 风险与决策点
+#### 已定决策（2026-10-08）
 
-- **逐项提交 vs 单事务**：见上，倾向逐项（可中断 + 部分成功 + 进度）。若你认为"整批一致性"更重要（要么全成要么全不动），这一条要先定，因为它决定执行器结构与测试。
-- **长批量的可中断性**：中止只在任务项边界生效，单个 20 GB 文件的下载/上传仍可能跑很久；任务项粒度的进度对单文件大文件不够细腻（与上传任务同一限制）。
-- **锁粒度变化的影响面**：从 scope 锁换成路径锁后，加密进行中的文件会被它的源/目标路径挡住（预期），但**同 scope 的其他文件不再被挡**——这是本阶段的收益，也需要在 UI 的 `structure_locked`（今天把任一活跃锁折叠成全局禁用）上放开到按路径禁用（与阶段 4 的 preflight 接线是同一件事，可提前到这里做一半）。
+1. **逐项提交，引用改写也逐项（b1）。** 每个任务项独立事务：`update_attachment_row_encryption` + `rewrite_story_attachment_refs` + `publish_attachment_change`。放弃现状的「全部上传完 → 一个事务写全部行」（`encryption.service.ts:125-146`）。已知代价：本批每有一个被正文引用的文件改名，`revision` 就 bump 一次（`attachment-structure.service.ts:111` 会 `revision = revision + 1`），编辑器的旧草稿更频繁撞版本冲突 —— 这正是 bump 的设计目的，但在批量下变密。之所以不选 b2（收尾一次性改写，只为把 bump 压到一次），是因为它带来「行已改名、引用未改」的崩溃窗口，需要额外的终态补偿路径，收益不抵复杂度。
+2. **接受「单个文件不可中断 + 无字节级进度」。** 加解密是整块 buffer 处理（`lib/attachment-crypto.ts` 的 `encrypt_attachment(plain: Uint8Array)` / `decrypt_attachment(data, key)`），改成流式会改变 AES-GCM 的密文格式（单 tag 认证整段），对历史文件不兼容；客户端 WebCrypto 转换会扩大密钥暴露面，不采用。`app.content.encrypt.maxSizeMb` 自加密功能引入（`feat(content): add private attachment support`）起就是 20，也就是说**现存每一份密文都出自 ≤ 20 MiB 的明文**，整块处理在内存与耗时上都无足轻重 —— 所以这不是遗留风险，而是**故意的边界**。UI 侧：非传输任务项显示「加密中/解密中」不定进度条。
+3. **按路径禁用拆两半。** 服务端部分进本阶段：`get_story` 已经返回逐条 `locks: ContentPathLock[]`（只对有 `content_manage: full` 的人），由服务端给出「某路径是否被锁阻塞」的派生结论，祖先语义（锁 `a/b/c.png` 挡住 `a`、`a/b`）只写一份。前端 UI 部分留到阶段 4：`MyContentAttachmentRowState` 的 `structure_locked: boolean` 换成按路径的禁用 + 原因，与 preflight 接全部入口一起做。
+
+#### 仍需注意的实现细节
+
+- **定稿/清除的键空间**：上传的暂存是 `content-upload/<scope>/<uuid>`，加解密新产生的对象是 `content/att/<uuid>`。`discard_task_staging` 目前只认前者的前缀，本阶段要让任务记录的「自身新产生的对象」也进清算范围，否则取消一个跑到一半的加密任务会留下孤儿对象（架构风险 #1/#3）。
+- **上限只挡加密、不挡解密**：`encryption.service.ts` 只在 `encrypting` 时比对 `maxSizeMb`。今天安全，因为所有密文都出自同一上限的加密路径；但上限是可配置项，把它调大就会让整块处理失去边界 —— `config/default.yaml` 的 `encrypt.maxSizeMb` 要写明这层关系。
 
 ## 14. 测试策略（在既有测试规范上追加）
 
