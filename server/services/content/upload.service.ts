@@ -1,5 +1,4 @@
-import type { ContentUploadSignRequest } from '@shared/types/content'
-import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, GetObjectCommand, ListPartsCommand, PutObjectCommand, UploadPartCommand } from '@aws-sdk/client-s3'
+import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { copy_object, delete_object_best_effort, head_object, put_object, signed_object_url } from '@server/lib/storage'
@@ -7,58 +6,9 @@ import { create_folder_rows, get_scope_attachment, get_scope_object_keys, insert
 import { publish_attachment_change, resolve_attachment_name, with_attachment_lock } from '@server/services/content/attachment-structure.service'
 import { cover_version_from, get_story } from '@server/services/content/story.service'
 import { runtime_config } from '@shared/config'
-import { attachment_ancestor_folders, attachment_download_name, attachment_folder_of, attachment_mime_type, attachment_path_join, decrypted_attachment_name, is_encrypted_attachment, redactable_attachment_mime, rename_attachment_references, sanitize_attachment_file_name, sanitize_attachment_path } from '@shared/content-markdown'
+import { attachment_ancestor_folders, attachment_download_name, attachment_folder_of, attachment_mime_type, attachment_path_join, decrypted_attachment_name, is_encrypted_attachment, redactable_attachment_mime, rename_attachment_references, sanitize_attachment_file_name } from '@shared/content-markdown'
 
 const config = runtime_config()
-
-const upload_url_expires_seconds = config.app.content.upload.urlTtlSeconds
-
-function content_upload_key_prefix(story_id: number) {
-  return `content-upload/${story_id}/`
-}
-
-function assert_content_upload_key(story_id: number, key: string) {
-  const prefix = content_upload_key_prefix(story_id)
-  if (! key.startsWith(prefix) || ! /^[\w-]+$/.test(key.slice(prefix.length)))
-    throw new ApiError(400, '上传凭证无效')
-}
-
-export async function sign_attachment_upload(input: ContentUploadSignRequest) {
-  assert_content_upload_key(input.story_id, input.key)
-  await get_story(input.story_id)
-
-  const common = { Bucket: config.oss.bucket, Key: input.key }
-  let command
-  let return_key = false
-  if (input.method === 'PUT' && input.upload_id && input.part_number) {
-    command = new UploadPartCommand({ ... common, UploadId: input.upload_id, PartNumber: input.part_number })
-  }
-  else if (input.method === 'PUT') {
-    command = new PutObjectCommand({ ... common, ContentType: input.content_type || undefined })
-    return_key = true
-  }
-  else if (input.method === 'POST' && ! input.upload_id) {
-    command = new CreateMultipartUploadCommand(common)
-    return_key = true
-  }
-  else if (input.method === 'POST' && input.upload_id) {
-    command = new CompleteMultipartUploadCommand({ ... common, UploadId: input.upload_id })
-  }
-  else if (input.method === 'GET' && input.upload_id) {
-    command = new ListPartsCommand({ ... common, UploadId: input.upload_id })
-  }
-  else if (input.method === 'DELETE' && input.upload_id) {
-    command = new AbortMultipartUploadCommand({ ... common, UploadId: input.upload_id })
-  }
-  else {
-    throw new ApiError(400, '不支持的上传操作')
-  }
-
-  return {
-    url: await signed_object_url(command, upload_url_expires_seconds),
-    ... (return_key ? { key: input.key } : {}),
-  }
-}
 
 /** RFC 5987 ext-value: encodeURIComponent minus the few characters it leaves bare. */
 function rfc5987_ext_value(value: string) {
@@ -91,40 +41,6 @@ export async function sign_attachment_download(story_id: number, file_name: stri
     ResponseContentDisposition: `attachment; filename*=UTF-8''${rfc5987_ext_value(attachment_download_name(row.file_name))}`,
   }), config.app.content.download.urlTtlSeconds)
   return { url }
-}
-
-export async function confirm_attachment_upload(story_id: number, key: string, raw_file_name: string) {
-  assert_content_upload_key(story_id, key)
-  const object = await head_object(key)
-  const base_name = sanitize_attachment_path(raw_file_name, config.app.content.link.fileNameMaxBytes)
-  // A signed upload can outlive its story, so the scope is revalidated here.
-  await get_story(story_id)
-  const file_name = resolve_attachment_name(base_name, await list_scope_paths(story_id), 'suffix')
-  const target_key = `content/att/${crypto.randomUUID()}`
-  const etag = await copy_object(key, target_key)
-  await delete_object_best_effort(key)
-  const version = etag ?? object.etag ?? String(Date.now())
-  try {
-    await insert_attachment_row({
-      story_id,
-      file_name,
-      object_key: target_key,
-      mime_type: attachment_mime_type(file_name),
-      file_size: object.size,
-      version,
-    })
-  }
-  catch (ex) {
-    await delete_object_best_effort(target_key)
-    throw ex
-  }
-
-  await materialize_attachment_folders(story_id, file_name)
-  await publish_attachment_change(story_id)
-  const row = await get_scope_attachment(story_id, file_name)
-  if (! row)
-    throw new ApiError(500, '附件写入失败，请重试')
-  return row
 }
 
 function get_form_file(form: FormData, field: string) {
@@ -239,22 +155,10 @@ function file_stem(file_name: string) {
   return dot > 0 ? file_name.slice(0, dot) : file_name
 }
 
-export async function replace_attachment(
-  story_id: number,
-  old_file_name: string,
-  key: string,
-  raw_file_name: string,
-  content_type: string | null,
-  mode: 'keep-name' | 'new-name',
-) {
-  assert_content_upload_key(story_id, key)
-  return await apply_attachment_replace(story_id, old_file_name, key, raw_file_name, content_type, mode)
-}
-
 /**
- * The lock-free core of replace_attachment; the task executor calls this with
- * path locks already held. `key` is already-uploaded bytes (the legacy path
- * validates its staging prefix before calling, the task path allocated it).
+ * The core replacement: swaps a stored attachment's bytes (and name, in
+ * `new-name` mode). The task executor calls this with path locks already held,
+ * and `key` is already-uploaded bytes.
  */
 export async function apply_attachment_replace(
   story_id: number,
