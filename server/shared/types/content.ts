@@ -82,6 +82,62 @@ export interface ContentUploadSignResponse {
 export type ContentOperationKind = 'move' | 'rename' | 'folder_create' | 'folder_delete' | 'delete' | 'encrypt' | 'decrypt' | 'redact'
 
 /**
+ * Attachment task kinds: one per user-level operation (see
+ * docs/content-task-refactor.md). A superset of ContentOperationKind — the
+ * structural kinds keep their lock names, upload/replace are new (they stay
+ * outside the scope lock today) and folder_rename splits off from 'move'.
+ */
+export type ContentTaskKind = 'upload' | 'replace' | 'move' | 'rename' | 'delete' | 'encrypt' | 'decrypt' | 'redact' | 'folder_create' | 'folder_delete' | 'folder_rename'
+
+/** Task lifecycle: queued → running → done/failed/cancelled; running ↔ paused only for transfer tasks. */
+export type ContentTaskStatus = 'queued' | 'running' | 'paused' | 'cancelling' | 'done' | 'failed' | 'cancelled'
+
+export type ContentTaskItemStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed'
+
+export interface ContentTask {
+  id: number
+  scope_id: number
+  kind: ContentTaskKind
+  status: ContentTaskStatus
+  /** Kind-specific task fields (moves[], file_names[], markdown…); validated on creation. */
+  payload: Record<string, unknown>
+  actor_id: number | null
+  /** Issuer instance id: powers the "resumable on this machine" hint, never an authorization boundary. */
+  client_id: string | null
+  error: string | null
+  heartbeat_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ContentTaskItem {
+  id: number
+  task_id: number
+  path: string
+  action: string
+  status: ContentTaskItemStatus
+  bytes_done: number
+  bytes_total: number
+  /** Server-assigned staging object key for upload items. */
+  staging_key: string | null
+  /** Multipart upload id — the resume anchor. */
+  upload_id: string | null
+  part_size: number | null
+  /** Per-item outcome: { new_path, reason, ... }. */
+  result: Record<string, unknown> | null
+}
+
+/** A live lock row as listed for preflight and the editor's disabled states. */
+export interface ContentPathLock {
+  /** '' is the scope-level lock (contends with every path). */
+  path: string
+  kind: string
+  /** null for legacy scope-level operation locks. */
+  task_id: number | null
+  expires_at: string
+}
+
+/**
  * A live attachment-operation lock on a scope, published so peers disable the
  * controls the operation would collide with. The lease is stealable after
  * `expires_at`, so consumers must treat it as advisory and still handle a 409.

@@ -203,6 +203,12 @@ const config_schema = z.object({
       operationLock: z.object({
         ttlSeconds: z.number().int().min(10),
       }),
+      task: z.object({
+        heartbeatSeconds: z.number().int().min(5),
+        queuedTimeoutSeconds: z.number().int().min(30),
+        retentionHours: z.number().int().min(1),
+        sweepIntervalSeconds: z.number().int().min(10),
+      }),
       encrypt: z.object({
         maxSizeMb: z.number(),
       }),
@@ -226,6 +232,9 @@ const config_schema = z.object({
   })
   .refine(value => value.app.auth.session.maxAgeDays > value.app.auth.jwt.renewBeforeDays, {
     message: 'app.auth.session.maxAgeDays must exceed jwt.renewBeforeDays, otherwise the idle window expires sessions before their token would be renewed',
+  })
+  .refine(value => value.app.content.task.heartbeatSeconds < value.app.content.operationLock.ttlSeconds, {
+    message: 'app.content.task.heartbeatSeconds must be less than operationLock.ttlSeconds: a heartbeat slower than the lease cannot keep the task locks alive',
   })
 
 export type AppConfig = z.infer<typeof config_schema>

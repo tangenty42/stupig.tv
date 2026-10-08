@@ -755,6 +755,17 @@ export function attachment_ancestor_folders(path: string) {
   return folders
 }
 
+/**
+ * Whether two attachment paths contend for the same subtree: equal, or either
+ * is the other's ancestor folder. The task lock manager uses it to enforce
+ * "locking a file blocks its ancestors, locking a folder blocks its whole
+ * subtree". The scope-level lock path ('') is NOT special-cased here — lock
+ * code treats it as the root that contends with everything.
+ */
+export function attachment_path_conflicts(a: string, b: string) {
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
+}
+
 /** Windows-reserved device basenames; matched against the stem before the first dot. */
 export const link_file_name_reserved_base = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 

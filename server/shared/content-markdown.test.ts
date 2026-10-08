@@ -4,6 +4,7 @@ import {
   attachment_base_name,
   attachment_download_name,
   attachment_name_segment_violation,
+  attachment_path_conflicts,
   attachment_path_violation,
   compare_attachment_names,
   decrypted_attachment_name,
@@ -91,6 +92,24 @@ describe('compare_attachment_names', () => {
     expect(compare_attachment_names('a/x.png', 'a/x.png')).toBe(0)
     expect(Math.sign(compare_attachment_names('1.png', '2.png')))
       .toBe(- Math.sign(compare_attachment_names('2.png', '1.png')))
+  })
+})
+
+describe('attachment_path_conflicts', () => {
+  it('相同、祖先、后代路径互斥', () => {
+    expect(attachment_path_conflicts('a/b', 'a/b')).toBe(true)
+    expect(attachment_path_conflicts('a', 'a/b')).toBe(true)
+    expect(attachment_path_conflicts('a/b', 'a')).toBe(true)
+    expect(attachment_path_conflicts('a/b', 'a/b/c.png')).toBe(true)
+    expect(attachment_path_conflicts('a/b/c.png', 'a/b')).toBe(true)
+  })
+
+  it('兄弟路径与不相关路径互不冲突', () => {
+    expect(attachment_path_conflicts('a/b', 'a/c')).toBe(false)
+    expect(attachment_path_conflicts('a', 'b')).toBe(false)
+    // 纯字符串前缀不等于路径祖先（ab 不是 a 的子路径）
+    expect(attachment_path_conflicts('a', 'ab')).toBe(false)
+    expect(attachment_path_conflicts('a/b', 'a/bc')).toBe(false)
   })
 })
 
