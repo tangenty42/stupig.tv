@@ -14,3 +14,4 @@ applyTo: "**/*.sql"
 - MySQL timezone is forced to UTC on every connection (`SET time_zone = "+00:00"`).
 - Always include safe rollbacks or reversibility where possible. Avoid destructive changes without explicit user approval.
 - If a migration requires environment changes, update `config/*.yaml`, `.env.example`, and `server/shared/config.ts` together.
+- A database that already has business tables but no `schema_migrations` records is auto-baselined on `pnpm migrate` (registered as applied, not replayed) — this keeps container startup self-healing. A genuinely empty database always executes migrations normally, so never rely on auto-baseline to skip a new migration: every migration file must be written to execute cleanly on a schema that matches all previously applied migrations.

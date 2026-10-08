@@ -12,11 +12,14 @@
 //     mysql 客户端的 DELIMITER（服务端不认）；因 MySQL 的 DDL 会隐式提交，
 //     "半途失败"无法回滚，所以文件请写成可重复执行（幂等）的形式
 //   - 已应用的迁移文件内容不可再改：checksum 不一致会拒绝执行
+//   - 存量库自动接管：库里已有业务表但没有任何迁移记录时（迁移系统上线前手工
+//     建的库），migrate 会把现存迁移登记为已应用（baseline）而不是重放——重放
+//     必然撞已有结构，容器启动会因此陷入重启循环
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { error_fields, log_error, log_info } from '@server/lib/log'
+import { error_fields, log_error, log_info, log_warn } from '@server/lib/log'
 import { load_config } from '@server/shared/config'
 import mysql from 'mysql2/promise'
 
@@ -97,6 +100,15 @@ async function read_applied(connection: mysql.Connection): Promise<Map<string, s
   return new Map(rows.map(row => [String(row.filename), String(row.checksum)]))
 }
 
+/** 除 schema_migrations 之外的表数量；非零说明这是一个迁移系统接管前就存在的库 */
+async function business_table_count(connection: mysql.Connection): Promise<number> {
+  const [rows] = await connection.query<mysql.RowDataPacket[]>(
+    'SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME != ?',
+    ['schema_migrations'],
+  )
+  return Number(rows[0]?.n ?? 0)
+}
+
 export interface MigrationOptions {
   baseline?: boolean
   check_only?: boolean
@@ -145,22 +157,38 @@ export async function run_migrations(options: MigrationOptions = {}): Promise<vo
         log_info('migrations up to date', { applied: applied.size })
         return
       }
+
+      // 存量库从未被接管（没有任何已应用记录，但业务表已存在）：真实执行会撞上
+      // 已有结构（比如基线迁移的 CREATE TABLE），所以登记而不重放。全新空库
+      // （业务表为零）不受影响，正常执行。
+      const auto_baseline = applied.size === 0 && await business_table_count(connection) > 0
+
       if (check_only) {
-        log_info('migrations pending', describe(plan))
+        log_info('migrations pending', { ... describe(plan), auto_baseline })
         return
       }
 
       await connection.query(schema_table_sql)
 
-      // 只标记不执行：库里结构已经是这些迁移的终态（手工建过），重放反而危险
-      if (baseline) {
-        for (const file of plan.pending) {
+      const mark_applied = async (files: MigrationFile[]) => {
+        for (const file of files) {
           await connection.query(
             'INSERT INTO schema_migrations (filename, checksum) VALUES (?, ?)',
             [file.filename, file.checksum],
           )
         }
+      }
+
+      // 只标记不执行：库里结构已经是这些迁移的终态（手工建过），重放反而危险
+      if (baseline) {
+        await mark_applied(plan.pending)
         log_info('migrations baselined', { baselined: plan.pending.map(file => file.filename) })
+        return
+      }
+
+      if (auto_baseline) {
+        log_warn('database has tables but no migration records; registering pending migrations as applied instead of replaying them', { baselined: plan.pending.map(file => file.filename) })
+        await mark_applied(plan.pending)
         return
       }
 
