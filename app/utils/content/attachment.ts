@@ -1,4 +1,5 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
+import type { PendingUploadRow } from './task-row'
 import { attachment_download_name, decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
 import { decrypted_blob_url } from './attachment-crypto'
 
@@ -61,25 +62,6 @@ export type AttachmentCardData
       /** Any move batch is in flight: the row cannot be dragged. */
       batch_pending: boolean
     }
-
-/** A file queued for upload from the editor, including its progress. */
-export interface PendingAttachmentUpload {
-  id: number
-  uppy_id: string
-  file: File | null
-  /** FileSystemFileHandle for zero-copy resume; null when picked without one. */
-  handle: FileSystemFileHandle | null
-  /** Storage path under the story's attachment scope (`folder/name.png`). */
-  file_name: string
-  file_size: number
-  mime_type: string | null
-  progress: number
-  /** Measured upload speed in bytes per second. */
-  speed: number
-  status: AttachmentUploadStatus
-  message: string | null
-  insert_position: number | null
-}
 
 /** A file plus the path it should be stored under; folder uploads carry nested paths. */
 export interface AttachmentUploadPick {
@@ -205,7 +187,7 @@ export type AttachmentListItem = {
   card: AttachmentFileCardData
 } & (
   | { kind: 'stored', attachment: ContentStoryAttachment, move_source_file_name?: string }
-  | { kind: 'upload', task: PendingAttachmentUpload }
+  | { kind: 'upload', row: PendingUploadRow }
 )
 
 /** Which corners of a selected row to round, so contiguous selections read as one block. */
