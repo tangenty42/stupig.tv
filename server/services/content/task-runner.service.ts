@@ -7,7 +7,7 @@ import { acquire_path_locks, release_path_locks, release_task_locks, renew_task_
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { runtime_config } from '@shared/config'
 import { execute_task, task_lock_paths } from './task-operations.service'
-import { get_task, heartbeat_task, is_terminal_task_status, list_queued_tasks, transition_task } from './task.service'
+import { get_task, heartbeat_task, is_terminal_task_status, list_queued_tasks, publish_task_state, transition_task } from './task.service'
 
 const config = runtime_config()
 
@@ -99,9 +99,15 @@ export async function dispatch_task(task_id: number) {
     publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
     throw error
   }
-  if (completed)
+  if (completed) {
     await release_task_locks(task.scope_id, task.id).catch(() => {})
-  publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
+    // Terminal: the task list itself changed, so subscribers refetch.
+    publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
+    return
+  }
+  // A transfer task now waits on the client: a snapshot reports its active
+  // items without turning every dispatch into a refetch.
+  await publish_task_state(task.id)
 }
 
 /**

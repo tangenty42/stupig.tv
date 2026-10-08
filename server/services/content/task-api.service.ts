@@ -9,7 +9,7 @@ import { runtime_config } from '@shared/config'
 import { attachment_scope_payload } from './attachment-structure.service'
 import { finalize_transfer_item, task_item_paths, transfer_item_resume_state } from './task-operations.service'
 import { complete_task_if_finished, dispatch_task, kick_task_runner, run_task_synchronously, touch_task } from './task-runner.service'
-import { create_task, get_task, transition_task, update_task_item } from './task.service'
+import { create_task, get_task, publish_task_state, transition_task, update_task_item } from './task.service'
 
 const config = runtime_config()
 
@@ -46,6 +46,8 @@ export async function create_content_task(input: {
   catch {
     // The failure is recorded on the task; the async API reports state.
   }
+  // A new task is a membership change: tell peers to fold it into their list.
+  publish_refresh({ resource: sync_resource('content_story_tasks', created.task.scope_id) })
   const current = await get_task(created.task.id)
   return current ?? created
 }
@@ -140,6 +142,9 @@ export async function report_task_item(input: {
     await update_task_item(task.id, item.id, {
       bytes_done: Math.max(0, Math.min(input.bytes_done ?? item.bytes_done, item.bytes_total)),
     })
+    // Progress is payload-only: the snapshot spares every subscriber a refetch
+    // for a number that changes many times per second.
+    await publish_task_state(task.id)
     return await require_task(task.id)
   }
 
@@ -149,6 +154,7 @@ export async function report_task_item(input: {
     bytes_done: item.bytes_total,
     result: { attachment },
   })
+  await publish_task_state(task.id)
   await complete_task_if_finished(task.id)
   return await require_task(task.id)
 }

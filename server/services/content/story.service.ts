@@ -4,7 +4,7 @@ import type { ContentBatchSkipped, ContentStoryAttachment, ContentStoryDetail } 
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
-import { get_operation_lock } from '@server/lib/operation-lock'
+import { get_operation_lock, list_scope_locks } from '@server/lib/operation-lock'
 import { delete_object_best_effort } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { delete_attachment_rows, delete_story_attachment_rows, get_scope_object_keys, get_story_object_keys, list_cover_urls, list_scope_attachments, list_scope_encryption_keys, list_scope_folders } from '@server/services/content-attachments.service'
@@ -13,6 +13,7 @@ import { extract_attachment_names, extract_story_reference_titles, parse_story_m
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 import { has_permission } from '@shared/permissions'
+import { list_scope_tasks } from './task.service'
 
 const config = runtime_config()
 
@@ -246,6 +247,11 @@ export async function get_story(id: number, base?: { updated_at: string, viewer_
     revision: story.revision,
     viewer_key,
     operation_lock: await get_operation_lock(story.id),
+    // Only content managers can see or act on tasks, so the payload carries
+    // them (and the finer-grained locks) for that audience alone.
+    ... (viewer && has_permission(viewer, 'content_manage', 'full')
+      ? { tasks: await list_scope_tasks(story.id), locks: await list_scope_locks(story.id) }
+      : {}),
     ... format_desc_cover(story, attachments.find(item => item.file_name === story.cover)?.url ?? null),
   }
 }

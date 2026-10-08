@@ -130,6 +130,31 @@ export interface ContentTaskItem {
   result: Record<string, unknown> | null
 }
 
+/** A task with its items, the unit every task API and event carries. */
+export interface ContentTaskState {
+  task: ContentTask
+  items: ContentTaskItem[]
+}
+
+/**
+ * Live task state pushed over the sync channel.
+ *
+ * Progress ticks are too frequent for "notify then refetch", so the event
+ * carries the state itself: subscribers apply it directly, and the periodic
+ * refresh stays for membership changes (a task appearing or finishing).
+ */
+export interface ContentTaskProgressSnapshot {
+  task_id: number
+  scope_id: number
+  status: ContentTaskStatus
+  items: {
+    id: number
+    status: ContentTaskItemStatus
+    bytes_done: number
+    bytes_total: number
+  }[]
+}
+
 /** A live lock row as listed for preflight and the editor's disabled states. */
 export interface ContentPathLock {
   /** '' is the scope-level lock (contends with every path). */
@@ -257,6 +282,13 @@ export interface ContentStoryDetail extends ContentStorySummary {
   viewer_key: string
   /** In-flight attachment structure change by any client; null when idle. */
   operation_lock: ContentOperationLock | null
+  /**
+   * Live tasks of the scope, present only for viewers who may manage content
+   * (they are the only ones who can see or act on them).
+   */
+  tasks?: ContentTaskState[]
+  /** Live path locks of the scope, same audience as `tasks`. */
+  locks?: ContentPathLock[]
 }
 
 /** Attachment files and explicit folders of one story's scope. */

@@ -94,7 +94,13 @@ vi.mock('@shared/config', () => ({
   runtime_config: () => ({ app: { content: { task: { retentionHours: 24 } } } }),
 }))
 
-const { create_task, heartbeat_task, list_scope_tasks, transition_task, update_task_item } = await import('@server/services/content/task.service')
+vi.mock('@server/lib/sync', () => ({
+  publish_task_snapshot: vi.fn(),
+  publish_refresh: vi.fn(),
+  sync_resource: (type: string, id: string | number) => `${type}:${id}`,
+}))
+
+const { create_task, heartbeat_task, list_scope_tasks, task_snapshot, transition_task, update_task_item } = await import('@server/services/content/task.service')
 
 beforeEach(() => {
   state.tasks = []
@@ -191,5 +197,47 @@ describe('update_task_item', () => {
   it('空 patch 不发任何 SQL', async () => {
     await update_task_item(1, 5, {})
     expect(state.calls).toHaveLength(0)
+  })
+})
+
+describe('task_snapshot', () => {
+  it('只带进度展示需要的字段（不含暂存 key 等内部状态）', () => {
+    const snapshot = task_snapshot({
+      task: {
+        id: 1,
+        scope_id: 42,
+        kind: 'upload',
+        status: 'running',
+        payload: {},
+        actor_id: null,
+        client_id: null,
+        error: null,
+        heartbeat_at: null,
+        created_at: '',
+        updated_at: '',
+      },
+      items: [{
+        id: 7,
+        task_id: 1,
+        path: 'a.png',
+        action: 'upload',
+        status: 'active',
+        bytes_done: 30,
+        bytes_total: 100,
+        staging_key: 'content-upload/42/secret',
+        upload_id: 'up-1',
+        part_size: 50,
+        result: null,
+      }],
+    })
+
+    expect(snapshot).toEqual({
+      task_id: 1,
+      scope_id: 42,
+      status: 'running',
+      items: [{ id: 7, status: 'active', bytes_done: 30, bytes_total: 100 }],
+    })
+    expect(JSON.stringify(snapshot)).not.toContain('secret')
+    expect(JSON.stringify(snapshot)).not.toContain('up-1')
   })
 })
