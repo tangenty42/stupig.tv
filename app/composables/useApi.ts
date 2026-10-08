@@ -1,6 +1,6 @@
 import type { AppRouter } from '@server/trpc/router'
 import type { PermissionGrant } from '@shared/permissions'
-import type { ContentAttachmentReplaceRequest, ContentStoryDetail, ContentUploadSignRequest } from '@shared/types/content'
+import type { ContentAttachmentReplaceRequest, ContentStoryDetail, ContentTaskKind, ContentTaskUploadedPart, ContentUploadSignRequest } from '@shared/types/content'
 import type { inferRouterInputs } from '@trpc/server'
 
 type RouterInputs = inferRouterInputs<AppRouter>
@@ -248,6 +248,40 @@ export function useApi() {
 
     async move_folder(id: number, source_folder: string, new_folder: string) {
       return trpc_call(trpc.content.moveFolder.mutate({ id, source_folder, new_folder }))
+    },
+
+    /* ---- 附件任务队列（docs/content-task-refactor.md §7）---- */
+
+    async preflight_task(story_id: number, kind: ContentTaskKind, payload: Record<string, unknown>) {
+      return trpc_call(trpc.content.preflightTask.query({ story_id, kind: kind as 'upload', payload }))
+    },
+
+    async create_task(story_id: number, kind: ContentTaskKind, payload: Record<string, unknown>, client_id: string | null = null) {
+      return trpc_call(trpc.content.createTask.mutate({ story_id, kind: kind as 'upload', payload, client_id }))
+    },
+
+    async cancel_task(task_id: number) {
+      return trpc_call(trpc.content.cancelTask.mutate({ task_id }))
+    },
+
+    async resume_task(task_id: number) {
+      return trpc_call(trpc.content.resumeTask.mutate({ task_id }))
+    },
+
+    async list_scope_tasks(story_id: number) {
+      return trpc_call(trpc.content.listScopeTasks.query({ story_id }))
+    },
+
+    async sign_task_parts(task_id: number, item_id: number, part_numbers: number[]) {
+      return trpc_call(trpc.content.signTaskParts.mutate({ task_id, item_id, part_numbers }))
+    },
+
+    async report_task_item(payload: { task_id: number, item_id: number, status: 'progress' | 'completed', bytes_done?: number, parts?: ContentTaskUploadedPart[] }) {
+      return trpc_call(trpc.content.reportTaskItem.mutate(payload))
+    },
+
+    async resume_task_item(task_id: number, item_id: number) {
+      return trpc_call(trpc.content.resumeTaskItem.query({ task_id, item_id }))
     },
   }
 

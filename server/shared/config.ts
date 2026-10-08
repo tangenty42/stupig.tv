@@ -212,6 +212,7 @@ const config_schema = z.object({
         queuedTimeoutSeconds: z.number().int().min(30),
         retentionHours: z.number().int().min(1),
         sweepIntervalSeconds: z.number().int().min(10),
+        clientIdStorageName: z.string().min(1),
       }),
       encrypt: z.object({
         maxSizeMb: z.number(),
