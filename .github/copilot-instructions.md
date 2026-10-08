@@ -68,14 +68,12 @@
 - After type refactors or import changes on either the frontend or the backend, run `npx nuxt typecheck` to type-check the whole workspace. Type errors must be resolved before considering the task complete.
 - Avoid adding new external dependencies unless there is a clear, justified need. The project already uses PrimeVue, Tailwind, and Nuxt icons.
 
-## Git & Commits
+## Commit, branch & PR conventions
 
-- Commit messages are single-line English, imperative mood, sentence case, no scope prefix and no trailer — match the existing history (`git log --oneline`).
-- Never append `Co-authored-by` or any other trailer unless the user explicitly asks for it in that conversation.
-
-## Branch & PR naming
-
+- Messages follow conventional-commit style: **`type(scope): description`** — single line, English, imperative mood, lowercase description, no trailing period, no trailer. Example: `feat(content): move attachment uploads onto the task queue`.
+- `type` is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`; `scope` is the area touched (`content`, `db`, `auth`, `profile`, `ui`, `sync`, `storage`, `config`, `deploy`, `ci`, `process`, `deps`, …).
+- History on `main` was rewritten to this format, so it is the only style to match (`git log --oneline`).
 - Branch names are `type/scope/description`, all lowercase, hyphenated: `feat/content/task-staging-cleanup`, `fix/content/discard-staged-objects`, `docs/content/phase-3-plan`, `chore/db/drop-reference-schema`.
 - PR titles are `type(scope): description` in English, imperative mood, no trailing period: `feat(content): move attachment uploads onto the task queue`.
-- `type` is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`; `scope` is the area touched (`content`, `db`, `auth`, `ci`, `profile`, `md`…).
 - Branch auto-delete on merge is enabled repository-wide: a merged PR's branch is removed automatically, so do not reuse it and do not delete it by hand.
+- Never append `Co-authored-by` or any other trailer unless the user explicitly asks for it in that conversation.
