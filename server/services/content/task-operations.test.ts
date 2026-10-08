@@ -505,10 +505,12 @@ describe('transfer_item_resume_state', () => {
     state.uploaded_parts = [{ part_number: 1, etag: 'e1', size: 100 }]
 
     const multipart = await transfer_item_resume_state(make_transfer_item('a.png', 'upload', { staging_key: 'k', upload_id: 'up-1', part_size: 100 }))
-    expect(multipart).toEqual({ staging_key: 'k', upload_id: 'up-1', part_size: 100, uploaded_parts: state.uploaded_parts })
+    expect(multipart).toEqual({ staging_key: 'k', upload_id: 'up-1', part_size: 100, uploaded_parts: state.uploaded_parts, sign_batch_size: 20 })
 
     const single = await transfer_item_resume_state(make_transfer_item('b.png', 'upload', { staging_key: 'k2' }))
     expect(single.uploaded_parts).toEqual([])
+    // 单次 PUT 也有上限，客户端的预签批处理不必先试探。
+    expect(single.sign_batch_size).toBe(20)
   })
 
   it('未开始的任务项抛 409', async () => {

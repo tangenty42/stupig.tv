@@ -239,6 +239,8 @@ export interface ContentTaskPartPlan {
   part_size: number | null
   /** Multipart upload id; null for single-PUT items. */
   upload_id: string | null
+  /** How many parts the client may ask to sign in one call (the server's cap). */
+  sign_batch_size: number
 }
 
 export interface ContentTaskUploadedPart {
@@ -253,6 +255,8 @@ export interface ContentTaskResumeState {
   upload_id: string | null
   part_size: number | null
   uploaded_parts: ContentTaskUploadedPart[]
+  /** The server's per-call signing cap, so the client can batch without probing. */
+  sign_batch_size: number
 }
 
 /**
