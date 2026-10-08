@@ -72,3 +72,10 @@
 
 - Commit messages are single-line English, imperative mood, sentence case, no scope prefix and no trailer — match the existing history (`git log --oneline`).
 - Never append `Co-authored-by` or any other trailer unless the user explicitly asks for it in that conversation.
+
+## Branch & PR naming
+
+- Branch names are `type/scope/description`, all lowercase, hyphenated: `feat/content/task-staging-cleanup`, `fix/content/discard-staged-objects`, `docs/content/phase-3-plan`, `chore/db/drop-reference-schema`.
+- PR titles are `type(scope): description` in English, imperative mood, no trailing period: `feat(content): move attachment uploads onto the task queue`.
+- `type` is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`; `scope` is the area touched (`content`, `db`, `auth`, `ci`, `profile`, `md`…).
+- Branch auto-delete on merge is enabled repository-wide: a merged PR's branch is removed automatically, so do not reuse it and do not delete it by hand.
