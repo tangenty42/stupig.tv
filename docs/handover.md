@@ -96,7 +96,7 @@ pnpm test                # vitest run
 - **阶段 4**（前端收敛）：`edit.vue` 仍有 2954 行，客户端规则与 preflight 重复；拆分映射与顺序见 §13.2。
 - **阶段 5**（方言清单）：见 §13.3（含"方言其实已大部分单源"的现状核对）。
 - 与重构无关但已记录的风险：`docs/architecture-risks.md` 的高优先级项（OSS 对账任务、删除失败重试、生产错误响应脱敏、MQTT 重连刷新与版本校验、故障注入测试）。
-- 小项：结构类旧端点（move/rename/delete/folder/encrypt/decrypt/abridged）要到阶段 3 收尾才能删；`README.md` 的 MQTT 段落有一句重复的话（无害，未清理）。
+- 小项：结构类旧端点（move/rename/delete/folder/encrypt/decrypt/abridged）要到阶段 3 收尾才能删。
 
 ## 9. 陷阱清单（都是真踩过的）
 

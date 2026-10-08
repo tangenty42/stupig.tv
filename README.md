@@ -34,9 +34,8 @@ Every port, host and credential comes from `.env`; start from `.env.example`.
   behind the reverse proxy). The image is built without a `.env`, so the browser value is
   derived at container start by the image's own entrypoint from `MQTT_WEB_URL` (see
   `docker-entrypoint.sh`); changing it only needs a container restart, not a rebuild. The
-  server asserts at startup that the derived value matches `MQTT_WEB_URL`, so a mismatch
-  keeps the container down instead of silently handing the browser an empty broker URL. The server asserts at startup
-  that the injected value matches `MQTT_WEB_URL`, so a missing or stale injection keeps the
+  server asserts at startup that the injected value matches `MQTT_WEB_URL` (see
+  `server/plugins/public-config-guard.ts`), so a missing or mismatched injection keeps the
   container down instead of silently handing the browser an empty broker URL
 - Migrations under `migrations/` are applied automatically when the container starts
   (the `CMD` runs the bundled runner before the server; a failure keeps the container down
