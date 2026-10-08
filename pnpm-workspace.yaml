@@ -1,5 +1,3 @@
-shellEmulator: true
-
 # pnpm 12 defaults to a 24h quarantine: no version published more recently than
 # this is installed. It is the whole supply-chain guard here, so it is written
 # down explicitly — which also makes it strict (resolution fails instead of
@@ -7,8 +5,10 @@ shellEmulator: true
 #
 # trustPolicy (no-downgrade) stays off: it compares publish dates across all
 # release lines, so it blocks well-attested packages — every semver 6.x release
-# or the whole cssnano family — and no version of those can satisfy it.
+# or the whole cssnano family — and no version of those can satisfy it. The
+# matching pnpm/yaml-enforce-settings override lives in eslint.config.mjs.
 minimumReleaseAge: 1440
+shellEmulator: true
 
 allowBuilds:
   # postinstall only picks the TS version for its own published output
