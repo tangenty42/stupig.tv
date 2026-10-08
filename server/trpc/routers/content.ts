@@ -3,24 +3,20 @@ import { get_bilibili_video_cards } from '@server/services/bilibili.service'
 import {
   confirm_attachment_upload,
   create_abridged_attachment,
-  create_folder,
   create_story,
   decrypt_attachments,
-  delete_attachment,
-  delete_folder,
   delete_story,
   encrypt_attachments,
   get_story,
   list_stories,
-  move_attachment,
-  move_attachments,
-  move_folder,
-  rename_attachment,
   replace_attachment,
   sign_attachment_download,
   sign_attachment_upload,
   update_story,
 } from '@server/services/content.service'
+import { cancel_content_task, create_content_task, create_folder, delete_attachment, delete_folder, move_attachment, move_attachments, move_folder, rename_attachment } from '@server/services/content/task-api.service'
+import { preflight_task } from '@server/services/content/task-operations.service'
+import { list_scope_tasks } from '@server/services/content/task.service'
 import { permission_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
 import { has_permission } from '@shared/permissions'
@@ -84,10 +80,11 @@ export const content_router = router({
 
   renameAttachment: content_admin_procedure
     .input(api_schema.content.rename_attachment)
-    .mutation(({ input }) => rename_attachment(
+    .mutation(({ ctx, input }) => rename_attachment(
       input.id,
       input.old_file_name,
       input.file_name,
+      ctx.auth_user.id,
     )),
 
   replaceAttachment: content_admin_procedure
@@ -109,21 +106,24 @@ export const content_router = router({
       input.markdown,
       input.base_revision,
       has_permission(ctx.auth_user, 'content_private', 'read'),
+      ctx.auth_user.id,
     )),
 
   moveAttachment: content_admin_procedure
     .input(api_schema.content.move_attachment)
-    .mutation(({ input }) => move_attachment(
+    .mutation(({ ctx, input }) => move_attachment(
       input.id,
       input.file_name,
       input.target_folder,
+      ctx.auth_user.id,
     )),
 
   moveAttachments: content_admin_procedure
     .input(api_schema.content.move_attachments)
-    .mutation(({ input }) => move_attachments(
+    .mutation(({ ctx, input }) => move_attachments(
       input.id,
       input.moves,
+      ctx.auth_user.id,
     )),
 
   encryptAttachments: content_admin_procedure
@@ -144,21 +144,46 @@ export const content_router = router({
 
   createFolder: content_admin_procedure
     .input(api_schema.content.create_folder)
-    .mutation(({ input }) => create_folder(input.id, input.folder)),
+    .mutation(({ ctx, input }) => create_folder(input.id, input.folder, ctx.auth_user.id)),
 
   deleteFolder: content_admin_procedure
     .input(api_schema.content.delete_folder)
-    .mutation(({ input }) => delete_folder(input.id, input.folder)),
+    .mutation(({ ctx, input }) => delete_folder(input.id, input.folder, ctx.auth_user.id)),
 
   moveFolder: content_admin_procedure
     .input(api_schema.content.move_folder)
-    .mutation(({ input }) => move_folder(
+    .mutation(({ ctx, input }) => move_folder(
       input.id,
       input.source_folder,
       input.new_folder,
+      ctx.auth_user.id,
     )),
 
   getBilibiliVideoCards: public_procedure
     .input(api_schema.content.get_bilibili_video_cards)
     .query(({ input }) => get_bilibili_video_cards(input.hrefs)),
+
+  /* ---- 附件任务队列（docs/content-task-refactor.md §7）---- */
+
+  preflightTask: content_admin_procedure
+    .input(api_schema.content.preflight_task)
+    .query(({ input }) => preflight_task(input.story_id, input.kind, input.payload)),
+
+  createTask: content_admin_procedure
+    .input(api_schema.content.create_task)
+    .mutation(({ ctx, input }) => create_content_task({
+      scope_id: input.story_id,
+      kind: input.kind,
+      payload: input.payload,
+      actor_id: ctx.auth_user.id,
+      client_id: input.client_id ?? null,
+    })),
+
+  cancelTask: content_admin_procedure
+    .input(api_schema.content.cancel_task)
+    .mutation(({ input }) => cancel_content_task(input.task_id)),
+
+  listScopeTasks: content_admin_procedure
+    .input(api_schema.content.list_scope_tasks)
+    .query(({ input }) => list_scope_tasks(input.story_id)),
 })

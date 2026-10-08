@@ -1,4 +1,4 @@
-import type { ContentAttachmentBatchResult, ContentBatchSkipped, ContentOperationKind, ContentStoryAttachment } from '@shared/types/content'
+import type { ContentBatchSkipped, ContentOperationKind, ContentStoryAttachment } from '@shared/types/content'
 import type { Connection, RowDataPacket } from 'mysql2/promise'
 import { extname } from 'node:path'
 import { ApiError } from '@server/errors/ApiError'
@@ -7,7 +7,7 @@ import { acquire_operation_lock, get_operation_lock, release_operation_lock } fr
 import { random_file_token } from '@server/lib/random'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { create_folder_rows, delete_folder_rows, delete_rows_by_ids, get_scope_attachment, list_folder_subtree_rows, list_scope_attachments, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id } from '@server/services/content-attachments.service'
-import { get_story, update_story } from '@server/services/content/story.service'
+import { get_story } from '@server/services/content/story.service'
 import { runtime_config } from '@shared/config'
 import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, is_encrypted_attachment, link_file_name_byte_length, normalized_attachment_extension, rename_attachment_references, sanitize_attachment_segment } from '@shared/content-markdown'
 
@@ -114,16 +114,6 @@ export async function rewrite_story_attachment_refs(connection: Connection, stor
   }
 }
 
-/** Persists a folder (and missing ancestors) in a scope. */
-export async function create_folder(story_id: number, folder: string) {
-  await with_attachment_lock(story_id, 'folder_create', async () => {
-    await apply_folder_create(story_id, folder)
-  })
-  // Read after the lock is released, so the payload reports the scope as idle
-  // instead of echoing the caller's own finished operation back as in flight.
-  return attachment_scope_payload(story_id)
-}
-
 /** The lock-free core of create_folder; the task executor calls this with path locks already held. */
 export async function apply_folder_create(story_id: number, folder: string) {
   await get_story(story_id)
@@ -135,36 +125,11 @@ export async function apply_folder_create(story_id: number, folder: string) {
   await publish_attachment_change(story_id)
 }
 
-/** Removes a folder row subtree; files beneath make it a 409. */
-export async function delete_folder(story_id: number, folder: string) {
-  await with_attachment_lock(story_id, 'folder_delete', async () => {
-    await apply_folder_delete(story_id, folder)
-  })
-  return attachment_scope_payload(story_id)
-}
-
 /** The lock-free core of delete_folder; the task executor calls this with path locks already held. */
 export async function apply_folder_delete(story_id: number, folder: string) {
   await get_story(story_id)
   await delete_folder_rows(story_id, folder)
   await publish_attachment_change(story_id)
-}
-
-/**
- * Moves/renames a folder: every row of its subtree (files, subfolders and the
- * source folder row itself — no empty folder is left behind) gets the new
- * prefix; story markdown/cover references follow. A folder row landing where a
- * folder already exists merges into it (dropping `a/a` onto the root yields
- * `a`, not a conflict); files still refuse a taken path with a 409.
- */
-export async function move_folder(story_id: number, source_folder: string, new_folder: string) {
-  if (new_folder === source_folder)
-    return attachment_scope_payload(story_id)
-
-  await with_attachment_lock(story_id, 'move', async () => {
-    await apply_folder_rename(story_id, source_folder, new_folder)
-  })
-  return attachment_scope_payload(story_id)
 }
 
 /** The lock-free core of move_folder; the task executor calls this with path locks already held. */
@@ -329,7 +294,7 @@ function assert_attachment_name_available(name: string, existing: Iterable<strin
  * as if it were plaintext. 加密/取消加密 are the operations that own that
  * transition. Legality therefore applies to the name with the marker stripped.
  */
-function resolve_renamed_attachment_name(old_file_name: string, new_file_name: string, existing: Iterable<string>) {
+export function resolve_renamed_attachment_name(old_file_name: string, new_file_name: string, existing: Iterable<string>) {
   // The extension is normalized before the guards: lowering it after the
   // encryption-marker check could flip a legal `a.png.GOOD` into the reserved
   // `.good` marker the check had just cleared. The marker-aware normalizer
@@ -342,71 +307,9 @@ function resolve_renamed_attachment_name(old_file_name: string, new_file_name: s
   return normalized
 }
 
-export async function delete_attachment(story_id: number, file_name: string, markdown: string, base_revision: number, can_private: boolean) {
-  return await with_attachment_lock(story_id, 'delete', async () => {
-    const result = await update_story(story_id, markdown, [file_name], base_revision, can_private)
-    if (! result.succeeded.includes(file_name)) {
-      throw new ApiError(404, '附件不存在或已被删除')
-    }
-  })
-}
-
-/**
- * Moves an attachment into a folder (or back to root when `target_folder` is
- * null): a row update plus the story's markdown/cover reference rewrite.
- */
-export async function move_attachment(story_id: number, file_name: string, target_folder: string | null) {
-  return await with_attachment_lock(story_id, 'move', async () => {
-    const story = await get_story(story_id)
-    const attachments = story.attachments
-    const attachment = attachments.find(item => item.file_name === file_name)
-    if (! attachment)
-      throw new ApiError(404, '附件不存在或已被删除')
-
-    const new_file_name = attachment_path_join(target_folder, attachment_base_name(file_name))
-    if (new_file_name === file_name)
-      return attachment
-
-    // Only the folder changes, so the name is the row's own — an encrypted
-    // file's `.good` marker rides along rather than being re-validated.
-    assert_attachment_name_available(new_file_name, await list_scope_paths(story_id))
-
-    const connection = await db.getConnection()
-    try {
-      await connection.beginTransaction()
-      await rename_attachment_row(story_id, file_name, new_file_name, connection)
-      await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name: file_name, new_file_name }])
-      await connection.commit()
-    }
-    catch (error) {
-      await connection.rollback()
-      throw error
-    }
-    finally {
-      connection.release()
-    }
-
-    await publish_attachment_change(story_id)
-    const row = await get_scope_attachment(story_id, new_file_name)
-    return row ?? { ... attachment, file_name: new_file_name }
-  })
-}
-
 export interface AttachmentMove {
   file_name: string
   target_folder: string | null
-}
-
-/**
- * Moves many attachments in one pass: a single listing fetch, a single
- * markdown/cover rewrite and one refresh — instead of one request per file.
- * Each move keeps its own target folder (or root when null).
- */
-export async function move_attachments(story_id: number, moves: AttachmentMove[]): Promise<ContentAttachmentBatchResult> {
-  return await with_attachment_lock(story_id, 'move', async () => {
-    const applied = await apply_attachment_moves(story_id, moves)
-    return { attachments: applied.attachments, succeeded: applied.succeeded.map(item => item.old_file_name), skipped: applied.skipped }
-  })
 }
 
 /** The applied rename pair (old → new) for one moved attachment. */
@@ -509,12 +412,6 @@ export async function apply_attachment_moves(story_id: number, moves: Attachment
     succeeded: planned.map(plan => ({ old_file_name: plan.old_file_name, new_file_name: plan.new_file_name })),
     skipped,
   }
-}
-
-export async function rename_attachment(story_id: number, old_file_name: string, new_file_name: string) {
-  return await with_attachment_lock(story_id, 'rename', async () => {
-    return apply_attachment_rename(story_id, old_file_name, new_file_name)
-  })
 }
 
 /** The lock-free core of rename_attachment; the task executor calls this with path locks already held. */

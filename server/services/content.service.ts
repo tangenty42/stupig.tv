@@ -5,4 +5,5 @@
 export * from './content/attachment-structure.service'
 export * from './content/encryption.service'
 export * from './content/story.service'
+export * from './content/task-api.service'
 export * from './content/upload.service'

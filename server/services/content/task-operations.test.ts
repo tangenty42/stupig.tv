@@ -1,3 +1,4 @@
+import { ApiError } from '@server/errors/ApiError'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // 执行器的语义在"payload → 锁路径/任务项"的纯映射与"结果 → 任务项状态"的
@@ -11,6 +12,13 @@ const state = vi.hoisted(() => ({
   move_result: { succeeded: [] as { old_file_name: string, new_file_name: string }[], skipped: [] as { file_name: string, reason: string }[] },
   update_story_result: { succeeded: [] as string[], skipped: [] as { file_name: string, reason: string }[] },
   folder_delete_error: null as Error | null,
+  // preflight 边界
+  scope_files: [] as string[],
+  scope_folders: [] as string[],
+  scope_paths: [] as string[],
+  story_markdown: '',
+  scope_locks: [] as { path: string, kind: string, task_id: number | null, expires_at: string }[],
+  name_error: null as Error | null,
 }))
 
 vi.mock('@server/services/content/attachment-structure.service', () => ({
@@ -31,9 +39,30 @@ vi.mock('@server/services/content/attachment-structure.service', () => ({
     state.applied_folder.push(folder)
   }),
   apply_folder_rename: vi.fn(async () => {}),
+  resolve_attachment_name: vi.fn((name: string) => {
+    if (state.name_error)
+      throw state.name_error
+    return name
+  }),
+  resolve_renamed_attachment_name: vi.fn((_old_name: string, new_name: string) => {
+    if (state.name_error)
+      throw state.name_error
+    return new_name
+  }),
+}))
+
+vi.mock('@server/services/content-attachments.service', () => ({
+  list_scope_attachments: vi.fn(async () => state.scope_files.map(file_name => ({ file_name }))),
+  list_scope_folders: vi.fn(async () => state.scope_folders),
+  list_scope_paths: vi.fn(async () => state.scope_paths),
+}))
+
+vi.mock('@server/lib/operation-lock', () => ({
+  list_scope_locks: vi.fn(async () => state.scope_locks),
 }))
 
 vi.mock('@server/services/content/story.service', () => ({
+  get_story: vi.fn(async () => ({ markdown: state.story_markdown })),
   update_story: vi.fn(async (_scope: number, markdown: string, delete_files: string[], base_revision: number) => {
     state.update_story = { markdown, delete_files, base_revision }
     return state.update_story_result
@@ -46,7 +75,7 @@ vi.mock('@server/services/content/task.service', () => ({
   }),
 }))
 
-const { task_lock_paths, task_item_paths, execute_task } = await import('@server/services/content/task-operations.service')
+const { task_lock_paths, task_item_paths, execute_task, preflight_task } = await import('@server/services/content/task-operations.service')
 
 function make_task(kind: string, payload: Record<string, unknown>) {
   return {
@@ -89,6 +118,12 @@ beforeEach(() => {
   state.move_result = { succeeded: [], skipped: [] }
   state.update_story_result = { succeeded: [], skipped: [] }
   state.folder_delete_error = null
+  state.scope_files = []
+  state.scope_folders = []
+  state.scope_paths = []
+  state.story_markdown = ''
+  state.scope_locks = []
+  state.name_error = null
 })
 
 describe('task_lock_paths', () => {
@@ -188,5 +223,72 @@ describe('execute_task', () => {
 
     expect(state.applied_folder).toEqual(['a/b'])
     expect(state.item_updates[0]?.patch.status).toBe('done')
+  })
+})
+
+describe('preflight_task', () => {
+  it('move：源缺失与目标冲突给出原因，正常项通过', async () => {
+    state.scope_files = ['a.png', 'dir/taken.png']
+    state.scope_paths = ['a.png', 'dir/taken.png', 'taken.png']
+    state.scope_locks = [{ path: 'x.png', kind: 'move', task_id: 9, expires_at: '' }]
+
+    const result = await preflight_task(42, 'move', { moves: [
+      { file_name: 'a.png', target_folder: null },
+      { file_name: 'ghost.png', target_folder: null },
+      { file_name: 'dir/taken.png', target_folder: null },
+    ] })
+
+    // a.png 移到根是 no-op（原地）；ghost.png 不存在；dir/taken.png 移到根撞上已有同名文件
+    expect(result.items.map(item => [item.ok, item.reason])).toEqual([
+      [true, null],
+      [false, '附件不存在或已被删除'],
+      [false, '操作时发生文件名冲突'],
+    ])
+    expect(result.locks).toHaveLength(1)
+  })
+
+  it('rename：名称规则违反来自共享守卫的消息', async () => {
+    state.scope_files = ['a.png']
+    state.scope_paths = ['a.png']
+    state.name_error = new ApiError(400, '文件名不能以 .good 结尾')
+
+    const result = await preflight_task(42, 'rename', { old_file_name: 'a.png', new_file_name: 'a.png.good' })
+
+    expect(result.items[0]?.ok).toBe(false)
+    expect(result.items[0]?.reason).toContain('.good')
+  })
+
+  it('delete：被正文引用的文件与非空文件夹被拦截', async () => {
+    state.scope_files = ['a.png', 'dir/b.png']
+    state.scope_paths = ['a.png', 'dir/b.png', 'dir']
+    state.scope_folders = ['dir']
+    state.story_markdown = '![](a.png)'
+
+    const result = await preflight_task(42, 'delete', { file_names: ['a.png'], folders: ['dir'], markdown: '', base_revision: 1, can_private: true })
+
+    expect(result.items.map(item => [item.ok, item.reason])).toEqual([
+      [false, '已被正文引用'],
+      [false, '文件夹内仍有附件，无法删除'],
+    ])
+  })
+
+  it('folder_create：路径已被占用时报告冲突', async () => {
+    state.scope_paths = ['cards']
+    state.name_error = new ApiError(409, '操作时发生文件名冲突')
+
+    const result = await preflight_task(42, 'folder_create', { folder: 'cards' })
+
+    expect(result.items[0]?.ok).toBe(false)
+    expect(result.items[0]?.reason).toContain('冲突')
+  })
+
+  it('folder_rename：移动到自身内部被拦截', async () => {
+    state.scope_folders = ['a']
+    state.scope_paths = ['a']
+
+    const result = await preflight_task(42, 'folder_rename', { source_folder: 'a', new_folder: 'a/b' })
+
+    expect(result.items[0]?.ok).toBe(false)
+    expect(result.items[0]?.reason).toContain('自身内部')
   })
 })

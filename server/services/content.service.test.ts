@@ -32,8 +32,114 @@ const mocks = vi.hoisted(() => ({
   get_connection: vi.fn(),
 }))
 
+/**
+ * The legacy endpoints run through the task queue now, so the queue's
+ * bookkeeping tables get the same in-memory treatment as the business tables:
+ * every content_tasks / content_task_items statement is answered here and
+ * never reaches the per-test stubs.
+ */
+const task_sim = vi.hoisted(() => {
+  interface TaskRow {
+    id: number
+    scope_id: number
+    kind: string
+    status: string
+    payload: string
+    actor_id: number | null
+    client_id: string | null
+    error: string | null
+  }
+  interface ItemRow {
+    id: number
+    task_id: number
+    path: string
+    action: string
+    status: string
+    bytes_done: number
+    bytes_total: number
+    staging_key: string | null
+    upload_id: string | null
+    part_size: number | null
+    result: string | null
+  }
+  const tasks: TaskRow[] = []
+  const items: ItemRow[] = []
+  let next_task_id = 1
+  let next_item_id = 1
+
+  function handle(sql: string, params: unknown[]): unknown[] | null {
+    if (sql.includes('INSERT INTO content_tasks')) {
+      const id = next_task_id ++
+      tasks.push({ id, scope_id: Number(params[0]), kind: String(params[1]), status: 'queued', payload: String(params[2]), actor_id: params[3] as number | null, client_id: params[4] as string | null, error: null })
+      return [{ insertId: id }]
+    }
+    if (sql.includes('INSERT INTO content_task_items')) {
+      const id = next_item_id ++
+      items.push({ id, task_id: Number(params[0]), path: String(params[1]), action: String(params[2]), status: 'pending', bytes_done: 0, bytes_total: Number(params[3] ?? 0), staging_key: null, upload_id: null, part_size: null, result: null })
+      return [{ affectedRows: 1 }]
+    }
+    if (sql.includes('FROM content_tasks WHERE id ='))
+      return [tasks.filter(task => task.id === Number(params[0])).map(task => ({ ... task, heartbeat_at: null, created_at: '', updated_at: '' }))]
+    if (sql.includes('FROM content_task_items WHERE task_id ='))
+      return [items.filter(item => item.task_id === Number(params[0]))]
+    if (sql.includes('UPDATE content_tasks SET status')) {
+      const [to, error, task_id, ... from] = params
+      const task = tasks.find(entry => entry.id === Number(task_id))
+      if (task && (from as string[]).includes(task.status)) {
+        task.status = String(to)
+        task.error = error as string | null
+        return [{ affectedRows: 1 }]
+      }
+      return [{ affectedRows: 0 }]
+    }
+    if (sql.includes('UPDATE content_task_items SET')) {
+      const item_id = Number(params[params.length - 2])
+      const item = items.find(entry => entry.id === item_id)
+      if (item) {
+        const values = params.slice(0, - 2)
+        let index = 0
+        // The service builds the SET clause in this fixed column order.
+        if (sql.includes('status = ?'))
+          item.status = String(values[index ++])
+        if (sql.includes('bytes_done = ?'))
+          item.bytes_done = Number(values[index ++])
+        if (sql.includes('staging_key = ?'))
+          item.staging_key = values[index ++] as string | null
+        if (sql.includes('upload_id = ?'))
+          item.upload_id = values[index ++] as string | null
+        if (sql.includes('part_size = ?'))
+          item.part_size = Number(values[index ++])
+        if (sql.includes('result = CAST'))
+          item.result = values[index ++] as string | null
+      }
+      return [{ affectedRows: item ? 1 : 0 }]
+    }
+    return null
+  }
+
+  function reset() {
+    tasks.length = 0
+    items.length = 0
+    next_task_id = 1
+    next_item_id = 1
+  }
+
+  return { tasks, items, handle, reset }
+})
+
 vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
-vi.mock('@server/lib/db', () => ({ db: { execute: mocks.db_execute, getConnection: mocks.get_connection } }))
+vi.mock('@server/lib/db', () => ({
+  db: {
+    execute: (sql: string, params?: unknown[]) => task_sim.handle(sql, params ?? []) ?? mocks.db_execute(sql, params),
+    getConnection: async () => {
+      const inner = await mocks.get_connection() as { execute: (sql: string, params?: unknown[]) => Promise<unknown> }
+      return {
+        ... inner,
+        execute: (sql: string, params?: unknown[]) => task_sim.handle(sql, params ?? []) ?? inner.execute(sql, params),
+      }
+    },
+  },
+}))
 vi.mock('@server/lib/storage', () => ({
   signed_object_url: mocks.signed_object_url,
   copy_object: mocks.copy_object,
@@ -43,18 +149,26 @@ vi.mock('@server/lib/storage', () => ({
   put_object: mocks.put_object,
 }))
 // The lease itself is exercised by the lock's own tests; here the scope lock
-// only has to be taken and released.
+// only has to be taken and released, and task path locks always acquire.
 vi.mock('@server/lib/operation-lock', () => ({
   acquire_operation_lock: vi.fn(async (scope_id: number) => ({ scope_id, token: 'test-token' })),
   release_operation_lock: vi.fn(async () => {}),
   get_operation_lock: vi.fn(async () => null),
+  acquire_path_locks: vi.fn(async (scope_id: number, paths: string[], task_id: number) => ({ acquired: true as const, lock: { scope_id, task_id, token: 'test-token', paths } })),
+  release_path_locks: vi.fn(async () => {}),
+  list_scope_locks: vi.fn(async () => []),
 }))
+
 vi.mock('@server/lib/sync', async () => ({
   ... (await vi.importActual<typeof import('@server/lib/sync')>('@server/lib/sync')),
   publish_refresh: mocks.publish_refresh,
 }))
 
 const { confirm_attachment_upload, create_abridged_attachment, create_folder, decrypt_attachments, encrypt_attachments, get_story, move_attachment, move_attachments, move_folder, rename_attachment, replace_attachment, sign_attachment_download, sign_attachment_upload } = await import('@server/services/content.service')
+
+beforeEach(() => {
+  task_sim.reset()
+})
 
 function stub_story_row(story_id: number, markdown = '') {
   mocks.db_execute.mockImplementation(async (sql: string) => {
