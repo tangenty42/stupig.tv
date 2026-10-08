@@ -58,11 +58,19 @@ function create_tasks_state(story_id: number) {
   const files = new Map<number, LocalItem>()
   /** The in-flight transfer per item; present exactly while bytes are being sent. */
   const controllers = new Map<number, AbortController>()
+  /**
+   * Tasks the user removed by hand. The server keeps terminal rows for the whole
+   * retention window (the resume/audit window), so hiding is the client's job —
+   * without this, the next `load` would put the row back.
+   */
+  const dismissed = reactive(new Set<number>())
   const speeds = reactive(new Map<number, number>())
   const client_id = useClientInstanceId()
 
   /** Live states by task id, kept in one place so a snapshot can patch in place. */
   function replace_task(next: ContentTaskState) {
+    if (dismissed.has(next.task.id))
+      return
     const index = tasks.value.findIndex(entry => entry.task.id === next.task.id)
     if (index === - 1)
       tasks.value = [... tasks.value, next]
@@ -126,7 +134,7 @@ function create_tasks_state(story_id: number) {
         controller.abort()
         controllers.delete(item_id)
       }
-      tasks.value = live
+      tasks.value = live.filter(entry => ! dismissed.has(entry.task.id))
     }
     finally {
       loading.value = false
@@ -160,13 +168,14 @@ function create_tasks_state(story_id: number) {
     replace_task(next)
   }
 
-  /** Drops a task from local state; the server keeps the row until retention sweeps it. */
+  /** Hides a task locally for good; the server keeps the row until retention sweeps it. */
   function dismiss(task_id: number) {
     const entry = tasks.value.find(candidate => candidate.task.id === task_id)
     for (const item of entry?.items ?? []) {
       pause_item(item.id)
       files.delete(item.id)
     }
+    dismissed.add(task_id)
     tasks.value = tasks.value.filter(candidate => candidate.task.id !== task_id)
   }
 
@@ -346,10 +355,15 @@ function create_tasks_state(story_id: number) {
     dismiss(task_id)
   }
 
-  /** Removes a row: a live task is cancelled, a finished one is just dropped. */
+  /**
+   * Removes a row. Anything the server could still resume is cancelled instead
+   * — that is what releases the stage it holds (a failed transfer keeps its
+   * parts for a later resume, so writing it off has to go through the API).
+   * A task that already ended for good is only hidden.
+   */
   async function remove(task_id: number) {
     const entry = tasks.value.find(candidate => candidate.task.id === task_id)
-    if (entry && ! ['done', 'failed', 'cancelled'].includes(entry.task.status)) {
+    if (entry && ! ['done', 'cancelled'].includes(entry.task.status)) {
       await cancel(task_id)
       return
     }

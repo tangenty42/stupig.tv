@@ -1,7 +1,8 @@
 import type { ContentPathLock, ContentStoryAttachment, ContentTask, ContentTaskDeletePayload, ContentTaskFolderCreatePayload, ContentTaskFolderDeletePayload, ContentTaskFolderRenamePayload, ContentTaskItem, ContentTaskKind, ContentTaskMovePayload, ContentTaskRenamePayload, ContentTaskReplacePayload, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
+import { error_fields, log_error } from '@server/lib/log'
 import { list_scope_locks } from '@server/lib/operation-lock'
-import { complete_multipart_upload, copy_object, create_multipart_upload, delete_object_best_effort, head_object, list_parts } from '@server/lib/storage'
+import { abort_multipart_upload, complete_multipart_upload, copy_object, create_multipart_upload, delete_object_best_effort, head_object, list_parts } from '@server/lib/storage'
 import { get_scope_attachment, insert_attachment_row, list_scope_attachments, list_scope_folders, list_scope_paths } from '@server/services/content-attachments.service'
 import { runtime_config } from '@shared/config'
 import { attachment_ancestor_folders, attachment_base_name, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, extract_attachment_names, sanitize_attachment_path } from '@shared/content-markdown'
@@ -343,6 +344,32 @@ export async function transfer_item_resume_state(item: ContentTaskItem) {
     // A single-PUT item has no parts to inventory: the client re-sends it whole.
     uploaded_parts: item.upload_id ? await list_parts(item.staging_key, item.upload_id) : [],
     sign_batch_size: config.app.content.upload.signBatchSize,
+  }
+}
+
+/**
+ * Releases everything a task staged. Called when the stage can never become an
+ * attachment any more — the task was cancelled, or it aged out of the retention
+ * window — so nothing is left to resume from.
+ *
+ * Best-effort by construction: a multipart the client already completed has no
+ * upload id left to abort, and a delete of an object that never landed is not an
+ * error worth failing a cancel over.
+ */
+export async function discard_task_staging(items: ContentTaskItem[]) {
+  for (const item of items) {
+    const key = item.staging_key
+    if (! key)
+      continue
+    if (item.upload_id) {
+      try {
+        await abort_multipart_upload(key, item.upload_id)
+      }
+      catch (error) {
+        log_error('content task staging abort failed', { key, ... error_fields(error) })
+      }
+    }
+    await delete_object_best_effort(key)
   }
 }
 

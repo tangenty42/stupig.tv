@@ -442,14 +442,40 @@ describe('content tasks store: removing and cancelling', () => {
     expect(store.pending_rows).toEqual([])
   })
 
-  it('移除终态任务不打扰服务端', async () => {
+  it('移除已完成的任务不打扰服务端：暂存已经落地，没有东西要释放', async () => {
     const store = useContentTasksStore(STORY_ID)
-    store.adopt(make_state([make_item({ id: 1, status: 'failed' })], { status: 'failed' }))
+    store.adopt(make_state([make_item({ id: 1, status: 'failed' })], { status: 'done' }))
 
     await store.remove(7)
 
     expect(mocks.api.cancel_task).not.toHaveBeenCalled()
     expect(store.tasks).toEqual([])
+  })
+
+  it('移除失败的任务走取消：服务端要靠它丢掉暂存的分片', async () => {
+    const store = useContentTasksStore(STORY_ID)
+    store.adopt(make_state([make_item({ id: 1, status: 'failed' })], { status: 'failed' }))
+    mocks.api.cancel_task.mockResolvedValue(make_state([make_item({ id: 1, status: 'failed' })], { status: 'cancelled' }))
+
+    await store.remove(7)
+
+    expect(mocks.api.cancel_task).toHaveBeenCalledWith(7)
+    expect(store.tasks).toEqual([])
+  })
+
+  it('移除后的行不会被下一次 load 带回来', async () => {
+    const store = useContentTasksStore(STORY_ID)
+    const task = make_state([make_item({ id: 1, status: 'failed' })], { status: 'failed' })
+    store.adopt(task)
+    // 服务端在整个保留期内照旧列出这行（终态行是审计/续传窗口）。
+    mocks.api.list_scope_tasks.mockResolvedValue([task])
+    mocks.api.cancel_task.mockResolvedValue({ ... task, task: { ... task.task, status: 'cancelled' } })
+
+    await store.remove(7)
+    await store.load()
+
+    expect(store.tasks).toEqual([])
+    expect(store.pending_rows).toEqual([])
   })
 
   it('移除仍在运行的任务会先取消它，才放开路径锁', async () => {
