@@ -68,6 +68,7 @@ vi.mock('@server/services/content/task.service', () => ({
     if (! entry || entry.task.status !== 'running')
       throw new ApiError(409, '任务状态已变化，请刷新后重试')
   }),
+  publish_task_state: vi.fn(async () => {}),
 }))
 
 vi.mock('@server/services/content/task-operations.service', () => ({

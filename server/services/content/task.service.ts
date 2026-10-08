@@ -1,7 +1,8 @@
-import type { ContentTask, ContentTaskItem, ContentTaskItemStatus, ContentTaskKind, ContentTaskStatus } from '@shared/types/content'
+import type { ContentTask, ContentTaskItem, ContentTaskItemStatus, ContentTaskKind, ContentTaskProgressSnapshot, ContentTaskState, ContentTaskStatus } from '@shared/types/content'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
+import { publish_task_snapshot } from '@server/lib/sync'
 import { runtime_config } from '@shared/config'
 
 const config = runtime_config()
@@ -95,9 +96,21 @@ function format_task_item(row: TaskItemRow): ContentTaskItem {
   }
 }
 
-export interface ContentTaskWithItems {
-  task: ContentTask
-  items: ContentTaskItem[]
+export type ContentTaskWithItems = ContentTaskState
+
+/** The wire form of a task for sync events: only what a progress display needs. */
+export function task_snapshot(state: ContentTaskState): ContentTaskProgressSnapshot {
+  return {
+    task_id: state.task.id,
+    scope_id: state.task.scope_id,
+    status: state.task.status,
+    items: state.items.map(item => ({
+      id: item.id,
+      status: item.status,
+      bytes_done: item.bytes_done,
+      bytes_total: item.bytes_total,
+    })),
+  }
 }
 
 export interface ContentTaskItemInput {
@@ -239,6 +252,13 @@ export async function heartbeat_task(task_id: number) {
   )
   if (! result.affectedRows)
     throw new ApiError(409, '任务状态已变化，请刷新后重试')
+}
+
+/** Pushes the task's live state to subscribers without making them refetch. */
+export async function publish_task_state(task_id: number) {
+  const state = await get_task(task_id)
+  if (state)
+    publish_task_snapshot(task_snapshot(state))
 }
 
 /** Partial per-item update, always scoped by task so a stale runner cannot touch another task's items. */
