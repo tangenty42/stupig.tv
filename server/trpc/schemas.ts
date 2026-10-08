@@ -84,6 +84,46 @@ const folder_path_input = z.string()
  */
 const existing_path_input = z.string().trim().min(1).max(255)
 
+/** Per-kind payload schemas for the task endpoints; the source of truth for what a task carries. */
+const task_payload_schemas = {
+  move: z.object({
+    moves: z.array(z.object({
+      file_name: z.string().min(1).max(255),
+      target_folder: existing_path_input.nullable(),
+    })).min(1).max(500),
+  }),
+  rename: z.object({
+    old_file_name: z.string().min(1).max(255),
+    new_file_name: attachment_path_input,
+  }),
+  delete: z.object({
+    file_names: z.array(z.string().min(1).max(255)).max(500),
+    folders: z.array(existing_path_input).max(500),
+    markdown: markdown_input,
+    base_revision: z.number().int().positive(),
+    can_private: z.boolean(),
+  }),
+  folder_create: z.object({
+    folder: folder_path_input.unwrap(),
+  }),
+  folder_delete: z.object({
+    folder: existing_path_input,
+  }),
+  folder_rename: z.object({
+    source_folder: existing_path_input,
+    new_folder: folder_path_input.unwrap(),
+  }),
+} as const
+
+function refine_task_payload(value: { kind: keyof typeof task_payload_schemas, payload: Record<string, unknown> }, ctx: z.RefinementCtx) {
+  const result = task_payload_schemas[value.kind].safeParse(value.payload)
+  if (result.success)
+    return
+  for (const issue of result.error.issues) {
+    ctx.addIssue({ code: 'custom', message: issue.message, path: ['payload', ... issue.path] })
+  }
+}
+
 export const api_schema = {
   auth: {
     register: form_schema.register,
@@ -212,6 +252,25 @@ export const api_schema = {
       // takes: only the destination answers to the name rules.
       source_folder: existing_path_input,
       new_folder: folder_path_input.unwrap(),
+    }),
+    // 任务队列（docs/content-task-refactor.md §7）。payload 按 kind 分别校验，
+    // 复用各操作的字段规则，避免请求层与服务层漂移。
+    preflight_task: z.object({
+      story_id: z.coerce.number().int().positive(),
+      kind: z.enum(['move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
+      payload: z.record(z.string(), z.unknown()),
+    }).superRefine(refine_task_payload),
+    create_task: z.object({
+      story_id: z.coerce.number().int().positive(),
+      kind: z.enum(['move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
+      payload: z.record(z.string(), z.unknown()),
+      client_id: z.string().max(64).nullish(),
+    }).superRefine(refine_task_payload),
+    cancel_task: z.object({
+      task_id: z.coerce.number().int().positive(),
+    }),
+    list_scope_tasks: z.object({
+      story_id: z.coerce.number().int().positive(),
     }),
     get_bilibili_video_cards: z.object({
       hrefs: z.array(z.string().max(2048)).min(1).max(20),

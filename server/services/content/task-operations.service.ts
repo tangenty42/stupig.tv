@@ -1,8 +1,10 @@
-import type { ContentTask, ContentTaskDeletePayload, ContentTaskFolderCreatePayload, ContentTaskFolderDeletePayload, ContentTaskFolderRenamePayload, ContentTaskItem, ContentTaskKind, ContentTaskMovePayload, ContentTaskRenamePayload } from '@shared/types/content'
+import type { ContentPathLock, ContentTask, ContentTaskDeletePayload, ContentTaskFolderCreatePayload, ContentTaskFolderDeletePayload, ContentTaskFolderRenamePayload, ContentTaskItem, ContentTaskKind, ContentTaskMovePayload, ContentTaskRenamePayload } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
-import { attachment_base_name, attachment_path_join } from '@shared/content-markdown'
-import { apply_attachment_moves, apply_attachment_rename, apply_folder_create, apply_folder_delete, apply_folder_rename } from './attachment-structure.service'
-import { update_story } from './story.service'
+import { list_scope_locks } from '@server/lib/operation-lock'
+import { list_scope_attachments, list_scope_folders, list_scope_paths } from '@server/services/content-attachments.service'
+import { attachment_ancestor_folders, attachment_base_name, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, extract_attachment_names } from '@shared/content-markdown'
+import { apply_attachment_moves, apply_attachment_rename, apply_folder_create, apply_folder_delete, apply_folder_rename, resolve_attachment_name, resolve_renamed_attachment_name } from './attachment-structure.service'
+import { get_story, update_story } from './story.service'
 import { update_task_item } from './task.service'
 
 /**
@@ -178,4 +180,149 @@ async function execute_folder_rename_task(task: ContentTask, items: ContentTaskI
   const item = item_of(items, payload.source_folder, 'folder_rename')
   if (item)
     await update_task_item(task.id, item.id, { status: 'done', result: { new_path: payload.new_folder } })
+}
+
+/* ------------------------------------------------------------------------- */
+/* Preflight: the same rules, read-only                                      */
+/* ------------------------------------------------------------------------- */
+
+export interface ContentTaskPreflightItem {
+  path: string
+  action: string
+  ok: boolean
+  /** Populated when ok is false; the same message the executor would produce. */
+  reason: string | null
+}
+
+export interface ContentTaskPreflight {
+  items: ContentTaskPreflightItem[]
+  /** Live locks in the scope; the UI disables whatever they cover. */
+  locks: ContentPathLock[]
+}
+
+/**
+ * Read-only verdicts for a would-be task: every item passes through the same
+ * name/conflict rules the executor applies, plus existence and reference
+ * checks. Advisory by definition — execution re-checks against fresher state —
+ * but the editor's disabled states and conflict previews come from here, never
+ * from a client-side copy of the rules.
+ */
+export async function preflight_task(scope_id: number, kind: ContentTaskKind, payload: Record<string, unknown>): Promise<ContentTaskPreflight> {
+  const story = await get_story(scope_id)
+  const items = task_item_paths(kind, payload)
+  const [paths, attachments, folders, locks] = await Promise.all([
+    list_scope_paths(scope_id),
+    list_scope_attachments(scope_id),
+    list_scope_folders(scope_id),
+    list_scope_locks(scope_id),
+  ])
+  const file_names = new Set(attachments.map(attachment => attachment.file_name))
+  // A folder exists explicitly (row) or implicitly (it holds files).
+  const folder_set = new Set(folders)
+  for (const attachment of attachments) {
+    for (const ancestor of attachment_ancestor_folders(attachment.file_name))
+      folder_set.add(ancestor)
+  }
+
+  let verdicts: ContentTaskPreflightItem[]
+  switch (kind) {
+    case 'move': {
+      const { moves } = payload as unknown as ContentTaskMovePayload
+      const sources = new Set(moves.map(move => move.file_name.toLowerCase()))
+      const remaining = paths.filter(path => ! sources.has(path.toLowerCase()))
+      verdicts = items.map((item) => {
+        if (! file_names.has(item.path))
+          return { ... item, ok: false, reason: '附件不存在或已被删除' }
+        const move = moves.find(entry => entry.file_name === item.path)!
+        const destination = attachment_path_join(move.target_folder, attachment_base_name(move.file_name))
+        if (destination !== item.path && attachment_path_taken(remaining, destination))
+          return { ... item, ok: false, reason: attachment_name_conflict_message }
+        return { ... item, ok: true, reason: null }
+      })
+      break
+    }
+    case 'rename': {
+      const { old_file_name, new_file_name } = payload as unknown as ContentTaskRenamePayload
+      verdicts = items.map((item) => {
+        if (! file_names.has(old_file_name))
+          return { ... item, ok: false, reason: '附件不存在或已被删除' }
+        try {
+          resolve_renamed_attachment_name(old_file_name, new_file_name, paths)
+          return { ... item, ok: true, reason: null }
+        }
+        catch (error) {
+          return { ... item, ok: false, reason: error instanceof ApiError ? error.message : '文件名不合法' }
+        }
+      })
+      break
+    }
+    case 'delete': {
+      const referenced = new Set(extract_attachment_names(story.markdown))
+      verdicts = items.map((item) => {
+        if (item.action === 'delete') {
+          if (! file_names.has(item.path))
+            return { ... item, ok: false, reason: '附件不存在或已被删除' }
+          // The draft's references are editor-local; execution re-checks against
+          // the submitted markdown, so this only mirrors the stored document.
+          if (referenced.has(item.path))
+            return { ... item, ok: false, reason: '已被正文引用' }
+          return { ... item, ok: true, reason: null }
+        }
+        // folder_delete
+        if (! folder_set.has(item.path))
+          return { ... item, ok: false, reason: '文件夹不存在或已被删除' }
+        if (attachments.some(attachment => attachment.file_name.startsWith(`${item.path}/`)))
+          return { ... item, ok: false, reason: '文件夹内仍有附件，无法删除' }
+        return { ... item, ok: true, reason: null }
+      })
+      break
+    }
+    case 'folder_create': {
+      const { folder } = payload as unknown as ContentTaskFolderCreatePayload
+      verdicts = items.map((item) => {
+        try {
+          resolve_attachment_name(folder, paths, 'reject')
+          return { ... item, ok: true, reason: null }
+        }
+        catch (error) {
+          return { ... item, ok: false, reason: error instanceof ApiError ? error.message : '文件名不合法' }
+        }
+      })
+      break
+    }
+    case 'folder_delete': {
+      const { folder } = payload as unknown as ContentTaskFolderDeletePayload
+      verdicts = items.map((item) => {
+        if (! folder_set.has(folder))
+          return { ... item, ok: false, reason: '文件夹不存在或已被删除' }
+        if (attachments.some(attachment => attachment.file_name.startsWith(`${folder}/`)))
+          return { ... item, ok: false, reason: '文件夹内仍有附件，无法删除' }
+        return { ... item, ok: true, reason: null }
+      })
+      break
+    }
+    case 'folder_rename': {
+      const { source_folder, new_folder } = payload as unknown as ContentTaskFolderRenamePayload
+      verdicts = items.map((item) => {
+        if (new_folder.startsWith(`${source_folder}/`))
+          return { ... item, ok: false, reason: '不能移动到文件夹自身内部' }
+        if (! folder_set.has(source_folder))
+          return { ... item, ok: false, reason: '文件夹不存在或已被删除' }
+        // A folder destination merges; a file answering to it is a conflict.
+        if (file_names.has(new_folder))
+          return { ... item, ok: false, reason: attachment_name_conflict_message }
+        try {
+          resolve_attachment_name(new_folder, paths, 'merge')
+          return { ... item, ok: true, reason: null }
+        }
+        catch (error) {
+          return { ... item, ok: false, reason: error instanceof ApiError ? error.message : '文件名不合法' }
+        }
+      })
+      break
+    }
+    default:
+      throw new ApiError(400, `不支持的任务类型：${kind}`)
+  }
+  return { items: verdicts, locks }
 }
