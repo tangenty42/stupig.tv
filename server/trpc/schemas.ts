@@ -86,6 +86,27 @@ const existing_path_input = z.string().trim().min(1).max(255)
 
 /** Per-kind payload schemas for the task endpoints; the source of truth for what a task carries. */
 const task_payload_schemas = {
+  upload: z.object({
+    uploads: z.array(z.object({
+      // The client's desired path; the server settles the final name at finalize.
+      path: attachment_path_input,
+      size: z.number().int().min(1).max(config.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
+      mime_type: z.string().max(127).nullable(),
+      insert_position: z.number().int().min(0).nullish(),
+    })).min(1).max(200)
+      // Task items are keyed by path, so a batch has to arrive with distinct
+      // plans: preflightTask hands back `suggested_name` for the client to
+      // apply rather than letting two files collide on one item.
+      .refine(entries => new Set(entries.map(entry => entry.path)).size === entries.length, '同一批次存在同名文件，请先处理重名'),
+  }),
+  replace: z.object({
+    old_file_name: z.string().min(1).max(255),
+    mode: z.enum(['keep-name', 'new-name']),
+    size: z.number().int().min(1).max(config.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
+    mime_type: z.string().max(127).nullable(),
+    file_name: attachment_path_input,
+    content_type: z.string().max(255).nullable(),
+  }),
   move: z.object({
     moves: z.array(z.object({
       file_name: z.string().min(1).max(255),
@@ -257,20 +278,43 @@ export const api_schema = {
     // 复用各操作的字段规则，避免请求层与服务层漂移。
     preflight_task: z.object({
       story_id: z.coerce.number().int().positive(),
-      kind: z.enum(['move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
+      kind: z.enum(['upload', 'replace', 'move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
       payload: z.record(z.string(), z.unknown()),
     }).superRefine(refine_task_payload),
     create_task: z.object({
       story_id: z.coerce.number().int().positive(),
-      kind: z.enum(['move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
+      kind: z.enum(['upload', 'replace', 'move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
       payload: z.record(z.string(), z.unknown()),
       client_id: z.string().max(64).nullish(),
     }).superRefine(refine_task_payload),
     cancel_task: z.object({
       task_id: z.coerce.number().int().positive(),
     }),
+    resume_task: z.object({
+      task_id: z.coerce.number().int().positive(),
+    }),
     list_scope_tasks: z.object({
       story_id: z.coerce.number().int().positive(),
+    }),
+    sign_task_parts: z.object({
+      task_id: z.coerce.number().int().positive(),
+      item_id: z.coerce.number().int().positive(),
+      part_numbers: z.array(z.coerce.number().int().min(1)).min(1),
+    }),
+    report_task_item: z.object({
+      task_id: z.coerce.number().int().positive(),
+      item_id: z.coerce.number().int().positive(),
+      status: z.enum(['progress', 'completed']),
+      bytes_done: z.coerce.number().int().min(0).optional(),
+      parts: z.array(z.object({
+        part_number: z.coerce.number().int().min(1),
+        etag: z.string().min(1).max(128),
+        size: z.coerce.number().int().min(0),
+      })).max(10_000).optional(),
+    }),
+    resume_task_item: z.object({
+      task_id: z.coerce.number().int().positive(),
+      item_id: z.coerce.number().int().positive(),
     }),
     get_bilibili_video_cards: z.object({
       hrefs: z.array(z.string().max(2048)).min(1).max(20),

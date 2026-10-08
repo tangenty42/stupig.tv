@@ -1,13 +1,17 @@
 import {
   AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
   CopyObjectCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListMultipartUploadsCommand,
   ListObjectsV2Command,
+  ListPartsCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { error_fields, log_error } from '@server/lib/log'
@@ -193,4 +197,81 @@ export async function abort_multipart_upload(key: string, upload_id: string) {
     Key: key,
     UploadId: upload_id,
   }))
+}
+
+export async function create_multipart_upload(key: string, content_type: string | null) {
+  const result = await get_client().send(new CreateMultipartUploadCommand({
+    Bucket: config.oss.bucket,
+    Key: key,
+    ContentType: content_type || undefined,
+    CacheControl: 'public, max-age=31536000, immutable',
+  }))
+  if (! result.UploadId)
+    throw new Error(`multipart upload for ${key} returned no UploadId`)
+  return result.UploadId
+}
+
+/** One uploaded part as listed from the service, for resume. */
+export interface UploadedPart {
+  part_number: number
+  etag: string
+  size: number
+}
+
+export async function list_parts(key: string, upload_id: string) {
+  const parts: UploadedPart[] = []
+  let marker: string | undefined
+  do {
+    const page = await get_client().send(new ListPartsCommand({
+      Bucket: config.oss.bucket,
+      Key: key,
+      UploadId: upload_id,
+      PartNumberMarker: marker,
+    }))
+    for (const part of page.Parts ?? []) {
+      if (part.PartNumber === undefined || ! part.ETag)
+        continue
+      parts.push({
+        part_number: part.PartNumber,
+        etag: strip_etag(part.ETag) ?? part.ETag,
+        size: Number(part.Size ?? 0),
+      })
+    }
+    marker = page.IsTruncated ? page.NextPartNumberMarker : undefined
+  } while (marker)
+  return parts
+}
+
+export async function complete_multipart_upload(key: string, upload_id: string, parts: UploadedPart[]) {
+  const result = await get_client().send(new CompleteMultipartUploadCommand({
+    Bucket: config.oss.bucket,
+    Key: key,
+    UploadId: upload_id,
+    MultipartUpload: {
+      Parts: [... parts]
+        .sort((left, right) => left.part_number - right.part_number)
+        .map(part => ({ PartNumber: part.part_number, ETag: part.etag })),
+    },
+  }))
+  return strip_etag(result.ETag)
+}
+
+/** Signs a single part's PUT (the client uploads bytes straight to the object store). */
+export async function signed_part_upload_url(key: string, upload_id: string, part_number: number, expires_in: number) {
+  return await signed_object_url(new UploadPartCommand({
+    Bucket: config.oss.bucket,
+    Key: key,
+    UploadId: upload_id,
+    PartNumber: part_number,
+  }), expires_in)
+}
+
+/** Signs a whole-object PUT, for files small enough to skip multipart. */
+export async function signed_put_url(key: string, content_type: string | null, expires_in: number) {
+  return await signed_object_url(new PutObjectCommand({
+    Bucket: config.oss.bucket,
+    Key: key,
+    ContentType: content_type || undefined,
+    CacheControl: 'public, max-age=31536000, immutable',
+  }), expires_in)
 }

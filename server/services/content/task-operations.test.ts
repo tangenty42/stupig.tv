@@ -19,6 +19,13 @@ const state = vi.hoisted(() => ({
   story_markdown: '',
   scope_locks: [] as { path: string, kind: string, task_id: number | null, expires_at: string }[],
   name_error: null as Error | null,
+  inserted_rows: [] as Record<string, unknown>[],
+  materialized: [] as string[],
+  multipart_created: [] as string[],
+  completed: [] as { key: string, upload_id: string, parts: unknown[] }[],
+  uploaded_parts: [] as { part_number: number, etag: string, size: number }[],
+  replaced: null as { old_name: string, key: string } | null,
+  changed: [] as number[],
 }))
 
 vi.mock('@server/services/content/attachment-structure.service', () => ({
@@ -39,10 +46,19 @@ vi.mock('@server/services/content/attachment-structure.service', () => ({
     state.applied_folder.push(folder)
   }),
   apply_folder_rename: vi.fn(async () => {}),
-  resolve_attachment_name: vi.fn((name: string) => {
+  publish_attachment_change: vi.fn(async () => {
+    state.changed.push(... [])
+  }),
+  resolve_attachment_name: vi.fn((name: string, existing: Iterable<string> = []) => {
     if (state.name_error)
       throw state.name_error
-    return name
+    // 模拟真实的后缀策略：合法名直接返回，被占用的加后缀
+    if (! [... existing].includes(name))
+      return name
+    const dot = name.lastIndexOf('.')
+    const stem = dot > 0 ? name.slice(0, dot) : name
+    const ext = dot > 0 ? name.slice(dot) : ''
+    return `${stem}-suffixed${ext}`
   }),
   resolve_renamed_attachment_name: vi.fn((_old_name: string, new_name: string) => {
     if (state.name_error)
@@ -55,6 +71,35 @@ vi.mock('@server/services/content-attachments.service', () => ({
   list_scope_attachments: vi.fn(async () => state.scope_files.map(file_name => ({ file_name }))),
   list_scope_folders: vi.fn(async () => state.scope_folders),
   list_scope_paths: vi.fn(async () => state.scope_paths),
+  insert_attachment_row: vi.fn(async (row: Record<string, unknown>) => {
+    state.inserted_rows.push(row)
+  }),
+  get_scope_attachment: vi.fn(async (_scope: number, file_name: string) => state.inserted_rows.find(row => row.file_name === file_name) ?? null),
+}))
+
+vi.mock('@server/services/content/upload.service', () => ({
+  apply_attachment_replace: vi.fn(async (_scope: number, old_name: string, key: string) => {
+    state.replaced = { old_name, key }
+    return { file_name: old_name }
+  }),
+  materialize_attachment_folders: vi.fn(async (_scope: number, file_name: string) => {
+    state.materialized.push(file_name)
+  }),
+}))
+
+vi.mock('@server/lib/storage', () => ({
+  create_multipart_upload: vi.fn(async (key: string) => {
+    state.multipart_created.push(key)
+    return `upload-${state.multipart_created.length}`
+  }),
+  complete_multipart_upload: vi.fn(async (key: string, upload_id: string, parts: unknown[]) => {
+    state.completed.push({ key, upload_id, parts })
+    return 'completed-etag'
+  }),
+  list_parts: vi.fn(async () => state.uploaded_parts),
+  head_object: vi.fn(async () => ({ size: 123, content_type: 'image/png', etag: 'staged-etag' })),
+  copy_object: vi.fn(async () => 'copied-etag'),
+  delete_object_best_effort: vi.fn(async () => {}),
 }))
 
 vi.mock('@server/lib/operation-lock', () => ({
@@ -75,7 +120,26 @@ vi.mock('@server/services/content/task.service', () => ({
   }),
 }))
 
-const { task_lock_paths, task_item_paths, execute_task, preflight_task } = await import('@server/services/content/task-operations.service')
+const { task_lock_paths, task_item_paths, execute_task, preflight_task, upload_part_size, finalize_transfer_item, transfer_item_resume_state } = await import('@server/services/content/task-operations.service')
+
+const ITEM_ID = 11
+
+function make_transfer_item(path: string, action: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: ITEM_ID,
+    task_id: 1,
+    path,
+    action,
+    status: 'pending',
+    bytes_done: 0,
+    bytes_total: 0,
+    staging_key: null,
+    upload_id: null,
+    part_size: null,
+    result: null,
+    ... overrides,
+  } as never
+}
 
 function make_task(kind: string, payload: Record<string, unknown>) {
   return {
@@ -124,6 +188,12 @@ beforeEach(() => {
   state.story_markdown = ''
   state.scope_locks = []
   state.name_error = null
+  state.inserted_rows = []
+  state.materialized = []
+  state.multipart_created = []
+  state.completed = []
+  state.uploaded_parts = []
+  state.replaced = null
 })
 
 describe('task_lock_paths', () => {
@@ -150,8 +220,8 @@ describe('task_lock_paths', () => {
     expect(task_lock_paths('folder_delete', { folder: 'a/b' })).toEqual(['a/b'])
   })
 
-  it('传输/加密类尚未实现：抛 400', () => {
-    expect(() => task_lock_paths('upload', {})).toThrow('不支持的任务类型')
+  it('传输类已实现（走锁路径推导），加密类尚未实现：抛 400', () => {
+    expect(task_lock_paths('upload', { uploads: [{ path: 'a.png', size: 1, mime_type: null }] })).toEqual(['a.png'])
     expect(() => task_lock_paths('encrypt', {})).toThrow('不支持的任务类型')
   })
 })
@@ -290,5 +360,201 @@ describe('preflight_task', () => {
 
     expect(result.items[0]?.ok).toBe(false)
     expect(result.items[0]?.reason).toContain('自身内部')
+  })
+})
+
+describe('upload_part_size', () => {
+  it('小文件返回 null（单次 PUT），超过片大小的返回片大小', () => {
+    const part = 8 * 1024 * 1024
+    expect(upload_part_size(1)).toBeNull()
+    expect(upload_part_size(part)).toBeNull()
+    expect(upload_part_size(part + 1)).toBe(part)
+    expect(upload_part_size(part * 3)).toBe(part)
+  })
+})
+
+describe('传输类任务的锁路径与任务项', () => {
+  it('upload：锁计划落点；replace：keep-name 只锁原路径，new-name 锁两者', () => {
+    expect(task_lock_paths('upload', { uploads: [{ path: 'a.png', size: 1, mime_type: null }] })).toEqual(['a.png'])
+    expect(task_lock_paths('replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'b.png', size: 1, mime_type: null, content_type: null })).toEqual(['a.png'])
+    expect(task_lock_paths('replace', { old_file_name: 'a.png', mode: 'new-name', file_name: 'b.png', size: 1, mime_type: null, content_type: null }).sort()).toEqual(['a.png', 'b.png'])
+  })
+
+  it('upload 的任务项带 bytes_total，replace 是单一项', () => {
+    expect(task_item_paths('upload', { uploads: [{ path: 'a.png', size: 9, mime_type: null }] }))
+      .toEqual([{ path: 'a.png', action: 'upload', bytes_total: 9 }])
+    expect(task_item_paths('replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'b.png', size: 7, mime_type: null, content_type: null }))
+      .toEqual([{ path: 'a.png', action: 'replace', bytes_total: 7 }])
+  })
+})
+
+describe('execute_task：上传准备', () => {
+  const upload_task = (uploads: unknown[]) => make_task('upload', { uploads })
+
+  it('小文件只分配暂存 key（无 multipart），大文件建 multipart', async () => {
+    const part = 8 * 1024 * 1024
+    const task = upload_task([
+      { path: 'small.png', size: 1024, mime_type: 'image/png' },
+      { path: 'big.bin', size: part * 2, mime_type: null },
+    ])
+    const items = [make_transfer_item('small.png', 'upload'), make_transfer_item('big.bin', 'upload')]
+
+    const outcome = await execute_task(task, items)
+
+    // 传输类任务不在这里收尾：字节还没到
+    expect(outcome.complete).toBe(false)
+    expect(state.multipart_created).toHaveLength(1)
+    const updates = state.item_updates.map(update => update.patch)
+    expect(updates[0]).toMatchObject({ status: 'active', upload_id: null, part_size: null })
+    expect(String(updates[0]?.staging_key)).toMatch(/^content-upload\/42\//)
+    expect(updates[1]).toMatchObject({ status: 'active', upload_id: 'upload-1', part_size: part })
+  })
+
+  it('恢复时不重新分配暂存 key（保住客户端的分片锚）', async () => {
+    const task = upload_task([{ path: 'a.png', size: 1024, mime_type: null }])
+    const items = [make_transfer_item('a.png', 'upload', { staging_key: 'content-upload/42/existing', status: 'active' })]
+
+    await execute_task(task, items)
+
+    expect(state.multipart_created).toEqual([])
+    expect(state.item_updates[0]?.patch).toEqual({ status: 'active' })
+  })
+
+  it('非法文件名在准备阶段被跳过，不分配暂存', async () => {
+    state.name_error = new ApiError(400, '文件名包含不支持的字符')
+    const task = upload_task([{ path: 'a.png', size: 1024, mime_type: null }])
+
+    const outcome = await execute_task(task, [make_transfer_item('a.png', 'upload')])
+
+    expect(outcome.complete).toBe(false)
+    expect(state.multipart_created).toEqual([])
+    expect(state.item_updates[0]?.patch).toMatchObject({ status: 'skipped' })
+  })
+})
+
+describe('execute_task：替换准备', () => {
+  it('已加密的目标被跳过（替换会留下明文配密钥的坏行）', async () => {
+    state.scope_files = ['a.png']
+    const task = make_task('replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'a.png', size: 10, mime_type: null, content_type: null })
+    // 列表里带 is_encrypted 才触发跳过
+    const attachments = await import('@server/services/content-attachments.service')
+    vi.mocked(attachments.list_scope_attachments).mockResolvedValueOnce([{ file_name: 'a.png', is_encrypted: true }] as never)
+
+    const outcome = await execute_task(task, [make_transfer_item('a.png', 'replace')])
+
+    expect(outcome.complete).toBe(true)
+    expect(state.item_updates[0]?.patch).toMatchObject({ status: 'skipped' })
+    expect(state.multipart_created).toEqual([])
+  })
+})
+
+describe('finalize_transfer_item', () => {
+  it('upload：完成 multipart → 拷贝到终态对象 → 落行 → 物化文件夹', async () => {
+    const task = make_task('upload', { uploads: [{ path: 'cards/a.png', size: 10, mime_type: 'image/png' }] })
+    const item = make_transfer_item('cards/a.png', 'upload', { staging_key: 'content-upload/42/x', upload_id: 'up-1' })
+
+    const row = await finalize_transfer_item(task, item, [{ part_number: 1, etag: 'e1', size: 10 }])
+
+    expect(state.completed).toEqual([{ key: 'content-upload/42/x', upload_id: 'up-1', parts: [{ part_number: 1, etag: 'e1', size: 10 }] }])
+    expect(state.inserted_rows[0]).toMatchObject({ story_id: 42, file_name: 'cards/a.png', file_size: 123 })
+    expect(state.materialized).toEqual(['cards/a.png'])
+    expect(row.file_name).toBe('cards/a.png')
+  })
+
+  it('upload：单次 PUT 不走 CompleteMultipartUpload', async () => {
+    const task = make_task('upload', { uploads: [{ path: 'a.png', size: 10, mime_type: null }] })
+    const item = make_transfer_item('a.png', 'upload', { staging_key: 'content-upload/42/x' })
+
+    await finalize_transfer_item(task, item, [])
+
+    expect(state.completed).toEqual([])
+    expect(state.inserted_rows[0]?.file_name).toBe('a.png')
+  })
+
+  it('upload：落点被占时按后缀改名，而不是让上传失败', async () => {
+    state.scope_paths = ['a.png']
+    const task = make_task('upload', { uploads: [{ path: 'a.png', size: 10, mime_type: null }] })
+    const item = make_transfer_item('a.png', 'upload', { staging_key: 'content-upload/42/x' })
+
+    const row = await finalize_transfer_item(task, item, [])
+
+    expect(row.file_name).not.toBe('a.png')
+    expect(String(row.file_name)).toMatch(/^a-.+\.png$/)
+  })
+
+  it('replace：交给替换内核，不自己落行', async () => {
+    const task = make_task('replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'a.png', size: 10, mime_type: null, content_type: 'image/png' })
+    const item = make_transfer_item('a.png', 'replace', { staging_key: 'content-upload/42/x' })
+
+    await finalize_transfer_item(task, item, [])
+
+    expect(state.replaced).toEqual({ old_name: 'a.png', key: 'content-upload/42/x' })
+    expect(state.inserted_rows).toEqual([])
+  })
+
+  it('缺暂存对象时抛 409', async () => {
+    const task = make_task('upload', { uploads: [{ path: 'a.png', size: 10, mime_type: null }] })
+    const item = make_transfer_item('a.png', 'upload')
+
+    await expect(finalize_transfer_item(task, item, [])).rejects.toMatchObject({ statusCode: 409 })
+  })
+})
+
+describe('transfer_item_resume_state', () => {
+  it('multipart 项回报已上传分片；单次 PUT 项不回传分片', async () => {
+    state.uploaded_parts = [{ part_number: 1, etag: 'e1', size: 100 }]
+
+    const multipart = await transfer_item_resume_state(make_transfer_item('a.png', 'upload', { staging_key: 'k', upload_id: 'up-1', part_size: 100 }))
+    expect(multipart).toEqual({ staging_key: 'k', upload_id: 'up-1', part_size: 100, uploaded_parts: state.uploaded_parts })
+
+    const single = await transfer_item_resume_state(make_transfer_item('b.png', 'upload', { staging_key: 'k2' }))
+    expect(single.uploaded_parts).toEqual([])
+  })
+
+  it('未开始的任务项抛 409', async () => {
+    await expect(transfer_item_resume_state(make_transfer_item('a.png', 'upload'))).rejects.toMatchObject({ statusCode: 409 })
+  })
+})
+
+describe('preflight：上传与替换', () => {
+  it('upload：重名不算失败，给出建议名；非法名才是失败', async () => {
+    state.scope_paths = ['taken.png']
+
+    const result = await preflight_task(42, 'upload', { uploads: [
+      { path: 'fresh.png', size: 10, mime_type: null },
+      { path: 'taken.png', size: 10, mime_type: null },
+    ] })
+
+    expect(result.items[0]).toMatchObject({ ok: true, suggested_name: null })
+    expect(result.items[1]?.ok).toBe(true)
+    expect(result.items[1]?.suggested_name).toMatch(/^taken-.+\.png$/)
+  })
+
+  it('upload：同批两个同名文件，第二个拿到建议名', async () => {
+    const result = await preflight_task(42, 'upload', { uploads: [
+      { path: 'a.png', size: 10, mime_type: null },
+      { path: 'a.png', size: 10, mime_type: null },
+    ] })
+
+    expect(result.items[1]?.suggested_name).toMatch(/^a-.+\.png$/)
+  })
+
+  it('upload：空文件被拒绝', async () => {
+    const result = await preflight_task(42, 'upload', { uploads: [{ path: 'a.png', size: 0, mime_type: null }] })
+
+    expect(result.items[0]).toMatchObject({ ok: false, reason: '文件为空' })
+  })
+
+  it('replace：目标缺失或已加密被拒绝', async () => {
+    state.scope_files = ['a.png']
+    state.scope_paths = ['a.png']
+
+    const missing = await preflight_task(42, 'replace', { old_file_name: 'ghost.png', mode: 'keep-name', file_name: 'ghost.png', size: 10, mime_type: null, content_type: null })
+    expect(missing.items[0]).toMatchObject({ ok: false, reason: '附件不存在或已被删除' })
+
+    const attachments = await import('@server/services/content-attachments.service')
+    vi.mocked(attachments.list_scope_attachments).mockResolvedValueOnce([{ file_name: 'a.png', is_encrypted: true }] as never)
+    const encrypted = await preflight_task(42, 'replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'a.png', size: 10, mime_type: null, content_type: null })
+    expect(encrypted.items[0]).toMatchObject({ ok: false, reason: '已加密' })
   })
 })

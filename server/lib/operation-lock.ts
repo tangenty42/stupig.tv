@@ -222,6 +222,34 @@ export async function release_path_locks(lock: AcquiredPathLocks) {
   )
 }
 
+/**
+ * Frees whatever locks a task still holds, whichever acquisition they came
+ * from. Transfer tasks (uploads) outlive the request that started them, so the
+ * completion path — a later request, or the sweeper — cannot hold the original
+ * token; task_id alone scopes the release, and a re-queued task re-acquires
+ * with a fresh token anyway.
+ */
+export async function release_task_locks(scope_id: number, task_id: number) {
+  await db.execute(
+    'DELETE FROM content_locks WHERE scope_id = ? AND task_id = ?',
+    [scope_id, task_id],
+  )
+}
+
+/**
+ * Rolls whatever locks a task holds forward. The report path (client progress)
+ * cannot present the original token, and task_id already scopes the claim, so
+ * this renews by task. Returns how many lock rows were touched: a short count
+ * means the claim was swept and the caller must stop.
+ */
+export async function renew_task_locks(scope_id: number, task_id: number) {
+  const [result] = await db.execute<ResultSetHeader>(
+    'UPDATE content_locks SET expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE scope_id = ? AND task_id = ?',
+    [config.app.content.operationLock.ttlSeconds, scope_id, task_id],
+  )
+  return Number(result.affectedRows)
+}
+
 /** Every live lock of the scope (scope row included), for preflight and the editor's disabled states. */
 export async function list_scope_locks(scope_id: number): Promise<ContentPathLock[]> {
   const [rows] = await db.execute<LockPathRow[]>(
