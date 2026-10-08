@@ -23,6 +23,9 @@ const state = vi.hoisted(() => ({
   materialized: [] as string[],
   multipart_created: [] as string[],
   completed: [] as { key: string, upload_id: string, parts: unknown[] }[],
+  aborted: [] as { key: string, upload_id: string }[],
+  abort_error: null as Error | null,
+  deleted_objects: [] as string[],
   uploaded_parts: [] as { part_number: number, etag: string, size: number }[],
   replaced: null as { old_name: string, key: string } | null,
   changed: [] as number[],
@@ -96,10 +99,17 @@ vi.mock('@server/lib/storage', () => ({
     state.completed.push({ key, upload_id, parts })
     return 'completed-etag'
   }),
+  abort_multipart_upload: vi.fn(async (key: string, upload_id: string) => {
+    state.aborted.push({ key, upload_id })
+    if (state.abort_error)
+      throw state.abort_error
+  }),
   list_parts: vi.fn(async () => state.uploaded_parts),
   head_object: vi.fn(async () => ({ size: 123, content_type: 'image/png', etag: 'staged-etag' })),
   copy_object: vi.fn(async () => 'copied-etag'),
-  delete_object_best_effort: vi.fn(async () => {}),
+  delete_object_best_effort: vi.fn(async (key: string) => {
+    state.deleted_objects.push(key)
+  }),
 }))
 
 vi.mock('@server/lib/operation-lock', () => ({
@@ -120,7 +130,7 @@ vi.mock('@server/services/content/task.service', () => ({
   }),
 }))
 
-const { task_lock_paths, task_item_paths, execute_task, preflight_task, upload_part_size, finalize_transfer_item, transfer_item_resume_state } = await import('@server/services/content/task-operations.service')
+const { task_lock_paths, task_item_paths, discard_task_staging, execute_task, preflight_task, upload_part_size, finalize_transfer_item, transfer_item_resume_state } = await import('@server/services/content/task-operations.service')
 
 const ITEM_ID = 11
 
@@ -192,6 +202,9 @@ beforeEach(() => {
   state.materialized = []
   state.multipart_created = []
   state.completed = []
+  state.aborted = []
+  state.abort_error = null
+  state.deleted_objects = []
   state.uploaded_parts = []
   state.replaced = null
 })
@@ -558,5 +571,45 @@ describe('preflight：上传与替换', () => {
     vi.mocked(attachments.list_scope_attachments).mockResolvedValueOnce([{ file_name: 'a.png', is_encrypted: true }] as never)
     const encrypted = await preflight_task(42, 'replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'a.png', size: 10, mime_type: null, content_type: null })
     expect(encrypted.items[0]).toMatchObject({ ok: false, reason: '已加密' })
+  })
+})
+
+describe('discard_task_staging', () => {
+  it('multipart 项：先 abort 上传会话，再删暂存对象', async () => {
+    await discard_task_staging([
+      make_transfer_item('a.png', 'upload', { staging_key: 'content-upload/42/x', upload_id: 'up-1' }),
+    ])
+
+    expect(state.aborted).toEqual([{ key: 'content-upload/42/x', upload_id: 'up-1' }])
+    expect(state.deleted_objects).toEqual(['content-upload/42/x'])
+  })
+
+  it('单次 PUT 项没有上传会话可 abort，只删对象', async () => {
+    await discard_task_staging([
+      make_transfer_item('a.png', 'upload', { staging_key: 'content-upload/42/y' }),
+    ])
+
+    expect(state.aborted).toEqual([])
+    expect(state.deleted_objects).toEqual(['content-upload/42/y'])
+  })
+
+  it('还没拿到暂存 key 的任务项无事可做', async () => {
+    await discard_task_staging([
+      make_transfer_item('a.png', 'upload'),
+      make_transfer_item('b.png', 'upload', { staging_key: null }),
+    ])
+
+    expect(state.aborted).toEqual([])
+    expect(state.deleted_objects).toEqual([])
+  })
+
+  it('abort 失败不阻断对象删除（例如客户端已经把 multipart 完成了）', async () => {
+    state.abort_error = Object.assign(new Error('NoSuchUpload'), { name: 'NoSuchUpload' })
+
+    await expect(discard_task_staging([
+      make_transfer_item('a.png', 'upload', { staging_key: 'content-upload/42/z', upload_id: 'up-2' }),
+    ])).resolves.toBeUndefined()
+
+    expect(state.deleted_objects).toEqual(['content-upload/42/z'])
   })
 })

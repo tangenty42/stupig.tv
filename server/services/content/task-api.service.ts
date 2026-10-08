@@ -7,7 +7,7 @@ import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { get_scope_attachment } from '@server/services/content-attachments.service'
 import { runtime_config } from '@shared/config'
 import { attachment_scope_payload } from './attachment-structure.service'
-import { finalize_transfer_item, task_item_paths, transfer_item_resume_state } from './task-operations.service'
+import { discard_task_staging, finalize_transfer_item, task_item_paths, transfer_item_resume_state } from './task-operations.service'
 import { complete_task_if_finished, dispatch_task, kick_task_runner, run_task_synchronously, touch_task } from './task-runner.service'
 import { create_task, get_task, publish_task_state, transition_task, update_task_item } from './task.service'
 
@@ -52,14 +52,16 @@ export async function create_content_task(input: {
   return current ?? created
 }
 
-/** Cancels a queued task; a running one is a 409 (phase-1 executors finish within the request). */
+/** Cancels a task; a running one is a 409 (phase-1 executors finish within the request). */
 export async function cancel_content_task(task_id: number): Promise<ContentTaskWithItems> {
   const current = await get_task(task_id)
   if (! current)
     throw new ApiError(404, '任务不存在或已被删除')
   await transition_task(task_id, 'cancelled')
-  // A cancelled task keeps nothing: the rows go, and so do its path locks.
+  // A cancelled task keeps nothing: its paths are freed and whatever it staged
+  // is released — cancelling is the user saying the transfer is never coming back.
   await release_task_locks(current.task.scope_id, task_id).catch(() => {})
+  await discard_task_staging(current.items)
   publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
   return (await get_task(task_id)) ?? current
 }

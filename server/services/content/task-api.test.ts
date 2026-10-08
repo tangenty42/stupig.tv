@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   published: [] as string[],
   touched: [] as number[],
   kicked: 0,
+  discarded: [] as unknown[],
 }))
 
 function make_task(overrides: Record<string, unknown> = {}) {
@@ -83,6 +84,9 @@ vi.mock('@server/services/content/task-runner.service', () => ({
 
 vi.mock('@server/services/content/task-operations.service', () => ({
   task_item_paths: vi.fn(() => [{ path: 'a.png', action: 'upload', bytes_total: 100 }]),
+  discard_task_staging: vi.fn(async (items: unknown) => {
+    state.discarded.push(items)
+  }),
   finalize_transfer_item: vi.fn(async (_task: unknown, item: { id: number }, parts: unknown[]) => {
     state.finalized.push({ item_id: item.id, parts })
     return { file_name: 'a.png', is_image: true }
@@ -141,6 +145,7 @@ beforeEach(() => {
   state.published = []
   state.touched = []
   state.kicked = 0
+  state.discarded = []
 })
 
 describe('sign_task_parts', () => {
@@ -221,10 +226,12 @@ describe('resume_task_item', () => {
 })
 
 describe('cancel / resume（任务级）', () => {
-  it('取消：转 cancelled、清锁、广播', async () => {
+  it('取消：转 cancelled、清锁、释放暂存对象、广播', async () => {
     await cancel_content_task(9)
 
     expect(state.transitioned).toEqual([{ id: 9, to: 'cancelled' }])
+    // 取消意味着这份传输永远不回来了：分片的 multipart 与暂存对象都要释放。
+    expect(state.discarded).toEqual([[make_task().items[0]]])
     expect(state.published).toEqual(['content_story_tasks:42'])
   })
 
@@ -235,6 +242,14 @@ describe('cancel / resume（任务级）', () => {
 
     expect(state.transitioned).toEqual([{ id: 9, to: 'queued' }])
     expect(state.kicked).toBe(1)
+  })
+
+  it('失败任务的暂存不被清掉：下次恢复还要接着传', async () => {
+    state.task = make_task({ status: 'failed' })
+
+    await resume_content_task(9)
+
+    expect(state.discarded).toEqual([])
   })
 
   it('任务不存在时抛 404', async () => {

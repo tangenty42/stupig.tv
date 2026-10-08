@@ -170,13 +170,28 @@ app:
 - **逐项提交**（上传/替换/加解密/删减版）：每个任务项独立事务落库并即时 `publish_attachment_change`（bump `updated_at` + 刷新事件），天然产出结构化 `succeeded/skipped`（risk #7 终态）。
 - **整任务单事务**（移动/重命名/文件夹操作）：链式移动（a→b, b→c）依赖两阶段改名（`.mvtmp-`）的整体性，保持今天的批量事务语义；任务项状态在提交后一次性翻转。
 - **加解密移出请求**：runner 异步执行 OSS 下载/转换/上传，解除"长请求持锁"隐患（现状痛点 §1.2）。
-- **sweeper**（Nitro plugin 内 `setInterval`，DB 租约 claim，单实例可用、多实例安全）：回收过期锁与中断任务、abort 残留 multipart（服务端持 `upload_id`，可直接 `AbortMultipartUpload`）、清理超保留期任务与孤儿 staging 对象。任务表本身就是对账单，与 cleanup 脚本互补（risk #1/#3）。
+- **sweeper**（Nitro plugin 内 `setInterval`，DB 租约 claim，单实例可用、多实例安全）：回收过期锁与中断任务、清理超保留期的终态任务（见 §5.4：先抢行再释放其暂存对象）。任务表本身就是对账单，与 cleanup 脚本互补（risk #1/#3）。
 
 ### 5.3 暂停/取消/恢复
 
 - **暂停**：仅对含传输项的任务（upload/replace/redact）有意义。前端中断在途分片（AbortController），任务转 `paused` 并**释放路径锁**（不占着锁睡觉）；`resumeTask` 重新排队。
-- **取消**：`cancelTask` → 服务端 abort multipart、删 staging、释放锁；已完成的任务项不回滚（部分成功语义，与今天一致）。
+- **取消**：`cancelTask` → 服务端 abort multipart、删 staging、释放锁；已完成的任务项不回滚（部分成功语义，与今天一致）。**失败任务也能取消**（`failed → cancelled`）：`failed` 是唯一保留暂存的状态（续传要用），所以"我不要了"必须走这条路径才能顺手放掉暂存。
 - **恢复**：任务项的 `(staging_key, upload_id)` 是续传锚。resume 后 runner 先 `ListParts` 核对；upload_id 已被 OSS 回收则重建 multipart（staging key 保留或重签）。
+
+### 5.4 暂存对象的生命周期（阶段 2 补齐）
+
+`content-upload/<scope>/<uuid>` 下的对象只在两处离开暂存区：**定稿**（finalize 把它 copy 到 `content/att/<uuid>` 后删源）与**放弃**。放弃只有三条路径：
+
+| 路径 | 时机 | 动作 |
+|---|---|---|
+| `cancelTask` | 用户主动取消（含取消失败任务，即 UI 的"移除"） | `discard_task_staging`：逐项 `AbortMultipartUpload`（有 upload_id 时）+ 删对象，随后释放锁 |
+| 保留期清算 | 终态任务超过 `retentionHours`（runner tick 的 `purge_expired_tasks`） | 先删行（条件 UPDATE 抢所有权，抢不到说明刚被 resume，保留原状），再 `discard_task_staging` |
+| 定稿 | 任务项落地 | finalize 内 `copy_object` + `delete_object_best_effort(staging_key)`（已有） |
+
+规则要点：
+- **`failed` 不清暂存**——失败的传输任务正是要靠暂存续传；它的对象由保留期清算或用户取消负责释放。
+- **先声明所有权再释放**：清算用一个按状态与保留期约束的 DELETE 抢行，抢到了才丢对象，避免与并发 `resumeTask` 抢同一批分片。
+- **abort 是 best-effort**：客户端可能已经把 multipart 完成了（`NoSuchUpload`），失败只记日志，对象删除照常执行。
 
 ## 6. 各操作任务化细则
 
@@ -314,7 +329,7 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 | **0. 拆分预热**（✅ 已完成，2026-10-08） | `content_locks` 表 + 锁管理器内部替换 operation-lock（保持 409 语义）；按 §10 拆 service（不改行为） | 全部既有测试绿（546）+ typecheck + lint；锁语义单测（operation-lock.test.ts）；迁移在开发库真实执行 |
 | **1. 任务内核**（✅ 已完成，2026-10-08） | 任务表、runner plugin、路径锁 + 续租、preflight；move/rename/folder/delete 四类纯 DB 操作切换为任务（旧端点转同步包装，tRPC 形状不变）；新增 preflightTask/createTask/cancelTask/listScopeTasks 端点 | 状态机、排队/冲突/超时/中断恢复、锁前缀冲突矩阵、preflight 逐项判定测试；既有 57 个 content 服务测试不改断言、全程走任务管线通过 |
 | **2. 上传任务化**（✅ 已完成，2026-10-08） | signTaskParts/reportTaskItem/resume、上传任务化（服务端准备 + 客户端灌字节）、实时进度事件；前端 task-uploader 替换 Uppy、pending 行来自服务端任务；旧上传端点删除 | task-uploader（12 测试）+ 任务 store（27 测试）+ task-row 投影（9 测试）+ 服务端 task-api 测试；`@uppy/*` 依赖移除；lint/typecheck/668 测试全绿 |
-| **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行；redact 模态框接任务流 | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
+| **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行（重活只需 1 个任务项）；redact 模态框接任务流 | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
 | **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 抽离 §11 的 composable/store 并瘦身收尾、Pinia store 落定 | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
 | **5. 方言清单** | content-dialect 收编 + `create_story_editor` 工厂 + Preview composable 抽取 | 清单完备性测试；渲染快照对比不变 |
 

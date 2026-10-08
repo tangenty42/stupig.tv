@@ -14,6 +14,11 @@ const state = vi.hoisted(() => ({
   transitioned: [] as { id: number, to: string }[],
   transition_error_once: false,
   execute_incomplete: false,
+  expired: [] as number[],
+  delete_claimed: true,
+  deleted: [] as number[],
+  discarded: [] as unknown[],
+  order: [] as string[],
 }))
 
 function make_task(id: number, status = 'queued'): ContentTaskWithItems {
@@ -69,10 +74,20 @@ vi.mock('@server/services/content/task.service', () => ({
       throw new ApiError(409, '任务状态已变化，请刷新后重试')
   }),
   publish_task_state: vi.fn(async () => {}),
+  list_expired_tasks: vi.fn(async () => state.expired),
+  delete_finished_task: vi.fn(async (id: number) => {
+    state.order.push(`delete:${id}`)
+    state.deleted.push(id)
+    return state.delete_claimed
+  }),
 }))
 
 vi.mock('@server/services/content/task-operations.service', () => ({
   task_lock_paths: vi.fn(() => ['a.png', 'dir/a.png']),
+  discard_task_staging: vi.fn(async (items: unknown) => {
+    state.order.push('discard')
+    state.discarded.push(items)
+  }),
   execute_task: vi.fn(async (task: ContentTaskWithItems['task']) => {
     state.executed.push(task.id)
     if (state.execute_error)
@@ -108,7 +123,7 @@ vi.mock('@server/lib/log', () => ({ log_error: vi.fn(), log_info: vi.fn(), log_w
 vi.mock('@shared/config', () => ({ runtime_config: () => ({ app: { content: { task: { sweepIntervalSeconds: 60, queuedTimeoutSeconds: 300 } } } }) }))
 vi.mock('@server/lib/db', () => ({ db: { execute: vi.fn(async () => [[]]) } }))
 
-const { dispatch_task, run_task_synchronously } = await import('@server/services/content/task-runner.service')
+const { dispatch_task, run_task_synchronously, run_task_tick } = await import('@server/services/content/task-runner.service')
 
 beforeEach(() => {
   state.tasks = new Map()
@@ -120,6 +135,11 @@ beforeEach(() => {
   state.transitioned = []
   state.transition_error_once = false
   state.execute_incomplete = false
+  state.expired = []
+  state.delete_claimed = true
+  state.deleted = []
+  state.discarded = []
+  state.order = []
 })
 
 describe('dispatch_task', () => {
@@ -212,5 +232,49 @@ describe('run_task_synchronously', () => {
     state.execute_error = new ApiError(400, '不能移动到文件夹自身内部')
 
     await expect(run_task_synchronously(1)).rejects.toMatchObject({ statusCode: 400 })
+  })
+})
+
+describe('tick：过期任务清算', () => {
+  /** A terminal task whose item still holds a staged multipart. */
+  function expired_task(id: number) {
+    const entry = make_task(id, 'failed')
+    entry.items[0]!.staging_key = 'content-upload/42/x'
+    entry.items[0]!.upload_id = 'up-1'
+    return entry
+  }
+
+  it('先删行再释放暂存对象：没有可续传的行之后，multipart 才被 abort', async () => {
+    state.tasks.set(7, expired_task(7))
+    state.expired = [7]
+
+    await run_task_tick()
+
+    expect(state.deleted).toEqual([7])
+    expect(state.discarded).toEqual([[state.tasks.get(7)!.items[0]]])
+    // 顺序很重要：先声明行已被删除（否则可能被并发 resume 拿回去续传）。
+    expect(state.order).toEqual(['delete:7', 'discard'])
+  })
+
+  it('保留期内的任务不动', async () => {
+    state.tasks.set(7, expired_task(7))
+    state.expired = []
+
+    await run_task_tick()
+
+    expect(state.deleted).toEqual([])
+    expect(state.discarded).toEqual([])
+  })
+
+  it('删行没抢到（任务刚被重新排队）时不释放暂存：续传仍然可用', async () => {
+    state.tasks.set(7, expired_task(7))
+    state.expired = [7]
+    state.delete_claimed = false
+
+    await run_task_tick()
+
+    expect(state.deleted).toEqual([7])
+    expect(state.discarded).toEqual([])
+    expect(state.order).toEqual(['delete:7'])
   })
 })
