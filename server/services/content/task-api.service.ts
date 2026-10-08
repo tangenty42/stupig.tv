@@ -1,12 +1,17 @@
-import type { ContentAttachmentBatchResult, ContentTaskKind } from '@shared/types/content'
+import type { ContentAttachmentBatchResult, ContentTask, ContentTaskItem, ContentTaskKind, ContentTaskPart, ContentTaskPartPlan, ContentTaskReplacePayload, ContentTaskResumeState, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
 import type { ContentTaskWithItems } from './task.service'
 import { ApiError } from '@server/errors/ApiError'
+import { release_task_locks } from '@server/lib/operation-lock'
+import { signed_part_upload_url, signed_put_url } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { get_scope_attachment } from '@server/services/content-attachments.service'
+import { runtime_config } from '@shared/config'
 import { attachment_scope_payload } from './attachment-structure.service'
-import { task_item_paths } from './task-operations.service'
-import { dispatch_task, run_task_synchronously } from './task-runner.service'
-import { create_task, get_task, transition_task } from './task.service'
+import { finalize_transfer_item, task_item_paths, transfer_item_resume_state } from './task-operations.service'
+import { complete_task_if_finished, dispatch_task, kick_task_runner, run_task_synchronously, touch_task } from './task-runner.service'
+import { create_task, get_task, transition_task, update_task_item } from './task.service'
+
+const config = runtime_config()
 
 /**
  * The application-facing task API (docs/content-task-refactor.md §7): creates
@@ -51,8 +56,129 @@ export async function cancel_content_task(task_id: number): Promise<ContentTaskW
   if (! current)
     throw new ApiError(404, '任务不存在或已被删除')
   await transition_task(task_id, 'cancelled')
+  // A cancelled task keeps nothing: the rows go, and so do its path locks.
+  await release_task_locks(current.task.scope_id, task_id).catch(() => {})
   publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
   return (await get_task(task_id)) ?? current
+}
+
+/** Re-queues an interrupted task (failed) so the runner picks it up again. Prepared items keep their staging keys. */
+export async function resume_content_task(task_id: number): Promise<ContentTaskWithItems> {
+  const current = await get_task(task_id)
+  if (! current)
+    throw new ApiError(404, '任务不存在或已被删除')
+  await transition_task(task_id, 'queued')
+  kick_task_runner()
+  publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
+  return (await get_task(task_id)) ?? current
+}
+
+/* ------------------------------------------------------------------------- */
+/* Transfer endpoints (upload / replace tasks)                                */
+/* ------------------------------------------------------------------------- */
+
+/** Parts a transfer item is split into; a single-PUT item is one part. */
+function item_part_count(item: ContentTaskItem) {
+  if (! item.part_size || item.bytes_total <= 0)
+    return 1
+  return Math.max(1, Math.ceil(item.bytes_total / item.part_size))
+}
+
+/**
+ * Signs a batch of part uploads for one item and rolls its lease forward.
+ * Parts are requested in batches (`signBatchSize`) so a very large file does
+ * not get URLs that expire before the client reaches the end.
+ */
+export async function sign_task_parts(input: { task_id: number, item_id: number, part_numbers: number[] }): Promise<ContentTaskPartPlan> {
+  const { task, item } = await require_active_item(input.task_id, input.item_id)
+  if (! item.staging_key)
+    throw new ApiError(409, '任务项缺少暂存对象')
+  const total = item_part_count(item)
+  const numbers = [... new Set(input.part_numbers)].sort((left, right) => left - right)
+  if (! numbers.length || numbers.length > config.app.content.upload.signBatchSize)
+    throw new ApiError(400, '分片数量不合法')
+  const content_type = transfer_content_type(task, item)
+  const urls: ContentTaskPart[] = []
+  for (const part_number of numbers) {
+    if (part_number < 1 || part_number > total)
+      throw new ApiError(400, '分片数量不合法')
+    urls.push({
+      part_number,
+      url: item.upload_id
+        ? await signed_part_upload_url(item.staging_key, item.upload_id, part_number, config.app.content.upload.urlTtlSeconds)
+        : await signed_put_url(item.staging_key, content_type, config.app.content.upload.urlTtlSeconds),
+    })
+  }
+  return { parts: urls, part_size: item.part_size, upload_id: item.upload_id }
+}
+
+/** The content type a staged object will be stored with, taken from the task payload. */
+function transfer_content_type(task: ContentTask, item: ContentTaskItem) {
+  if (item.action === 'replace')
+    return (task.payload as unknown as ContentTaskReplacePayload).content_type
+  const payload = task.payload as unknown as ContentTaskUploadPayload
+  return payload.uploads.find(entry => entry.path === item.path)?.mime_type ?? null
+}
+
+/**
+ * Reports progress on, or the completion of, a transfer item.
+ *
+ * Progress is bookkeeping only (bytes_done + a heartbeat). Completion runs the
+ * authoritative finalize — complete the multipart, then land the row — and
+ * once the last item is terminal the task closes and its locks are released.
+ */
+export async function report_task_item(input: {
+  task_id: number
+  item_id: number
+  status: 'progress' | 'completed'
+  bytes_done?: number
+  parts?: ContentTaskUploadedPart[]
+}): Promise<ContentTaskWithItems> {
+  const { task, item } = await require_active_item(input.task_id, input.item_id)
+
+  if (input.status === 'progress') {
+    await update_task_item(task.id, item.id, {
+      bytes_done: Math.max(0, Math.min(input.bytes_done ?? item.bytes_done, item.bytes_total)),
+    })
+    return await require_task(task.id)
+  }
+
+  const attachment = await finalize_transfer_item(task, item, input.parts ?? [])
+  await update_task_item(task.id, item.id, {
+    status: 'done',
+    bytes_done: item.bytes_total,
+    result: { attachment },
+  })
+  await complete_task_if_finished(task.id)
+  return await require_task(task.id)
+}
+
+/** Where a resuming client continues: the staging key, its upload id and the parts already landed. */
+export async function resume_task_item(input: { task_id: number, item_id: number }): Promise<ContentTaskResumeState> {
+  const current = await require_active_item(input.task_id, input.item_id)
+  return await transfer_item_resume_state(current.item)
+}
+
+/** Loads a task, asserting it still exists (we just wrote to it). */
+async function require_task(task_id: number): Promise<ContentTaskWithItems> {
+  const current = await get_task(task_id)
+  if (! current)
+    throw new ApiError(404, '任务不存在或已被删除')
+  return current
+}
+
+/** Loads a task and asserts the addressed item is in flight; every transfer call renews the lease. */
+async function require_active_item(task_id: number, item_id: number) {
+  await touch_task(task_id)
+  const current = await get_task(task_id)
+  if (! current)
+    throw new ApiError(404, '任务不存在或已被删除')
+  const item = current.items.find(entry => entry.id === item_id)
+  if (! item)
+    throw new ApiError(404, '任务项不存在或已被删除')
+  if (item.status !== 'active')
+    throw new ApiError(409, '任务项尚未就绪或已结束')
+  return { task: current.task, item }
 }
 
 /** Creates a task and runs it to a terminal state inline, the way the legacy endpoints used to run. */

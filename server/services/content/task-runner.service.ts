@@ -3,11 +3,11 @@ import type { ContentTaskWithItems } from './task.service'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { log_error } from '@server/lib/log'
-import { acquire_path_locks, release_path_locks } from '@server/lib/operation-lock'
+import { acquire_path_locks, release_path_locks, release_task_locks, renew_task_locks } from '@server/lib/operation-lock'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { runtime_config } from '@shared/config'
 import { execute_task, task_lock_paths } from './task-operations.service'
-import { get_task, is_terminal_task_status, list_queued_tasks, transition_task } from './task.service'
+import { get_task, heartbeat_task, is_terminal_task_status, list_queued_tasks, transition_task } from './task.service'
 
 const config = runtime_config()
 
@@ -57,6 +57,12 @@ export function kick_task_runner() {
  * lock conflict leaves the task queued for the next tick. Executor errors mark
  * the task failed and are rethrown so a synchronous caller gets the original
  * ApiError; the tick path logs them instead.
+ *
+ * Transfer tasks (upload/replace) are the exception to "dispatch finishes the
+ * task": their executor only prepares staging and the client then feeds bytes
+ * in through `reportTaskItem`. Such a task KEEPS its path locks after dispatch
+ * returns — the locks are the claim the whole upload rests on — and they are
+ * released when the last item lands, or by the sweeper if the client vanishes.
  */
 export async function dispatch_task(task_id: number) {
   const current = await get_task(task_id)
@@ -67,31 +73,70 @@ export async function dispatch_task(task_id: number) {
   const acquired = await acquire_path_locks(task.scope_id, paths, task.id, task.kind)
   if (! acquired.acquired)
     return
-  const lock = acquired.lock
+  let completed = false
   try {
     try {
       await transition_task(task.id, 'running')
     }
     catch {
-      // Another dispatcher (tick vs inline) took it; the winner owns execution.
+      // Another dispatcher (tick vs inline) took it; hand the locks straight
+      // back so we do not hold a task somebody else is running.
+      await release_path_locks(acquired.lock).catch(() => {})
       return
     }
-    try {
-      await execute_task(task, items)
+    const outcome = await execute_task(task, items)
+    if (outcome.complete) {
       await transition_task(task.id, 'done')
+      completed = true
     }
-    catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      // The task may have moved on (cancelled mid-flight); then that wins.
-      await transition_task(task.id, 'failed', { error: message }).catch(() => {})
-      throw error
-    }
+    // Not complete: a transfer task stays running with its locks held.
   }
-  finally {
-    // A release failure only leaves the lease to lapse into the sweeper.
-    await release_path_locks(lock).catch(() => {})
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // The task may have moved on (cancelled mid-flight); then that wins.
+    await transition_task(task.id, 'failed', { error: message }).catch(() => {})
+    await release_task_locks(task.scope_id, task.id).catch(() => {})
     publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
+    throw error
   }
+  if (completed)
+    await release_task_locks(task.scope_id, task.id).catch(() => {})
+  publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
+}
+
+/**
+ * Completes a transfer task once its last item has reached a terminal state.
+ *
+ * Partial failure is still `done`: the per-item statuses carry what happened
+ * (§5.1), and the UI shows them. What matters here is releasing the locks, or
+ * every path the upload claimed stays blocked forever.
+ */
+export async function complete_task_if_finished(task_id: number) {
+  const current = await get_task(task_id)
+  if (! current || current.task.status !== 'running')
+    return false
+  const unfinished = current.items.some(item => item.status === 'pending' || item.status === 'active')
+  if (unfinished)
+    return false
+  await transition_task(task_id, 'done').catch(() => {})
+  await release_task_locks(current.task.scope_id, task_id).catch(() => {})
+  publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
+  return true
+}
+
+/**
+ * Rolls a running task's lease and heartbeat forward. Called from the client's
+ * progress reports, which is the only liveness signal a transfer task has; a
+ * short lock count means the claim was swept and the task must stop.
+ */
+export async function touch_task(task_id: number) {
+  const current = await get_task(task_id)
+  if (! current || current.task.status !== 'running')
+    throw new ApiError(409, '任务已结束')
+  const renewed = await renew_task_locks(current.task.scope_id, current.task.id)
+  if (! renewed)
+    throw new ApiError(409, '任务锁已失效，请重试')
+  await heartbeat_task(task_id)
 }
 
 /**

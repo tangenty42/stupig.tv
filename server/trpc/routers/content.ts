@@ -14,7 +14,7 @@ import {
   sign_attachment_upload,
   update_story,
 } from '@server/services/content.service'
-import { cancel_content_task, create_content_task, create_folder, delete_attachment, delete_folder, move_attachment, move_attachments, move_folder, rename_attachment } from '@server/services/content/task-api.service'
+import { cancel_content_task, create_content_task, create_folder, delete_attachment, delete_folder, move_attachment, move_attachments, move_folder, rename_attachment, report_task_item, resume_content_task, resume_task_item, sign_task_parts } from '@server/services/content/task-api.service'
 import { preflight_task } from '@server/services/content/task-operations.service'
 import { list_scope_tasks } from '@server/services/content/task.service'
 import { permission_procedure, public_procedure, router } from '@server/trpc/init'
@@ -183,7 +183,25 @@ export const content_router = router({
     .input(api_schema.content.cancel_task)
     .mutation(({ input }) => cancel_content_task(input.task_id)),
 
+  resumeTask: content_admin_procedure
+    .input(api_schema.content.resume_task)
+    .mutation(({ input }) => resume_content_task(input.task_id)),
+
   listScopeTasks: content_admin_procedure
     .input(api_schema.content.list_scope_tasks)
     .query(({ input }) => list_scope_tasks(input.story_id)),
+
+  /* ---- 传输段（上传任务专用）---- */
+
+  signTaskParts: content_admin_procedure
+    .input(api_schema.content.sign_task_parts)
+    .mutation(({ input }) => sign_task_parts(input)),
+
+  reportTaskItem: content_admin_procedure
+    .input(api_schema.content.report_task_item)
+    .mutation(({ input }) => report_task_item(input)),
+
+  resumeTaskItem: content_admin_procedure
+    .input(api_schema.content.resume_task_item)
+    .query(({ input }) => resume_task_item(input)),
 })
