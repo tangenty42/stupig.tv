@@ -316,6 +316,8 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 
 消费方：渲染插件、编辑器高亮/补全、lint、服务端校验、测试 fixture。新增语法 = 改清单 + 一处渲染规则 + 一处补全声明。[render.test.ts](../app/utils/content/markdown/render.test.ts) 的图标守卫模式推广为"清单完备性"测试。
 
+> 落地时的准确表述见 **§13.3**：方言已经大部分单源在 `@shared`（`content-markdown.ts` / `content-private.ts` / `html-lint.ts` / `app/utils/content/alerts.ts`），本阶段的实际工作是「**登记构造 + 加完备性守卫**」，外加把三处仍跨文件重写的触发规则（`@` 引用 token、bilibili 链接、文件夹简写）与 HTML 标签清单归口。
+
 ## 13. 阶段计划与验收
 
 > 前置条件（**已完成**，2026-10-08）：迁移系统接管——`migrations/20261008000000_init_schema.sql` 基线登记（开发库 + 生产库）、check.yml 空库全量迁移验证进入 CI。此后三张新表与 DROP `content_operation_locks` 只是普通的增量迁移。
@@ -330,8 +332,8 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 | **1. 任务内核**（✅ 已完成，2026-10-08） | 任务表、runner plugin、路径锁 + 续租、preflight；move/rename/folder/delete 四类纯 DB 操作切换为任务（旧端点转同步包装，tRPC 形状不变）；新增 preflightTask/createTask/cancelTask/listScopeTasks 端点 | 状态机、排队/冲突/超时/中断恢复、锁前缀冲突矩阵、preflight 逐项判定测试；既有 57 个 content 服务测试不改断言、全程走任务管线通过 |
 | **2. 上传任务化**（✅ 已完成，2026-10-08） | signTaskParts/reportTaskItem/resume、上传任务化（服务端准备 + 客户端灌字节）、实时进度事件；前端 task-uploader 替换 Uppy、pending 行来自服务端任务；旧上传端点删除 | task-uploader（12 测试）+ 任务 store（27 测试）+ task-row 投影（9 测试）+ 服务端 task-api 测试；`@uppy/*` 依赖移除；lint/typecheck/668 测试全绿 |
 | **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行（重活只需 1 个任务项）；redact 模态框接任务流。**详规见 §13.1** | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
-| **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 抽离 §11 的 composable/store 并瘦身收尾、Pinia store 落定 | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
-| **5. 方言清单** | content-dialect 收编 + `create_story_editor` 工厂 + Preview composable 抽取 | 清单完备性测试；渲染快照对比不变 |
+| **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 抽离 §11 的 composable/store 并瘦身收尾、Pinia store 落定。**详规见 §13.2** | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
+| **5. 方言清单** | content-dialect 收编 + `create_story_editor` 工厂 + Preview composable 抽取。**详规见 §13.3** | 清单完备性测试；渲染快照对比不变 |
 
 每阶段独立可上线、可回滚（阶段 1-3 旧端点包装层即回滚阀）。
 
@@ -392,6 +394,109 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 
 - **定稿/清除的键空间**：上传的暂存是 `content-upload/<scope>/<uuid>`，加解密新产生的对象是 `content/att/<uuid>`。`discard_task_staging` 目前只认前者的前缀，本阶段要让任务记录的「自身新产生的对象」也进清算范围，否则取消一个跑到一半的加密任务会留下孤儿对象（架构风险 #1/#3）。
 - **上限只挡加密、不挡解密**：`encryption.service.ts` 只在 `encrypting` 时比对 `maxSizeMb`。今天安全，因为所有密文都出自同一上限的加密路径；但上限是可配置项，把它调大就会让整块处理失去边界 —— `config/default.yaml` 的 `encrypt.maxSizeMb` 要写明这层关系。
+
+### 13.2 阶段 4 详规（前端收敛：edit.vue 拆分 + 规则去重）
+
+> 状态：**计划，未开工**（2026-10-09 定稿，基线 `main = d7c0119`）。所有行号均指当日 `edit.vue`。
+
+#### 量的现状
+
+`app/pages/content/[id]/edit.vue`：**2954 行** —— `<template>` 1–334，`<script setup>` 335–2954（2620 行），**233 个顶层声明**（约 156 个函数，其余为 `computed`/`ref`/`type`）。模板内的组件骨架：`MyContentStoryHeader`(8)、`MyContentMarkdownEditor`(38)、两个 `MyContentAttachmentList`(74 内嵌 / 100 独立)、`MyContentAttachmentRedact`(293)、5 个 `MyDialog`(115/139/174/211/244/300)。§11 的终态是 script ≤ 400 行。
+
+#### 拆分映射（按现有区间，不是按理想设计）
+
+| 目标模块 | 现区间 | 现在装的东西 |
+|---|---|---|
+| `scope-rows.ts`（纯函数 util） | 553–681、839–866、878–1035 | `attachment_items` → `folder_names` → `grouped_items` → `folder_row_data`/`file_row_state` → `file_rows` → `file_list_props`，以及 `item_file_name`/`item_folder`/`folder_count`/`is_item_moving`/`pending_dim_folders` |
+| `useAttachmentSelection()` | 683–738、1064–1223、1341–1389 | `selection`/`selection_anchor`、四个 key 工具、`visible_selectable_keys`、`select_range`/`select_upload_range`/`normalize_selection`/`remove_ancestor_folder_selection`、卡片点击与右键、marquee |
+| `useAttachmentDrag()` | 868–875、1036–1062、1251–1337、1391–1427 | `drop_folder`/`dragged_file_names`/`dragged_folder`/`root_drag_over`、`is_*_drop_disabled`/`is_folder_target_disabled`、dragstart/over/enter/leave/drop、`move_dragged_files` |
+| `contentTasks` store（阶段 2c 已建，这里并入动作层） | 1741–2026 | `upload_handle_key`、`upload_landing_handler`、`upload_picks`、`resolve_upload_file`/`pick_resume_file`、`continue_upload`/`toggle_upload`/`retry_upload`、三个批量入口 |
+| `useAttachmentStructureOps()` | 1480–1576、2266–2660 | 加密/解密、删除（文件与文件夹）、移动（文件与文件夹）、文件夹创建/改名/删除，以及它们的 `report_operation_error` 与 payload 应用 |
+| `useAttachmentDialogs()` | 455–502（状态）、2111–2294、2678–2762 | 改名、替换、文件夹、删减版入口四个对话框的状态与提交 |
+| `useContentEditorStore()`（扩展已有 `contentDraft`） | 404–453、459–521、1577–1740、2866–2954 | 头部 meta 映射、`useHead`/`useSeoMeta`、草稿状态标签、`fetch_story`、保存/创建/删除、草稿冲突三件套 |
+
+#### 切割顺序（每步独立可合、独立可回滚）
+
+1. **S1 纯函数搬家**：`scope-rows.ts`（投影整块）+ 单测。零行为变化，测试净增。
+2. **S2 两个临时态 composable**：`useAttachmentSelection`、`useAttachmentDrag`。它们不跨组件、不进 SSR。
+3. **S3 动作层并入任务 store**：上传相关的 286 行搬进 `contentTasks`，页面只剩调用。
+4. **S4 preflight 接全部入口 + 按路径禁用**（见下），这是本阶段的价值所在。
+5. **S5 编辑器 store 扩展**：草稿 + 保存 + 冲突，页面只剩组合与对话框。
+6. **S6（可选）模板拆分**：5 个对话框是否抽成独立组件要按共享状态量决定，不为了减行而拆。
+
+#### 规则去重（S4 的删除目标）
+
+被 preflight 取代、应当删除的客户端判定：`encryption_target_taken`/`encryption_skip_reason`/`split_encryption_targets`（740–779）、`encryption_blocked_reasons`（791–809）、`delete_blocked_reasons`（810–819）、`split_referenced`（2385–2397）、`folder_deletable`（2398–2407）、`split_delete_targets`（2408–2421）、`folder_delete_blocked_reasons`（2422–2426）、`split_move_targets`（2588–2609），以及三个 `*_conflict` computed（2150–2177 改名、2279–2289 新建文件夹、2318–2331 改名文件夹）。§11 表里的 `useAttachmentRules()` 因此更可能是**删除目标而非新建目标**：preflight 覆盖全部入口后，只剩「依赖本地草稿」的判定（如"已被正文引用"）需要在客户端留一份，而它由 `referenced_files`（529）现成提供。
+
+#### 按路径禁用（承接 §13.1 决策 3 的前端一半）
+
+- 现状：`remote_operation_lock`(836) + `structure_locked`(837) 折叠成「任一活跃锁 → 结构操作全禁用」，被 11 处消费（`delete_disabled`、`batch_pending`、`replace_disabled`、`is_attachment_drag`、`is_folder_drag`、文件夹菜单 `row_locked` 等）。
+- 目标：服务端（阶段 3）给出「某路径是否被锁阻塞」的结论后，前端按路径查表生成本行的 `disabled` + 原因；`MyContentAttachmentRowState.structure_locked: boolean` 换成 `lock_blocked_reasons: string[]`。`Card.vue` 的 `action_item()` 已经支持 `disabled` + 原因文案，形状够用，不需要新机制。
+- 祖先语义（锁 `a/b/c.png` 挡住 `a`、`a/b`）只在服务端实现一次，前端不写前缀判断。
+
+#### 验收
+
+1. `edit.vue` script ≤ 400 行（模板另算）。
+2. `projectScopeRows` 单测：stored/upload/folder × selected/dragged/moving/pending/locked 的矩阵；分组顺序与现状逐项一致。
+3. **disabled 走查清单**：右键单行、批量菜单、拖拽目标、改名输入框、文件夹输入框、替换按钮、上传批量按钮 —— 每个入口的禁用状态与服务端 preflight 判定逐条对齐。
+4. 上述「规则去重」清单里的函数全部删除（按名字核对），且没有新的客户端重复实现。
+5. 全量测试 + `npx nuxt typecheck` + lint；手工走查：上传/暂停/续传、移动（文件与文件夹）、加密/解密、删减版、保存冲突。
+
+#### 风险
+
+- `selection`/`drag` 是纯客户端临时态，**不要**用 `useState` 或 Pinia（会把无意义状态带进 SSR payload，并新增 hydration 面）；草稿与编辑器 store 沿用 `contentDraft` 的 per-target `defineStore` 先例。
+- `markdown_editor`（`InstanceType<typeof MyContentMarkdownEditor>`）与 `MyContentAttachmentRow` 类型要跟着搬家；`npx nuxt typecheck` 是主要守卫。
+- 拆分过程中**不要顺手改行为**：S1–S3 应当能做到「测试零改动通过」（新增的单测除外），否则说明搬错了。
+
+### 13.3 阶段 5 详规（方言清单 + 编辑器/预览收敛）
+
+> 状态：**计划，未开工**（2026-10-09 定稿）。
+
+**先纠正 §12 的语气**：方言**已经大部分单源**，本阶段不是"合并多份实现"，而是「**登记构造 + 加完备性守卫**」。证据：
+
+- `server/shared/content-markdown.ts`（1215 行）是 front matter 解析、评级 tier、附件命名/路径/冲突、引用提取与改名的唯一实现，25 个 app/server 文件 import 它。
+- `server/shared/content-private.ts`（296 行）拥有 `<good>` 私有内容规则与三类占位符；客户端 `app/utils/content/markdown/private.ts` 直接 import 它，只补渲染 chrome。
+- `server/shared/html-lint.ts`（153 行）是 HTML 语法诊断的唯一实现，服务端 story 校验（`story.service.ts:69`）与编辑器 lint 共用。
+- `app/utils/content/alerts.ts` 是 alert 类型/图标/标签/标记正则的唯一来源，被渲染插件、`editor/alert-marker.ts`、`editor/completions.ts`、`markdown/compiled-icons.ts` 共用。
+- 编辑器 lint 直接调用 `parse_story_markdown`（`editor/lint.ts:14`），前端诊断与服务端校验同源。
+
+**真正的缺口**：
+
+1. **没有清单**：没有任何地方能回答「方言有哪些构造，每个构造在渲染/高亮/补全/lint/图标各需要动哪一处」。新增语法靠人记，靠注释互相提醒。
+2. **三处跨文件重写触发规则**：
+   - `@story` 引用的 token 字符集：`content-markdown.ts`（提取/改名）vs `editor/completions.ts:26-31`（补全 token）；
+   - bilibili 链接模式：`markdown/link-cards.ts`（渲染判定）vs `server/services/bilibili.service.ts`（抓取）；
+   - 文件夹简写 `[](folder)`：`content-markdown.ts`（`is_attachment_folder`/`folder_images`）vs `editor/completions.ts`（`attachment_dest_pattern`）。
+3. **HTML 标签清单在客户端**：`app/utils/content/html.ts` 被渲染器 `html-wrappers.ts` 与编辑器 `language.ts` 共用，但服务端 `html-lint.ts` 走自己的 CodeMirror 解析路径，不引用这份清单 —— 要么搬进 `@shared` 成为方言的一部分，要么在清单里显式声明它不属于方言。
+4. **markdownlint 的规则集只在编辑器**（`editor/lint.ts:47-58`），服务端不跑：编辑器可能 warn 而服务端接受。方向是宽松的，可以接受，但清单里要写明它是 advisory。
+
+**`server/shared/content-dialect.ts` 的形状**（登记 + 指向实现，不搬运代码）：
+
+```ts
+export interface ContentDialectConstruct {
+  id: string // 'front-matter' | 'alert' | 'story-reference' | 'folder-shorthand' | ...
+  summary: string // 一句话说明触发形态
+  trigger: RegExp | null // 单一触发正则（若存在），供实现方 import
+  renderer: string // 渲染规则所在文件（相对路径，守卫测试会扫描它）
+  editor?: string[] // 高亮/补全/标记所在文件
+  icons?: readonly string[] // 该构造可能产出的 iconify 名称
+  lint: 'error' | 'warning' | 'advisory' | null
+}
+export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
+```
+
+**测试（把现有守卫模式推广）**：`app/utils/content/markdown/render.test.ts:452-562` 已经用「扫渲染器源码里的 `lucide:*` 字面量，断言 `story_compiled_icons` 全覆盖」的方式守住图标。同样形状推广三件事：① 渲染插件目录里每个产出 HTML 的构造都在清单里；② 清单里每个 `renderer`/`editor` 路径都真实存在（防重构后指错）；③ 图标项与 `story_compiled_icons` 合并后仍覆盖渲染输出（保留现有断言）。守卫必须能变红：新增一个构造但不登记 → 测试失败。
+
+**`create_story_editor(options)` 工厂**（§11.1）：扩展列表现在整块内联在 `Editor.vue:319-377` 的 `onMounted` 里（`basicSetup`、`indentWithTab`、`Mod-f`/`Escape` keymap、`editor_markdown_lang`、`editor_close_brackets`、`lint_source` + `lintGutter`、`autocomplete_ext`、`search_field`、`alert_marker_plugin`、两个 `Compartment`、`lineWrapping`、paste handler、`updateListener`）。工厂收口这份列表，Editor.vue 只留 DOM 宿主、全屏 Teleport、分栏拖拽（`start_attachments_divider_drag`/`start_divider_drag`）、slots 与 6 个 emit。验收：Editor.vue 由 671 行降到约 350 行，且扩展列表的改动只出现在工厂一处。
+
+**Preview.vue 三个 composable**（1310 行，script 自 78 起）：
+
+- `useBilibiliVideoCards`：78–137（`fetch_missing_video_cards` 109、href watch 131）；
+- `useDecryptedAttachments`：149–305（`encrypted_by_url` 149、`plain_attachments_by_url` 159、`decrypted_urls` 169、`setup_encrypted_images` 175、`on_encrypted_toggle` 209、`mark_card_decrypting` 247、`open_encrypted` 264、`download_plain` 287、`refresh_story_body` 306）；
+- `useStoryBodyEnhancements`：326–430（render watch、`on_window_resize`、`onMounted` 的 DOM wiring、lightbox 的 click/keydown）。
+- `.story-body` 的 scoped 样式**不拆**（渲染 HTML 的唯一样式来源）。
+
+**验收**：Editor.vue ≈ 350 行、Preview.vue 的 script 明显缩小；渲染输出零变化（`render.test.ts` 的全部等价/快照断言不改）；清单完备性守卫能变红。
 
 ## 14. 测试策略（在既有测试规范上追加）
 
