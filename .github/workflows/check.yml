@@ -6,9 +6,8 @@
 #   - migrations：对全新 MySQL 8.4 从空库跑完整迁移链，再跑第二遍验证
 #     执行器的"全部已应用"幂等路径，最后用 information_schema 断言结构落地。
 #
-# 后续（未包含在本草案）：
-#   - 迁移重放结果与 stupig_tv.sql 参考 schema 的 drift 对比（需先写导出脚本）；
-#   - 在分支保护里把 check / migrations 设为必需状态检查（deploy.yml 不变）。
+# 分支保护：check / migrations 已设为 main 的必需状态检查（见仓库 Ruleset）。
+# 参考 schema 的 drift 对比已不再需要——`migrations/` 本身就是唯一事实源。
 
 name: Check
 

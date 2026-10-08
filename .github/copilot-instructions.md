@@ -17,8 +17,8 @@
 
 ## Database & Migrations
 
-- `stupig_tv.sql` is the reference schema. Read it to understand the current structure; **never modify it**.
-- If a task requires changing SQL structure, provide migration SQL as a separate snippet/file. Do not edit the reference schema.
+- The migration chain in `migrations/` is the single source of truth for the schema; there is no reference dump to keep in sync. Read the migrations (filename order) to understand the current structure.
+- Change SQL structure by adding a new timestamped migration; never edit an applied one, whose checksum is pinned.
 - Table names are snake_case. Timestamps are `TIMESTAMP` stored in UTC. Boolean fields are `tinyint(1)` and must be converted with `Boolean()` before returning to the client.
 
 ## Workflow Standards
