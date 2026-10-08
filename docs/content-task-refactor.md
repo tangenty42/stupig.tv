@@ -304,14 +304,16 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 ## 13. 阶段计划与验收
 
 > 前置条件（**已完成**，2026-10-08）：迁移系统接管——`migrations/20261008000000_init_schema.sql` 基线登记（开发库 + 生产库）、check.yml 空库全量迁移验证进入 CI。此后三张新表与 DROP `content_operation_locks` 只是普通的增量迁移。
+>
+> 修订记录（2026-10-08）：① 阶段 0 去掉 edit.vue 抽离——选择/拖拽/规则/上传代码分别会在阶段 1/2/4 被任务 API 与 preflight 重写，提前抽离是双重搬移，统一并入阶段 4 一次性收敛；② service 拆分中 `content-attachments.service.ts` 保持独立文件不并入 scope 模块（零删除原则），`content.service.ts` 保留为 facade 使 router 与既有测试的 import 路径不变；③ 迁移执行器增加存量库自动 baseline（有业务表但无迁移记录时登记而不重放），容器启动自愈。
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| **0. 拆分预热**（暂缓开工） | 按 §10 拆 service（不改行为）；edit.vue 抽出 §11 的 composable/store（不改行为）；`content_locks` 表 + 锁管理器内部替换 operation-lock（保持 409 语义） | 全部既有测试绿；`npx nuxt typecheck`、`pnpm lint` 通过；锁并发回归测试 |
+| **0. 拆分预热**（✅ 已完成，2026-10-08） | `content_locks` 表 + 锁管理器内部替换 operation-lock（保持 409 语义）；按 §10 拆 service（不改行为） | 全部既有测试绿（546）+ typecheck + lint；锁语义单测（operation-lock.test.ts）；迁移在开发库真实执行 |
 | **1. 任务内核** | 任务表、runner plugin、路径锁 + 续租、preflight；move/rename/folder/delete 四类纯 DB 操作切换为任务（旧端点转同步包装） | 状态机迁移、排队/冲突/超时/中断恢复、锁前缀冲突矩阵测试；故障注入（risk 文档高优 #5） |
 | **2. 上传任务化** | signTaskParts/reportTaskItem/resume、sweeper 清算 staging；前端 task-uploader 替换 Uppy；pending 行来自服务端任务 | 断网/刷新/换标签页/跨设备续传测试；对账脚本验证无残留；旧端点删除 |
 | **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行；redact 模态框接任务流 | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
-| **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 瘦身收尾、Pinia store 落定 | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
+| **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 抽离 §11 的 composable/store 并瘦身收尾、Pinia store 落定 | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
 | **5. 方言清单** | content-dialect 收编 + `create_story_editor` 工厂 + Preview composable 抽取 | 清单完备性测试；渲染快照对比不变 |
 
 每阶段独立可上线、可回滚（阶段 1-3 旧端点包装层即回滚阀）。
