@@ -22,6 +22,25 @@ concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
 
+# 与迁移无关的密钥给占位值：load_config 会校验 config/*.yaml 引用的全部
+# 无默认值插值变量，测试与迁移的 import 链都会触发（测试本身 mock 掉 db 等
+# 边界，这些值从不真正使用）。NODE_ENV 不在这里设——vitest 默认用 test，
+# 只有迁移步骤需要 production（避开 development.yaml 的 ${APP_PORT} 插值）。
+env:
+  MYSQL_HOST: 127.0.0.1
+  MYSQL_PORT: '3306'
+  MYSQL_PASSWORD: ci-mysql-password
+  JWT_SECRET: ci-jwt-secret-not-a-real-secret-32ch
+  REDIS_HOST: 127.0.0.1
+  REDIS_PORT: '6379'
+  MQTT_HOST: 127.0.0.1
+  MQTT_TCP_PORT: '1883'
+  MQTT_WEB_URL: ws://localhost:8083/mqtt
+  OSS_ACCESS_KEY_ID: ci-oss-key-id
+  OSS_ACCESS_KEY_SECRET: ci-oss-key-secret
+  ALIYUN_ACCESS_KEY_ID: ci-aliyun-key-id
+  ALIYUN_ACCESS_KEY_SECRET: ci-aliyun-key-secret
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -83,25 +102,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # load_config 会校验 config/*.yaml 引用的全部无默认值插值变量，
-      # 与迁移无关的密钥也给占位值；NODE_ENV=production 避开
-      # development.yaml 的 site.url（${APP_PORT}）插值
+      # NODE_ENV=production 避开 development.yaml 的 site.url（${APP_PORT}）插值
       - name: Apply migrations on a fresh database
         env:
           NODE_ENV: production
-          MYSQL_HOST: 127.0.0.1
-          MYSQL_PORT: '3306'
-          MYSQL_PASSWORD: ci-mysql-password
-          JWT_SECRET: ci-jwt-secret-not-a-real-secret-32ch
-          REDIS_HOST: 127.0.0.1
-          REDIS_PORT: '6379'
-          MQTT_HOST: 127.0.0.1
-          MQTT_TCP_PORT: '1883'
-          MQTT_WEB_URL: ws://localhost:8083/mqtt
-          OSS_ACCESS_KEY_ID: ci-oss-key-id
-          OSS_ACCESS_KEY_SECRET: ci-oss-key-secret
-          ALIYUN_ACCESS_KEY_ID: ci-aliyun-key-id
-          ALIYUN_ACCESS_KEY_SECRET: ci-aliyun-key-secret
         run: |
           pnpm migrate
           # 第二遍：全部已记录，应直接判 up to date（执行器幂等路径）
