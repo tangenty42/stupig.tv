@@ -221,7 +221,7 @@ content.reportTaskItem({ task_id, item_id, status, bytes_done?, parts? })
 ```
 
 - 权限：全部 `content_manage: full`（`signAttachmentDownload` 保持 public 不变）。
-- 旧端点（`moveAttachment` / `renameAttachment` / `moveAttachments` / `deleteAttachment` / `encryptAttachments` / `decryptAttachments` / `createFolder` / `deleteFolder` / `moveFolder` / `replaceAttachment` / `createAbridgedAttachment` / `signAttachmentUpload` / `confirmAttachmentUpload`）在阶段 2 前保留为任务的**同步包装**（建任务→等待终态→返回现状形状），阶段 2 完成后删除（决策 5）。
+- 旧端点（`moveAttachment` / `renameAttachment` / `moveAttachments` / `deleteAttachment` / `encryptAttachments` / `decryptAttachments` / `createFolder` / `deleteFolder` / `moveFolder` / `createAbridgedAttachment`）在阶段 2 前保留为任务的**同步包装**（建任务→等待终态→返回现状形状）。阶段 2 已删除上传与替换的旧端点（`signAttachmentUpload` / `confirmAttachmentUpload` / `replaceAttachment`，决策 5）；其余包装随阶段 3 移除（同批操作仍在请求内同步执行）。
 - `updateStory` / `createStory` / `deleteStory` / `getStory` / `listStories` / `getBilibiliVideoCards` 签名不变。
 
 ## 8. 同步与前端协议
@@ -248,9 +248,9 @@ content.reportTaskItem({ task_id, item_id, status, bytes_done?, parts? })
 ## 9. 断点续传与设备标识
 
 - 续传锚 = 任务项的 `(staging_key, upload_id)` + 分片清单（`ListParts`）。**任何持有源文件的客户端都能续**。
-- `client_id` = localStorage 安装实例 UUID（新工具 `app/utils/client-instance.ts`；可复用 useDataSync 的 client id 机制）。建任务时记录，仅作提示（决策 6）：本机 `client_id` 匹配且 IndexedDB（`upload-file-handle.ts` 沿用）里有 FileSystemFileHandle → 卡片显示"可续传"。
+- `client_id` = localStorage 安装实例 UUID（`app/composables/useClientInstanceId.ts`，配置项 `app.content.task.clientIdStorageName`；与 useDataSync 用 sessionStorage 的 `sync_client_id` 有意区分）。建任务时记录，仅作提示（决策 6）：本机 `client_id` 匹配且 IndexedDB（`upload-file-handle.ts` 沿用，键为 `<story_id>:<计划路径>`）里有 FileSystemFileHandle → 卡片显示"可续传"。
 - 分片计划：任务项激活时服务端按 `bytes_total` 与 `upload.partSizeMb` 定 `part_size` 与分片数；客户端按批预签（`signBatchSize`），XHR PUT（要 upload progress 事件）+ 并发池 + AbortController，收 ETag 回报。
-- **Uppy 移除（决策 3）**：`@uppy/core` / `@uppy/aws-s3` / `@uppy/golden-retriever` 依赖卸载；`upload_from_file` / `sync_uppy_files` / ghost 恢复 / NoSuchUpload 自救等对账代码删除。新上传器 `app/utils/content/task-uploader.ts`（约 300-400 行纯逻辑 + 单测：分片规划、ETag 收集、重试/暂停/恢复）。
+- **Uppy 移除（决策 3，✅ 已完成）**：`@uppy/core` / `@uppy/aws-s3` / `@uppy/golden-retriever` 依赖卸载；`upload_from_file` / `sync_uppy_files` / ghost 恢复 / NoSuchUpload 自救等对账代码删除。新上传器 `app/utils/content/task-uploader.ts`（注入式传输层 + 单测：分片规划、分批预签、并发上限、续传跳过、进度节流、取消；XHR 传输在 `upload-transport.ts`），任务状态与本地 driver 在 `app/stores/contentTasks.ts`，行投影在 `app/utils/content/task-row.ts`。
 
 ## 10. 服务端模块拆分（risk #4 落地）
 
@@ -306,12 +306,14 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 > 前置条件（**已完成**，2026-10-08）：迁移系统接管——`migrations/20261008000000_init_schema.sql` 基线登记（开发库 + 生产库）、check.yml 空库全量迁移验证进入 CI。此后三张新表与 DROP `content_operation_locks` 只是普通的增量迁移。
 >
 > 修订记录（2026-10-08，阶段 1）：① 同步派发模型——旧端点建任务后进程内 inline 执行（run_task_synchronously），执行器 ApiError 原样透传，锁冲突保持原 409 语义，无需轮询等待；② scope 锁与任务路径锁共享 per-scope 命名锁临界区，双向互斥，过渡期未任务化的操作（encrypt/decrypt/redact/replace）不会与任务并发；③ `get_operation_lock` 折叠路径锁（任一活跃锁即禁用结构操作），细粒度按路径禁用留给阶段 4 的 preflight 接线；④ 锁续租用 `operationLock.ttlSeconds` 单一配置，runner 心跳续租随阶段 2 的传输任务一起启用（纯 DB 任务毫秒级完成，无需续租）；⑤ 前端接线（任务事件订阅、pending 行）不在阶段 1 单独做，并入阶段 4 前端收敛。
+>
+> 修订记录（2026-10-08，阶段 2）：① 上传的命名冲突在**建任务时不再解析**——preflight 只判合法性与给出 `suggested_name`，权威的一次冲突解析发生在 finalize（锁内，见 §6.1）；② 客户端 `sign_batch_size` 由服务端随任务项下发，预签批处理无需试探上限；③ 续传靠 staging key + multipart `list_parts`，`client_id` 只用于「本机可续传」提示（决策 6）；④ 前端 `task-uploader` 取代 Uppy，`@uppy/*` 依赖与旧上传端点（signAttachmentUpload / confirmAttachmentUpload / replaceAttachment）一并删除；`confirm_attachment_upload` 的服务端实现同样删除，其逻辑由 `finalize_transfer_item` 独占；⑤ 粘贴改名不再需要「先入队后改名」的中间态：任务直接以最终名字创建。
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **0. 拆分预热**（✅ 已完成，2026-10-08） | `content_locks` 表 + 锁管理器内部替换 operation-lock（保持 409 语义）；按 §10 拆 service（不改行为） | 全部既有测试绿（546）+ typecheck + lint；锁语义单测（operation-lock.test.ts）；迁移在开发库真实执行 |
 | **1. 任务内核**（✅ 已完成，2026-10-08） | 任务表、runner plugin、路径锁 + 续租、preflight；move/rename/folder/delete 四类纯 DB 操作切换为任务（旧端点转同步包装，tRPC 形状不变）；新增 preflightTask/createTask/cancelTask/listScopeTasks 端点 | 状态机、排队/冲突/超时/中断恢复、锁前缀冲突矩阵、preflight 逐项判定测试；既有 57 个 content 服务测试不改断言、全程走任务管线通过 |
-| **2. 上传任务化** | signTaskParts/reportTaskItem/resume、sweeper 清算 staging；前端 task-uploader 替换 Uppy；pending 行来自服务端任务 | 断网/刷新/换标签页/跨设备续传测试；对账脚本验证无残留；旧端点删除 |
+| **2. 上传任务化**（✅ 已完成，2026-10-08） | signTaskParts/reportTaskItem/resume、上传任务化（服务端准备 + 客户端灌字节）、实时进度事件；前端 task-uploader 替换 Uppy、pending 行来自服务端任务；旧上传端点删除 | task-uploader（12 测试）+ 任务 store（27 测试）+ task-row 投影（9 测试）+ 服务端 task-api 测试；`@uppy/*` 依赖移除；lint/typecheck/668 测试全绿 |
 | **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行；redact 模态框接任务流 | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
 | **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 抽离 §11 的 composable/store 并瘦身收尾、Pinia store 落定 | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
 | **5. 方言清单** | content-dialect 收编 + `create_story_editor` 工厂 + Preview composable 抽取 | 清单完备性测试；渲染快照对比不变 |
