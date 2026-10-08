@@ -51,9 +51,13 @@ function execute(sql: string, params: unknown[]) {
     state.rows = state.rows.filter(row => row.token !== token)
     return [{ affectedRows: 1 }]
   }
-  // get_operation_lock
-  if (sql.includes('SELECT kind, expires_at'))
-    return [state.rows.filter(row => ! row.expired && row.path === '').map(row => ({ kind: row.kind, expires_at: '2026-10-08 16:00:00' }))]
+  // get_operation_lock（SELECT 全部活跃锁，模拟 ORDER BY：scope 行优先）
+  if (sql.includes('SELECT kind, expires_at')) {
+    return [state.rows
+      .filter(row => ! row.expired)
+      .sort((left, right) => Number(right.path === '') - Number(left.path === ''))
+      .map(row => ({ kind: row.kind, expires_at: '2026-10-08 16:00:00' }))]
+  }
   return [{}]
 }
 
@@ -222,6 +226,25 @@ describe('get_operation_lock / list_scope_locks', () => {
 
   it('没有活跃 scope 锁时返回 null', async () => {
     expect(await get_operation_lock(42)).toBeNull()
+  })
+
+  it('只有任务路径锁时也返回它（过渡期：任务锁同样禁用结构操作）', async () => {
+    state.rows.push({ path: 'a.png', kind: 'move', task_id: 7, token: 'x', expired: false })
+
+    const lock = await get_operation_lock(42)
+
+    expect(lock?.kind).toBe('move')
+  })
+
+  it('scope 锁与路径锁并存时优先返回 scope 锁', async () => {
+    state.rows.push(
+      { path: 'a.png', kind: 'move', task_id: 7, token: 'x', expired: false },
+      { path: '', kind: 'encrypt', task_id: null, token: 'y', expired: false },
+    )
+
+    const lock = await get_operation_lock(42)
+
+    expect(lock?.kind).toBe('encrypt')
   })
 
   it('list_scope_locks 返回全部活跃锁（含任务路径锁）', async () => {

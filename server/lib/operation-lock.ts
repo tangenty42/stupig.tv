@@ -120,8 +120,11 @@ export async function release_operation_lock(lock: AcquiredOperationLock) {
 
 /** The scope's live lock, as rendered by peers to disable the controls an operation would collide with. */
 export async function get_operation_lock(scope_id: number): Promise<ContentOperationLock | null> {
+  // A task's path lock disables the same controls as the scope lock during the
+  // transition to the task queue; per-path disabled states arrive with the
+  // editor's preflight wiring. The scope row (path '') wins when both exist.
   const [rows] = await db.execute<LockRow[]>(
-    'SELECT kind, expires_at FROM content_locks WHERE scope_id = ? AND path = \'\' AND expires_at >= NOW()',
+    'SELECT kind, expires_at FROM content_locks WHERE scope_id = ? AND expires_at >= NOW() ORDER BY (path = \'\') DESC, expires_at DESC LIMIT 1',
     [scope_id],
   )
   const row = rows[0]

@@ -137,6 +137,43 @@ export interface ContentPathLock {
   expires_at: string
 }
 
+/* ---- Task payloads (one per kind; persisted in content_tasks.payload) ---- */
+
+export interface ContentTaskMovePayload {
+  moves: { file_name: string, target_folder: string | null }[]
+}
+
+export interface ContentTaskRenamePayload {
+  old_file_name: string
+  new_file_name: string
+}
+
+/**
+ * Delete is a compound: the files go through the revision-checked save (the
+ * markdown with their references removed), the folders must be empty by then.
+ * `can_private` is captured at creation from the actor's permissions.
+ */
+export interface ContentTaskDeletePayload {
+  file_names: string[]
+  folders: string[]
+  markdown: string
+  base_revision: number
+  can_private: boolean
+}
+
+export interface ContentTaskFolderCreatePayload {
+  folder: string
+}
+
+export interface ContentTaskFolderDeletePayload {
+  folder: string
+}
+
+export interface ContentTaskFolderRenamePayload {
+  source_folder: string
+  new_folder: string
+}
+
 /**
  * A live attachment-operation lock on a scope, published so peers disable the
  * controls the operation would collide with. The lease is stealable after

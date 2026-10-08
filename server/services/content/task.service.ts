@@ -181,6 +181,19 @@ export async function list_scope_tasks(scope_id: number): Promise<ContentTaskWit
      ORDER BY id`,
     [scope_id, config.app.content.task.retentionHours],
   )
+  return with_items(rows)
+}
+
+/** Every queued task across all scopes, FIFO — the runner's dispatch queue. */
+export async function list_queued_tasks(limit = 100): Promise<ContentTaskWithItems[]> {
+  const [rows] = await db.execute<TaskRow[]>(
+    'SELECT * FROM content_tasks WHERE status = \'queued\' ORDER BY id LIMIT ?',
+    [limit],
+  )
+  return with_items(rows)
+}
+
+async function with_items(rows: TaskRow[]): Promise<ContentTaskWithItems[]> {
   if (! rows.length)
     return []
   const ids = rows.map(row => Number(row.id))

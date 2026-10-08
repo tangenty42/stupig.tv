@@ -14,7 +14,7 @@ import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of
 const config = runtime_config()
 
 /** Attachment files and explicit folders of a story's scope. */
-async function attachment_scope_payload(story_id: number) {
+export async function attachment_scope_payload(story_id: number) {
   return {
     attachments: await list_scope_attachments(story_id),
     folders: await list_scope_folders(story_id),
@@ -117,27 +117,37 @@ export async function rewrite_story_attachment_refs(connection: Connection, stor
 /** Persists a folder (and missing ancestors) in a scope. */
 export async function create_folder(story_id: number, folder: string) {
   await with_attachment_lock(story_id, 'folder_create', async () => {
-    await get_story(story_id)
-    // A name is one path for both kinds: a file already answering to it — or
-    // holding contents that make the name a folder in its own right — keeps the
-    // folder from existing under it.
-    const folder_path = resolve_attachment_name(folder, await list_scope_paths(story_id), 'reject')
-    await create_folder_rows(story_id, [... attachment_ancestor_folders(folder_path), folder_path])
-    await publish_attachment_change(story_id)
+    await apply_folder_create(story_id, folder)
   })
   // Read after the lock is released, so the payload reports the scope as idle
   // instead of echoing the caller's own finished operation back as in flight.
   return attachment_scope_payload(story_id)
 }
 
+/** The lock-free core of create_folder; the task executor calls this with path locks already held. */
+export async function apply_folder_create(story_id: number, folder: string) {
+  await get_story(story_id)
+  // A name is one path for both kinds: a file already answering to it — or
+  // holding contents that make the name a folder in its own right — keeps the
+  // folder from existing under it.
+  const folder_path = resolve_attachment_name(folder, await list_scope_paths(story_id), 'reject')
+  await create_folder_rows(story_id, [... attachment_ancestor_folders(folder_path), folder_path])
+  await publish_attachment_change(story_id)
+}
+
 /** Removes a folder row subtree; files beneath make it a 409. */
 export async function delete_folder(story_id: number, folder: string) {
   await with_attachment_lock(story_id, 'folder_delete', async () => {
-    await get_story(story_id)
-    await delete_folder_rows(story_id, folder)
-    await publish_attachment_change(story_id)
+    await apply_folder_delete(story_id, folder)
   })
   return attachment_scope_payload(story_id)
+}
+
+/** The lock-free core of delete_folder; the task executor calls this with path locks already held. */
+export async function apply_folder_delete(story_id: number, folder: string) {
+  await get_story(story_id)
+  await delete_folder_rows(story_id, folder)
+  await publish_attachment_change(story_id)
 }
 
 /**
@@ -150,83 +160,91 @@ export async function delete_folder(story_id: number, folder: string) {
 export async function move_folder(story_id: number, source_folder: string, new_folder: string) {
   if (new_folder === source_folder)
     return attachment_scope_payload(story_id)
+
+  await with_attachment_lock(story_id, 'move', async () => {
+    await apply_folder_rename(story_id, source_folder, new_folder)
+  })
+  return attachment_scope_payload(story_id)
+}
+
+/** The lock-free core of move_folder; the task executor calls this with path locks already held. */
+export async function apply_folder_rename(story_id: number, source_folder: string, new_folder: string) {
+  if (new_folder === source_folder)
+    return
   if (new_folder.startsWith(`${source_folder}/`))
     throw new ApiError(400, '不能移动到文件夹自身内部')
 
-  await with_attachment_lock(story_id, 'move', async () => {
-    const story = await get_story(story_id)
+  const story = await get_story(story_id)
 
-    const connection = await db.getConnection()
-    try {
-      await connection.beginTransaction()
-      // Planned inside the transaction: the listing, the collision checks and
-      // the rewrite must not be separated by another writer.
-      const subtree = await list_folder_subtree_rows(story_id, source_folder, connection)
-      if (! subtree.length)
-        throw new ApiError(404, '文件夹不存在或已被删除')
-      const subtree_ids = new Set(subtree.map(row => row.id))
-      const remaining = (await list_scope_rows(story_id, connection)).filter(row => ! subtree_ids.has(row.id))
-      const remaining_folders = new Set(remaining.filter(row => row.is_folder).map(row => row.file_name.toLowerCase()))
-      const remaining_files = new Set(remaining.filter(row => ! row.is_folder).map(row => row.file_name.toLowerCase()))
-      const remaining_paths = remaining.map(row => row.file_name)
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    // Planned inside the transaction: the listing, the collision checks and
+    // the rewrite must not be separated by another writer.
+    const subtree = await list_folder_subtree_rows(story_id, source_folder, connection)
+    if (! subtree.length)
+      throw new ApiError(404, '文件夹不存在或已被删除')
+    const subtree_ids = new Set(subtree.map(row => row.id))
+    const remaining = (await list_scope_rows(story_id, connection)).filter(row => ! subtree_ids.has(row.id))
+    const remaining_folders = new Set(remaining.filter(row => row.is_folder).map(row => row.file_name.toLowerCase()))
+    const remaining_files = new Set(remaining.filter(row => ! row.is_folder).map(row => row.file_name.toLowerCase()))
+    const remaining_paths = remaining.map(row => row.file_name)
 
-      const renames: { old_file_name: string, new_file_name: string }[] = []
-      const moves: { id: number, new_file_name: string }[] = []
-      const merged: number[] = []
-      // The destination has to be a legal name in its own right (the `.good`
-      // check applies to folders too); landing on a folder that already answers
-      // to it is the documented merge, so that conflict is allowed here and the
-      // per-row checks below decide the rest.
-      const destination = resolve_attachment_name(new_folder, remaining_paths, 'merge')
-      for (const row of subtree) {
-        const new_file_name = `${destination}${row.file_name.slice(source_folder.length)}`
-        if (row.is_folder) {
-          const lower = new_file_name.toLowerCase()
-          if (remaining_folders.has(lower))
-            merged.push(row.id)
-          else if (remaining_files.has(lower))
-            throw new ApiError(409, attachment_name_conflict_message)
-          else
-            moves.push({ id: row.id, new_file_name })
-        }
-        else {
-          // Derived from the row, so it may carry the `.good` marker: only its
-          // availability is checked, never its legality.
-          assert_attachment_name_available(new_file_name, remaining_paths)
+    const renames: { old_file_name: string, new_file_name: string }[] = []
+    const moves: { id: number, new_file_name: string }[] = []
+    const merged: number[] = []
+    // The destination has to be a legal name in its own right (the `.good`
+    // check applies to folders too); landing on a folder that already answers
+    // to it is the documented merge, so that conflict is allowed here and the
+    // per-row checks below decide the rest.
+    const destination = resolve_attachment_name(new_folder, remaining_paths, 'merge')
+    for (const row of subtree) {
+      const new_file_name = `${destination}${row.file_name.slice(source_folder.length)}`
+      if (row.is_folder) {
+        const lower = new_file_name.toLowerCase()
+        if (remaining_folders.has(lower))
+          merged.push(row.id)
+        else if (remaining_files.has(lower))
+          throw new ApiError(409, attachment_name_conflict_message)
+        else
           moves.push({ id: row.id, new_file_name })
-          renames.push({ old_file_name: row.file_name, new_file_name })
-        }
       }
-
-      // Two-phase rename: a destination may still be another subtree row's
-      // source (moving onto an ancestor path, e.g. a/a → a), and the unique
-      // index forbids holding that name even mid-batch. The transaction keeps
-      // a failure between the loops from stranding rows under `.mvtmp-` names.
-      for (const row of subtree)
-        await rename_row_by_id(row.id, `.mvtmp-${crypto.randomUUID()}`, connection)
-      await delete_rows_by_ids(merged, connection)
-      for (const move of moves)
-        await rename_row_by_id(move.id, move.new_file_name, connection)
-      // The destination becomes a folder of its own, ancestors included. Files
-      // otherwise carry a folder's existence implicitly, so renaming onto a
-      // path no row answers to would leave the renamed folder to vanish as soon
-      // as its last file moved away. Existing rows are kept, so a merge is free.
-      if (moves.some(move => move.new_file_name.startsWith(`${destination}/`)))
-        await create_folder_rows(story_id, [... attachment_ancestor_folders(destination), destination], connection)
-      await rewrite_story_attachment_refs(connection, story.id, renames)
-      await connection.commit()
-    }
-    catch (error) {
-      await connection.rollback()
-      throw error
-    }
-    finally {
-      connection.release()
+      else {
+        // Derived from the row, so it may carry the `.good` marker: only its
+        // availability is checked, never its legality.
+        assert_attachment_name_available(new_file_name, remaining_paths)
+        moves.push({ id: row.id, new_file_name })
+        renames.push({ old_file_name: row.file_name, new_file_name })
+      }
     }
 
-    await publish_attachment_change(story_id)
-  })
-  return attachment_scope_payload(story_id)
+    // Two-phase rename: a destination may still be another subtree row's
+    // source (moving onto an ancestor path, e.g. a/a → a), and the unique
+    // index forbids holding that name even mid-batch. The transaction keeps
+    // a failure between the loops from stranding rows under `.mvtmp-` names.
+    for (const row of subtree)
+      await rename_row_by_id(row.id, `.mvtmp-${crypto.randomUUID()}`, connection)
+    await delete_rows_by_ids(merged, connection)
+    for (const move of moves)
+      await rename_row_by_id(move.id, move.new_file_name, connection)
+    // The destination becomes a folder of its own, ancestors included. Files
+    // otherwise carry a folder's existence implicitly, so renaming onto a
+    // path no row answers to would leave the renamed folder to vanish as soon
+    // as its last file moved away. Existing rows are kept, so a merge is free.
+    if (moves.some(move => move.new_file_name.startsWith(`${destination}/`)))
+      await create_folder_rows(story_id, [... attachment_ancestor_folders(destination), destination], connection)
+    await rewrite_story_attachment_refs(connection, story.id, renames)
+    await connection.commit()
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
+
+  await publish_attachment_change(story_id)
 }
 
 /** Rebuilds a taken file name with a random suffix before the extension, keeping the byte cap and folder prefix. */
@@ -386,131 +404,149 @@ export interface AttachmentMove {
  */
 export async function move_attachments(story_id: number, moves: AttachmentMove[]): Promise<ContentAttachmentBatchResult> {
   return await with_attachment_lock(story_id, 'move', async () => {
-    const story = await get_story(story_id)
-    const attachments = story.attachments
-    const by_name = new Map(attachments.map(item => [item.file_name, item]))
+    const applied = await apply_attachment_moves(story_id, moves)
+    return { attachments: applied.attachments, succeeded: applied.succeeded.map(item => item.old_file_name), skipped: applied.skipped }
+  })
+}
 
-    const planned: { attachment: ContentStoryAttachment, old_file_name: string, new_file_name: string }[] = []
-    const skipped: ContentBatchSkipped[] = []
-    for (const move of moves) {
-      const attachment = by_name.get(move.file_name)
-      if (! attachment) {
-        skipped.push({ file_name: move.file_name, reason: '附件不存在或已被删除' })
-        continue
-      }
-      const new_file_name = attachment_path_join(move.target_folder, attachment_base_name(move.file_name))
-      if (new_file_name !== move.file_name)
-        planned.push({ attachment, old_file_name: move.file_name, new_file_name })
+/** The applied rename pair (old → new) for one moved attachment. */
+export interface AttachmentMoveApplied {
+  attachments: ContentStoryAttachment[]
+  succeeded: { old_file_name: string, new_file_name: string }[]
+  skipped: ContentBatchSkipped[]
+}
+
+/** The lock-free core of move_attachments, reporting the applied renames; the task executor calls this with path locks already held. */
+export async function apply_attachment_moves(story_id: number, moves: AttachmentMove[]): Promise<AttachmentMoveApplied> {
+  const story = await get_story(story_id)
+  const attachments = story.attachments
+  const by_name = new Map(attachments.map(item => [item.file_name, item]))
+
+  const planned: { attachment: ContentStoryAttachment, old_file_name: string, new_file_name: string }[] = []
+  const skipped: ContentBatchSkipped[] = []
+  for (const move of moves) {
+    const attachment = by_name.get(move.file_name)
+    if (! attachment) {
+      skipped.push({ file_name: move.file_name, reason: '附件不存在或已被删除' })
+      continue
     }
+    const new_file_name = attachment_path_join(move.target_folder, attachment_base_name(move.file_name))
+    if (new_file_name !== move.file_name)
+      planned.push({ attachment, old_file_name: move.file_name, new_file_name })
+  }
 
-    if (! planned.length) {
-      publish_attachment_refresh(story_id)
-      return { attachments, succeeded: [], skipped }
+  if (! planned.length) {
+    publish_attachment_refresh(story_id)
+    return { attachments, succeeded: [], skipped }
+  }
+
+  // A destination must not collide with anything that still exists after the
+  // batch — files and folders alike — and two moves in the same batch must not
+  // land on the same name. The batch's own sources are excluded: a chained
+  // move (a→b, b→c) frees the name it vacates.
+  const moved_away = new Set(planned.map(plan => plan.old_file_name.toLowerCase()))
+  const remaining = (await list_scope_paths(story_id)).filter(path => ! moved_away.has(path.toLowerCase()))
+  const destinations = new Set<string>()
+  const available: typeof planned = []
+  for (const plan of planned) {
+    const lower = plan.new_file_name.toLowerCase()
+    if (destinations.has(lower)) {
+      skipped.push({ file_name: plan.old_file_name, reason: attachment_name_conflict_message })
+      continue
     }
-
-    // A destination must not collide with anything that still exists after the
-    // batch — files and folders alike — and two moves in the same batch must not
-    // land on the same name. The batch's own sources are excluded: a chained
-    // move (a→b, b→c) frees the name it vacates.
-    const moved_away = new Set(planned.map(plan => plan.old_file_name.toLowerCase()))
-    const remaining = (await list_scope_paths(story_id)).filter(path => ! moved_away.has(path.toLowerCase()))
-    const destinations = new Set<string>()
-    const available: typeof planned = []
-    for (const plan of planned) {
-      const lower = plan.new_file_name.toLowerCase()
-      if (destinations.has(lower)) {
+    destinations.add(lower)
+    // The batch's own sources are already excluded from `remaining`, so the
+    // guard sees exactly the names that survive it. Only the folder changes,
+    // so the row's own name (and any `.good` marker on it) is not re-validated.
+    try {
+      assert_attachment_name_available(plan.new_file_name, remaining)
+    }
+    catch (error) {
+      if (error instanceof ApiError && error.statusCode === 409) {
         skipped.push({ file_name: plan.old_file_name, reason: attachment_name_conflict_message })
         continue
       }
-      destinations.add(lower)
-      // The batch's own sources are already excluded from `remaining`, so the
-      // guard sees exactly the names that survive it. Only the folder changes,
-      // so the row's own name (and any `.good` marker on it) is not re-validated.
-      try {
-        assert_attachment_name_available(plan.new_file_name, remaining)
-      }
-      catch (error) {
-        if (error instanceof ApiError && error.statusCode === 409) {
-          skipped.push({ file_name: plan.old_file_name, reason: attachment_name_conflict_message })
-          continue
-        }
-        throw error
-      }
-      available.push(plan)
-    }
-    planned.splice(0, planned.length, ... available)
-
-    if (! planned.length) {
-      publish_attachment_refresh(story_id)
-      return { attachments, succeeded: [], skipped }
-    }
-
-    // Two-phase rename: a destination may be another move's source (a→b, b→c),
-    // and the unique index forbids holding that name even mid-batch. Both loops
-    // run on one transaction — a failure between them must restore the original
-    // names instead of stranding rows under `.mvtmp-` display paths.
-    const connection = await db.getConnection()
-    try {
-      await connection.beginTransaction()
-      const temp_names = planned.map(() => `.mvtmp-${crypto.randomUUID()}`)
-      for (const [index, plan] of planned.entries()) {
-        await rename_attachment_row(story_id, plan.old_file_name, temp_names[index]!, connection)
-      }
-      for (const [index, plan] of planned.entries()) {
-        await rename_attachment_row(story_id, temp_names[index]!, plan.new_file_name, connection)
-      }
-      await rewrite_story_attachment_refs(connection, story.id, planned)
-      await connection.commit()
-    }
-    catch (error) {
-      await connection.rollback()
       throw error
     }
-    finally {
-      connection.release()
-    }
+    available.push(plan)
+  }
+  planned.splice(0, planned.length, ... available)
 
-    await publish_attachment_change(story_id)
-    const result_attachments = (await get_story(story_id)).attachments
-    return {
-      attachments: result_attachments,
-      succeeded: planned.map(plan => plan.old_file_name),
-      skipped,
+  if (! planned.length) {
+    publish_attachment_refresh(story_id)
+    return { attachments, succeeded: [], skipped }
+  }
+
+  // Two-phase rename: a destination may be another move's source (a→b, b→c),
+  // and the unique index forbids holding that name even mid-batch. Both loops
+  // run on one transaction — a failure between them must restore the original
+  // names instead of stranding rows under `.mvtmp-` display paths.
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    const temp_names = planned.map(() => `.mvtmp-${crypto.randomUUID()}`)
+    for (const [index, plan] of planned.entries()) {
+      await rename_attachment_row(story_id, plan.old_file_name, temp_names[index]!, connection)
     }
-  })
+    for (const [index, plan] of planned.entries()) {
+      await rename_attachment_row(story_id, temp_names[index]!, plan.new_file_name, connection)
+    }
+    await rewrite_story_attachment_refs(connection, story.id, planned)
+    await connection.commit()
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
+
+  await publish_attachment_change(story_id)
+  const result_attachments = (await get_story(story_id)).attachments
+  return {
+    attachments: result_attachments,
+    succeeded: planned.map(plan => ({ old_file_name: plan.old_file_name, new_file_name: plan.new_file_name })),
+    skipped,
+  }
 }
 
 export async function rename_attachment(story_id: number, old_file_name: string, new_file_name: string) {
   return await with_attachment_lock(story_id, 'rename', async () => {
-    const story = await get_story(story_id)
-    const attachments = story.attachments
-    const attachment = attachments.find(item => item.file_name === old_file_name)
-    if (! attachment) {
-      throw new ApiError(404, '附件不存在或已被删除')
-    }
-    if (old_file_name === new_file_name) {
-      return attachment
-    }
-    // The renamed file is excluded from its own conflict check.
-    const file_name = resolve_renamed_attachment_name(old_file_name, new_file_name, await list_scope_paths(story_id))
-
-    const connection = await db.getConnection()
-    try {
-      await connection.beginTransaction()
-      await rename_attachment_row(story_id, old_file_name, file_name, connection)
-      await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name, new_file_name: file_name }])
-      await connection.commit()
-    }
-    catch (error) {
-      await connection.rollback()
-      throw error
-    }
-    finally {
-      connection.release()
-    }
-
-    await publish_attachment_change(story_id)
-    const row = await get_scope_attachment(story_id, file_name)
-    return row ?? { ... attachment, file_name }
+    return apply_attachment_rename(story_id, old_file_name, new_file_name)
   })
+}
+
+/** The lock-free core of rename_attachment; the task executor calls this with path locks already held. */
+export async function apply_attachment_rename(story_id: number, old_file_name: string, new_file_name: string) {
+  const story = await get_story(story_id)
+  const attachments = story.attachments
+  const attachment = attachments.find(item => item.file_name === old_file_name)
+  if (! attachment) {
+    throw new ApiError(404, '附件不存在或已被删除')
+  }
+  if (old_file_name === new_file_name) {
+    return attachment
+  }
+  // The renamed file is excluded from its own conflict check.
+  const file_name = resolve_renamed_attachment_name(old_file_name, new_file_name, await list_scope_paths(story_id))
+
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    await rename_attachment_row(story_id, old_file_name, file_name, connection)
+    await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name, new_file_name: file_name }])
+    await connection.commit()
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
+
+  await publish_attachment_change(story_id)
+  const row = await get_scope_attachment(story_id, file_name)
+  return row ?? { ... attachment, file_name }
 }
