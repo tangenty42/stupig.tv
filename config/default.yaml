@@ -142,8 +142,18 @@ app:
       maxDimension: 8192
     operationLock:
       # 作用域附件操作锁的租约。必须长于最慢的结构变更（移动文件夹会逐行重写
-      # 其下所有行），否则租约中途过期会被第二个请求抢占
+      # 其下所有行），否则租约中途过期会被第二个请求抢占。任务路径锁共用此值
       ttlSeconds: 120
+    task:
+      # runner 的心跳/锁续期间隔。必须短于 operationLock.ttlSeconds（见
+      # config.ts 的交叉校验），否则锁会在两次心跳之间过期
+      heartbeatSeconds: 30
+      # 排队超时：锁长期被占用时任务放弃
+      queuedTimeoutSeconds: 300
+      # 终态任务保留期（小时）：断点续传与审计窗口
+      retentionHours: 24
+      # sweeper 间隔：回收过期锁、清算中断任务与残留上传
+      sweepIntervalSeconds: 60
     encrypt:
       maxSizeMb: 20
     bilibili:
