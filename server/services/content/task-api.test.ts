@@ -63,6 +63,7 @@ vi.mock('@server/services/content/task.service', () => ({
     state.item_updates.push({ item_id, patch })
   }),
   list_scope_tasks: vi.fn(async () => []),
+  publish_task_state: vi.fn(async () => {}),
 }))
 
 vi.mock('@server/services/content/task-runner.service', () => ({

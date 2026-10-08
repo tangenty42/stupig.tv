@@ -410,6 +410,54 @@ describe('get_story private stripping', () => {
   })
 })
 
+/**
+ * 任务与路径锁只有能管理内容的人才看得到：payload 里带上它们是为了让编辑器
+ * 渲染 pending 行与禁用态，对访客既无用又多暴露一层内部状态。
+ */
+describe('get_story task payload audience', () => {
+  function viewer(overrides: Partial<AuthUser>) {
+    return {
+      id: 7,
+      session_id: 1,
+      username: 'viewer',
+      phone: '',
+      avatar_file: null,
+      is_verified: false,
+      is_admin: false,
+      ... overrides,
+    } as AuthUser
+  }
+
+  beforeEach(() => {
+    mocks.db_execute.mockReset()
+    stub_story_row(1, 'body')
+  })
+
+  it('content_manage 持有者拿到 tasks 与 locks', async () => {
+    const story = await get_story(1, undefined, viewer({ permissions: [{ field: 'content_manage', level: 'full' }] }))
+
+    expect(story).toHaveProperty('tasks')
+    expect(story).toHaveProperty('locks')
+  })
+
+  it('管理员也拿到', async () => {
+    const story = await get_story(1, undefined, viewer({ is_admin: true }))
+
+    expect(story).toHaveProperty('tasks')
+    expect(story).toHaveProperty('locks')
+  })
+
+  it('普通用户与访客都拿不到', async () => {
+    const guest = await get_story(1, undefined, null)
+    expect(guest).not.toHaveProperty('tasks')
+    expect(guest).not.toHaveProperty('locks')
+
+    const plain = await get_story(1, undefined, viewer({ permissions: [{ field: 'content_private', level: 'read' }] }))
+    expect(plain).not.toHaveProperty('tasks')
+    expect(plain).not.toHaveProperty('locks')
+  })
+})
+
 describe('get_story version check', () => {
   const base = { updated_at: '2026-01-01 00:00:00', viewer_key: 'anon:false' }
 
