@@ -33,7 +33,7 @@ EXPOSE 3042
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3042)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # 浏览器侧的 MQTT 地址只能运行期注入，派生逻辑必须随镜像发布（见 docker-entrypoint.sh：
-# compose 文件是服务器上单独维护的，CI 只推镜像，放在那里会走岔）。
+# 镜像要能脱离 compose 单独 `docker run`，而且跟着镜像一起被验证，不依赖部署那一步）。
 # sed 是必需的：Windows 工作区里这个脚本可能是 CRLF，而 #!/bin/sh\r 会让 exec 直接
 # 报 "no such file or directory" —— 容器起不来，且只有真跑起来才看得见。chmod 同理，
 # Windows 检出没有可执行位。
