@@ -12,6 +12,8 @@
 #   IMAGE             完整镜像地址（含 :latest）
 #   ACR_USERNAME / ACR_PASSWORD
 #   HEALTH_ATTEMPTS / HEALTH_INTERVAL_SECONDS   可选，健康门窗口（默认 72 × 5s = 6 分钟）
+#   SERVICE                                     可选，compose 里的服务名（默认 app），
+#                                               容器用它来解析，不靠容器的实际名字
 #
 # 设计取舍（2026-10-09 事故后加的）：
 #   - 健康门的**唯一**决定性失败信号是容器 exited / restarting。超时（容器仍在
@@ -27,16 +29,24 @@ set -eu
 : "${ACR_USERNAME:?ACR_USERNAME 未设置}"
 : "${ACR_PASSWORD:?ACR_PASSWORD 未设置}"
 
-CONTAINER=stupig-tv
 ATTEMPTS=${HEALTH_ATTEMPTS:-72}
 INTERVAL=${HEALTH_INTERVAL_SECONDS:-5}
+SERVICE=${SERVICE:-app}
 
 cd "$DEPLOY_DIR"
 
+# 容器名必须问 compose，不能写死：服务器上的 compose 是单独维护的，project 前缀由
+# 目录名决定（实际叫 stupig-tv-app-1），写死名字会让健康门永远看不到容器 ——
+# 2026-10-09 第一次上线时就是这样：容器其实健康，门却超时判失败，回滚锚点也是空的。
+resolve_container() {
+  docker compose ps -q "$SERVICE" 2>/dev/null | head -n 1
+}
+
 echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
 
-previous_image=$(docker inspect --format '{{.Image}}' "$CONTAINER" 2>/dev/null || true)
-echo "previous image: ${previous_image:-<none>}"
+previous_container=$(resolve_container)
+previous_image=$(docker inspect --format '{{.Image}}' "$previous_container" 2>/dev/null || true)
+echo "previous container: ${previous_container:-<none>} image: ${previous_image:-<none>}"
 
 docker compose pull
 docker compose up -d
@@ -47,8 +57,14 @@ wait_until_ready() {
   attempt=0
   while [ "$attempt" -lt "$ATTEMPTS" ]; do
     attempt=$((attempt + 1))
-    status=$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)
-    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER" 2>/dev/null || echo missing)
+    # 每次重新解析：容器在 up -d / 回滚时会被重建，ID 随之改变
+    container=$(resolve_container)
+    if [ -z "$container" ]; then
+      echo "[$attempt/$ATTEMPTS] 没找到 $SERVICE 服务的容器" >&2
+      return 1
+    fi
+    status=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || echo missing)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || echo missing)
     echo "[$attempt/$ATTEMPTS] status=$status health=$health"
     case "$status" in
       running)
@@ -85,7 +101,7 @@ fi
 echo "--- docker compose ps ---"
 docker compose ps || true
 echo "--- 容器最后 80 行日志 ---"
-docker logs --tail 80 "$CONTAINER" 2>&1 || true
+docker logs --tail 80 "$(resolve_container)" 2>&1 || true
 
 if [ "$readiness" -eq 2 ]; then
   echo "容器仍在运行但没有通过健康检查，未自动回滚（可能是慢启动）。" >&2

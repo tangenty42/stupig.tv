@@ -73,4 +73,14 @@ describe('部署的健康检查与自愈接线', () => {
     // 内联在 workflow 里的 SSH 命令谁也测不了；脚本可以在本地跑（见其同名测试）
     expect(read('.github/workflows/deploy.yml')).toMatch(/< scripts\/deploy-remote\.sh/)
   })
+
+  it('远端脚本按 compose 的服务名解析容器，不写死容器名', () => {
+    const script = read('scripts/deploy-remote.sh')
+
+    // 服务器上的 compose 是单独维护的，容器实际叫 <project>-<service>-1
+    // （线上是 stupig-tv-app-1）。写死名字 → docker inspect 报 No such container →
+    // 健康门永远看不到容器、回滚锚点也是空的：2026-10-09 第一次上线就踩了这个。
+    expect(script).toMatch(/docker compose ps -q "\$SERVICE"/)
+    expect(script).not.toMatch(/^CONTAINER=/m)
+  })
 })

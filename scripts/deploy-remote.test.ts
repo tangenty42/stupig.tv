@@ -60,8 +60,17 @@ pop() {
 }
 
 case "$1" in
-  login|compose|tag|image)
+  login|tag|image)
     echo "$*" >> "$STUB_DIR/calls"
+    exit 0
+    ;;
+  compose)
+    echo "$*" >> "$STUB_DIR/calls"
+    # "compose ps -q <service>" 是脚本解析容器的方式（不靠固定容器名）。容器 ID
+    # 故意取一个与任何名字都不像的值：写死 stupig-tv 的实现在这里就会暴露。
+    case "$*" in
+      *"ps -q"*) echo "$STUB_CONTAINER_ID" ;;
+    esac
     exit 0
     ;;
   inspect)
@@ -96,6 +105,8 @@ interface Scenario {
   statuses: string[]
   healths: string[]
   previous_image?: string
+  /** 设为空字符串即模拟"compose 找不到该服务的容器" */
+  container_id?: string
 }
 
 function run_deploy(scenario: Scenario): RunResult {
@@ -128,6 +139,7 @@ function run_deploy(scenario: Scenario): RunResult {
       HEALTH_INTERVAL_SECONDS: '0',
       STUB_DIR: dir,
       STUB_PREVIOUS_IMAGE: scenario.previous_image ?? '',
+      STUB_CONTAINER_ID: scenario.container_id ?? 'a1b2c3d4e5f6',
     },
   }) as SpawnSyncReturns<string>
 
@@ -163,6 +175,23 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.output).toContain('部署完成')
     expect(result.calls.some(call => call.startsWith('image prune'))).toBe(true)
     expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
+    // 容器是问 compose 要的，不是写死名字找的（服务器上叫 stupig-tv-app-1）
+    expect(result.calls).toContain('compose ps -q app')
+    expect(result.output).toContain('a1b2c3d4e5f6')
+  })
+
+  it('compose 里找不到容器：当作确定的坏消息，而不是干等超时', () => {
+    const result = run_deploy({
+      statuses: [],
+      healths: [],
+      container_id: '',
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('没找到 app 服务的容器')
+    // 找不到容器时等满窗口毫无意义：应当立刻判失败
+    expect(result.output).not.toContain('等待')
+    expect(result.output).toContain('没有可回滚的旧镜像')
   })
 
   it('容器退出：回滚到 pull 之前那一版，站点自己恢复，部署以失败退出', () => {
