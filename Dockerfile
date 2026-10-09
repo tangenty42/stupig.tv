@@ -25,6 +25,13 @@ COPY config ./config
 # 迁移以挂载/复制的文件为准（不进 .output），启动时自动应用
 COPY migrations ./migrations
 EXPOSE 3042
+# 容器级健康检查：探针跟着镜像走，所以不经 compose 的 `docker run` 也有（compose 里
+# 那份同名检查会覆盖它，两边都指向 /healthz，不会走岔）。必须用 shell 形式以便运行时
+# 读 PORT —— compose 会用 .env 的 APP_PORT 覆盖它，在这里写死 3042 意味着换端口部署
+# 就永远 unhealthy。node 自带 fetch，基础镜像里没有 curl/wget 也不需要。
+# start-period 要涵盖启动前的迁移（ENTRYPOINT 先跑 migrate 再起服务）。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3042)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # 浏览器侧的 MQTT 地址只能运行期注入，派生逻辑必须随镜像发布（见 docker-entrypoint.sh：
 # compose 文件是服务器上单独维护的，CI 只推镜像，放在那里会走岔）。
 # sed 是必需的：Windows 工作区里这个脚本可能是 CRLF，而 #!/bin/sh\r 会让 exec 直接

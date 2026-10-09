@@ -19,13 +19,18 @@ services:
       # 只绑回环，外部流量由 openresty 反代进来
       - 127.0.0.1:${APP_PORT}:${APP_PORT}
     healthcheck:
-      # 端口由 compose 从 .env 的 APP_PORT 插值（与上面的 PORT / ports 同源），
-      # 别写成容器内的 ${process.env.APP_PORT}：compose 会先按自己的格式解析而报错
-      test: [CMD, node, -e, 'fetch("http://127.0.0.1:${APP_PORT}/").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      # 探 /healthz 而不是 /：首页 SSR 渲染成功不代表数据库可用。镜像自带一份等价的
+      # HEALTHCHECK，这里保留一份是为了能按 .env 的 APP_PORT 插值（镜像里只能运行时
+      # 读 PORT）。端口必须用 compose 插值，别写成 ${process.env.APP_PORT}：compose
+      # 会先按自己的格式解析而报错。
+      #
+      # 注意：这个文件在服务器上是单独维护的一份，改动要同步过去才生效（CD 只推镜像）。
+      test: [CMD, node, -e, 'fetch("http://127.0.0.1:${APP_PORT}/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      # 涵盖启动前的迁移（CMD 先 migrate 再起服务），太短会把慢启动误判为不健康
+      start_period: 120s
 
 networks:
   default:

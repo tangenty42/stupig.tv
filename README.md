@@ -42,6 +42,16 @@ Every port, host and credential comes from `.env`; start from `.env.example`.
   on purpose). Existing databases whose schema was built by hand need a one-off
   `docker exec stupig-tv node .output/server/maintenance/migrate.mjs --baseline`;
   `--status` is read-only and lists what is pending
+- Health and self-healing: the image ships a `HEALTHCHECK` (and `docker-compose.yml`
+  an equivalent one) probing `/healthz`, which asks the database and the migration
+  ledger — a 200 on `/` would prove neither. CD runs `scripts/deploy-remote.sh` on the
+  server, which waits for the container to become healthy: if it exits or enters a
+  restart loop the deploy rolls back to the image that was running before, and either
+  way the workflow fails loudly instead of reporting a green deploy over a dead site.
+  A container that is merely slow (still running, not yet healthy) does *not* trigger a
+  rollback — only the logs and a red run. Remember that `docker-compose.yml` is
+  maintained by hand on the server, so changes to it must be copied there; the image's
+  own healthcheck needs no such step.
 - Add a scheduled task to run the storage cleanup: 1panel 计划任务 → 类型选「容器内执行」→
   容器 `stupig-tv` → 命令 `cd /app && node .output/server/maintenance/cleanup.mjs --delete --grace-hours=168`
   （`cd /app` 不能省：配置加载以 cwd 为基准找 `config/*.yaml`。先用不带 `--delete`
