@@ -37,6 +37,11 @@ jobs:
           echo "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ vars.SSH_PORT }}" -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          # 仓库里的 compose 是线上编排的唯一来源：先送过去，由远端脚本校验后换到位
+          # （旧的备份成 docker-compose.yml.bak）。以前这份文件只在服务器上，会悄悄
+          # 漂移（探针探 /、缺 container_name），而仓库里那份看起来是好的。
+          scp -P "${{ vars.SSH_PORT }}" docker-compose.yml \
+            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:${{ vars.DEPLOY_DIR }}/docker-compose.yml.incoming"
           # 远端序列在 scripts/deploy-remote.sh：SSH → 远端 shell 的两层引号转义本身就是
           # 事故来源，脚本可以在本地用替身 docker 跑（scripts/deploy-remote.test.ts）。
           # 它内部带健康门：容器起不来就回滚到旧镜像，并让这一步红掉。
