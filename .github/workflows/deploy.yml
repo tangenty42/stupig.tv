@@ -37,9 +37,13 @@ jobs:
           echo "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ vars.SSH_PORT }}" -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          # 远端序列在 scripts/deploy-remote.sh：SSH → 远端 shell 的两层引号转义本身就是
+          # 事故来源，脚本可以在本地用替身 docker 跑（scripts/deploy-remote.test.ts）。
+          # 它内部带健康门：容器起不来就回滚到旧镜像，并让这一步红掉。
           ssh -p "${{ vars.SSH_PORT }}" "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
-            "cd ${{ vars.DEPLOY_DIR }} \
-             && echo '${{ secrets.ACR_PASSWORD }}' | docker login '${IMAGE%%/*}' -u '${{ secrets.ACR_USERNAME }}' --password-stdin \
-             && docker compose pull \
-             && docker compose up -d \
-             && docker image prune -f"
+            "DEPLOY_DIR='${{ vars.DEPLOY_DIR }}' \
+             IMAGE='$IMAGE' \
+             ACR_USERNAME='${{ secrets.ACR_USERNAME }}' \
+             ACR_PASSWORD='${{ secrets.ACR_PASSWORD }}' \
+             sh -s" \
+            < scripts/deploy-remote.sh
