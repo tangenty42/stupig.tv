@@ -56,6 +56,7 @@ pnpm test                # vitest run
 ## 5. 数据库与迁移
 
 - **`migrations/` 是结构的唯一事实源**（历史的手工 dump 已删除）。表名 snake_case，时间戳 `TIMESTAMP` 存 UTC，布尔字段是 `tinyint(1)`，返回客户端前 `Boolean()` 转换。
+- **已应用的迁移是冻结的，一个字节都不能改** —— 运行器记录每个文件的 sha256，不一致就拒绝执行（容器启动失败）。连注释和空白也算：2026-10-09 就是这么把生产搞挂的。新增迁移要在同一个提交里把 hash 补进 `scripts/frozen-migrations.test.ts`；CI 在空库上重放，**发现不了**对已应用文件的改动。遇到 `已应用的迁移文件被改动或删除了` 时，先分辨是"行尾造成的假警报"还是"真的被改了"，两者修法相反 —— 判定规则与修复 SQL 见 [`.github/instructions/migrations.instructions.md`](../.github/instructions/migrations.instructions.md) 的 "Recovering from ..." 一节。
 - 迁移执行器 `scripts/migrate.ts`：checksum 篡改检测、`GET_LOCK` 并发保护、`--status`/`--dry-run` 只读、`--baseline` 登记存量库；**对"有业务表但没有迁移记录"的存量库会自动 baseline**（登记而不重放）。
 - 容器启动自动执行迁移，失败则容器起不来（有意如此）。CI 的 `migrations` job 会在全新 MySQL 8.4 上做空库全量重放 + 二次执行幂等验证 + 结构断言（`content_locks`/`content_tasks`/`content_task_items` 存在，`content_operation_locks` 已删）。
 - 需要改结构时：**写新的增量迁移**，不要改已应用的迁移文件（checksum 会拒绝）。
@@ -103,7 +104,7 @@ pnpm test                # vitest run
 - **PowerShell 把 `[id]` 当通配符**：`Select-String -Path 'app/pages/content/[id]/edit.vue'` 会**静默返回空**。用 `-LiteralPath`，或改用 ripgrep / `grep` 工具。
 - **中文经 PowerShell 管道会乱码**：给原生命令（`gh`、`python`）传含中文的内容时，走 UTF-8 文件（`[System.IO.File]::WriteAllText(path, text, New-Object System.Text.UTF8Encoding($false))`），不要用管道；不要用 `Set-Content -Encoding UTF8`（会带 BOM，GitHub API 会 400）。用 PowerShell 做字符串替换改含中文的源码也很容易掉字符——优先用编辑器工具而不是 `-replace`。
 - **`gh api` 改 Ruleset 必须用 PUT**（不是 PATCH），且 JSON 不能带 BOM。
-- **新写的守卫必须能变红**：先故意破坏被守护的行为、确认测试失败、再恢复。不会失败的测试比没有测试更糟。
+- **新写的守卫必须能变红**：先故意破坏被守护的行为、确认测试失败、再恢复。不会失败的测试比没有测试更糟。`scripts/frozen-migrations.test.ts` 就是这条规则的产物（2026-10-09 生产事故后补的）。
 - **不要为了让测试过而放宽断言**；expectation 与实现谁对，先判断再改。
 - **子代理不可用**：本环境的 `explore`/`general-purpose` 子代理会以 `400 The requested model is not supported` 失败，探查工作要自己做。
 - 测试环境是 Node、**没有 DOM**：需要真实浏览器行为（canvas、布局、指针事件）的东西不在单测范围内；`import.meta.client` 被强制为 `true`。
