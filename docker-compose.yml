@@ -1,6 +1,11 @@
 # 服务器端编排：应用容器接入外部 Docker 网络（EXTERNAL_DOCKER_NETWORK，
 # 当前为 1panel 的网络），直连该网络里的 MySQL / Redis / EMQX。
 # .env 放本文件旁边，密钥由 compose 注入容器，不进镜像。
+#
+# 这份文件是唯一的副本：CD 会在 `docker compose pull` 之前把它送到服务器
+# ${DEPLOY_DIR}，并把服务器上的旧文件留成 docker-compose.yml.bak（见
+# scripts/deploy-remote.sh）。所以改这里就等于改线上，不需要手工同步 —— 反过来，
+# 服务器上直接改这份文件会被下一次部署覆盖。
 
 services:
   app:
@@ -13,8 +18,8 @@ services:
       NODE_ENV: production
       PORT: ${APP_PORT}
       # 浏览器侧的 MQTT 地址不需要在这里映射：镜像自带的 docker-entrypoint.sh 会用
-      # .env 里的 MQTT_WEB_URL 派生 NUXT_PUBLIC_MQTT_WEB_URL（CI 只推镜像，compose
-      # 文件在服务器上单独维护，映射写在这里会与镜像走岔）。
+      # .env 里的 MQTT_WEB_URL 派生 NUXT_PUBLIC_MQTT_WEB_URL（不经 compose 也能工作，
+      # 由镜像构建时的实测覆盖）。
     ports:
       # 只绑回环，外部流量由 openresty 反代进来
       - 127.0.0.1:${APP_PORT}:${APP_PORT}
@@ -23,8 +28,6 @@ services:
       # HEALTHCHECK，这里保留一份是为了能按 .env 的 APP_PORT 插值（镜像里只能运行时
       # 读 PORT）。端口必须用 compose 插值，别写成 ${process.env.APP_PORT}：compose
       # 会先按自己的格式解析而报错。
-      #
-      # 注意：这个文件在服务器上是单独维护的一份，改动要同步过去才生效（CD 只推镜像）。
       test: [CMD, node, -e, 'fetch("http://127.0.0.1:${APP_PORT}/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
       interval: 30s
       timeout: 5s

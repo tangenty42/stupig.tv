@@ -1,6 +1,6 @@
 import type { SpawnSyncReturns } from 'node:child_process'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -70,6 +70,8 @@ case "$1" in
     # 故意取一个与任何名字都不像的值：写死 stupig-tv 的实现在这里就会暴露。
     case "$*" in
       *"ps -q"*) echo "$STUB_CONTAINER_ID" ;;
+      # 校验送来的 compose：默认通过，STUB_COMPOSE_CONFIG_FAILS 非空则失败
+      *"config -q"*) [ -n "\${STUB_COMPOSE_CONFIG_FAILS:-}" ] && exit 1 ;;
     esac
     exit 0
     ;;
@@ -99,6 +101,8 @@ interface RunResult {
   status: number | null
   output: string
   calls: string[]
+  /** 部署目录里留下什么（compose 换位/备份的断言要看它） */
+  files: Record<string, string>
 }
 
 interface Scenario {
@@ -107,6 +111,10 @@ interface Scenario {
   previous_image?: string
   /** 设为空字符串即模拟"compose 找不到该服务的容器" */
   container_id?: string
+  /** 预置到部署目录的文件（用来模拟服务器上已有的 compose 与送来的那一份） */
+  files?: Record<string, string>
+  /** 让 `compose config` 校验失败（模拟送来的 compose 有问题） */
+  compose_config_fails?: boolean
 }
 
 function run_deploy(scenario: Scenario): RunResult {
@@ -120,6 +128,8 @@ function run_deploy(scenario: Scenario): RunResult {
   writeFileSync(join(dir, 'status_queue'), `${scenario.statuses.join('\n')}\n`)
   writeFileSync(join(dir, 'health_queue'), `${scenario.healths.join('\n')}\n`)
   writeFileSync(join(dir, 'calls'), '')
+  for (const [name, content] of Object.entries(scenario.files ?? {}))
+    writeFileSync(join(dir, name), content)
 
   const shell_dir = shell ? shell.replace(/[/\\][^/\\]+$/, '') : ''
   const result = spawnSync(shell!, [script_path], {
@@ -140,12 +150,20 @@ function run_deploy(scenario: Scenario): RunResult {
       STUB_DIR: dir,
       STUB_PREVIOUS_IMAGE: scenario.previous_image ?? '',
       STUB_CONTAINER_ID: scenario.container_id ?? 'a1b2c3d4e5f6',
+      STUB_COMPOSE_CONFIG_FAILS: scenario.compose_config_fails ? '1' : '',
     },
   }) as SpawnSyncReturns<string>
 
   const calls = readFileSync(join(dir, 'calls'), 'utf-8').split('\n').filter(Boolean)
+  const files: Record<string, string> = {}
+  for (const name of readdirSync(dir)) {
+    // 队列/记录文件是测试自己的脚手架，不是被测对象留下的东西
+    if (['fakebin', 'status_queue', 'health_queue', 'calls'].includes(name))
+      continue
+    files[name] = readFileSync(join(dir, name), 'utf-8')
+  }
   rmSync(dir, { recursive: true, force: true })
-  return { status: result.status, output: `${result.stdout}${result.stderr}`, calls }
+  return { status: result.status, output: `${result.stdout}${result.stderr}`, calls, files }
 }
 
 const needs_shell = shell ? describe : describe.skip
@@ -253,5 +271,44 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.status).not.toBe(0)
     expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
     expect(result.output).toContain('未自动回滚')
+  })
+
+  it('送来的 compose 换到位，服务器上那份留成备份', () => {
+    const result = run_deploy({
+      statuses: ['running'],
+      healths: ['healthy'],
+      previous_image: 'sha256:old',
+      files: {
+        'docker-compose.yml': 'old-compose\n',
+        'docker-compose.yml.incoming': 'new-compose\n',
+      },
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.files['docker-compose.yml']).toBe('new-compose\n')
+    expect(result.files['docker-compose.yml.bak']).toBe('old-compose\n')
+    expect(result.files['docker-compose.yml.incoming']).toBeUndefined()
+    // 换文件前要先校验：坏文件会把下次部署也一起弄坏
+    expect(result.output).toContain('compose 已更新')
+  })
+
+  it('送来的 compose 校验不过：保留服务器上那份，且不去动容器', () => {
+    const result = run_deploy({
+      statuses: ['running'],
+      healths: ['healthy'],
+      previous_image: 'sha256:old',
+      compose_config_fails: true,
+      files: {
+        'docker-compose.yml': 'old-compose\n',
+        'docker-compose.yml.incoming': 'broken: [\n',
+      },
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.files['docker-compose.yml']).toBe('old-compose\n')
+    expect(result.files['docker-compose.yml.bak']).toBeUndefined()
+    expect(result.output).toContain('校验失败')
+    // 连镜像都不该拉：这一步失败就已经决定这次部署不成立
+    expect(result.calls.some(call => call.startsWith('compose pull'))).toBe(false)
   })
 })
