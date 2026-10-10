@@ -3,9 +3,7 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { publish_task_snapshot } from '@server/lib/sync'
-import { runtime_config } from '@shared/config'
-
-const config = runtime_config()
+import { settings } from '@shared/settings'
 
 /**
  * Attachment task storage (docs/content-task-refactor.md §3/§5). A task is one
@@ -192,7 +190,7 @@ export async function list_scope_tasks(scope_id: number): Promise<ContentTaskWit
        OR updated_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
      )
      ORDER BY id`,
-    [scope_id, config.app.content.task.retentionHours],
+    [scope_id, settings.app.content.task.retentionHours],
   )
   return with_items(rows)
 }
@@ -317,7 +315,7 @@ export async function list_expired_tasks(): Promise<number[]> {
      WHERE status IN ('done', 'failed', 'cancelled')
        AND updated_at < DATE_SUB(NOW(), INTERVAL ? HOUR)
      ORDER BY id LIMIT 500`,
-    [config.app.content.task.retentionHours],
+    [settings.app.content.task.retentionHours],
   )
   return rows.map(row => Number(row.id))
 }

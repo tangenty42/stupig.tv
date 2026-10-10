@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { runtime_config } from '@shared/config'
+import { runtime_config } from '@config/loader'
 
 const config = runtime_config()
 

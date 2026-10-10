@@ -5,11 +5,9 @@ import { db } from '@server/lib/db'
 import { error_fields, log_error } from '@server/lib/log'
 import { acquire_path_locks, release_path_locks, release_task_locks, renew_task_locks } from '@server/lib/operation-lock'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { runtime_config } from '@shared/config'
+import { settings } from '@shared/settings'
 import { discard_task_staging, execute_task, task_lock_paths } from './task-operations.service'
 import { delete_finished_task, get_task, heartbeat_task, is_terminal_task_status, list_expired_tasks, list_queued_tasks, publish_task_state, transition_task } from './task.service'
-
-const config = runtime_config()
 
 /**
  * The attachment task runner (docs/content-task-refactor.md §5): an in-process
@@ -36,7 +34,7 @@ export function start_task_runner() {
     return
   timer = setInterval(() => {
     void tick()
-  }, config.app.content.task.sweepIntervalSeconds * 1000)
+  }, settings.app.content.task.sweepIntervalSeconds * 1000)
   // The interval must not keep the process alive on its own (tests, CLI runs).
   timer.unref?.()
 }
@@ -204,7 +202,7 @@ async function sweep_expired_locks() {
 async function fail_stale_queued_tasks() {
   const [rows] = await db.execute<RowDataPacket[]>(
     'SELECT id FROM content_tasks WHERE status = \'queued\' AND created_at < DATE_SUB(NOW(), INTERVAL ? SECOND)',
-    [config.app.content.task.queuedTimeoutSeconds],
+    [settings.app.content.task.queuedTimeoutSeconds],
   )
   for (const row of rows) {
     await transition_task(Number(row.id), 'failed', { error: '操作冲突，请稍后再试' }).catch(() => {})

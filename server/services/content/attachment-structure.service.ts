@@ -8,10 +8,8 @@ import { random_file_token } from '@server/lib/random'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { create_folder_rows, delete_folder_rows, delete_rows_by_ids, get_scope_attachment, list_folder_subtree_rows, list_scope_attachments, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id } from '@server/services/content-attachments.service'
 import { get_story } from '@server/services/content/story.service'
-import { runtime_config } from '@shared/config'
 import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, is_encrypted_attachment, link_file_name_byte_length, normalized_attachment_extension, rename_attachment_references, sanitize_attachment_segment } from '@shared/content-markdown'
-
-const config = runtime_config()
+import { settings } from '@shared/settings'
 
 /** Attachment files and explicit folders of a story's scope. */
 export async function attachment_scope_payload(story_id: number) {
@@ -217,7 +215,7 @@ function suffixed_attachment_name(file_name: string, ext: string) {
   const base = attachment_base_name(file_name)
   const stem = ext ? base.slice(0, - ext.length) : base
   const suffix = `-${random_file_token()}`
-  const stem_limit = config.app.content.link.fileNameMaxBytes - link_file_name_byte_length(suffix) - link_file_name_byte_length(ext)
+  const stem_limit = settings.app.content.link.fileNameMaxBytes - link_file_name_byte_length(suffix) - link_file_name_byte_length(ext)
   // The stem is not a file name — the extension is appended separately and
   // already lowercased by the caller — so this cleans the segment only.
   return attachment_path_join(attachment_folder_of(file_name), `${sanitize_attachment_segment(stem, Math.max(stem_limit, 1))}${suffix}${ext}`)

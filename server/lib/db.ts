@@ -1,4 +1,4 @@
-import { runtime_config } from '@shared/config'
+import { runtime_config } from '@config/loader'
 import mysql from 'mysql2/promise'
 
 const config = runtime_config()

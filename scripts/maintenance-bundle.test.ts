@@ -29,8 +29,7 @@ beforeAll(async () => {
   await cp(build_output, bundle)
 }, 120_000)
 
-// 维护脚本在生产容器里跑（NODE_ENV=production，只有 default.yaml 生效），
-// 其连接信息全靠插值；env 变量把主机指向本机的关闭端口，必然拒连
+// Production bundles run without source files or node_modules; config files are shipped separately.
 const bundle_env = {
   NODE_ENV: 'production',
   MYSQL_HOST: '127.0.0.1',
@@ -41,6 +40,7 @@ const bundle_env = {
   MQTT_HOST: '127.0.0.1',
   MQTT_TCP_PORT: '1',
   MQTT_WEB_URL: 'ws://localhost:8083/mqtt',
+  NUXT_OTP_DEBUG: 'false',
   JWT_SECRET: 'p'.repeat(40),
   ALIYUN_ACCESS_KEY_ID: 'placeholder',
   ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
@@ -73,7 +73,7 @@ describe('维护脚本产物', () => {
   })
 
   it('迁移产物同样能在容器里跑起来（只读 --status，不写库）', async () => {
-    const env = { ... process.env, ... bundle_env }
+    const env = { NODE_ENV: 'production', MYSQL_HOST: '127.0.0.1', MYSQL_PORT: '1', MYSQL_PASSWORD: 'placeholder' }
     const migrate = resolve(work_dir, 'migrate.mjs')
     await cp(resolve(project_root, '.output/server/maintenance/migrate.mjs'), migrate)
 

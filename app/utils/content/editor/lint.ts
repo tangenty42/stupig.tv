@@ -21,22 +21,21 @@ export interface LintListItem {
   source: string | null
 }
 
-/** Subset of the public runtime config the story lint needs. */
 export interface StoryLintLimits {
-  content_story_title_max_length: number
-  content_story_label_max_bytes: number
-  content_story_desc_max_bytes: number
-  content_story_cover_max_bytes: number
-  content_story_markdown_max_bytes: number
+  titleMaxLength: number
+  labelMaxBytes: number
+  descMaxBytes: number
+  coverMaxBytes: number
+  markdownMaxBytes: number
 }
 
 export function story_lint_config(limits: StoryLintLimits, stories: ContentStorySummary[], story_id: number | null): ContentMarkdownConfig {
   return {
-    title_max_length: limits.content_story_title_max_length,
-    label_max_bytes: limits.content_story_label_max_bytes,
-    desc_max_bytes: limits.content_story_desc_max_bytes,
-    cover_max_bytes: limits.content_story_cover_max_bytes,
-    markdown_max_bytes: limits.content_story_markdown_max_bytes,
+    title_max_length: limits.titleMaxLength,
+    label_max_bytes: limits.labelMaxBytes,
+    desc_max_bytes: limits.descMaxBytes,
+    cover_max_bytes: limits.coverMaxBytes,
+    markdown_max_bytes: limits.markdownMaxBytes,
     existing_titles: stories
       .filter(story => story.id !== story_id)
       .map(story => ({ id: story.id, title: story.title })),

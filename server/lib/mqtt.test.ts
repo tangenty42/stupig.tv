@@ -7,10 +7,14 @@ const mocks = vi.hoisted(() => {
       port: 1883,
       username: '',
       password: '',
-      qos: 1,
-      topicPrefix: 'test/sync',
-      clientIdPrefixServer: 'server',
-      publishQueueSize: 2,
+    },
+    integrations: {
+      mqtt: {
+        qos: 1,
+        topicPrefix: 'test/sync',
+        clientIdPrefixServer: 'server',
+        publishQueueSize: 2,
+      },
     },
   }
 
@@ -49,7 +53,7 @@ vi.mock('mqtt', () => ({
   default: { connect: mocks.connect },
 }))
 
-vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
+vi.mock('@config/loader', () => ({ runtime_config: () => mocks.config }))
 
 async function load_module() {
   vi.resetModules()

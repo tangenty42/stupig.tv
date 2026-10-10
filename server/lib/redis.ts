@@ -1,4 +1,4 @@
-import { runtime_config } from '@shared/config'
+import { runtime_config } from '@config/loader'
 import { Redis } from 'ioredis'
 import { log_warn } from './log'
 

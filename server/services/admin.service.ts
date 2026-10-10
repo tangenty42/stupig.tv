@@ -3,12 +3,12 @@ import type { UserRow } from '@server/services/profile.service'
 import type { AuthUser } from '@server/types/auth'
 import type { PermissionGrant } from '@shared/permissions'
 import type { RowDataPacket } from 'mysql2/promise'
+import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { format_profile_row, select_profile_row_sql } from '@server/services/profile.service'
 import { logout_all_user_sessions } from '@server/services/session.service'
-import { runtime_config } from '@shared/config'
 import { normalize_permission_grants } from '@shared/permissions'
 
 const config = runtime_config()

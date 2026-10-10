@@ -6,10 +6,8 @@ import { delete_object_best_effort, get_object, put_object } from '@server/lib/s
 import { list_scope_file_rows, list_scope_paths, update_attachment_row_encryption } from '@server/services/content-attachments.service'
 import { publish_attachment_change, publish_attachment_refresh, rewrite_story_attachment_refs, with_attachment_lock } from '@server/services/content/attachment-structure.service'
 import { get_story } from '@server/services/content/story.service'
-import { runtime_config } from '@shared/config'
 import { attachment_name_conflict_message, attachment_path_taken, decrypted_attachment_name, encrypted_attachment_suffix, is_encrypted_attachment } from '@shared/content-markdown'
-
-const config = runtime_config()
+import { settings } from '@shared/settings'
 
 export async function encrypt_attachments(story_id: number, file_names: string[]) {
   return await transform_attachment_encryption(story_id, 'encrypt', file_names)
@@ -54,7 +52,7 @@ async function transform_attachment_encryption(story_id: number, kind: 'encrypt'
       return { attachments, succeeded: [], skipped }
     }
     if (encrypting) {
-      const max_bytes = config.app.content.encrypt.maxSizeMb * 1024 * 1024
+      const max_bytes = settings.app.content.encrypt.maxSizeMb * 1024 * 1024
       for (const row of [... targets]) {
         if (Number(row.file_size) > max_bytes) {
           skipped.push({ file_name: row.file_name, reason: '文件太大' })

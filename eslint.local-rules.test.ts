@@ -1,6 +1,6 @@
 import type { Rule } from 'eslint'
-import { RuleTester } from 'eslint'
-import { describe, it } from 'vitest'
+import { ESLint, RuleTester } from 'eslint'
+import { describe, expect, it } from 'vitest'
 import plugin from './eslint.local-rules.mjs'
 
 const rule = plugin.rules['no-extensionless-package-subpath'] as Rule.RuleModule
@@ -36,4 +36,19 @@ tester.run('no-extensionless-package-subpath', rule, {
       errors: [{ messageId: 'extensionless' }],
     },
   ],
+})
+
+describe('yaml configuration formatting', () => {
+  it('requires block containers and a final newline', async () => {
+    const source = 'app: { modes: [light, dark] }'
+    const [result] = await new ESLint({ fix: false }).lintText(source, { filePath: 'config/formatting-fixture.yaml' })
+    expect(result?.messages.map(message => message.ruleId)).toEqual(expect.arrayContaining([
+      'yaml/block-mapping',
+      'yaml/block-sequence',
+      'style/eol-last',
+    ]))
+    const [fixed] = await new ESLint({ fix: true }).lintText(source, { filePath: 'config/formatting-fixture.yaml' })
+    expect(fixed?.errorCount).toBe(0)
+    expect(fixed?.output).toBe('app:\n  modes:\n    - light\n    - dark\n')
+  })
 })

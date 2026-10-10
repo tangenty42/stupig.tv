@@ -1,4 +1,5 @@
 import { story_markdown_template } from '@shared/content-markdown'
+import { settings } from '@shared/settings'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, nextTick, ref, watch } from 'vue'
@@ -27,9 +28,9 @@ import { computed, nextTick, ref, watch } from 'vue'
  * through that real ordering.
  */
 
-const DRAFT_PREFIX = 'stupig_content_draft_'
-const SCHEMA_VERSION = 2
-const AUTOSAVE_DELAY_MS = 1000
+const DRAFT_PREFIX = settings.app.content.draft.storagePrefix
+const SCHEMA_VERSION = settings.app.content.draft.schemaVersion
+const AUTOSAVE_DELAY_MS = settings.app.content.draft.autosaveDelayMs
 const STORY_ID = 24
 const STORY_KEY = `${DRAFT_PREFIX}${STORY_ID}`
 const NEW_KEY = `${DRAFT_PREFIX}new`
@@ -59,13 +60,6 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.stubGlobal('localStorage', mocks.localStorage)
-vi.stubGlobal('useRuntimeConfig', () => ({
-  public: {
-    content_draft_schema_version: SCHEMA_VERSION,
-    content_draft_storage_prefix: DRAFT_PREFIX,
-    content_draft_autosave_delay_ms: AUTOSAVE_DELAY_MS,
-  },
-}))
 // The store relies on Nuxt auto-imports; in a plain Node test they are globals.
 vi.stubGlobal('ref', ref)
 vi.stubGlobal('computed', computed)

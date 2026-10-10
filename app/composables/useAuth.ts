@@ -1,6 +1,7 @@
 import type { PermissionGrant } from '@shared/permissions'
 import type { AuthResult } from '@shared/types/auth'
 import { normalize_permission_grants } from '@shared/permissions'
+import { settings } from '@shared/settings'
 
 export interface LoginUser {
   id: number
@@ -14,14 +15,12 @@ export interface LoginUser {
 }
 
 export function useAuth() {
-  const runtime_config = useRuntimeConfig()
-  const config = runtime_config.public
   const { info, dead } = useMyToast()
 
-  const user = useCookie<LoginUser | null>(config.auth_user_cookie_name, {
+  const user = useCookie<LoginUser | null>(settings.app.auth.cookie.userName, {
     default: () => null,
     sameSite: 'lax',
-    maxAge: config.cookie_max_age,
+    maxAge: settings.app.auth.cookie.maxAgeDays * 86400,
   })
 
   function normalize_login_user(input: LoginUser) {
@@ -70,7 +69,7 @@ export function useAuth() {
     }
 
     try {
-      await $fetch(`${config.api_base}/trpc/auth.logout`, {
+      await $fetch(`${settings.app.api.base}/trpc/auth.logout`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

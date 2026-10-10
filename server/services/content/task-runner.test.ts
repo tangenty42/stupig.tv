@@ -120,7 +120,7 @@ vi.mock('@server/lib/sync', () => ({
 }))
 
 vi.mock('@server/lib/log', () => ({ log_error: vi.fn(), log_info: vi.fn(), log_warn: vi.fn(), error_fields: () => ({}) }))
-vi.mock('@shared/config', () => ({ runtime_config: () => ({ app: { content: { task: { sweepIntervalSeconds: 60, queuedTimeoutSeconds: 300 } } } }) }))
+vi.mock('@config/loader', () => ({ runtime_config: () => ({ app: { content: { task: { sweepIntervalSeconds: 60, queuedTimeoutSeconds: 300 } } } }) }))
 vi.mock('@server/lib/db', () => ({ db: { execute: vi.fn(async () => [[]]) } }))
 
 const { dispatch_task, run_task_synchronously, run_task_tick } = await import('@server/services/content/task-runner.service')

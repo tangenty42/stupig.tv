@@ -1,5 +1,6 @@
 import type { DataSyncEvent } from '@shared/types/sync'
 import type MqttClient from 'mqtt/lib/client'
+import { settings } from '@shared/settings'
 import { sync_resource } from '@shared/types/sync'
 import mqtt from 'mqtt'
 
@@ -50,8 +51,7 @@ function get_broadcast_channel() {
     return null
   }
 
-  const config = useRuntimeConfig().public
-  broadcast_channel = new BroadcastChannel(config.sync_broadcast_channel_name)
+  broadcast_channel = new BroadcastChannel(settings.app.client.sync.broadcastChannelName)
   return broadcast_channel
 }
 
@@ -59,8 +59,7 @@ function sync_client_id() {
   if (import.meta.server) {
     return ''
   }
-  const config = useRuntimeConfig().public
-  const key = config.sync_client_id_storage_key
+  const key = settings.app.client.sync.clientIdStorageKey
   let id = sessionStorage.getItem(key)
   if (! id) {
     id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -173,17 +172,16 @@ export function broadcast_login(user_id: number) {
 }
 
 function broker_ws_url() {
-  return useRuntimeConfig().public.mqtt_web_url
+  return useRuntimeConfig().public.mqtt.web.wsUrl
 }
 
 function broker_client_id() {
-  const config = useRuntimeConfig().public
   if (! current_client_id) {
     // One stable id per tab (sessionStorage) so reconnects resume the same
     // broker session: with clean=false and QoS 1, sessionPresent then tells us
     // whether offline events were queued, letting quick reconnects skip the
     // full refresh below.
-    current_client_id = `${config.mqtt_client_id_prefix_web}_${sync_client_id()}`
+    current_client_id = `${settings.integrations.mqtt.clientIdPrefixWeb}_${sync_client_id()}`
   }
   return current_client_id
 }
@@ -305,18 +303,17 @@ function sync_mqtt_subscriptions() {
     return
   }
   const listeners = get_listeners()
-  const config = useRuntimeConfig().public
 
   if (! mqtt_client?.connected) {
     return
   }
 
   const all_resources = Array.from(new Set([... listeners.keys(), ... collected_resources]))
-  const topics = all_resources.map(resource => `${config.mqtt_topic_prefix}/${resource}`)
+  const topics = all_resources.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
   if (topics.length) {
     const client = mqtt_client
     try {
-      client.subscribe(topics, { qos: config.mqtt_qos as 0 | 1 | 2 }, (err: any) => {
+      client.subscribe(topics, { qos: settings.integrations.mqtt.qos }, (err: any) => {
         if (err && ! err.message?.includes('Connection closed')) {
           console.error('[MQTT] subscribe failed', err)
         }
@@ -331,17 +328,15 @@ function update_mqtt_subscriptions(added: string[], removed: string[]) {
   if (import.meta.server) {
     return
   }
-  const config = useRuntimeConfig().public
-
   if (! mqtt_client?.connected) {
     return
   }
 
   if (added.length) {
     const client = mqtt_client
-    const topics = added.map(resource => `${config.mqtt_topic_prefix}/${resource}`)
+    const topics = added.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
     try {
-      client.subscribe(topics, { qos: config.mqtt_qos as 0 | 1 | 2 }, (err: any) => {
+      client.subscribe(topics, { qos: settings.integrations.mqtt.qos }, (err: any) => {
         if (err && ! err.message?.includes('Connection closed')) {
           console.error('[MQTT] subscribe failed', err)
         }
@@ -353,7 +348,7 @@ function update_mqtt_subscriptions(added: string[], removed: string[]) {
 
   if (removed.length) {
     const client = mqtt_client
-    const topics = removed.map(resource => `${config.mqtt_topic_prefix}/${resource}`)
+    const topics = removed.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
     try {
       client.unsubscribe(topics, (err: any) => {
         if (err && ! err.message?.includes('Connection closed')) {
@@ -611,11 +606,10 @@ export function useDataSync() {
       }
     })
 
-    const config = useRuntimeConfig().public
     // Watches the user cookie rather than the auth token: the token cookie is
     // now httpOnly and unreadable here, and login/logout move the user cookie in
     // lockstep, which is all this signal needs.
-    const user = useCookie(config.auth_user_cookie_name)
+    const user = useCookie(settings.app.auth.cookie.userName)
     watch(user, () => {
       if (! initial_gather_done) {
         return

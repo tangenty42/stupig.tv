@@ -1,4 +1,8 @@
-# 生产环境覆盖。只写与 default.yaml 不同的项，深度合并。
+# 生产环境覆盖。只写与 default.yaml 不同的项，按映射递归合并。
 
 site:
   indexable: true
+
+app:
+  otp:
+    debug: ${NUXT_OTP_DEBUG:-false}

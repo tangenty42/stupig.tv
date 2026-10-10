@@ -1,53 +1,12 @@
 import { resolve } from 'node:path'
 import Aura from '@primeuix/themes/aura'
-import { load_public_config } from './server/shared/config'
+import { load_settings } from './config/lib/loader'
+import { public_config_defaults } from './config/lib/schema'
 
-// 构建期没有 .env（Dockerfile/CI），而这里只需要下发到客户端的白名单，所以走
-// load_public_config：不校验密钥与连接信息，插值字段允许为空。白名单里唯一来自
-// .env 的 mqtt_web_url 在镜像里就是空串，容器启动时由镜像自带的 docker-entrypoint.sh
-// 从 MQTT_WEB_URL 派生 NUXT_PUBLIC_MQTT_WEB_URL 注入（见该脚本与 Dockerfile）；
-// 其余密钥/连接信息由运行时的 load_config 负责。
-const config = load_public_config()
-
-// 客户端可见配置的白名单映射。配置本体在 config/*.yaml，schema 与类型推导在
-// server/shared/config.ts；只有这里列出的字段会通过 runtimeConfig.public 下发。
-const public_config = {
-  api_base: config.app.api.base,
-  captcha_app_id: config.aliyun.captcha.appId ?? '',
-  color_mode_fallback: config.app.colorMode.fallback,
-  color_mode_cookie_name: config.app.colorMode.cookieName,
-  identity_cookie_name: config.app.identity.cookieName,
-  cookie_max_age: config.app.auth.cookie.maxAgeDays * 86400,
-  max_avatar_size_mb: config.app.avatar.maxSizeMb,
-  max_content_encrypt_size_mb: config.app.content.encrypt.maxSizeMb,
-  content_redact_max_dimension: config.app.content.redact.maxDimension,
-  content_story_title_max_length: config.app.content.story.titleMaxLength,
-  content_story_label_max_bytes: config.app.content.story.labelMaxBytes,
-  content_story_desc_max_bytes: config.app.content.story.descMaxBytes,
-  content_story_cover_max_bytes: config.app.content.story.coverMaxBytes,
-  content_story_markdown_max_bytes: config.app.content.story.markdownMaxBytes,
-  content_draft_schema_version: config.app.content.draft.schemaVersion,
-  content_draft_storage_prefix: config.app.content.draft.storagePrefix,
-  content_draft_autosave_delay_ms: config.app.content.draft.autosaveDelayMs,
-  content_upload_handle_storage_name: config.app.content.upload.handleStorageName,
-  content_task_client_id_storage_name: config.app.content.task.clientIdStorageName,
-  static_base_url: config.site.staticBaseUrl,
-  site_url: config.site.url,
-  site_indexable: config.site.indexable,
-  mqtt_web_url: config.mqtt.web.wsUrl,
-  mqtt_qos: config.mqtt.qos,
-  mqtt_topic_prefix: config.mqtt.topicPrefix,
-  mqtt_client_id_prefix_web: config.mqtt.web.clientIdPrefix,
-  timezone_cookie_name: config.app.timezone.cookieName,
-  auth_user_cookie_name: config.app.auth.cookie.userName,
-  sync_broadcast_channel_name: config.app.sync.broadcastChannelName,
-  sync_client_id_storage_key: config.app.sync.clientIdStorageKey,
-  ping_idle_interval_seconds: config.app.online.pingIdleIntervalSeconds,
-  poll_interval_seconds: config.app.online.pollIntervalSeconds,
-  online_timeout_seconds: config.app.online.timeoutSeconds,
-}
+const settings = load_settings()
 
 const alias = {
+  '@config': resolve(__dirname, './config/lib'),
   '@shared': resolve(__dirname, './server/shared'),
   '@server': resolve(__dirname, './server'),
 }
@@ -155,16 +114,12 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-06-22',
   alias,
 
-  // 开发端口只从 .env 的 APP_PORT 读：写进 pnpm 脚本的 `--port ${APP_PORT}` 不会
-  // 被展开（Windows 上脚本跑在 cmd.exe 里，且脚本环境本来就没有 .env），Nuxt 会拿到
-  // 字面量、Number() 得到 NaN，再静默回落到 3000。这里读 process.env 是安全的，
-  // 上面的 import 已经执行过 config.ts 里的 dotenv。
   devServer: {
-    port: Number(process.env.APP_PORT) || 3000,
+    port: Number(process.env.APP_PORT) || 3042,
   },
 
   runtimeConfig: {
-    public: public_config,
+    public: public_config_defaults,
   },
 
   devtools: { enabled: false },
@@ -201,10 +156,11 @@ export default defineNuxtConfig({
     // "Cannot find module" 报错。相对路径在容器(/app)和本地都能正确解析。
     errorHandler: './server/error-handler.ts',
     externals: {
-      inline: ['pinia'],
+      inline: ['pinia', 'yaml'],
     },
   },
   modules: [
+    './config/lib/nuxt-module',
     '@pinia/nuxt',
     '@primevue/nuxt-module',
     '@nuxtjs/color-mode',
@@ -227,10 +183,7 @@ export default defineNuxtConfig({
     },
   },
   site: {
-    url: public_config.site_url,
     name: 'Stupig 蠢猪小组',
-    // indexable 由 config 显式声明（本地在 local.yaml 覆盖为 false），不依赖 NODE_ENV
-    indexable: public_config.site_indexable,
   },
   sitemap: {
     sources: ['/api/_sitemap/urls'],
@@ -393,13 +346,13 @@ export default defineNuxtConfig({
     },
   },
   colorMode: {
-    fallback: public_config.color_mode_fallback,
+    fallback: settings.app.client.colorMode.fallback,
     globalName: '__NUXT_COLOR_MODE__',
     componentName: 'ColorScheme',
     classPrefix: '',
     classSuffix: '',
     storage: 'cookie',
-    storageKey: public_config.color_mode_cookie_name,
+    storageKey: settings.app.client.colorMode.cookieName,
   },
   legacy: {
     vite: {
@@ -413,9 +366,6 @@ export default defineNuxtConfig({
       htmlAttrs: {
         lang: 'zh-CN',
       },
-      link: [
-        { rel: 'icon', href: `${public_config.static_base_url}/imgs/Stupig_icon.svg` },
-      ],
       style: [
         { key: 'app-loading-mask-style', textContent: app_loading_mask_css },
       ],

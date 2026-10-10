@@ -41,6 +41,7 @@
 </template>
 
 <script setup lang="ts">
+import { settings } from '@shared/settings'
 import Cropper from 'cropperjs'
 import 'cropperjs/dist/cropper.css'
 
@@ -144,13 +145,12 @@ function init_cropper() {
 async function on_select_file(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  const config = useRuntimeConfig().public
 
   if (! file) {
     return
   }
 
-  const max_size_bytes = config.max_avatar_size_mb * 1024 * 1024
+  const max_size_bytes = settings.app.avatar.maxSizeMb * 1024 * 1024
   if (file.size > max_size_bytes) {
     error(`文件不能超过 ${format_bytes(max_size_bytes)}`)
     reset_file_input()

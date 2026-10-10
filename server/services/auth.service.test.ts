@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   sync: { publish_refresh: vi.fn() },
 }))
 
-vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
+vi.mock('@config/loader', () => ({ runtime_config: () => mocks.config }))
 vi.mock('@server/lib/db', () => ({ db: mocks.db }))
 vi.mock('@server/lib/captcha', () => mocks.captcha)
 vi.mock('@server/lib/sms', () => mocks.sms)

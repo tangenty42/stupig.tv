@@ -1,4 +1,4 @@
-// 从生产 MySQL dump 一份脱敏数据，供本地开发导入。凭据走 config（.env + YAML），无需输入。
+// 从生产 MySQL dump 一份脱敏数据，供本地开发导入。凭据走环境变量，无需输入。
 // 用法（在服务器或能连生产库的容器里执行）：
 //   pnpm db:dump:dev > stupig_tv_dev.sql
 //   pnpm db:dump:dev --gzip > stupig_tv_dev.sql.gz
@@ -12,7 +12,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { createGzip } from 'node:zlib'
-import { load_config } from '@server/shared/config'
+import { load_database_config } from '@config/loader'
 
 // "Dev@123456" 的 bcrypt 哈希（bcryptjs, rounds=10）
 const LOCAL_PASSWORD_HASH = '$2b$10$sT2LriomK70rzTJXync3GO0wK0ERbYBS24LrTBAv621WJ2EV/n3o6'
@@ -34,7 +34,7 @@ export function redact_dump_line(line: string, state: RedactState): string {
 }
 
 function dump_command(): { command: string, args: string[], env: NodeJS.ProcessEnv } {
-  const db = load_config().db
+  const db = load_database_config()
   const env = { ... process.env, MYSQL_PWD: db.password }
   const args = ['--single-transaction', '--routines', '--triggers', '--default-character-set=utf8mb4', db.name]
   // 有 docker 且目标容器存在时走 docker exec（服务器上库在容器网络里，host 不一定能直连）

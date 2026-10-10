@@ -1,4 +1,5 @@
 import { ApiError } from '@server/errors/ApiError'
+import { settings } from '@shared/settings'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // task-api 是编排层：断言它把校验、预签、回报、完成这几步按正确的顺序和边界
@@ -127,10 +128,6 @@ vi.mock('@server/lib/sync', () => ({
   sync_resource: (type: string, id: string | number) => `${type}:${id}`,
 }))
 
-vi.mock('@shared/config', () => ({
-  runtime_config: () => ({ app: { content: { upload: { signBatchSize: 2, urlTtlSeconds: 900 } } } }),
-}))
-
 const { cancel_content_task, report_task_item, resume_content_task, resume_task_item, sign_task_parts } = await import('@server/services/content/task-api.service')
 
 beforeEach(() => {
@@ -157,7 +154,7 @@ describe('sign_task_parts', () => {
       { key: 'content-upload/42/x', upload_id: 'up-1', part_number: 2 },
     ])
     expect(plan.parts.map(part => part.part_number)).toEqual([1, 2])
-    expect(plan).toMatchObject({ part_size: 50, upload_id: 'up-1', sign_batch_size: 2 })
+    expect(plan).toMatchObject({ part_size: 50, upload_id: 'up-1', sign_batch_size: settings.app.content.upload.signBatchSize })
     // 每次传输调用都续租
     expect(state.touched).toEqual([9])
   })
@@ -177,8 +174,11 @@ describe('sign_task_parts', () => {
   it('超出总分片数或超出批大小被拒绝', async () => {
     // bytes_total 100 / part_size 50 = 2 片
     await expect(sign_task_parts({ task_id: 9, item_id: 11, part_numbers: [3] })).rejects.toMatchObject({ statusCode: 400 })
-    // signBatchSize 为 2
-    await expect(sign_task_parts({ task_id: 9, item_id: 11, part_numbers: [1, 2, 3] })).rejects.toMatchObject({ statusCode: 400 })
+    const part_numbers = Array.from({ length: settings.app.content.upload.signBatchSize + 1 }, (_, index) => index + 1)
+    const task = make_task()
+    task.items[0]!.bytes_total = part_numbers.length * task.items[0]!.part_size
+    state.task = task
+    await expect(sign_task_parts({ task_id: 9, item_id: 11, part_numbers })).rejects.toMatchObject({ statusCode: 400 })
     expect(state.signed_parts).toEqual([])
   })
 

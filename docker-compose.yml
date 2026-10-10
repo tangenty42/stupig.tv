@@ -17,9 +17,6 @@ services:
     environment:
       NODE_ENV: production
       PORT: ${APP_PORT}
-      # 浏览器侧的 MQTT 地址不需要在这里映射：镜像自带的 docker-entrypoint.sh 会用
-      # .env 里的 MQTT_WEB_URL 派生 NUXT_PUBLIC_MQTT_WEB_URL（不经 compose 也能工作，
-      # 由镜像构建时的实测覆盖）。
     ports:
       # 只绑回环，外部流量由 openresty 反代进来
       - 127.0.0.1:${APP_PORT}:${APP_PORT}
@@ -28,7 +25,11 @@ services:
       # HEALTHCHECK，这里保留一份是为了能按 .env 的 APP_PORT 插值（镜像里只能运行时
       # 读 PORT）。端口必须用 compose 插值，别写成 ${process.env.APP_PORT}：compose
       # 会先按自己的格式解析而报错。
-      test: [CMD, node, -e, 'fetch("http://127.0.0.1:${APP_PORT}/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
+      test:
+        - CMD
+        - node
+        - -e
+        - 'fetch("http://127.0.0.1:${APP_PORT}/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
       interval: 30s
       timeout: 5s
       retries: 3

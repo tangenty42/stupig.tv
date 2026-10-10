@@ -131,6 +131,7 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { RedactionStroke } from '~/utils/content/redact'
 import { attachment_base_name, decrypted_attachment_name, redactable_attachment_mime } from '@shared/content-markdown'
+import { settings } from '@shared/settings'
 import { decrypted_blob_url } from '~/utils/content/attachment-crypto'
 import { encode_bmp, paint_redaction_stroke, paint_redaction_strokes } from '~/utils/content/redact'
 
@@ -152,10 +153,9 @@ const emit = defineEmits<{
 
 const static_url = useStaticUrl()
 const { error: toast_error } = useMyToast()
-const config = useRuntimeConfig().public
 // A file-size cap does not bound the decoded size, and a small PNG can inflate
 // into a canvas that exhausts the tab's memory.
-const max_editable_dimension = config.content_redact_max_dimension
+const max_editable_dimension = settings.app.content.redact.maxDimension
 // Wheel-zoom responsiveness: the scale factor is exponential in the wheel
 // delta, so a trackpad pinch and a mouse notch both feel proportional instead
 // of jumping a fixed step per event.

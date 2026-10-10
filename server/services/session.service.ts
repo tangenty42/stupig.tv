@@ -1,9 +1,9 @@
 import type { H3Event } from 'h3'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 
+import { runtime_config } from '@config/loader'
 import { db } from '@server/lib/db'
 import { get_client_ip } from '@server/lib/session'
-import { runtime_config } from '@shared/config'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 

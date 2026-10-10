@@ -1,7 +1,7 @@
 import type { User } from '@shared/types/user'
 import type { H3Event } from 'h3'
+import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
-import { runtime_config } from '@shared/config'
 import jwt from 'jsonwebtoken'
 
 const config = runtime_config()

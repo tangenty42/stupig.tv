@@ -1,3 +1,4 @@
+import { settings } from '@shared/settings'
 import { defineStore } from 'pinia'
 
 export interface ContentDraftRecord {
@@ -35,10 +36,9 @@ export function useContentDraftStore(target_story_id: number | null) {
 }
 
 function create_draft_state(target_story_id: number | null) {
-  const config = useRuntimeConfig().public
-  const draft_schema_version = config.content_draft_schema_version
-  const draft_storage_prefix = config.content_draft_storage_prefix
-  const autosave_delay_ms = config.content_draft_autosave_delay_ms
+  const draft_schema_version = settings.app.content.draft.schemaVersion
+  const draft_storage_prefix = settings.app.content.draft.storagePrefix
+  const autosave_delay_ms = settings.app.content.draft.autosaveDelayMs
   const storage_key = `${draft_storage_prefix}${target_story_id ?? 'new'}`
 
   const markdown = ref('')

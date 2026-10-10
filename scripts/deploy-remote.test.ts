@@ -115,6 +115,8 @@ interface Scenario {
   files?: Record<string, string>
   /** 让 `compose config` 校验失败（模拟送来的 compose 有问题） */
   compose_config_fails?: boolean
+  /** 部署目录里 .env 的内容；null 表示不存在（默认是一份无占位符的最小文件） */
+  env_content?: string | null
 }
 
 function run_deploy(scenario: Scenario): RunResult {
@@ -128,6 +130,11 @@ function run_deploy(scenario: Scenario): RunResult {
   writeFileSync(join(dir, 'status_queue'), `${scenario.statuses.join('\n')}\n`)
   writeFileSync(join(dir, 'health_queue'), `${scenario.healths.join('\n')}\n`)
   writeFileSync(join(dir, 'calls'), '')
+  // CD 会在跑远端脚本前把 .env 推到部署目录；默认预置一份能过闸门的
+  const env_content = scenario.env_content === undefined ? 'APP_PORT=3042\n' : scenario.env_content
+  if (env_content !== null) {
+    writeFileSync(join(dir, '.env'), env_content)
+  }
   for (const [name, content] of Object.entries(scenario.files ?? {}))
     writeFileSync(join(dir, name), content)
 
@@ -196,6 +203,35 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     // 容器是问 compose 要的，不是写死名字找的（服务器上叫 stupig-tv-app-1）
     expect(result.calls).toContain('compose ps -q app')
     expect(result.output).toContain('a1b2c3d4e5f6')
+  })
+
+  it('.env 缺失：中止部署，不碰运行中的容器', () => {
+    const result = run_deploy({
+      statuses: ['running'],
+      healths: ['healthy'],
+      previous_image: 'sha256:old',
+      env_content: null,
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('.env 缺失')
+    // 在 up 之前中止：容器与镜像标签都不动，也就不需要回滚
+    expect(result.calls.some(call => call.startsWith('compose up'))).toBe(false)
+    expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
+  })
+
+  it('.env 还有 <required> 占位符：同样中止部署', () => {
+    const result = run_deploy({
+      statuses: ['running'],
+      healths: ['healthy'],
+      previous_image: 'sha256:old',
+      env_content: 'APP_PORT=3042\nACR_IMAGE=<required>\n',
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('<required> 占位符未填')
+    expect(result.calls.some(call => call.startsWith('compose up'))).toBe(false)
+    expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
   })
 
   it('compose 里找不到容器：当作确定的坏消息，而不是干等超时', () => {

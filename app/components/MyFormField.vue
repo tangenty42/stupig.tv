@@ -94,6 +94,7 @@
 import type { useFormReturn } from '@primevue/forms/useform'
 import { FormField } from '@primevue/forms'
 import { phone_schema } from '@shared/schemas'
+import { settings } from '@shared/settings'
 import { sync_resource } from '@shared/types/sync'
 import { useApi } from '~/composables/useApi'
 
@@ -142,8 +143,7 @@ const otp_cooldown_until = ref<string | null>(null)
 const otp_send_loading = ref(false)
 const otp_sync_loading = ref(false)
 
-const { public: config } = useRuntimeConfig()
-const identity_token = useCookie(config.identity_cookie_name)
+const identity_token = useCookie(settings.app.identity.cookieName)
 
 async function target_field_has_error() {
   const field_name = props.otpSend?.targetFieldName

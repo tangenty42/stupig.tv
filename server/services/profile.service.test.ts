@@ -26,7 +26,7 @@ vi.mock('@server/lib/sync', () => ({
 vi.mock('@server/services/session.service', () => ({
   logout_session: vi.fn(),
 }))
-vi.mock('@shared/config', () => ({
+vi.mock('@config/loader', () => ({
   runtime_config: () => ({ app: { auth: { bcryptRounds: 10 }, online: { timeoutSeconds: 16 } } }),
 }))
 

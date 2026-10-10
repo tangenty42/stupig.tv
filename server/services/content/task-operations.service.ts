@@ -4,14 +4,12 @@ import { error_fields, log_error } from '@server/lib/log'
 import { list_scope_locks } from '@server/lib/operation-lock'
 import { abort_multipart_upload, complete_multipart_upload, copy_object, create_multipart_upload, delete_object_best_effort, head_object, list_parts } from '@server/lib/storage'
 import { get_scope_attachment, insert_attachment_row, list_scope_attachments, list_scope_folders, list_scope_paths } from '@server/services/content-attachments.service'
-import { runtime_config } from '@shared/config'
 import { attachment_ancestor_folders, attachment_base_name, attachment_mime_type, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, extract_attachment_names, sanitize_attachment_path } from '@shared/content-markdown'
+import { settings } from '@shared/settings'
 import { apply_attachment_moves, apply_attachment_rename, apply_folder_create, apply_folder_delete, apply_folder_rename, publish_attachment_change, resolve_attachment_name, resolve_renamed_attachment_name } from './attachment-structure.service'
 import { get_story, update_story } from './story.service'
 import { update_task_item } from './task.service'
 import { apply_attachment_replace, materialize_attachment_folders } from './upload.service'
-
-const config = runtime_config()
 
 /**
  * Task executors: apply one task against the scope with its path locks already
@@ -103,7 +101,7 @@ export function task_item_paths(kind: ContentTaskKind, payload: Record<string, u
 
 /** Bytes per part for a transfer; null means the file is small enough for one PUT. */
 export function upload_part_size(bytes_total: number) {
-  const part = config.app.content.upload.partSizeMb * 1024 * 1024
+  const part = settings.app.content.upload.partSizeMb * 1024 * 1024
   return bytes_total > part ? part : null
 }
 
@@ -302,7 +300,7 @@ export async function finalize_transfer_item(task: ContentTask, item: ContentTas
   const payload = task.payload as unknown as ContentTaskUploadPayload
   const entry = payload.uploads.find(upload => upload.path === item.path)
   const object = await head_object(item.staging_key)
-  const base_name = sanitize_attachment_path(entry?.path ?? item.path, config.app.content.link.fileNameMaxBytes)
+  const base_name = sanitize_attachment_path(entry?.path ?? item.path, settings.app.content.link.fileNameMaxBytes)
   // The authoritative conflict pass: the planned path was locked, so this
   // normally returns it unchanged; a name that appeared anyway still lands
   // (suffixed) instead of failing an upload the user already paid for.
@@ -343,7 +341,7 @@ export async function transfer_item_resume_state(item: ContentTaskItem) {
     part_size: item.part_size,
     // A single-PUT item has no parts to inventory: the client re-sends it whole.
     uploaded_parts: item.upload_id ? await list_parts(item.staging_key, item.upload_id) : [],
-    sign_batch_size: config.app.content.upload.signBatchSize,
+    sign_batch_size: settings.app.content.upload.signBatchSize,
   }
 }
 

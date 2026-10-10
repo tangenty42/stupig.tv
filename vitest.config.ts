@@ -1,5 +1,8 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
+import { generate_settings } from './config/lib/generate'
+
+await generate_settings()
 
 export default defineConfig({
   // Nuxt replaces these flags at build time; tests run in Node, so define them
@@ -13,6 +16,7 @@ export default defineConfig({
       // Matches Nuxt's srcDir alias, so app-side modules (the markdown renderer)
       // can be imported by tests.
       '~': resolve(import.meta.dirname, './app'),
+      '@config': resolve(import.meta.dirname, './config/lib'),
       '@server': resolve(import.meta.dirname, './server'),
       '@shared': resolve(import.meta.dirname, './server/shared'),
     },

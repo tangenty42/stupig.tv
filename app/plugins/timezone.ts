@@ -1,5 +1,7 @@
+import { settings } from '@shared/settings'
+
 export default defineNuxtPlugin(() => {
-  const timezone_cookie = useCookie<string | null>(useRuntimeConfig().public.timezone_cookie_name)
+  const timezone_cookie = useCookie<string | null>(settings.app.client.timezone.cookieName)
   if (import.meta.client) {
     timezone_cookie.value = new Intl.DateTimeFormat().resolvedOptions().timeZone
   }

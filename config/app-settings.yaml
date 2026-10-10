@@ -1,0 +1,87 @@
+app:
+  api:
+    base: /api
+  auth:
+    jwt:
+      expiresInDays: 14
+      renewBeforeDays: 7
+    session:
+      maxAgeDays: 14
+      maxTokenGenerations: 8
+    cookie:
+      maxAgeDays: 14
+      tokenName: stupig_session
+      userName: login
+    bcryptRounds: 12
+  otp:
+    expiresMinutes: 10
+    tier1:
+      dailyLimit: 5
+      cooldownMs: 60000
+    tier2:
+      dailyLimit: 5
+      cooldownMs: 1800000
+  identity:
+    cookieName: stupig_identity
+    cookieMaxAgeDays: 30
+  client:
+    colorMode:
+      fallback: dark
+      cookieName: stupig_color_mode
+    timezone:
+      cookieName: stupig_timezone
+    sync:
+      broadcastChannelName: stupig_sync_events
+      clientIdStorageKey: stupig_sync_client_id
+  online:
+    timeoutSeconds: 16
+    pingIdleIntervalSeconds: 4
+    pollIntervalSeconds: 4
+  avatar:
+    maxSizeMb: 1
+  content:
+    story:
+      titleMaxLength: 60
+      labelMaxBytes: 255
+      descMaxBytes: 500
+      coverMaxBytes: 255
+      markdownMaxBytes: 1048576
+    link:
+      fileNameMaxBytes: 255
+    draft:
+      schemaVersion: 2
+      storagePrefix: stupig_content_draft_
+      autosaveDelayMs: 1000
+    upload:
+      handleStorageName: stupig_content_upload_handles
+      partSizeMb: 8
+      signBatchSize: 20
+      urlTtlSeconds: 900
+      maxSizeMb: 20480
+    download:
+      urlTtlSeconds: 300
+    redact:
+      maxDimension: 8192
+    operationLock:
+      ttlSeconds: 120
+    task:
+      heartbeatSeconds: 30
+      queuedTimeoutSeconds: 300
+      retentionHours: 24
+      sweepIntervalSeconds: 60
+      clientIdStorageName: stupig_content_task_client_id
+    encrypt:
+      maxSizeMb: 20
+
+integrations:
+  mqtt:
+    qos: 1
+    topicPrefix: stupig/sync
+    clientIdPrefixServer: server
+    clientIdPrefixWeb: web
+    publishQueueSize: 100
+  bilibili:
+    fetchTimeoutMs: 5000
+    cacheTtlMs: 86400000
+    negativeCacheTtlMs: 300000
+    fetchFailureCooldownMs: 300000

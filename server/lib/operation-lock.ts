@@ -1,8 +1,8 @@
 import type { ContentOperationKind, ContentOperationLock, ContentPathLock, ContentTaskKind } from '@shared/types/content'
 import type { Connection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
-import { runtime_config } from '@shared/config'
 import { attachment_path_conflicts } from '@shared/content-markdown'
 
 const config = runtime_config()

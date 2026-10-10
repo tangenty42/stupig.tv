@@ -1,3 +1,5 @@
+import { settings } from '@shared/settings'
+
 /**
  * The browser installation's own id, persisted in localStorage so it survives a
  * refresh and is shared by every tab.
@@ -14,8 +16,7 @@ export function useClientInstanceId() {
   if (import.meta.server)
     return null
 
-  const config = useRuntimeConfig().public
-  const key = config.content_task_client_id_storage_name
+  const key = settings.app.content.task.clientIdStorageName
 
   try {
     const existing = localStorage.getItem(key)

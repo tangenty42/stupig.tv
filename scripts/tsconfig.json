@@ -9,6 +9,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "paths": {
+      "@config/*": ["../config/lib/*"],
       "@server": ["../server"],
       "@server/*": ["../server/*"],
       "@shared/*": ["../server/shared/*"]

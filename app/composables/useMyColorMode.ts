@@ -1,9 +1,10 @@
+import { settings } from '@shared/settings'
+
 export function useMyColorMode() {
   const my_color_mode = useState<'light' | 'dark' | null>('my-color-mode', () => null)
   const real_color_mode = useColorMode()
-  const config = useRuntimeConfig().public
-  const cookie_name = config.color_mode_cookie_name
-  const fallback = config.color_mode_fallback as 'light' | 'dark'
+  const cookie_name = settings.app.client.colorMode.cookieName
+  const fallback = settings.app.client.colorMode.fallback
 
   if (import.meta.server) {
     const cookie_value = useCookie(cookie_name).value as 'light' | 'dark' | 'system' | null | undefined

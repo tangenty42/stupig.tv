@@ -1,14 +1,12 @@
-import { runtime_config } from '@shared/config'
 import { attachment_name_segment_violation, link_file_name_byte_length } from '@shared/content-markdown'
 import { is_valid_permission_grant, normalize_permission_grants } from '@shared/permissions'
 import { form_schema, phone_schema } from '@shared/schemas'
+import { settings } from '@shared/settings'
 import * as z from 'zod'
-
-const config = runtime_config()
 
 const markdown_input = z.string()
   .min(1, '内容不能为空')
-  .refine(value => link_file_name_byte_length(value) <= config.app.content.story.markdownMaxBytes, '内容太长了')
+  .refine(value => link_file_name_byte_length(value) <= settings.app.content.story.markdownMaxBytes, '内容太长了')
 
 const captcha_input = z.object({
   lot_number: z.string().optional(),
@@ -57,7 +55,7 @@ const attachment_path_input = z.string()
   .trim()
   .min(1, '文件名不能为空')
   .superRefine((name, ctx) => name.split('/').forEach(segment => assert_valid_name_segment(segment, ctx)))
-  .refine(name => link_file_name_byte_length(name) <= config.app.content.link.fileNameMaxBytes, '文件名太长')
+  .refine(name => link_file_name_byte_length(name) <= settings.app.content.link.fileNameMaxBytes, '文件名太长')
 
 /**
  * A (possibly nested) folder path being CREATED or RENAMED, which is therefore
@@ -90,7 +88,7 @@ const task_payload_schemas = {
     uploads: z.array(z.object({
       // The client's desired path; the server settles the final name at finalize.
       path: attachment_path_input,
-      size: z.number().int().min(1).max(config.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
+      size: z.number().int().min(1).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
       mime_type: z.string().max(127).nullable(),
       insert_position: z.number().int().min(0).nullish(),
     })).min(1).max(200)
@@ -102,7 +100,7 @@ const task_payload_schemas = {
   replace: z.object({
     old_file_name: z.string().min(1).max(255),
     mode: z.enum(['keep-name', 'new-name']),
-    size: z.number().int().min(1).max(config.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
+    size: z.number().int().min(1).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
     mime_type: z.string().max(127).nullable(),
     file_name: attachment_path_input,
     content_type: z.string().max(255).nullable(),

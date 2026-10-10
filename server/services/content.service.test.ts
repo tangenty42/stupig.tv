@@ -129,7 +129,7 @@ const task_sim = vi.hoisted(() => {
   return { tasks, items, handle, reset }
 })
 
-vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
+vi.mock('@config/loader', () => ({ runtime_config: () => mocks.config }))
 vi.mock('@server/lib/db', () => ({
   db: {
     execute: (sql: string, params?: unknown[]) => task_sim.handle(sql, params ?? []) ?? mocks.db_execute(sql, params),

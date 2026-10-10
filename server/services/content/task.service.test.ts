@@ -90,7 +90,7 @@ vi.mock('@server/lib/db', () => ({
   },
 }))
 
-vi.mock('@shared/config', () => ({
+vi.mock('@config/loader', () => ({
   runtime_config: () => ({ app: { content: { task: { retentionHours: 24 } } } }),
 }))
 

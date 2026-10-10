@@ -110,7 +110,7 @@ CREATE TABLE content_locks (
 
 迁移处理：`content_operation_locks` 废弃（租约是瞬时数据，不迁移，直接 DROP；迁移窗口内确保无进行中的操作）。
 
-新增配置项（`config/default.yaml` + `.env.example` + `server/shared/config.ts` 三处同步，遵循项目配置外化约定）：
+当时的配置提案（静态业务参数现由 `config/app-settings.yaml`、Zod schema 与其关系测试维护；部署配置独立层叠加载）：
 
 ```yaml
 app:
@@ -393,7 +393,7 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 #### 仍需注意的实现细节
 
 - **定稿/清除的键空间**：上传的暂存是 `content-upload/<scope>/<uuid>`，加解密新产生的对象是 `content/att/<uuid>`。`discard_task_staging` 目前只认前者的前缀，本阶段要让任务记录的「自身新产生的对象」也进清算范围，否则取消一个跑到一半的加密任务会留下孤儿对象（架构风险 #1/#3）。
-- **上限只挡加密、不挡解密**：`encryption.service.ts` 只在 `encrypting` 时比对 `maxSizeMb`。今天安全，因为所有密文都出自同一上限的加密路径；但上限是可配置项，把它调大就会让整块处理失去边界 —— `config/default.yaml` 的 `encrypt.maxSizeMb` 要写明这层关系。
+- **上限只挡加密、不挡解密**：`encryption.service.ts` 只在 `encrypting` 时比对 `maxSizeMb`。今天安全，因为所有密文都出自同一上限的加密路径；但上限是可配置项，把它调大就会让整块处理失去边界 —— `config/app-settings.yaml` 的 `app.content.encrypt.maxSizeMb` 要写明这层关系，并同步 Zod schema、关系测试与生成的共享模块。
 
 ### 13.2 阶段 4 详规（前端收敛：edit.vue 拆分 + 规则去重）
 

@@ -153,6 +153,7 @@ import { lintGutter } from '@codemirror/lint'
 import { Compartment, EditorState, Prec } from '@codemirror/state'
 import { EditorView, keymap, scrollPastEnd } from '@codemirror/view'
 import { front_matter_line_count } from '@shared/content-markdown'
+import { settings } from '@shared/settings'
 import { basicSetup } from 'codemirror'
 import { attachment_pick_from_file, attachment_picks_from_data_transfer } from '~/utils/content/attachment'
 import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/utils/content/attachment-drag'
@@ -192,7 +193,6 @@ const emit = defineEmits<{
 const model = defineModel<string>({ default: '' })
 
 const color_mode = useMyColorMode()
-const { public: public_config } = useRuntimeConfig()
 
 let view: EditorView | null = null
 const theme_compartment = new Compartment()
@@ -290,7 +290,7 @@ watch(fullscreen, async (active) => {
 
 const search = useMarkdownSearch(() => view)
 
-const get_lint_config = () => story_lint_config(public_config, props.stories, props.storyId)
+const get_lint_config = () => story_lint_config(settings.app.content.story, props.stories, props.storyId)
 
 const lint_source = create_markdown_lint(get_lint_config, (items) => {
   if (! view) {

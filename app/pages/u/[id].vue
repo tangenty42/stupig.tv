@@ -361,6 +361,7 @@ import { Form } from '@primevue/forms'
 import { zodResolver } from '@primevue/forms/resolvers/zod'
 import { has_permission } from '@shared/permissions'
 import { form_default, form_schema } from '@shared/schemas'
+import { settings } from '@shared/settings'
 import { sync_resource } from '@shared/types/sync'
 
 import dayjs from 'dayjs'
@@ -371,7 +372,6 @@ import { avatar_url } from '~/utils/avatar'
 dayjs.extend(utc)
 
 const route = useRoute()
-const runtime_config = useRuntimeConfig()
 const { auth: auth_api, profile: profile_api } = useApi()
 const { user: auth_user } = useAuth()
 const { error, ok, info } = useMyToast()
@@ -666,7 +666,7 @@ await useSyncedData<Profile>(
   sync_loading,
   {
     throw_resource_null_error: true,
-    polling_interval: runtime_config.public.poll_interval_seconds * 1000,
+    polling_interval: settings.app.online.pollIntervalSeconds * 1000,
   },
 )
 
@@ -677,7 +677,7 @@ await useSyncedData<SessionOverview>(
   self_sessions_loading,
   {
     throw_resource_null_error: false,
-    polling_interval: runtime_config.public.poll_interval_seconds * 1000,
+    polling_interval: settings.app.online.pollIntervalSeconds * 1000,
   },
 )
 

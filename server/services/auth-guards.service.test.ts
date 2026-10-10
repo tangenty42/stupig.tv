@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   sessions: { refresh_login_session: vi.fn() },
 }))
 
-vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
+vi.mock('@config/loader', () => ({ runtime_config: () => mocks.config }))
 vi.mock('@server/lib/session', () => mocks.session)
 vi.mock('@server/lib/db', () => ({ db: mocks.db }))
 vi.mock('@server/services/session.service', () => mocks.sessions)

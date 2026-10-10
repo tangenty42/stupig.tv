@@ -1,12 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 
-// 这条不变量只能读源码来断言：浏览器侧的 MQTT 地址构建期烘焙不了，唯一的注入通道是
-// 镜像自带的入口脚本 —— 一旦把派生逻辑挪回 docker-compose.yml（或漏掉 ENTRYPOINT），
-// 生产会以"页面正常、浏览器连不上 broker"或"容器起不来"的形式炸掉，而本地与单测全都
-// 看不出来。脚本本身的运行行为由镜像构建时的实测覆盖，这里只钉住"镜像确实带着这段派生
-// 逻辑"。
+// These checks guard packaging contracts that cannot be reached through a module entry point.
 const root = resolve(import.meta.dirname, '..')
 
 function read(relative: string) {
@@ -14,20 +11,18 @@ function read(relative: string) {
 }
 
 describe('镜像自带的运行期配置注入', () => {
-  it('入口脚本从 MQTT_WEB_URL 派生 NUXT_PUBLIC_MQTT_WEB_URL，且显式值优先', () => {
+  it('入口脚本直接透传命令，不再派生配置别名', () => {
     const script = read('docker-entrypoint.sh')
 
-    // 必须真的 export 出去：只赋值的话子进程看不到，注入等于没做
-    expect(script).toMatch(/^ {2}export NUXT_PUBLIC_MQTT_WEB_URL="\$MQTT_WEB_URL"$/m)
-    // 兜底而非覆盖：显式设置过的 NUXT_PUBLIC_MQTT_WEB_URL 必须原样保留
-    expect(script).toMatch(/if \[ -z "\$\{NUXT_PUBLIC_MQTT_WEB_URL:-\}" \]/)
+    expect(script).not.toMatch(/export |MQTT_WEB_URL/)
     // 作为入口执行时必须透传 CMD，否则迁移与服务都跑不起来
     expect(script).toMatch(/exec "\$@"/)
   })
 
-  it('dockerfile 把入口脚本装进镜像并设为 ENTRYPOINT', () => {
+  it('dockerfile 把运行时 YAML 与入口脚本装进镜像', () => {
     const dockerfile = read('Dockerfile')
 
+    expect(dockerfile).toMatch(/^COPY config \.\/config$/m)
     expect(dockerfile).toMatch(/^COPY docker-entrypoint\.sh /m)
     // Windows 工作区检出的是 CRLF，#!/bin/sh\r 会让容器直接起不来，必须在镜像里剥掉；
     // 同理要补可执行位（Windows 检出没有）
@@ -37,8 +32,8 @@ describe('镜像自带的运行期配置注入', () => {
 
   it('compose 不再重复承担注入，避免与镜像两处走岔', () => {
     // 注释里提到变量名是为了说明"不需要在这里映射"，所以只钉映射行本身
-    expect(read('docker-compose.yml')).not.toMatch(/^\s+NUXT_PUBLIC_MQTT_WEB_URL:/m)
-    expect(read('docker-compose.dev.yml')).not.toMatch(/^\s+NUXT_PUBLIC_MQTT_WEB_URL:/m)
+    expect(read('docker-compose.yml')).not.toMatch(/^\s+MQTT_WEB_URL:/m)
+    expect(read('docker-compose.dev.yml')).not.toMatch(/^\s+MQTT_WEB_URL:/m)
   })
 })
 
@@ -60,18 +55,28 @@ describe('部署的健康检查与自愈接线', () => {
   })
 
   it('compose 探 /healthz（不是 /），并保留自愈所需的 restart 策略', () => {
-    const compose = read('docker-compose.yml')
+    const app = parse(read('docker-compose.yml')).services.app
 
     // `/` 的 200 说明不了数据库可用：SSR 渲染外壳成功也会是 200
-    expect(compose).toMatch(/test: \[CMD, node, -e, 'fetch\("http:\/\/127\.0\.0\.1:\$\{APP_PORT\}\/healthz"\)/)
-    expect(compose).not.toMatch(/fetch\("http:\/\/127\.0\.0\.1:\$\{APP_PORT\}\/"\)/)
+    expect(app.healthcheck.test).toEqual(['CMD', 'node', '-e', expect.stringMatching(/^fetch\("http:\/\/127\.0\.0\.1:\$\{APP_PORT\}\/healthz"\)/)])
+    expect(app.healthcheck.test[3]).not.toMatch(/fetch\("http:\/\/127\.0\.0\.1:\$\{APP_PORT\}\/"\)/)
     // 容器崩了要能自己起来；没有这一行，"自愈"只剩健康门那半
-    expect(compose).toMatch(/^\s+restart: unless-stopped$/m)
+    expect(app.restart).toBe('unless-stopped')
   })
 
   it('部署把远端序列交给 scripts/deploy-remote.sh 执行', () => {
     // 内联在 workflow 里的 SSH 命令谁也测不了；脚本可以在本地跑（见其同名测试）
     expect(read('.github/workflows/deploy.yml')).toMatch(/< scripts\/deploy-remote\.sh/)
+  })
+
+  it('.env 由 CD 解密推送，服务器上不构建它', () => {
+    const workflow = read('.github/workflows/deploy.yml')
+    expect(workflow).toMatch(/ENV_PASSPHRASE: \$\{\{ secrets\.ENV_PASSPHRASE \}\}/)
+    expect(workflow).toMatch(/gpg --batch --yes --pinentry-mode loopback --passphrase "\$ENV_PASSPHRASE" --decrypt \\?\n?\s*--output \.env\.prod \.env\.prod\.gpg/)
+    expect(workflow).not.toMatch(/--passphrase "\$\{\{ secrets\.ENV_PASSPHRASE \}\}"/)
+    expect(workflow).toMatch(/scp -P .* \.env\.prod \\?\n?\s*"\$\{\{ vars\.SSH_USER \}\}@\$\{\{ vars\.SSH_HOST \}\}:\$\{\{ vars\.DEPLOY_DIR \}\}\/\.env"/)
+    // 服务器端只剩闸门，不再跑 build-env
+    expect(read('scripts/deploy-remote.sh')).not.toMatch(/build-env/)
   })
 
   it('远端脚本按 compose 的服务名解析容器，不写死容器名', () => {

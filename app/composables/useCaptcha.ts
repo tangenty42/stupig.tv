@@ -139,7 +139,7 @@ function get_captcha_obj(captcha_id: string) {
 
 export function useCaptcha() {
   const config = useRuntimeConfig()
-  const captcha_id = config.public.captcha_app_id
+  const captcha_id = config.public.aliyun.captcha.appId
   const showing = get_captcha_showing_state()
 
   async function verify() {

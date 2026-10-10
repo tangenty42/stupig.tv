@@ -1,11 +1,11 @@
+import { runtime_config } from '@config/loader'
 import { error_fields, log_error, log_info } from '@server/lib/log'
-import { runtime_config } from '@shared/config'
 import mqtt from 'mqtt'
 
 const config = runtime_config()
 
 function server_client_id() {
-  return `${config.mqtt.clientIdPrefixServer}_${process.pid}_${Date.now()}`
+  return `${config.integrations.mqtt.clientIdPrefixServer}_${process.pid}_${Date.now()}`
 }
 
 function broker_url() {
@@ -33,7 +33,7 @@ function flush_pending(client: mqtt.MqttClient) {
   const queued = pending
   pending = []
   for (const { resource, payload } of queued) {
-    client.publish(sync_topic(resource), payload, { qos: config.mqtt.qos as 0 | 1 | 2 })
+    client.publish(sync_topic(resource), payload, { qos: config.integrations.mqtt.qos })
   }
 }
 
@@ -75,7 +75,7 @@ export function get_mqtt_client() {
 }
 
 export function sync_topic(resource: string) {
-  return `${config.mqtt.topicPrefix}/${resource}`
+  return `${config.integrations.mqtt.topicPrefix}/${resource}`
 }
 
 // The broker may be unreachable for seconds at a time (reconnectPeriod is 5s),
@@ -86,16 +86,16 @@ export function publish_sync(resource: string, payload: string) {
   const mqtt = get_mqtt_client()
 
   if (mqtt?.connected) {
-    mqtt.publish(sync_topic(resource), payload, { qos: config.mqtt.qos as 0 | 1 | 2 })
+    mqtt.publish(sync_topic(resource), payload, { qos: config.integrations.mqtt.qos })
     return
   }
 
-  if (pending.length >= config.mqtt.publishQueueSize) {
+  if (pending.length >= config.integrations.mqtt.publishQueueSize) {
     pending.shift()
     dropped_total += 1
     log_error('mqtt-publish-dropped', {
       resource,
-      queue_size: config.mqtt.publishQueueSize,
+      queue_size: config.integrations.mqtt.publishQueueSize,
       dropped_total,
     })
   }

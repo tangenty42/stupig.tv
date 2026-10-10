@@ -20,7 +20,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }))
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn() }))
-vi.mock('@shared/config', () => ({
+vi.mock('@config/loader', () => ({
   runtime_config: () => ({
     oss: {
       endpoint: 'https://oss.example.test',

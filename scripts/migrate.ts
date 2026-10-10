@@ -19,8 +19,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { load_database_config } from '@config/loader'
 import { error_fields, log_error, log_info, log_warn } from '@server/lib/log'
-import { load_config } from '@server/shared/config'
 import mysql from 'mysql2/promise'
 
 const lock_name = 'stupig_tv_migrate'
@@ -121,17 +121,17 @@ export async function run_migrations(options: MigrationOptions = {}): Promise<vo
     throw new Error('--baseline 不能与 --status/--dry-run 一起使用')
   }
 
-  const config = load_config()
+  const config = load_database_config()
   const migration_dir = options.dir ?? resolve(process.cwd(), 'migrations')
   const files = read_migrations(migration_dir)
   log_info('migrations scanned', { dir: migration_dir, total: files.length, baseline, check_only })
 
   const connection = await mysql.createConnection({
-    host: config.db.host,
-    port: config.db.port,
-    user: config.db.user,
-    password: config.db.password,
-    database: config.db.name,
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.name,
     timezone: 'Z',
     // 一个 .sql 文件里有多条语句，且依赖同一会话的 @变量 / PREPARE，必须整文件提交
     multipleStatements: true,

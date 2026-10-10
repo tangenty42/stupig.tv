@@ -1,12 +1,13 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3'
+import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { copy_object, delete_object_best_effort, head_object, put_object, signed_object_url } from '@server/lib/storage'
 import { create_folder_rows, get_scope_attachment, get_scope_object_keys, insert_attachment_row, list_scope_file_rows, list_scope_paths, update_attachment_row_object } from '@server/services/content-attachments.service'
 import { publish_attachment_change, resolve_attachment_name, with_attachment_lock } from '@server/services/content/attachment-structure.service'
 import { cover_version_from, get_story } from '@server/services/content/story.service'
-import { runtime_config } from '@shared/config'
 import { attachment_ancestor_folders, attachment_download_name, attachment_folder_of, attachment_mime_type, attachment_path_join, decrypted_attachment_name, is_encrypted_attachment, redactable_attachment_mime, rename_attachment_references, sanitize_attachment_file_name } from '@shared/content-markdown'
+import { settings } from '@shared/settings'
 
 const config = runtime_config()
 
@@ -39,7 +40,7 @@ export async function sign_attachment_download(story_id: number, file_name: stri
     Bucket: config.oss.bucket,
     Key: row.object_key!,
     ResponseContentDisposition: `attachment; filename*=UTF-8''${rfc5987_ext_value(attachment_download_name(row.file_name))}`,
-  }), config.app.content.download.urlTtlSeconds)
+  }), settings.app.content.download.urlTtlSeconds)
   return { url }
 }
 
@@ -182,7 +183,7 @@ export async function apply_attachment_replace(
     throw new ApiError(409, '已加密的附件不能替换，请先取消加密')
 
   const object = await head_object(key)
-  const new_name = sanitize_attachment_file_name(raw_file_name || 'file', config.app.content.link.fileNameMaxBytes)
+  const new_name = sanitize_attachment_file_name(raw_file_name || 'file', settings.app.content.link.fileNameMaxBytes)
   // The scope's files and folders share one path space, so a replacement has to
   // clear both before it can take a name.
   const existing = await list_scope_paths(story_id)

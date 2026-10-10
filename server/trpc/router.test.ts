@@ -12,7 +12,27 @@ const auth_mocks = vi.hoisted(() => ({
 
 vi.mock('@server/services/auth-guards.service', () => auth_mocks)
 
+for (const [key, value] of Object.entries({
+  NODE_ENV: 'test',
+  MYSQL_HOST: '127.0.0.1',
+  MYSQL_PORT: '3306',
+  MYSQL_PASSWORD: 'placeholder',
+  REDIS_HOST: '127.0.0.1',
+  REDIS_PORT: '6379',
+  MQTT_HOST: '127.0.0.1',
+  MQTT_TCP_PORT: '1883',
+  MQTT_WEB_URL: 'ws://localhost:8083/mqtt',
+  OSS_ACCESS_KEY_ID: 'placeholder',
+  OSS_ACCESS_KEY_SECRET: 'placeholder',
+  ALIYUN_ACCESS_KEY_ID: 'placeholder',
+  ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
+  JWT_SECRET: 'x'.repeat(40),
+})) {
+  vi.stubEnv(key, value)
+}
+
 const { app_router } = await import('@server/trpc/router')
+vi.unstubAllEnvs()
 
 const auth_user: AuthUser = {
   id: 7,

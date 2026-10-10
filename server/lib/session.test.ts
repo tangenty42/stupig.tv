@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('@shared/config', () => ({ runtime_config: () => mocks.config }))
+vi.mock('@config/loader', () => ({ runtime_config: () => mocks.config }))
 
 const {
   clear_auth_token_cookie,

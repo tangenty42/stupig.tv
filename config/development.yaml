@@ -1,12 +1,13 @@
-# 开发环境覆盖。只写与 default.yaml 不同的项，深度合并。
-# 主机名、端口等连接信息全部在 .env（见 .env.example），default.yaml 经
-# ${VAR} 插值引用；改端口只改 .env。本机特有的其他覆盖请写在
-# config/local.yaml（不进仓库，优先级最高），模板见 config/local.example.yaml。
+# 开发环境覆盖。只写与 default.yaml 不同的项，按映射递归合并。
 
 # MySQL 密码与 docker-compose.dev.yml 创建容器时注入的 ${MYSQL_PASSWORD}
 # 是同一变量，两边天然一致；Redis 容器无密码。
 redis:
   password: ''
+
+mqtt:
+  web:
+    wsUrl: ws://localhost:${MQTT_WS_PORT:-8083}/mqtt
 
 oss:
   bucket: static-stupig-tv-dev
@@ -18,4 +19,4 @@ site:
 
 app:
   otp:
-    debug: true
+    debug: ${NUXT_OTP_DEBUG:-true}

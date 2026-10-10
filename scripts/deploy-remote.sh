@@ -73,6 +73,14 @@ if [ -f docker-compose.yml.incoming ]; then
 fi
 
 docker compose pull
+
+# .env 由 CD 解密推送（见 deploy.yml），这里只做闸门：缺失或含 <required> 占位符的
+# 配置过不了启动校验，部署了也起不来 —— 在动容器之前失败，站点不受影响。
+if [ ! -f .env ] || grep -q '=<required>' .env; then
+  echo ".env 缺失或还有 <required> 占位符未填：本地 env:build:prod 填好、env:encrypt 提交后重新部署。" >&2
+  exit 1
+fi
+
 docker compose up -d
 
 # 轮询容器状态：0 = 已就绪，1 = 确定的坏消息（退出/重启循环），2 = 超时未就绪。

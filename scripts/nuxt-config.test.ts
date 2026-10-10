@@ -1,5 +1,8 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
+const generation = vi.hoisted(() => ({ generate_settings: vi.fn() }))
+vi.mock('../config/lib/generate', () => generation)
+
 // 构建机（Dockerfile/CI）没有 .env，nuxt.config 必须在这种状态下加载成功；
 // 所以这里拦掉 dotenv，也不补任何连接信息变量。
 vi.mock('dotenv', () => ({ config: () => ({ parsed: {} }) }))
@@ -31,13 +34,24 @@ afterAll(() => {
 })
 
 describe('production SSR configuration', () => {
-  it('bundles Pinia so Nitro replaces its Vue compile-time flags', () => {
-    expect(config.nitro?.externals?.inline).toContain('pinia')
+  it('does not generate settings just by importing configuration', () => {
+    expect(generation.generate_settings).not.toHaveBeenCalled()
   })
 
-  it('在没有 .env 的构建机上也能取到 public 白名单', () => {
-    // 镜像里烘焙的是空串，运行期由容器的 NUXT_PUBLIC_MQTT_WEB_URL 覆盖
-    expect(config.runtimeConfig?.public?.mqtt_web_url).toBe('')
-    expect(config.runtimeConfig?.public?.site_url).toBe('https://www.stupig.tv')
+  it('registers settings generation as a Nuxt module', () => {
+    expect(config.modules?.[0]).toBe('./config/lib/nuxt-module')
+  })
+
+  it('bundles Pinia so Nitro replaces its Vue compile-time flags', () => {
+    expect(config.nitro?.externals?.inline).toContain('pinia')
+    expect(config.nitro?.externals?.inline).toContain('yaml')
+  })
+
+  it('declares only public deployment fields without reading runtime secrets', () => {
+    expect(config.runtimeConfig?.public?.mqtt).toEqual({ web: { wsUrl: '' } })
+    expect(config.runtimeConfig?.public?.site).toEqual({ url: '', indexable: false, staticBaseUrl: '' })
+    expect(config.runtimeConfig?.public?.aliyun).toEqual({ captcha: { appId: '' } })
+    expect(config.runtimeConfig?.public).not.toHaveProperty('max_content_encrypt_size_mb')
+    expect(config.runtimeConfig?.public).not.toHaveProperty('JWT_SECRET')
   })
 })

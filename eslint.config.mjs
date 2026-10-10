@@ -53,6 +53,14 @@ export default antfu(
     },
   },
   {
+    files: ['**/*.{yaml,yml}'],
+    rules: {
+      'yml/block-mapping': ['error', 'always'],
+      'yml/block-sequence': ['error', 'always'],
+      '@stylistic/eol-last': ['error', 'always'],
+    },
+  },
+  {
     files: ['server/**/*.ts'],
     rules: {
       // Console is the server logger

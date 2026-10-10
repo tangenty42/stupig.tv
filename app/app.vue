@@ -310,7 +310,8 @@ const document_title = computed(() => {
 })
 useHead({ title: document_title })
 
-const site_url = useRuntimeConfig().public.site_url
+const public_config = useRuntimeConfig().public
+const site_url = public_config.site.url
 
 useSeoMeta({
   description: '蠢猪小组（Stupig）官方网站：蠢猪档案与成员主页。',
@@ -320,7 +321,10 @@ useSeoMeta({
 })
 
 useHead({
-  link: computed(() => [{ rel: 'canonical', href: `${site_url}${route.path}` }]),
+  link: computed(() => [
+    { rel: 'canonical', href: `${site_url}${route.path}` },
+    { rel: 'icon', href: `${public_config.site.staticBaseUrl}/imgs/Stupig_icon.svg` },
+  ]),
 })
 
 const header_shift_distance = 80

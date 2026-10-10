@@ -8,10 +8,13 @@
 ## 1. 一分钟上手
 
 ```sh
-cp .env.example .env     # 首次：填密钥，本地端口保持原样
+pnpm env:build:dev       # 首次生成 .env（dev 默认值）：填密钥，本地端口保持原样
 pnpm install
 pnpm dev:all             # 起依赖容器（MySQL/Redis/EMQX/phpMyAdmin）+ dev server
 ```
+
+生产 `.env` 走另一条线：本地 `.env.prod`（gitignore）→ `pnpm env:encrypt` 加密成
+`.env.prod.gpg` 提交 → CD 用 `ENV_PASSPHRASE` 解密后推到服务器。
 
 验证改动（三项都必须过，CI 也是这三项）：
 
@@ -47,8 +50,11 @@ pnpm test                # vitest run
 
 ## 4. 环境与配置
 
-- 配置分层：`config/default.yaml` + 环境覆盖，Schema 校验在 `server/shared/config.ts`；`.env`/`.env.example` 只提供 `${VAR}` 插值。**改配置要三处同步**（yaml + `.env.example` + `config.ts`），并且**不要硬编码**。
-- 服务端读配置统一走 `runtime_config()`（缓存单例）；构建期不读 `.env` 的路径是 `load_public_config()`（`nuxt.config.ts` 这类工具用）。
+- 配置分层：`config/default.yaml` → `{NODE_ENV}.yaml` → development 下可选的 `config/local.yaml`，映射递归合并、数组替换；合并后只解析 YAML 明确写出的 `${VAR}` / `${VAR:-fallback}`，统一经 `config/lib/loader.ts` 读取、`config/lib/schema.ts` 做 Zod 校验。稳定共享参数在 `config/app-settings.yaml`，不插值、不做环境覆盖；`pnpm settings:generate` 生成安全的共享模块，`pnpm settings:check` 检查同步。**改配置要同步 YAML、schema、测试和生成文件，需要新增变量时同步 `.env.*.layer` 模板**；**不要硬编码密钥**，`server/shared/` 不得运行时引用敏感 loader。
+- 共享模块生成：`config/lib/generate.ts` 通过统一 loader 读取、Zod 校验 app settings，再序列化为 `server/shared/settings.generated.ts` 并用 ESLint 格式化，内容相同不写入；`@shared/settings` 保持为安全引用门面，`Settings` 来自 Zod 推导，类型使用 `import type`。YAML 强制展开映射、序列并以换行结束，生成文件不得手改。
+- 生成触发点：`nuxt.config.ts` 只读取配置值并注册本地 `config/lib/nuxt-module.ts`，不使用顶层 await、不直接生成文件；Nuxt 初始化（`dev`、`build`、`generate`、`typecheck`、`prepare`）执行 module 的异步 `setup()`，等待生成完成后再编译应用。安装后的 `postinstall` 经 `nuxt prepare` 间接触发；module 仅在开发时注册 app settings YAML 监听与 `builder:watch` 重新生成回调。Vitest 启动、`maintenance:build` 打包前和手动 `pnpm settings:generate` 仍各自保证生成。`pnpm settings:check` 只校验并检查过期，不写文件；CI 在安装后还对生成文件执行 Git diff 检查，避免自动生成掩盖未提交的改动。生产启动、普通 import 和单独导入 Nuxt 配置不生成共享模块；VS Code 保存 lint 只做格式修复，不替代构建期生成。
+- 服务端通过 `@config/lib/loader` 读配置。`load_config()` 将两份已校验配置用 `merge_config_layers(settings, value)` 递归合成，导出的 `AppConfig` 自动推导；保持 YAML 原层级，稳定 MQTT 参数在 `integrations.mqtt`，连接信息在 `mqtt`，浏览器偏好在 `app.client`，不手工改名或搬平字段。`runtime_config()` 首次读取后缓存整个进程生命周期，单独 import loader 不读取配置；`load_database_config()` 只插值/校验 `db` 子树。Nuxt 构建期只声明 public runtime config 形状；Nitro 启动时从已验证配置注入 public 子集，不读取密钥到 Nuxt 构建配置。
+- 更新部署：镜像包含 YAML，改 YAML 需重新构建部署镜像；app settings 还必须重新生成、编译共享模块，不能只改服务端 YAML 导致前后端值不一致。改 Compose 注入的环境变量则需重新创建容器，单纯 restart 不会刷新容器环境。
 - 外部服务：同机 Docker 里的 MySQL；Aliyun（短信/DYPNS/CAPTCHA）；MQTT/EMQX 做实时同步。
 - 实时同步：服务端用 `server/lib/sync.ts` 的 `publish_refresh({ resource })` 发布事件，浏览器端 `useSyncedData` 订阅并按需重新拉取。**不要**在客户端主动轮询服务端状态变化。
 - 数据同步的 SSR 边界有历史坑（hydration mismatch），规则写在 `.github/copilot-instructions.md` 里，动 `useSyncedData`/`useDataSync` 前先读。

@@ -1,9 +1,9 @@
 import type DypnsapiClass from '@alicloud/dypnsapi20170525'
 import DypnsapiModule, { CheckSmsVerifyCodeRequest, SendSmsVerifyCodeRequest } from '@alicloud/dypnsapi20170525'
 import { Config } from '@alicloud/openapi-client'
+import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { error_fields, log_error } from '@server/lib/log'
-import { runtime_config } from '@shared/config'
 
 const config = runtime_config()
 

@@ -1,5 +1,6 @@
 import type { AppRouter } from '@server/trpc/router'
 import type { inferRouterOutputs } from '@trpc/server'
+import { settings } from '@shared/settings'
 import { createTRPCClient, httpBatchLink } from '@trpc/client'
 
 type RouterOutputs = inferRouterOutputs<AppRouter>
@@ -59,9 +60,8 @@ export function get_last_trpc_request_at() {
 }
 
 export function useTrpcClient() {
-  const { public: config } = useRuntimeConfig()
   const { logout, user } = useAuth()
-  const trpc_path = `${config.api_base.replace(/\/$/, '')}/trpc`
+  const trpc_path = `${settings.app.api.base.replace(/\/$/, '')}/trpc`
   const trpc_url = import.meta.server
     ? new URL(trpc_path, useRequestURL()).toString()
     : trpc_path
@@ -207,7 +207,7 @@ export function useTrpcClient() {
         if (ping_pending || document.visibilityState !== 'visible') {
           return
         }
-        if (Date.now() - last_request_at < config.ping_idle_interval_seconds * 1000) {
+        if (Date.now() - last_request_at < settings.app.online.pingIdleIntervalSeconds * 1000) {
           return
         }
 

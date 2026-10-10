@@ -8,14 +8,12 @@ import { get_operation_lock, list_scope_locks } from '@server/lib/operation-lock
 import { delete_object_best_effort } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { delete_attachment_rows, delete_story_attachment_rows, get_scope_object_keys, get_story_object_keys, list_cover_urls, list_scope_attachments, list_scope_encryption_keys, list_scope_folders } from '@server/services/content-attachments.service'
-import { runtime_config } from '@shared/config'
 import { extract_attachment_names, extract_story_reference_titles, parse_story_markdown, rename_story_references } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 import { has_permission } from '@shared/permissions'
+import { settings } from '@shared/settings'
 import { list_scope_tasks } from './task.service'
-
-const config = runtime_config()
 
 interface StoryRow extends RowDataPacket {
   id: number
@@ -48,11 +46,11 @@ interface StoryRevisionRow extends RowDataPacket {
 }
 
 const content_markdown_config = {
-  title_max_length: config.app.content.story.titleMaxLength,
-  label_max_bytes: config.app.content.story.labelMaxBytes,
-  desc_max_bytes: config.app.content.story.descMaxBytes,
-  cover_max_bytes: config.app.content.story.coverMaxBytes,
-  markdown_max_bytes: config.app.content.story.markdownMaxBytes,
+  title_max_length: settings.app.content.story.titleMaxLength,
+  label_max_bytes: settings.app.content.story.labelMaxBytes,
+  desc_max_bytes: settings.app.content.story.descMaxBytes,
+  cover_max_bytes: settings.app.content.story.coverMaxBytes,
+  markdown_max_bytes: settings.app.content.story.markdownMaxBytes,
 } satisfies ContentMarkdownConfig
 
 function parse_or_throw(markdown: string, existing_titles: ContentMarkdownConfig['existing_titles']) {

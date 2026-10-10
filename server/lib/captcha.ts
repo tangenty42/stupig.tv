@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
+import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
-import { runtime_config } from '@shared/config'
 
 const config = runtime_config()
 

@@ -342,6 +342,7 @@ import type { AttachmentListItem, AttachmentUploadPick, MyContentAttachmentRow }
 import type { PendingUploadRow } from '~/utils/content/task-row'
 import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, compare_attachment_names, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, is_encrypted_attachment, link_file_name_illegal_chars, parse_story_markdown, rename_attachment_references, split_attachment_editable_name, story_markdown_template } from '@shared/content-markdown'
 import { has_permission } from '@shared/permissions'
+import { settings } from '@shared/settings'
 import { sync_resource } from '@shared/types/sync'
 import { storeToRefs } from 'pinia'
 import { useContentDraftStore } from '~/stores/contentDraft'
@@ -365,8 +366,7 @@ const { content } = useApi()
 const { user } = useAuth()
 const { ok, error } = useMyToast()
 const { confirm_require } = useMyConfirm()
-const config = useRuntimeConfig().public
-const upload_handle_db_name = config.content_upload_handle_storage_name
+const upload_handle_db_name = settings.app.content.upload.handleStorageName
 // Known stories for `@story` completion, duplicate-title and dead-reference
 // lints; kept in sync via the shared content_stories resource without touching
 // the editing content.
@@ -407,11 +407,11 @@ const private_blocked = computed(() =>
 // Existing titles must reach the save/header validation too, or every `@ref`
 // is flagged as dead (undefined existing_titles → `! undefined?.some()` is true).
 const content_markdown_config = computed(() => ({
-  title_max_length: config.content_story_title_max_length,
-  label_max_bytes: config.content_story_label_max_bytes,
-  desc_max_bytes: config.content_story_desc_max_bytes,
-  cover_max_bytes: config.content_story_cover_max_bytes,
-  markdown_max_bytes: config.content_story_markdown_max_bytes,
+  title_max_length: settings.app.content.story.titleMaxLength,
+  label_max_bytes: settings.app.content.story.labelMaxBytes,
+  desc_max_bytes: settings.app.content.story.descMaxBytes,
+  cover_max_bytes: settings.app.content.story.coverMaxBytes,
+  markdown_max_bytes: settings.app.content.story.markdownMaxBytes,
   existing_titles: (existing_stories.value ?? [])
     .filter(story => story.id !== story_id.value)
     .map(story => ({ id: story.id, title: story.title })),
@@ -731,7 +731,7 @@ const selected_folder_paths = computed(() => [... selection]
 const selected_stored_attachments = computed(() => stored_attachments.value.filter(attachment => selection.has(file_selection_key(attachment.file_name))))
 
 /** The size cap a file must fit under to be encrypted. */
-const max_encrypt_bytes = config.max_content_encrypt_size_mb * 1024 * 1024
+const max_encrypt_bytes = settings.app.content.encrypt.maxSizeMb * 1024 * 1024
 
 /** The state abbreviations the menus report in place of an action they cannot offer. */
 const encrypted_reason = '已加密'

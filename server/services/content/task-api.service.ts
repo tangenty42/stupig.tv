@@ -5,13 +5,11 @@ import { release_task_locks } from '@server/lib/operation-lock'
 import { signed_part_upload_url, signed_put_url } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { get_scope_attachment } from '@server/services/content-attachments.service'
-import { runtime_config } from '@shared/config'
+import { settings } from '@shared/settings'
 import { attachment_scope_payload } from './attachment-structure.service'
 import { discard_task_staging, finalize_transfer_item, task_item_paths, transfer_item_resume_state } from './task-operations.service'
 import { complete_task_if_finished, dispatch_task, kick_task_runner, run_task_synchronously, touch_task } from './task-runner.service'
 import { create_task, get_task, publish_task_state, transition_task, update_task_item } from './task.service'
-
-const config = runtime_config()
 
 /**
  * The application-facing task API (docs/content-task-refactor.md §7): creates
@@ -99,7 +97,7 @@ export async function sign_task_parts(input: { task_id: number, item_id: number,
     throw new ApiError(409, '任务项缺少暂存对象')
   const total = item_part_count(item)
   const numbers = [... new Set(input.part_numbers)].sort((left, right) => left - right)
-  if (! numbers.length || numbers.length > config.app.content.upload.signBatchSize)
+  if (! numbers.length || numbers.length > settings.app.content.upload.signBatchSize)
     throw new ApiError(400, '分片数量不合法')
   const content_type = transfer_content_type(task, item)
   const urls: ContentTaskPart[] = []
@@ -109,11 +107,11 @@ export async function sign_task_parts(input: { task_id: number, item_id: number,
     urls.push({
       part_number,
       url: item.upload_id
-        ? await signed_part_upload_url(item.staging_key, item.upload_id, part_number, config.app.content.upload.urlTtlSeconds)
-        : await signed_put_url(item.staging_key, content_type, config.app.content.upload.urlTtlSeconds),
+        ? await signed_part_upload_url(item.staging_key, item.upload_id, part_number, settings.app.content.upload.urlTtlSeconds)
+        : await signed_put_url(item.staging_key, content_type, settings.app.content.upload.urlTtlSeconds),
     })
   }
-  return { parts: urls, part_size: item.part_size, upload_id: item.upload_id, sign_batch_size: config.app.content.upload.signBatchSize }
+  return { parts: urls, part_size: item.part_size, upload_id: item.upload_id, sign_batch_size: settings.app.content.upload.signBatchSize }
 }
 
 /** The content type a staged object will be stored with, taken from the task payload. */

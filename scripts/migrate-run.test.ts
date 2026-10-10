@@ -53,8 +53,8 @@ vi.mock('mysql2/promise', () => ({
   },
 }))
 
-vi.mock('@server/shared/config', () => ({
-  load_config: () => ({ db: { host: 'db', port: 3306, user: 'u', password: 'p', name: 'stupig_tv' } }),
+vi.mock('@config/loader', () => ({
+  load_database_config: () => ({ host: 'db', port: 3306, user: 'u', password: 'p', name: 'stupig_tv' }),
 }))
 
 vi.mock('@server/lib/log', () => ({
