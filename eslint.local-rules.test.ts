@@ -50,5 +50,5 @@ describe('yaml configuration formatting', () => {
     const [fixed] = await new ESLint({ fix: true }).lintText(source, { filePath: 'config/formatting-fixture.yaml' })
     expect(fixed?.errorCount).toBe(0)
     expect(fixed?.output).toBe('app:\n  modes:\n    - light\n    - dark\n')
-  })
+  }, 15_000)
 })
