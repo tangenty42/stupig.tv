@@ -8,6 +8,15 @@
 # or the whole cssnano family — and no version of those can satisfy it. The
 # matching pnpm/yaml-enforce-settings override lives in eslint.config.mjs.
 minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - '@nuxt/cli@4.0.1'
+  - '@nuxt/kit@4.6.1'
+  - '@nuxt/nitro-server@4.6.1'
+  - '@nuxt/schema@4.6.1'
+  - '@nuxt/vite-builder@4.6.1'
+  - '@nuxt/vite-server@4.6.1'
+  - nuxt@4.6.1
+
 shellEmulator: true
 
 allowBuilds:
