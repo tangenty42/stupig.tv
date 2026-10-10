@@ -12,14 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
  * cannot import — so this drives it for real, through `sh`, against a stub
  * `docker` on PATH that replays a scripted container state.
  *
- * What the cases below lock in:
- *   - the happy path prunes and exits 0;
- *   - a container that exits is rolled back (the rollback anchor is a real image
- *     ID taken before the pull) and the run fails;
- *   - nothing to roll back to is reported, not silently "fixed";
- *   - a timeout (container still running, just not healthy yet) fails the run but
- *     does **not** downgrade the site — the deliberate asymmetry, since a slow
- *     start is not evidence of a broken image.
+ * The harness covers candidate config staging, complete rollback, and readiness gates.
  */
 
 const repo_root = join(import.meta.dirname, '..')
@@ -72,6 +65,7 @@ case "$1" in
       *"ps -q"*) echo "$STUB_CONTAINER_ID" ;;
       # 校验送来的 compose：默认通过，STUB_COMPOSE_CONFIG_FAILS 非空则失败
       *"config -q"*) [ -n "\${STUB_COMPOSE_CONFIG_FAILS:-}" ] && exit 1 ;;
+      *" pull"*) [ -n "\${STUB_COMPOSE_PULL_FAILS:-}" ] && exit 1 ;;
     esac
     exit 0
     ;;
@@ -115,8 +109,12 @@ interface Scenario {
   files?: Record<string, string>
   /** 让 `compose config` 校验失败（模拟送来的 compose 有问题） */
   compose_config_fails?: boolean
+  /** 让镜像拉取失败 */
+  compose_pull_fails?: boolean
   /** 部署目录里 .env 的内容；null 表示不存在（默认是一份无占位符的最小文件） */
   env_content?: string | null
+  /** CD 上传的 .env.incoming 内容；null 表示候选文件缺失 */
+  incoming_env_content?: string | null
 }
 
 function run_deploy(scenario: Scenario): RunResult {
@@ -130,11 +128,16 @@ function run_deploy(scenario: Scenario): RunResult {
   writeFileSync(join(dir, 'status_queue'), `${scenario.statuses.join('\n')}\n`)
   writeFileSync(join(dir, 'health_queue'), `${scenario.healths.join('\n')}\n`)
   writeFileSync(join(dir, 'calls'), '')
-  // CD 会在跑远端脚本前把 .env 推到部署目录；默认预置一份能过闸门的
-  const env_content = scenario.env_content === undefined ? 'APP_PORT=3042\n' : scenario.env_content
+  const env_content = scenario.env_content === undefined ? 'APP_PORT=3042\nDEPLOYMENT_ENV=old\n' : scenario.env_content
   if (env_content !== null) {
     writeFileSync(join(dir, '.env'), env_content)
   }
+  const incoming_env_content = scenario.incoming_env_content === undefined ? 'APP_PORT=3042\nDEPLOYMENT_ENV=new\n' : scenario.incoming_env_content
+  if (incoming_env_content !== null) {
+    writeFileSync(join(dir, '.env.incoming'), incoming_env_content)
+  }
+  writeFileSync(join(dir, 'docker-compose.yml'), 'old-compose\n')
+  writeFileSync(join(dir, 'docker-compose.yml.incoming'), 'new-compose\n')
   for (const [name, content] of Object.entries(scenario.files ?? {}))
     writeFileSync(join(dir, name), content)
 
@@ -158,6 +161,7 @@ function run_deploy(scenario: Scenario): RunResult {
       STUB_PREVIOUS_IMAGE: scenario.previous_image ?? '',
       STUB_CONTAINER_ID: scenario.container_id ?? 'a1b2c3d4e5f6',
       STUB_COMPOSE_CONFIG_FAILS: scenario.compose_config_fails ? '1' : '',
+      STUB_COMPOSE_PULL_FAILS: scenario.compose_pull_fails ? '1' : '',
     },
   }) as SpawnSyncReturns<string>
 
@@ -200,21 +204,27 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.output).toContain('部署完成')
     expect(result.calls.some(call => call.startsWith('image prune'))).toBe(true)
     expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
+    expect(result.files['.env']).toContain('DEPLOYMENT_ENV=new')
+    expect(result.files['.env.bak']).toContain('DEPLOYMENT_ENV=old')
+    expect(result.files['docker-compose.yml']).toBe('new-compose\n')
+    expect(result.files['docker-compose.yml.bak']).toBe('old-compose\n')
+    expect(result.files['.env.incoming']).toBeUndefined()
+    expect(result.files['docker-compose.yml.incoming']).toBeUndefined()
     // 容器是问 compose 要的，不是写死名字找的（服务器上叫 stupig-tv-app-1）
     expect(result.calls).toContain('compose ps -q app')
     expect(result.output).toContain('a1b2c3d4e5f6')
   })
 
-  it('.env 缺失：中止部署，不碰运行中的容器', () => {
+  it('.env.incoming 缺失：中止部署，不碰运行中的容器', () => {
     const result = run_deploy({
       statuses: ['running'],
       healths: ['healthy'],
       previous_image: 'sha256:old',
-      env_content: null,
+      incoming_env_content: null,
     })
 
     expect(result.status).not.toBe(0)
-    expect(result.output).toContain('.env 缺失')
+    expect(result.output).toContain('.env.incoming')
     // 在 up 之前中止：容器与镜像标签都不动，也就不需要回滚
     expect(result.calls.some(call => call.startsWith('compose up'))).toBe(false)
     expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
@@ -225,13 +235,30 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
       statuses: ['running'],
       healths: ['healthy'],
       previous_image: 'sha256:old',
-      env_content: 'APP_PORT=3042\nACR_IMAGE=<required>\n',
+      incoming_env_content: 'APP_PORT=3042\nACR_IMAGE=<required>\n',
     })
 
     expect(result.status).not.toBe(0)
     expect(result.output).toContain('<required> 占位符未填')
     expect(result.calls.some(call => call.startsWith('compose up'))).toBe(false)
     expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
+  })
+
+  it('镜像拉取失败：恢复旧配置和镜像标签，不重建当前容器', () => {
+    const result = run_deploy({
+      statuses: ['running'],
+      healths: ['healthy'],
+      previous_image: 'sha256:old',
+      compose_pull_fails: true,
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.files['.env']).toContain('DEPLOYMENT_ENV=old')
+    expect(result.files['docker-compose.yml']).toBe('old-compose\n')
+    expect(result.calls).toContain('tag sha256:old registry.example.com/ns/app:latest')
+    expect(result.calls.some(call => call.startsWith('compose up'))).toBe(false)
+    expect(result.files['.env.incoming']).toBeUndefined()
+    expect(result.files['docker-compose.yml.incoming']).toBeUndefined()
   })
 
   it('compose 里找不到容器：当作确定的坏消息，而不是干等超时', () => {
@@ -245,10 +272,10 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.output).toContain('没找到 app 服务的容器')
     // 找不到容器时等满窗口毫无意义：应当立刻判失败
     expect(result.output).not.toContain('等待')
-    expect(result.output).toContain('没有可回滚的旧镜像')
+    expect(result.output).toContain('没有旧镜像可恢复')
   })
 
-  it('容器退出：回滚到 pull 之前那一版，站点自己恢复，部署以失败退出', () => {
+  it('容器退出：旧镜像、.env 和 compose 一起回滚', () => {
     const result = run_deploy({
       // 第一轮（新镜像）：running/starting → exited；第二轮（回滚后）：running/healthy
       statuses: ['running', 'exited', 'running'],
@@ -259,7 +286,11 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.status).not.toBe(0)
     expect(result.calls).toContain('tag sha256:old registry.example.com/ns/app:latest')
     expect(result.calls).toContain('compose up -d --force-recreate')
-    expect(result.output).toContain('已回滚')
+    expect(result.output).toContain('已完整回滚')
+    expect(result.files['.env']).toContain('DEPLOYMENT_ENV=old')
+    expect(result.files['.env.bak']).toBe('APP_PORT=3042\nDEPLOYMENT_ENV=old\n')
+    expect(result.files['docker-compose.yml']).toBe('old-compose\n')
+    expect(result.files['docker-compose.yml.bak']).toBe('old-compose\n')
     expect(result.output).toContain('log line from the container')
     // 回滚路径绝不能删镜像：$previous_image 正是回滚锚点
     expect(result.calls.some(call => call.startsWith('image prune'))).toBe(false)
@@ -273,8 +304,10 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     })
 
     expect(result.status).not.toBe(0)
-    expect(result.output).toContain('回滚后仍未就绪，需要人工介入')
-    expect(result.output).not.toContain('已回滚')
+    expect(result.output).toContain('自动回滚未能完全完成，需要人工检查部署目录与容器')
+    expect(result.output).not.toContain('已完整回滚')
+    expect(result.files['.env']).toContain('DEPLOYMENT_ENV=old')
+    expect(result.files['docker-compose.yml']).toBe('old-compose\n')
   })
 
   it('容器陷入重启循环：同样判定为坏消息并回滚', () => {
@@ -286,27 +319,38 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
 
     expect(result.status).not.toBe(0)
     expect(result.calls).toContain('tag sha256:old registry.example.com/ns/app:latest')
-    expect(result.output).toContain('已回滚')
+    expect(result.output).toContain('已完整回滚')
   })
 
-  it('没有可回滚的旧镜像（首次部署）：明确报出来，不做假的补救', () => {
-    const result = run_deploy({ statuses: ['exited'], healths: ['starting'] })
-
-    expect(result.status).not.toBe(0)
-    expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
-    expect(result.output).toContain('没有可回滚的旧镜像')
-  })
-
-  it('超时未就绪但仍在运行：让部署失败，但不降级线上', () => {
+  it('首次部署失败：恢复配置文件并说明没有旧镜像可恢复', () => {
     const result = run_deploy({
-      statuses: ['running', 'running', 'running'],
-      healths: ['starting', 'starting', 'starting'],
-      previous_image: 'sha256:old',
+      statuses: ['exited'],
+      healths: ['starting'],
+      previous_image: '',
+      env_content: null,
+      files: { 'docker-compose.yml': 'old-compose\n' },
     })
 
     expect(result.status).not.toBe(0)
     expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
-    expect(result.output).toContain('未自动回滚')
+    expect(result.output).toContain('没有旧镜像可恢复')
+    expect(result.files['.env']).toBeUndefined()
+    expect(result.files['docker-compose.yml']).toBe('old-compose\n')
+  })
+
+  it('超时未就绪仍会恢复旧镜像、.env 与 compose', () => {
+    const result = run_deploy({
+      statuses: ['running', 'running', 'running', 'running'],
+      healths: ['starting', 'starting', 'starting', 'healthy'],
+      previous_image: 'sha256:old',
+    })
+
+    expect(result.status).not.toBe(0)
+    expect(result.calls).toContain('tag sha256:old registry.example.com/ns/app:latest')
+    expect(result.calls).toContain('compose up -d --force-recreate')
+    expect(result.output).toContain('已完整回滚')
+    expect(result.files['.env']).toContain('DEPLOYMENT_ENV=old')
+    expect(result.files['docker-compose.yml']).toBe('old-compose\n')
   })
 
   it('送来的 compose 换到位，服务器上那份留成备份', () => {
@@ -325,7 +369,7 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.files['docker-compose.yml.bak']).toBe('old-compose\n')
     expect(result.files['docker-compose.yml.incoming']).toBeUndefined()
     // 换文件前要先校验：坏文件会把下次部署也一起弄坏
-    expect(result.output).toContain('compose 已更新')
+    expect(result.output).toContain('候选 .env 与 compose 已切换')
   })
 
   it('送来的 compose 校验不过：保留服务器上那份，且不去动容器', () => {
@@ -341,8 +385,10 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     })
 
     expect(result.status).not.toBe(0)
+    expect(result.files['.env']).toBe('APP_PORT=3042\nDEPLOYMENT_ENV=old\n')
+    expect(result.files['.env.bak']).toBe('APP_PORT=3042\nDEPLOYMENT_ENV=old\n')
     expect(result.files['docker-compose.yml']).toBe('old-compose\n')
-    expect(result.files['docker-compose.yml.bak']).toBeUndefined()
+    expect(result.files['docker-compose.yml.bak']).toBe('old-compose\n')
     expect(result.output).toContain('校验失败')
     // 连镜像都不该拉：这一步失败就已经决定这次部署不成立
     expect(result.calls.some(call => call.startsWith('compose pull'))).toBe(false)

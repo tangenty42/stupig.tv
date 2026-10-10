@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// 不加载真实 .env：本测试明确提供 YAML 插值所需值，验证 Nitro 启动时注入 public 子集。
+// 不加载真实 .env：本测试明确提供 YAML 插值所需值，验证 request runtime config 注入。
 vi.mock('dotenv', () => ({ config: () => ({ parsed: {} }) }))
 
 const injected_url = 'wss://mqtt.example.com/mqtt'
@@ -32,19 +32,46 @@ const empty_public = {
   aliyun: { captcha: { appId: '' } },
 }
 
-const public_config: Record<string, unknown> = { ... empty_public }
+const frozen_public = Object.freeze({
+  site: Object.freeze({ ... empty_public.site }),
+  mqtt: Object.freeze({ web: Object.freeze({ ... empty_public.mqtt.web }) }),
+  aliyun: Object.freeze({ captcha: Object.freeze({ ... empty_public.aliyun.captcha }) }),
+})
+const request_configs = new WeakMap<object, { public: Record<string, unknown> }>()
+let request_hook: ((event: object) => void) | undefined
 
 vi.stubGlobal('defineNitroPlugin', (plugin: unknown) => plugin)
-vi.stubGlobal('useRuntimeConfig', () => ({ public: public_config }))
+vi.stubGlobal('useRuntimeConfig', (event?: object) => {
+  if (! event) {
+    return { public: frozen_public }
+  }
+  let request_config = request_configs.get(event)
+  if (! request_config) {
+    request_config = { public: structuredClone(empty_public) }
+    request_configs.set(event, request_config)
+  }
+  return request_config
+})
 
 const guard = (await import('./public-config-guard')).default as unknown as () => void
 
-function run_guard() {
-  guard()
+type RequestEvent = NonNullable<Parameters<typeof useRuntimeConfig>[0]>
+
+function run_guard(event = {} as RequestEvent) {
+  (guard as unknown as (app: { hooks: { hook: (name: string, callback: (event: object) => void) => void } }) => void)({
+    hooks: {
+      hook: (name, callback) => {
+        expect(name).toBe('request')
+        request_hook = callback
+      },
+    },
+  })
+  request_hook?.(event)
+  return event
 }
 
 beforeEach(() => {
-  Object.assign(public_config, empty_public)
+  request_hook = undefined
   for (const [key, value] of Object.entries(config_env)) {
     vi.stubEnv(key, value)
   }
@@ -55,13 +82,15 @@ afterEach(() => {
 })
 
 describe('public 配置的运行期注入守卫', () => {
-  it('从 YAML 解析结果注入 public 子集，不暴露服务端凭据', () => {
-    expect(() => run_guard()).not.toThrow()
-    expect(public_config).toEqual({
+  it('把 YAML 的 public 子集注入请求级 runtime config，不修改冻结的进程配置', () => {
+    const event = run_guard()
+    const request_config = useRuntimeConfig(event)
+    expect(request_config.public).toEqual({
       site: { url: 'https://www.stupig.tv', indexable: false, staticBaseUrl: 'https://stupig.oss.tangenty.cn' },
       mqtt: { web: { wsUrl: injected_url } },
       aliyun: { captcha: { appId: '804af2e773219386ce8ff865dac64fbe' } },
     })
-    expect(JSON.stringify(public_config)).not.toContain('placeholder')
+    expect(frozen_public.site.url).toBe('')
+    expect(JSON.stringify(request_config.public)).not.toContain('placeholder')
   })
 })

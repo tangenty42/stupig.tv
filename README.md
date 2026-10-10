@@ -128,9 +128,11 @@ server-side YAML file would leave the browser's compiled settings out of sync.
   on the server gets overwritten by the next deploy. CD then runs
   `scripts/deploy-remote.sh`, which waits for the container to become healthy: if it
   exits or enters a restart loop the deploy rolls back to the image that was running
-  before, and either way the workflow fails loudly instead of reporting a green deploy
-  over a dead site. A container that is merely slow (still running, not yet healthy)
-  does *not* trigger a rollback — only the logs and a red run.
+  before. `.env` and `docker-compose.yml` are staged as incoming files, backed up, and
+  switched together; any failure after the switch (including a health timeout) restores
+  both files and the previous image, then verifies the old container. The workflow still
+  fails loudly after rollback. Database migrations are forward-only and are **not** rolled
+  back automatically; schema/data recovery remains a separate operational procedure.
 - Add a scheduled task to run the storage cleanup: 1panel 计划任务 → 类型选「容器内执行」→
   容器 `stupig-tv` → 命令 `cd /app && node .output/server/maintenance/cleanup.mjs --delete --grace-hours=168`
   （先用不带 `--delete` 的同一命令跑一次，确认报告内容符合预期再开删）

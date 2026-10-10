@@ -15,17 +15,9 @@
 #   SERVICE                                     可选，compose 里的服务名（默认 app），
 #                                               容器用它来解析，不靠容器的实际名字
 #
-# 另外，workflow 会先把仓库里的 docker-compose.yml 送到 $DEPLOY_DIR/docker-compose.yml.incoming，
-# 本脚本校验后把它换到位（旧的备份成 docker-compose.yml.bak）—— 那份文件是线上编排的
-# 唯一来源，不再依赖手工同步。
-#
-# 设计取舍（2026-10-09 事故后加的）：
-#   - 健康门的**唯一**决定性失败信号是容器 exited / restarting。超时（容器仍在
-#     running，只是还没 healthy）只让 workflow 变红，**不自动回滚**：慢启动或大迁移
-#     都可能超时，凭模糊信号把线上降级到旧镜像比留在原地更危险。
-#   - 但容器退出/重启循环是确定的坏消息，此时自动回滚，站点自己恢复。
-#   - 回滚锚点必须在 pull 之前取：pull 之后旧镜像的 tag 被 :latest 顶掉，只剩 ID，
-#     而成功路径末尾的 prune 会把它当悬空镜像删掉 —— 所以只在成功后 prune。
+# workflow 先把新 .env 和 docker-compose.yml 上传为 incoming；本脚本备份旧文件后再切换。
+# 配置、镜像或健康门任一失败都会恢复旧文件和镜像；数据库迁移是前向迁移，不自动回退。
+# 回滚锚点在 pull 前保存，成功后才 prune 旧镜像。
 set -eu
 
 : "${DEPLOY_DIR:?DEPLOY_DIR 未设置}"
@@ -47,49 +39,10 @@ resolve_container() {
   docker compose ps -q "$SERVICE" 2>/dev/null | head -n 1
 }
 
-echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
-
-# 回滚锚点要在任何改动之前抓：容器与镜像都可能被下面的步骤替换掉
-previous_container=$(resolve_container)
-previous_image=$(docker inspect --format '{{.Image}}' "$previous_container" 2>/dev/null || true)
-echo "previous container: ${previous_container:-<none>} image: ${previous_image:-<none>}"
-
-# compose 文件由 CD 送到 .incoming（见 .github/workflows/deploy.yml）：校验通过才落到
-# 位，旧的那份留成 .bak，出问题可以直接 cp 回去。以前这份文件只存在于服务器上，于是
-# 它悄悄漂移（探针探的是 /、没有 container_name 导致容器叫 stupig-tv-app-1），而仓库
-# 里那份看起来"已经配置好了"。校验的意义：这个文件是线上唯一的编排描述，送进来一份
-# 语法或插值有问题的会把下次部署也一起弄坏。
-if [ -f docker-compose.yml.incoming ]; then
-  if ! docker compose -f docker-compose.yml.incoming config -q; then
-    echo "送来的 compose 文件校验失败，保留服务器上现有的那份" >&2
-    rm -f docker-compose.yml.incoming
-    exit 1
-  fi
-  if [ -f docker-compose.yml ]; then
-    cp -p docker-compose.yml docker-compose.yml.bak
-  fi
-  mv docker-compose.yml.incoming docker-compose.yml
-  echo "compose 已更新（旧文件备份为 docker-compose.yml.bak）"
-fi
-
-docker compose pull
-
-# .env 由 CD 解密推送（见 deploy.yml），这里只做闸门：缺失或含 <required> 占位符的
-# 配置过不了启动校验，部署了也起不来 —— 在动容器之前失败，站点不受影响。
-if [ ! -f .env ] || grep -q '=<required>' .env; then
-  echo ".env 缺失或还有 <required> 占位符未填：本地 env:build:prod 填好、env:encrypt 提交后重新部署。" >&2
-  exit 1
-fi
-
-docker compose up -d
-
-# 轮询容器状态：0 = 已就绪，1 = 确定的坏消息（退出/重启循环），2 = 超时未就绪。
-# 每次采样都打印，失败时这些行就是"它当时到底在干什么"的证据。
 wait_until_ready() {
   attempt=0
   while [ "$attempt" -lt "$ATTEMPTS" ]; do
     attempt=$((attempt + 1))
-    # 每次重新解析：容器在 up -d / 回滚时会被重建，ID 随之改变
     container=$(resolve_container)
     if [ -z "$container" ]; then
       echo "[$attempt/$ATTEMPTS] 没找到 $SERVICE 服务的容器" >&2
@@ -119,13 +72,113 @@ wait_until_ready() {
   return 2
 }
 
+previous_container=$(resolve_container)
+previous_image=$(docker inspect --format '{{.Image}}' "$previous_container" 2>/dev/null || true)
+echo "previous container: ${previous_container:-<none>} image: ${previous_image:-<none>}"
+
+transaction_started=0
+deployment_succeeded=0
+pull_started=0
+up_started=0
+had_env=0
+had_compose=0
+
+rollback_on_exit() {
+  exit_status=$?
+  trap - EXIT
+  if [ "$exit_status" -ne 0 ] && [ "$transaction_started" -eq 1 ] && [ "$deployment_succeeded" -ne 1 ]; then
+    set +e
+    rollback_ok=1
+    echo "部署失败：恢复旧 .env 与 compose 配置" >&2
+    if [ "$had_env" -eq 1 ]; then
+      cp -p .env.bak .env || rollback_ok=0
+    else
+      rm -f .env || rollback_ok=0
+    fi
+    if [ "$had_compose" -eq 1 ]; then
+      cp -p docker-compose.yml.bak docker-compose.yml || rollback_ok=0
+    else
+      rm -f docker-compose.yml || rollback_ok=0
+    fi
+    rm -f .env.incoming docker-compose.yml.incoming || rollback_ok=0
+
+    if [ "$rollback_ok" -eq 1 ] && [ "$pull_started" -eq 1 ] && [ -n "$previous_image" ]; then
+      docker tag "$previous_image" "$IMAGE" || rollback_ok=0
+      if [ "$rollback_ok" -eq 1 ] && [ "$up_started" -eq 1 ]; then
+        docker compose up -d --force-recreate || rollback_ok=0
+        if [ "$rollback_ok" -eq 1 ]; then
+          wait_until_ready || rollback_ok=0
+        fi
+      fi
+    elif [ "$up_started" -eq 1 ] && [ -z "$previous_image" ]; then
+      echo "没有旧镜像可恢复；配置文件已恢复，但首次部署需要人工处理。" >&2
+      rollback_ok=0
+    fi
+
+    if [ "$rollback_ok" -eq 1 ]; then
+      if [ "$up_started" -eq 1 ]; then
+        echo "已完整回滚：旧镜像、.env 与 compose 均已恢复。" >&2
+      else
+        echo "配置已回滚；容器未切换，无需重建。" >&2
+      fi
+    else
+      echo "自动回滚未能完全完成，需要人工检查部署目录与容器。" >&2
+    fi
+  fi
+  exit "$exit_status"
+}
+trap rollback_on_exit EXIT
+
+echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+
+# CD 只上传 incoming 文件；切换前先验证候选 .env，并保存完整回滚点。
+if [ ! -f .env.incoming ]; then
+  echo "缺少 .env.incoming，拒绝部署。" >&2
+  exit 1
+fi
+if grep -q '=<required>' .env.incoming; then
+  echo ".env.incoming 还有 <required> 占位符未填，拒绝部署。" >&2
+  exit 1
+fi
+if [ ! -f docker-compose.yml.incoming ]; then
+  echo "缺少 docker-compose.yml.incoming，拒绝部署。" >&2
+  exit 1
+fi
+
+if [ -f .env ]; then
+  cp -p .env .env.bak
+  had_env=1
+fi
+if [ -f docker-compose.yml ]; then
+  cp -p docker-compose.yml docker-compose.yml.bak
+  had_compose=1
+fi
+
+transaction_started=1
+mv .env.incoming .env
+chmod 600 .env
+mv docker-compose.yml.incoming docker-compose.yml
+echo "候选 .env 与 compose 已切换（旧配置备份为 .env.bak / docker-compose.yml.bak）"
+
+# 必须在两份候选配置同时就位后校验，确保 env_file 和 Compose 插值都是新值。
+if ! docker compose config -q; then
+  echo "候选 .env / compose 校验失败，自动恢复旧配置。" >&2
+  exit 1
+fi
+
+pull_started=1
+docker compose pull
+up_started=1
+docker compose up -d
+
 set +e
 wait_until_ready
 readiness=$?
 set -e
 
 if [ "$readiness" -eq 0 ]; then
-  docker image prune -f
+  docker image prune -f || echo "清理悬空镜像失败，忽略此项" >&2
+  deployment_succeeded=1
   echo "部署完成：容器已就绪"
   exit 0
 fi
@@ -135,29 +188,5 @@ docker compose ps || true
 echo "--- 容器最后 80 行日志 ---"
 docker logs --tail 80 "$(resolve_container)" 2>&1 || true
 
-if [ "$readiness" -eq 2 ]; then
-  echo "容器仍在运行但没有通过健康检查，未自动回滚（可能是慢启动）。" >&2
-  echo "人工判断后回滚：docker tag $previous_image $IMAGE && docker compose up -d --force-recreate" >&2
-  exit 1
-fi
-
-if [ -z "$previous_image" ]; then
-  echo "没有可回滚的旧镜像，站点需要人工处理。" >&2
-  exit 1
-fi
-
-echo "回滚到 $previous_image"
-docker tag "$previous_image" "$IMAGE"
-docker compose up -d --force-recreate
-set +e
-wait_until_ready
-rollback=$?
-set -e
-
-if [ "$rollback" -eq 0 ]; then
-  echo "已回滚：新镜像有问题，旧镜像已重新提供服务。" >&2
-else
-  echo "回滚后仍未就绪，需要人工介入。" >&2
-fi
-echo "回滚命令（供参考）：docker tag $previous_image $IMAGE && docker compose up -d --force-recreate" >&2
+echo "健康门失败（状态码 $readiness），将恢复旧镜像和配置。" >&2
 exit 1
