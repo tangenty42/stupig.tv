@@ -18,6 +18,12 @@ pnpm install
 pnpm dev:all           # start the dependency services, then run the dev server
 ```
 
+`pnpm env:build:dev` also prompts for `ENV_PASSPHRASE` once and stores it in the
+gitignored local `.env`; `pnpm env:check`, `pnpm env:encrypt` and the pre-commit check
+read it there automatically. An explicitly supplied value or process environment
+variable takes precedence. This local-only key is not included in `.env.prod` or sent to
+the server.
+
 - `pnpm dev:services` — start the dependency services only
   (`docker compose -f docker-compose.dev.yml up -d`; safe to re-run)
 - `pnpm dev` — run the dev server only, with the dependency services already up
@@ -106,7 +112,10 @@ server-side YAML file would leave the browser's compiled settings out of sync.
 - The production `.env` is maintained locally as the gitignored `.env.prod`
   (`pnpm env:build:prod` merges template changes into it and prompts for new
   `<required>` keys), then encrypted to the committed `.env.prod.gpg`
-  (`pnpm env:encrypt`). The deploy workflow decrypts it with the `ENV_PASSPHRASE`
+  (`pnpm env:encrypt`). `pnpm env:check` decrypts the committed file and compares it
+  with the local plaintext by key — it also runs as a pre-commit hook whenever
+  `.env.prod.gpg` is staged, so a stale ciphertext cannot be committed unnoticed.
+  The deploy workflow decrypts it with the `ENV_PASSPHRASE`
   secret and pushes it to the server; a missing file or leftover `<required>`
   placeholder aborts the deploy before touching the running container.
 - Reverse-proxy your EMQX WebSocket endpoint (`http://127.0.0.1:8083/mqtt`) with SSL
@@ -115,6 +124,19 @@ server-side YAML file would leave the browser's compiled settings out of sync.
   behind the reverse proxy). Nitro loads it through the YAML placeholder and injects the
   validated URL into `runtimeConfig.public`.
   Missing or invalid public deployment fields fail startup validation.
+- EMQX must require authentication, otherwise anyone can publish sync events. Set
+  `MQTT_USERNAME`/`MQTT_PASSWORD` to non-empty credentials in `.env`, then configure the
+  broker once via its Dashboard (or REST API):
+  - Access Control → Authentication → Create → `Password-Based` + `Built-in Database`,
+    with `User ID Type` = `username`, then add the `MQTT_USERNAME`/`MQTT_PASSWORD` user
+    under its User Management tab. This is the server-side publisher account.
+  - Access Control → Authorization: mirror [emqx-acl.conf](emqx-acl.conf) — the same file
+    the dev container mounts — so `server_*` client ids may publish/subscribe
+    `stupig/sync/#`, `web_*` client ids (browsers) may only subscribe, and unmatched
+    clients are denied (`no_match: deny`).
+  - Change the Dashboard's default `admin/public` password and never expose its port,
+    or the TCP listener (1883), publicly; only the reverse-proxied WebSocket port should
+    be reachable from the internet.
 - Migrations under `migrations/` are applied automatically when the container starts
   (the `CMD` runs the bundled runner before the server; a failure keeps the container down
   on purpose). Existing databases whose schema was built by hand need a one-off
