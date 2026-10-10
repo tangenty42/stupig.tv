@@ -14,6 +14,7 @@
     "env:build:prod": "tsx --tsconfig scripts/tsconfig.json scripts/sync-env.ts --prod",
     "env:encrypt": "tsx --tsconfig scripts/tsconfig.json scripts/gpg-env.ts encrypt",
     "env:decrypt": "tsx --tsconfig scripts/tsconfig.json scripts/gpg-env.ts decrypt",
+    "env:check": "tsx --tsconfig scripts/tsconfig.json scripts/gpg-env.ts check",
     "generate": "nuxt generate",
     "settings:generate": "tsx config/lib/generate.ts",
     "settings:check": "tsx config/lib/generate.ts --check",
@@ -101,7 +102,8 @@
     "pre-commit": "pnpm lint-staged"
   },
   "lint-staged": {
-    "*.{js,mjs,ts,vue,json,jsonc,json5,yaml,yml,md}": "eslint --fix --no-warn-ignored"
+    "*.{js,mjs,ts,vue,json,jsonc,json5,yaml,yml,md}": "eslint --fix --no-warn-ignored",
+    ".env.prod.gpg": "pnpm env:check"
   },
   "browserslist": {
     "production": [
