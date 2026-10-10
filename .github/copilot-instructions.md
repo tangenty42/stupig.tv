@@ -32,6 +32,7 @@
 - **Never delete or recreate files during code editing**, even if Autopilot would approve. Ask the user first using the "wait for my next prompt" approach.
 - Favor minimal replacement or modification over rewriting the whole file or module.
 - When updating shared server-side state that needs to be reflected in the UI (e.g., profile changes, admin role changes, user bans), do not proactively fetch from the client side. Instead, emit the appropriate refresh event via `server/lib/sync.ts` and rely on the existing data sync module to reload the affected data in all connected clients/tabs. On the client, prefer `useSyncedData` for subscribing to and reloading data. In most cases, leave `universal` at its default `true` so multiple subscribers to the same resource share one proxy and one fetch. Only set `universal: false` when the `fetcher` has caller-specific side effects or different behavior across callers. Use `useDataSync` directly only in rare cases where a component needs to react to a raw sync event without fetching a shared resource.
+- Polling vs MQTT events: sync events are emitted only for explicit mutations. Derived values that change without any mutation — e.g. `last_seen_at` / online presence — never produce an event, so the affected resources need a polling fallback. `profile` and `profile_sessions` on `app/pages/u/[id].vue` must keep their `polling_interval` (`settings.app.online.pollIntervalSeconds`) for this reason; `useSyncedData`'s poll only fires after that much quiet time with no fetch, and only while the tab is visible. The admin user list (`app/pages/admin/index.vue`) polls unconditionally on its own interval, `settings.app.admin.pollIntervalSeconds`. Do not remove these intervals when touching the sync module; new resources with silently-changing derived data should follow the same pattern rather than relying on events.
 - SSR/client sync boundary (source of a past hydration mismatch): `get_shared_proxies()` in `useSyncedData` and `get_listeners()` in `useDataSync` return a fresh Map per call on the server but a shared `useState` Map on the client, so "existing shared proxy" paths only ever run client-side. A universal proxy created with `immediate: false` is trigger-only and carries no fetched state; subscribers must not adopt an unfetched proxy's value, and `useSyncedData` itself joins in-flight shared fetches and awaits them when `immediate` is true. Values that must match between SSR render and hydration must either be `useState` (payload-serialized) or fetched identically on both sides — plain refs reset during hydration and are only refilled by awaited immediate fetches.
 
 ## Code Conventions
@@ -70,10 +71,12 @@
 
 ## Commit, branch & PR conventions
 
-- Messages follow conventional-commit style: **`type(scope): description`** — single line, English, imperative mood, lowercase description, no trailing period, no trailer. Example: `feat(content): move attachment uploads onto the task queue`.
+- All commit messages follow **`type(scope): description`** — one English line, imperative mood, lowercase description, no trailing period. Example: `feat(content): move attachment uploads onto the task queue`.
 - `type` is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`; `scope` is the area touched (`content`, `db`, `auth`, `profile`, `ui`, `sync`, `storage`, `config`, `deploy`, `ci`, `process`, `deps`, …).
 - History on `main` was rewritten to this format, so it is the only style to match (`git log --oneline`).
 - Branch names are `type/scope/description`, all lowercase, hyphenated: `feat/content/task-staging-cleanup`, `fix/content/discard-staged-objects`, `docs/content/phase-3-plan`, `chore/db/drop-reference-schema`.
-- PR titles are `type(scope): description` in English, imperative mood, no trailing period: `feat(content): move attachment uploads onto the task queue`.
+- PR titles use the same English format: `type(scope): description`.
+- PR descriptions are in English and contain these five sections, in order: `Background`, `Changes`, `Impact`, `Verification`, and `Materials (Documentation)`. Use concise bullets under each heading; write `None` when a section has nothing to report.
+- Merge commit messages use **`type(scope): description (#<PR id>)`**, e.g. `fix(deploy): roll back config and image on failures (#123)`.
 - Branch auto-delete on merge is enabled repository-wide: a merged PR's branch is removed automatically, so do not reuse it and do not delete it by hand.
-- Never append `Co-authored-by` or any other trailer unless the user explicitly asks for it in that conversation.
+- Never append additional trailers unless the user explicitly asks for them in that conversation.
