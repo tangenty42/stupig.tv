@@ -225,7 +225,7 @@ type RefreshReason = 'initial' | 'query' | 'manual' | 'polling' | 'mutation'
 type BatchCommand = 'BAN' | 'UNBAN' | 'KICK' | 'VERIFY' | 'UNVERIFY' | 'PROMOTE' | 'DEMOTE'
 
 const rows_per_page_options = [10, 50, 100, 154800]
-const poll_interval_seconds = settings.app.online.pollIntervalSeconds
+const poll_interval_seconds = settings.app.admin.pollIntervalSeconds
 const poll_interval_ms = poll_interval_seconds * 1000
 
 const shortcut_commands = [

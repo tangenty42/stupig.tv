@@ -31,11 +31,33 @@ services:
     image: emqx/emqx:5.10.5
     restart: unless-stopped
     ports:
-      - '${MQTT_TCP_PORT:?请在 .env 中设置 MQTT_TCP_PORT}:1883' # TCP，服务端 publish 用
-      - '${MQTT_WS_PORT:?请在 .env 中设置 MQTT_WS_PORT}:8083' # WebSocket，浏览器 useDataSync 用
-      - '${EMQX_DEV_DASHBOARD_PORT:?请在 .env 中设置 EMQX_DEV_DASHBOARD_PORT}:18083' # Dashboard（admin/public）
+      # 仅回环：这些端口只给本机开发用，不该暴露到局域网。
+      # Dashboard 同理：默认 admin/public 是众所周知凭据，别对外开。
+      - '127.0.0.1:${MQTT_TCP_PORT:?请在 .env 中设置 MQTT_TCP_PORT}:1883' # TCP，服务端 publish 用
+      - '127.0.0.1:${MQTT_WS_PORT:?请在 .env 中设置 MQTT_WS_PORT}:8083' # WebSocket，浏览器 useDataSync 用
+      - '127.0.0.1:${EMQX_DEV_DASHBOARD_PORT:?请在 .env 中设置 EMQX_DEV_DASHBOARD_PORT}:18083' # Dashboard（admin/public）
     environment:
-      EMQX_DASHBOARD__DEFAULT_PASSWORD: public
+      # Dashboard 管理密码，HOCON 值要带内层双引号，否则含 # 的字符串会被截断成注释。
+      # 仅本机回环，仍然改掉默认值：本地网络里的其他进程也可能扫到 18083。
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: '"public"'
+      # 认证器：密码哈希存内置 Mnesia 库，通过 Dashboard/API 管理用户。
+      # 数组索引语法 EMQX_AUTHENTICATION__1__* 对应 EMQX 的 authentication 数组第 1 项。
+      EMQX_AUTHENTICATION__1__MECHANISM: password_based
+      EMQX_AUTHENTICATION__1__BACKEND: built_in_database
+      EMQX_AUTHENTICATION__1__USER_ID_TYPE: username
+      EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__NAME: sha256
+      EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__SALT_POSITION: suffix
+      # 授权：无匹配即拒绝。服务端 clientId 前缀 server_ 允许 pub/sub 到 stupig/sync/#；
+      # 浏览器 clientId 前缀 web_ 只允许订阅。MQTT_USERNAME/MQTT_PASSWORD 只需对服务端
+      # 配置，浏览器端认证靠会话级 clientId 前缀识别。
+      EMQX_AUTHORIZATION__NO_MATCH: deny
+      EMQX_AUTHORIZATION__DENY_ACTION: disconnect
+      EMQX_AUTHORIZATION__SOURCES__1__TYPE: file
+      EMQX_AUTHORIZATION__SOURCES__1__ENABLE: true
+      EMQX_AUTHORIZATION__SOURCES__1__PATH: /opt/emqx/etc/acl.conf
+    volumes:
+      # 挂一份固定的 ACL：规则是代码的一部分，不该靠 Dashboard 手点。
+      - ./emqx-acl.conf:/opt/emqx/etc/acl.conf:ro
 
   phpmyadmin:
     image: phpmyadmin:5-apache

@@ -21,6 +21,7 @@ export const settings_schema = z.strictObject({
       sync: z.strictObject({ broadcastChannelName: identifier, clientIdStorageKey: identifier }),
     }),
     online: z.strictObject({ timeoutSeconds: positive_integer, pingIdleIntervalSeconds: positive_integer, pollIntervalSeconds: positive_integer }),
+    admin: z.strictObject({ pollIntervalSeconds: positive_integer }),
     avatar: z.strictObject({ maxSizeMb: positive_integer }),
     content: z.strictObject({
       story: z.strictObject({
