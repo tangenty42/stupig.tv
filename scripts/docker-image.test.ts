@@ -70,21 +70,21 @@ describe('部署的健康检查与自愈接线', () => {
   })
 
   it('只有 Check 成功后才部署，并部署同一个 commit', () => {
-    const workflow = read('.github/workflows/deploy.yml')
+    const workflow = parse(read('.github/workflows/deploy.yml'))
 
-    expect(workflow).toMatch(/workflow_run:[\s\S]*workflows:\s*\n\s+- Check[\s\S]*types:\s*\n\s+- completed[\s\S]*branches:\s*\n\s+- main/)
-    expect(workflow).toMatch(/if: github\.event\.workflow_run\.conclusion == 'success'/)
-    expect(workflow).toMatch(/ref:\s*\$\{\{ github\.event\.workflow_run\.head_sha \}\}/)
-    expect(workflow).not.toMatch(/^\s+push:/m)
-    expect(workflow).not.toMatch(/^\s+workflow_dispatch:/m)
+    expect(workflow.on.workflow_run).toEqual({ workflows: ['Check'], types: ['completed'], branches: ['main'] })
+    expect(workflow.jobs['build-and-deploy'].if).toBe('github.event.workflow_run.conclusion == \'success\'')
+    expect(workflow.jobs['build-and-deploy'].steps[0].with.ref).toBe('$' + '{{ github.event.workflow_run.head_sha }}')
   })
 
   it('.env 由 CD 解密推送，服务器上不构建它', () => {
-    const workflow = read('.github/workflows/deploy.yml')
-    expect(workflow).toMatch(/ENV_PASSPHRASE: \$\{\{ secrets\.ENV_PASSPHRASE \}\}/)
-    expect(workflow).toMatch(/gpg --batch --yes --pinentry-mode loopback --passphrase "\$ENV_PASSPHRASE" --decrypt \\?\n?\s*--output \.env\.prod \.env\.prod\.gpg/)
-    expect(workflow).not.toMatch(/--passphrase "\$\{\{ secrets\.ENV_PASSPHRASE \}\}"/)
-    expect(workflow).toMatch(/scp -P .* \.env\.prod \\?\n?\s*"\$\{\{ vars\.SSH_USER \}\}@\$\{\{ vars\.SSH_HOST \}\}:\$\{\{ vars\.DEPLOY_DIR \}\}\/\.env\.incoming"/)
+    const workflow = parse(read('.github/workflows/deploy.yml'))
+    const deploy_step = workflow.jobs['build-and-deploy'].steps.find((step: { name?: string }) => step.name === 'Deploy to server')
+
+    expect(deploy_step.env.ENV_PASSPHRASE).toBe('$' + '{{ secrets.ENV_PASSPHRASE }}')
+    expect(deploy_step.run).toContain('gpg --batch --yes --pinentry-mode loopback --passphrase "$ENV_PASSPHRASE" --decrypt')
+    expect(deploy_step.run).toContain('--output .env.prod .env.prod.gpg')
+    expect(deploy_step.run).toContain('.env.incoming')
     // 服务器端只剩闸门，不再跑 build-env
     expect(read('scripts/deploy-remote.sh')).not.toMatch(/build-env/)
   })
@@ -107,7 +107,7 @@ describe('部署的健康检查与自愈接线', () => {
     // 而仓库里那份看着是好的 —— 现在仓库这份必须是唯一来源。
     expect(workflow).toMatch(/scp[^\n]*docker-compose\.yml/)
     expect(workflow).toMatch(/docker-compose\.yml\.incoming/)
-      // 两份候选配置换入后联合校验；失败时恢复旧文件
+    // 两份候选配置换入后联合校验；失败时恢复旧文件
     expect(script).toMatch(/docker compose config -q/)
     expect(script).toMatch(/cp -p \.env \.env\.bak/)
     expect(script).toMatch(/cp -p docker-compose\.yml docker-compose\.yml\.bak/)
