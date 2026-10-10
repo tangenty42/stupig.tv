@@ -2,7 +2,7 @@
 
 FROM node:24-slim AS build
 WORKDIR /app
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # --ignore-scripts: postinstall 的 nuxt prepare / git hooks 需要完整源码与 .git，构建阶段跳过
 RUN corepack enable && pnpm install --frozen-lockfile --ignore-scripts
 COPY . .
