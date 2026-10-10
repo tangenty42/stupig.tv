@@ -30,14 +30,14 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
       # 版本在这里显式指定，不写进 package.json 的 packageManager 字段：
       # 该字段会让 pnpm 尝试把 packageManagerDependencies 同步进 lockfile，
       # 与 --frozen-lockfile 冲突（Dockerfile 的 corepack 路径同理）
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12.10.1
 
@@ -61,7 +61,7 @@ jobs:
       - run: pnpm test
 
   migrations:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       mysql:
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12.10.1
 
