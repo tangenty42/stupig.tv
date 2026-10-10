@@ -1,10 +1,13 @@
 name: Deploy
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - Check
+    types:
+      - completed
     branches:
       - main
-  workflow_dispatch:
 
 concurrency:
   group: deploy-production
@@ -12,9 +15,12 @@ concurrency:
 
 jobs:
   build-and-deploy:
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Build and push image
         run: |
@@ -46,7 +52,7 @@ jobs:
           gpg --batch --yes --pinentry-mode loopback --passphrase "$ENV_PASSPHRASE" --decrypt \
             --output .env.prod .env.prod.gpg
           scp -P "${{ vars.SSH_PORT }}" .env.prod \
-            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:${{ vars.DEPLOY_DIR }}/.env"
+            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:${{ vars.DEPLOY_DIR }}/.env.incoming"
           shred -u .env.prod
           # 仓库里的 compose 是线上编排的唯一来源：先送过去，由远端脚本校验后换到位
           # （旧的备份成 docker-compose.yml.bak）。以前这份文件只在服务器上，会悄悄
