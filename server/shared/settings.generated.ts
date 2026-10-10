@@ -54,6 +54,9 @@ export const settings: Settings = {
       pingIdleIntervalSeconds: 4,
       pollIntervalSeconds: 4,
     },
+    admin: {
+      pollIntervalSeconds: 2,
+    },
     avatar: {
       maxSizeMb: 1,
     },
