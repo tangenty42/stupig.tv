@@ -16,6 +16,7 @@ export interface LoginUser {
 
 export function useAuth() {
   const { info, dead } = useMyToast()
+  const { broadcast_login, broadcast_logout } = useDataSync()
 
   const user = useCookie<LoginUser | null>(settings.app.auth.cookie.userName, {
     default: () => null,

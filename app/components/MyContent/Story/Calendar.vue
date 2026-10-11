@@ -158,6 +158,7 @@ const props = withDefaults(defineProps<{
   initial_month: null,
 })
 
+const time_context = useDisplayTimeContext()
 const week_labels = ['一', '二', '三', '四', '五', '六', '日']
 
 // Bar colors ignore ratings: events cycle through this palette in start-date
@@ -184,7 +185,7 @@ const events = computed<CalendarEvent[]>(() => {
   const list: CalendarEvent[] = []
   for (const story of props.stories) {
     const dates = story.event_dates
-      .map(date => localize_date(date, true))
+      .map(date => localize_date(date, true, time_context.value.timezone))
       .filter(date => date.isValid())
       .sort((a, b) => a.valueOf() - b.valueOf())
     const start = dates[0]
@@ -226,18 +227,18 @@ const max_month = computed(() => {
 
 const displayed_month = ref(parse_initial_month())
 
-const month_label = computed(() => format_event_entry('month', displayed_month.value))
+const month_label = computed(() => format_event_entry('month', displayed_month.value, time_context.value.timezone))
 
 // Hovering any segment applies the hover effect to every segment of that event.
 const hovered_id = ref<number | null>(null)
 
 function parse_initial_month() {
   if (props.initial_month) {
-    const initial_month = localize_date(props.initial_month, true)
+    const initial_month = localize_date(props.initial_month, true, time_context.value.timezone)
     if (initial_month.isValid())
       return initial_month.startOf('month')
   }
-  return max_month.value ?? localize_date().startOf('month')
+  return max_month.value ?? localize_date(time_context.value.now_ms, false, time_context.value.timezone).startOf('month')
 }
 
 const can_go_prev = computed(() => min_month.value !== null && displayed_month.value.isAfter(min_month.value, 'month'))
@@ -252,7 +253,7 @@ function clamp_displayed_month() {
 
 // Until a month is pinned (initial_month prop or manual navigation), follow the
 // last reachable month once the bounds are known.
-const month_pinned = ref(Boolean(props.initial_month && localize_date(props.initial_month, true).isValid()))
+const month_pinned = ref(Boolean(props.initial_month && localize_date(props.initial_month, true, time_context.value.timezone).isValid()))
 
 watch([min_month, max_month], () => {
   if (! month_pinned.value && max_month.value !== null)
@@ -264,7 +265,7 @@ watch([min_month, max_month], () => {
 function build_rows(month: Dayjs): CalendarRow[] {
   const month_start = month.startOf('month')
   const month_last = month_start.endOf('month')
-  const today = localize_date()
+  const today = localize_date(time_context.value.now_ms, false, time_context.value.timezone)
   // Monday-first: day() returns 0 for Sunday.
   const leading = (month_start.day() + 6) % 7
   const days_in_month = month_start.daysInMonth()

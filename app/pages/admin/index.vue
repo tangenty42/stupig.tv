@@ -221,7 +221,7 @@ definePageMeta({
 
 useSeoMeta({ robots: 'noindex, nofollow' })
 
-type RefreshReason = 'initial' | 'query' | 'manual' | 'polling' | 'mutation'
+type RefreshReason = 'initial' | 'query' | 'manual' | 'mutation'
 type BatchCommand = 'BAN' | 'UNBAN' | 'KICK' | 'VERIFY' | 'UNVERIFY' | 'PROMOTE' | 'DEMOTE'
 
 const rows_per_page_options = [10, 50, 100, 154800]
@@ -258,7 +258,7 @@ const active_filter = ref('')
 const page = ref(1)
 const page_size = ref(rows_per_page_options[0]!)
 
-const users_result = ref<AdminUserList | null>(null)
+const users_result = useSyncedState<AdminUserList | null>('admin-users-result', () => null)
 const users_loading = ref(false)
 const selected_ids = ref(new Set<number>())
 
@@ -279,8 +279,7 @@ const permission_pending = ref(false)
 const last_sync_at = ref<number | null>(null)
 const last_sync_reason = ref<RefreshReason>('initial')
 
-let poll_timer: ReturnType<typeof setInterval> | null = null
-let reload_serial = 0
+let refresh_reason: RefreshReason = 'initial'
 
 const users = computed<AdminUser[]>(() => users_result.value?.users ?? [])
 const total = computed(() => users_result.value?.total ?? 0)
@@ -351,36 +350,30 @@ function toggle_current_page_selection() {
   selected_ids.value = next
 }
 
+const { refresh: refresh_users } = await useSyncedData<AdminUserList>(
+  null,
+  () => admin.list_users({
+    page: page.value,
+    page_size: page_size.value,
+    filter: active_filter.value || undefined,
+  }),
+  users_result,
+  users_loading,
+  {
+    universal: false,
+    fetch_without_resource: true,
+    polling_interval: poll_interval_ms,
+    on_data: () => {
+      last_sync_reason.value = refresh_reason
+      last_sync_at.value = Date.now()
+      prune_selection()
+    },
+  },
+)
+
 async function reload_users(reason: RefreshReason) {
-  const serial = ++ reload_serial
-  users_loading.value = true
-
-  try {
-    const result = await admin.list_users({
-      page: page.value,
-      page_size: page_size.value,
-      filter: active_filter.value || undefined,
-    })
-
-    if (serial !== reload_serial) {
-      return
-    }
-
-    users_result.value = result
-    last_sync_reason.value = reason
-    last_sync_at.value = Date.now()
-    prune_selection()
-  }
-  catch (ex) {
-    if (serial === reload_serial) {
-      error(ex)
-    }
-  }
-  finally {
-    if (serial === reload_serial) {
-      users_loading.value = false
-    }
-  }
+  refresh_reason = reason
+  await refresh_users()
 }
 
 function apply_filter(filter: string) {
@@ -623,21 +616,6 @@ async function submit_permissions() {
     permission_pending.value = false
   }
 }
-
-onMounted(() => {
-  poll_timer = setInterval(() => {
-    void reload_users('polling')
-  }, poll_interval_ms)
-})
-
-onUnmounted(() => {
-  if (poll_timer) {
-    clearInterval(poll_timer)
-    poll_timer = null
-  }
-})
-
-await reload_users('initial')
 </script>
 
 <style scoped>

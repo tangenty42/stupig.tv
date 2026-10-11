@@ -2,7 +2,7 @@
   <Button
     :disabled="!! remaining || loading"
     :loading="loading"
-    :label="remaining ? duration_format(duration) : '发送'"
+    :label="remaining ? duration_format(duration, { timezone: time_context.timezone }) : '发送'"
     severity="secondary"
     size="small"
     @click="$emit('click', $event)"
@@ -28,10 +28,11 @@ defineEmits<{
 // survives Nuxt payload serialization between SSR and hydration intact;
 // it is localized here at the point of use.
 const cooldown_until = defineModel<string | null>({ default: null })
+const time_context = useDisplayTimeContext()
 const now = useReactiveDateNow()
 
 const cooldown_until_date = computed(() =>
-  cooldown_until.value ? localize_date(cooldown_until.value) : null,
+  cooldown_until.value ? localize_date(cooldown_until.value, false, time_context.value.timezone) : null,
 )
 
 const remaining = computed(() => {

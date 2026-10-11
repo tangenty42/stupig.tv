@@ -56,7 +56,9 @@ pnpm test                # vitest run
 - 服务端通过 `@config/lib/loader` 读配置。`load_config()` 将两份已校验配置用 `merge_config_layers(settings, value)` 递归合成，导出的 `AppConfig` 自动推导；保持 YAML 原层级，稳定 MQTT 参数在 `integrations.mqtt`，连接信息在 `mqtt`，浏览器偏好在 `app.client`，不手工改名或搬平字段。`runtime_config()` 首次读取后缓存整个进程生命周期，单独 import loader 不读取配置；`load_database_config()` 只插值/校验 `db` 子树。Nuxt 构建期只声明 public runtime config 形状；Nitro 启动时从已验证配置注入 public 子集，不读取密钥到 Nuxt 构建配置。
 - 更新部署：镜像包含 YAML，改 YAML 需重新构建部署镜像；app settings 还必须重新生成、编译共享模块，不能只改服务端 YAML 导致前后端值不一致。改 Compose 注入的环境变量则需重新创建容器，单纯 restart 不会刷新容器环境。
 - 外部服务：同机 Docker 里的 MySQL；Aliyun（短信/DYPNS/CAPTCHA）；MQTT/EMQX 做实时同步。
-- 实时同步：服务端用 `server/lib/sync.ts` 的 `publish_refresh({ resource })` 发布事件，浏览器端 `useSyncedData` 订阅并按需重新拉取。**不要**在客户端主动轮询服务端状态变化。
+- 实时同步分三层：`useDataSync` 管 MQTT/BroadcastChannel 和资源通知，`QueryClient`/`Query` 管请求、共享缓存、失效重跑与轮询，`useSyncedData` 管 Vue refs、回调与 hydration。客户端插件 `app/plugins/data-sync.client.ts` 启动应用级传输并注入身份变化/退出处理，不由首次调用组件持有连接。详见 [架构说明第 5 节](./architecture-risks.md#5-实时同步的所有权与兼容约束)。
+- 显式服务端变更用 `server/lib/sync.ts` 的 `publish_refresh({ resource })` 发布事件，让查询失效后重新拉取，不在 mutation 成功后额外主动 fetch。在线状态等随时间改变但不发事件的数据保留 `polling_interval` 兜底，使用共享 settings 中的间隔，不自行创建页面轮询计时器。
+- `useSyncedData` 第一个参数接受单个/多个资源、字面量、ref 或包含 ref 的数组。固定资源不包 ref/computed；动态资源保持响应式。`query_key` 可独立指定查询身份；相同 key 的 fetcher 必须等价。无资源独立查询用 `null` + `universal: false` + `fetch_without_resource: true`。OTP 冷却已合并手机号与身份事件为一次多资源订阅。
 - 数据同步的 SSR 边界有历史坑（hydration mismatch），规则写在 `.github/copilot-instructions.md` 里，动 `useSyncedData`/`useDataSync` 前先读。
 
 ## 5. 数据库与迁移

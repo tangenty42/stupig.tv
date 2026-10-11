@@ -31,7 +31,7 @@
           </MyBadge>
         </span>
         <span class="story-card-date ml-auto">
-          {{ format_event_range(story.event_precision, story.event_dates) }}
+          {{ format_event_range(story.event_precision, story.event_dates, time_context.timezone) }}
         </span>
       </div>
     </div>
@@ -50,6 +50,7 @@ const props = defineProps<{
 }>()
 
 const static_url = useStaticUrl()
+const time_context = useDisplayTimeContext()
 
 const pinned = computed(() => story_pinned(props.story.labels))
 const rating_rank = computed(() => story_rating_rank(props.story.labels))

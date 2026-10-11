@@ -47,6 +47,10 @@ export const settings: Settings = {
       sync: {
         broadcastChannelName: 'stupig_sync_events',
         clientIdStorageKey: 'stupig_sync_client_id',
+        eventDeduplicationLimit: 256,
+        resourceGatherDelayMs: 200,
+        reconnectDelayMs: 1000,
+        connectTimeoutMs: 30000,
       },
     },
     online: {

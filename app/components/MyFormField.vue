@@ -136,12 +136,11 @@ const described_by = computed(() => {
 const { auth: auth_api } = useApi()
 const pc_form = inject<useFormReturn | undefined>('$pcForm', undefined)
 
-// Stored as a plain UTC ISO string (not Dayjs) so the value survives Nuxt
-// payload serialization between SSR and hydration intact. Consumers
-// localize it at the point of use.
-const otp_cooldown_until = ref<string | null>(null)
+// Store a UTC ISO string rather than Dayjs so the cooldown survives payload serialization.
+const otp_state_key = props.otpSend ? `${props.otpSend.purpose}:${props.name}` : props.name
+const otp_cooldown_until = useSyncedState<string | null>(`otp_cooldown_${otp_state_key}`, () => null)
 const otp_send_loading = ref(false)
-const otp_sync_loading = ref(false)
+const otp_sync_loading = useState(`otp_cooldown_loading_${otp_state_key}`, () => false)
 
 const identity_token = useCookie(settings.app.identity.cookieName)
 
@@ -214,22 +213,6 @@ if (props.otpSend) {
     }
   }
 
-  async function sync_otp_cooldown_by_identity() {
-    try {
-      const data = await auth_api.get_otp_cooldown()
-
-      const next_available_at = data?.next_available_at
-      if (! next_available_at) {
-        return null
-      }
-
-      return next_available_at
-    }
-    catch {
-      return null
-    }
-  }
-
   const otp_sync_source_has_error = ref(false)
 
   watch(() => otp_target_phone.value, async (new_phone) => {
@@ -264,17 +247,10 @@ if (props.otpSend) {
   })
 
   await useSyncedData<string | null>(
-    otp_sync_source,
+    [otp_sync_source, otp_sync_by_identity_source],
     sync_otp_cooldown,
     otp_cooldown_until,
     otp_sync_loading,
-  )
-  await useSyncedData<string | null>(
-    otp_sync_by_identity_source,
-    sync_otp_cooldown_by_identity,
-    otp_cooldown_until,
-    otp_sync_loading,
-    { immediate: false },
   )
 
   watch(otp_sync_source_has_error, (new_val) => {

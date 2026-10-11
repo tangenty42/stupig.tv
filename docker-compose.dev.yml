@@ -47,9 +47,10 @@ services:
       EMQX_AUTHENTICATION__1__USER_ID_TYPE: username
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__NAME: sha256
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__SALT_POSITION: suffix
-      # 授权：无匹配即拒绝。服务端 clientId 前缀 server_ 允许 pub/sub 到 stupig/sync/#；
-      # 浏览器 clientId 前缀 web_ 只允许订阅。MQTT_USERNAME/MQTT_PASSWORD 只需对服务端
-      # 配置，浏览器端认证靠会话级 clientId 前缀识别。
+      EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN: 'true'
+      EMQX_LISTENERS__TCP__DEFAULT__ZONE: default
+      EMQX_LISTENERS__WS__DEFAULT__ENABLE_AUTHN: 'false'
+      EMQX_LISTENERS__WS__DEFAULT__ZONE: default
       EMQX_AUTHORIZATION__NO_MATCH: deny
       EMQX_AUTHORIZATION__DENY_ACTION: disconnect
       EMQX_AUTHORIZATION__SOURCES__1__TYPE: file

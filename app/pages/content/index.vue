@@ -104,11 +104,11 @@ const { user } = useAuth()
 
 const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full'))
 
-const stories = useState<ContentStorySummary[] | null>('content_stories', () => null)
+const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
 const loading = useState('content_stories_loading', () => false)
 
 await useSyncedData<ContentStorySummary[]>(
-  computed(() => sync_resource('content_stories', 'all')),
+  sync_resource('content_stories', 'all'),
   () => content.list_stories(),
   stories,
   loading,

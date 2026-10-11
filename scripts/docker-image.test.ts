@@ -35,6 +35,23 @@ describe('镜像自带的运行期配置注入', () => {
     expect(read('docker-compose.yml')).not.toMatch(/^\s+MQTT_WEB_URL:/m)
     expect(read('docker-compose.dev.yml')).not.toMatch(/^\s+MQTT_WEB_URL:/m)
   })
+
+  it('开发 MQTT 浏览器免认证且普通连接只能订阅', () => {
+    const environment = parse(read('docker-compose.dev.yml')).services.emqx.environment
+    expect(environment.EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN).toBe('true')
+    expect(environment.EMQX_LISTENERS__WS__DEFAULT__ENABLE_AUTHN).toBe('false')
+    expect(environment.EMQX_LISTENERS__TCP__DEFAULT__ZONE).toBe('default')
+    expect(environment.EMQX_LISTENERS__WS__DEFAULT__ZONE).toBe('default')
+    expect(environment.EMQX_ZONES).toBeUndefined()
+    expect(environment.EMQX_MQTT__CLIENT_ATTRS_INIT).toBeUndefined()
+    expect(environment.EMQX_AUTHENTICATION__1__BACKEND).toBe('built_in_database')
+    expect(environment.EMQX_AUTHORIZATION__NO_MATCH).toBe('deny')
+    const acl = read('emqx-acl.conf')
+    expect(acl.split(/\r?\n/).filter(line => line.trim() && ! line.startsWith('%%'))).toEqual([
+      '{allow, all, subscribe, ["stupig/sync/#"]}.',
+      '{deny, all}.',
+    ])
+  })
 })
 
 // 2026-10-09 事故的教训：镜像里一个字节的改动（连注释都算）可以让容器启动即失败，

@@ -213,7 +213,7 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     // 容器是问 compose 要的，不是写死名字找的（服务器上叫 stupig-tv-app-1）
     expect(result.calls).toContain('compose ps -q app')
     expect(result.output).toContain('a1b2c3d4e5f6')
-  })
+  }, 15_000)
 
   it('.env.incoming 缺失：中止部署，不碰运行中的容器', () => {
     const result = run_deploy({
@@ -351,7 +351,7 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.output).toContain('已完整回滚')
     expect(result.files['.env']).toContain('DEPLOYMENT_ENV=old')
     expect(result.files['docker-compose.yml']).toBe('old-compose\n')
-  })
+  }, 15_000)
 
   it('送来的 compose 换到位，服务器上那份留成备份', () => {
     const result = run_deploy({

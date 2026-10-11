@@ -18,7 +18,14 @@ export const settings_schema = z.strictObject({
     client: z.strictObject({
       colorMode: z.strictObject({ fallback: z.enum(['light', 'dark']), cookieName: identifier }),
       timezone: z.strictObject({ cookieName: identifier }),
-      sync: z.strictObject({ broadcastChannelName: identifier, clientIdStorageKey: identifier }),
+      sync: z.strictObject({
+        broadcastChannelName: identifier,
+        clientIdStorageKey: identifier,
+        eventDeduplicationLimit: z.number().int().positive(),
+        resourceGatherDelayMs: z.number().int().positive(),
+        reconnectDelayMs: z.number().int().positive(),
+        connectTimeoutMs: z.number().int().positive(),
+      }),
     }),
     online: z.strictObject({ timeoutSeconds: positive_integer, pingIdleIntervalSeconds: positive_integer, pollIntervalSeconds: positive_integer }),
     admin: z.strictObject({ pollIntervalSeconds: positive_integer }),

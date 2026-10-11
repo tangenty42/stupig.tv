@@ -1,7 +1,7 @@
 <template>
   <div class="pb-12 pt-8">
     <template v-if="story">
-      <MyContentStoryHeader back :editable="can_manage_content" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-url="story.cover_url" :date="format_event_range(story.event_precision, story.event_dates)" :story-id="story.id" />
+      <MyContentStoryHeader back :editable="can_manage_content" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-url="story.cover_url" :date="format_event_range(story.event_precision, story.event_dates, time_context.timezone)" :story-id="story.id" />
 
       <MyDivider class="mt-12">
         正文
@@ -57,11 +57,12 @@ import { format_event_range } from '~/utils/content/event'
 const route = useRoute()
 const { content } = useApi()
 const { user } = useAuth()
+const time_context = useDisplayTimeContext()
 
 const story_id = computed(() => Number(route.params.id))
 const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full'))
 
-const story = useState<ContentStoryDetail | null>(`content_story_view_${String(route.params.id)}`, () => null)
+const story = useSyncedState<ContentStoryDetail | null>(`content_story_view_${String(route.params.id)}`, () => null)
 const loading = useState(`content_story_view_loading_${String(route.params.id)}`, () => false)
 
 useHead({
@@ -87,11 +88,11 @@ await useSyncedData<ContentStoryDetail>(
   loading,
 )
 
-const stories = useState<ContentStorySummary[] | null>('content_stories', () => null)
+const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
 const stories_loading = useState('content_stories_loading', () => false)
 
 await useSyncedData<ContentStorySummary[]>(
-  computed(() => sync_resource('content_stories', 'all')),
+  sync_resource('content_stories', 'all'),
   () => content.list_stories(),
   stories,
   stories_loading,
