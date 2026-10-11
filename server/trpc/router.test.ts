@@ -16,6 +16,8 @@ for (const [key, value] of Object.entries({
   NODE_ENV: 'test',
   MYSQL_HOST: '127.0.0.1',
   MYSQL_PORT: '3306',
+  MYSQL_USER: 'stupig_tv',
+  MYSQL_DATABASE: 'stupig_tv',
   MYSQL_PASSWORD: 'placeholder',
   REDIS_HOST: '127.0.0.1',
   REDIS_PORT: '6379',
@@ -26,6 +28,7 @@ for (const [key, value] of Object.entries({
   OSS_ACCESS_KEY_SECRET: 'placeholder',
   ALIYUN_ACCESS_KEY_ID: 'placeholder',
   ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
+  ALIYUN_CAPTCHA_APP_KEY: 'placeholder',
   JWT_SECRET: 'x'.repeat(40),
 })) {
   vi.stubEnv(key, value)
