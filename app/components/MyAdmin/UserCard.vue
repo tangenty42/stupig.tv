@@ -46,13 +46,13 @@
           </div>
 
           <div class="mt-3 text-xs text-slate-400">
-            注册于：{{ duration_build_string([user.created_at, date_now], ['{formated}前', '刚刚']) }}
+            注册于：{{ duration_build_string([user.created_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) }}
           </div>
           <div class="mt-1 text-xs text-slate-400">
-            最近登录：{{ user.last_login_at ? duration_build_string([user.last_login_at, date_now], ['{formated}前', '刚刚']) : '-' }}
+            最近登录：{{ user.last_login_at ? duration_build_string([user.last_login_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) : '-' }}
           </div>
           <div class="mt-1 text-xs text-slate-400">
-            最近在线：{{ user.last_online_at ? duration_build_string([user.last_online_at, date_now], ['{formated}前', '刚刚']) : '-' }}
+            最近在线：{{ user.last_online_at ? duration_build_string([user.last_online_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) : '-' }}
           </div>
         </div>
       </div>
@@ -157,6 +157,7 @@ const profile_link = computed(() => `/u/${props.user.id}`)
 
 const is_self_admin_demote = computed(() => props.user.is_admin && props.user.id === auth_user.value?.id)
 
+const time_context = useDisplayTimeContext()
 const date_now = useReactiveDateNow()
 
 function toggle_disabled() {

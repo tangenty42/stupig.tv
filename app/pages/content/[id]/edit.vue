@@ -119,7 +119,7 @@
       <div class="space-y-3 text-sm text-slate-600 dark:text-slate-300">
         <p>这份自动保存的草稿基于较旧的数据库版本，继续编辑可能覆盖其他人已保存的修改！</p>
         <p v-if="pending_conflict_draft" class="text-xs text-slate-500 dark:text-slate-400">
-          （本地草稿保存于 {{ datetime_format(pending_conflict_draft.saved_at) }}）
+          （本地草稿保存于 {{ datetime_format(pending_conflict_draft.saved_at, time_context.timezone) }}）
         </p>
       </div>
 
@@ -364,16 +364,17 @@ definePageMeta({
 const route = useRoute()
 const { content } = useApi()
 const { user } = useAuth()
+const time_context = useDisplayTimeContext()
 const { ok, error } = useMyToast()
 const { confirm_require } = useMyConfirm()
 const upload_handle_db_name = settings.app.content.upload.handleStorageName
 // Known stories for `@story` completion, duplicate-title and dead-reference
 // lints; kept in sync via the shared content_stories resource without touching
 // the editing content.
-const existing_stories = useState<ContentStorySummary[] | null>('content_stories', () => null)
+const existing_stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
 const existing_stories_loading = useState('content_stories_loading', () => false)
 await useSyncedData<ContentStorySummary[]>(
-  computed(() => sync_resource('content_stories', 'all')),
+  sync_resource('content_stories', 'all'),
   () => content.list_stories(),
   existing_stories,
   existing_stories_loading,
@@ -444,7 +445,7 @@ const header_cover = computed(() => header_meta.value?.cover ?? null)
 const header_cover_label = computed(() => header_meta.value?.cover_label ?? null)
 const header_date = computed(() => {
   const meta = header_meta.value
-  return meta ? format_event_range(meta.event_precision, meta.event_entries) : null
+  return meta ? format_event_range(meta.event_precision, meta.event_entries, time_context.value.timezone) : null
 })
 
 /**
@@ -1590,7 +1591,7 @@ catch {
 // A new story has no attachments: uploads start only after the first save.
 const initial_markdown = is_edit.value
   ? (story.value?.markdown ?? '')
-  : story_markdown_template(datetime_build_string(null, '{YYYY}/{M}/{D}'))
+  : story_markdown_template(datetime_build_string(time_context.value.now_ms, '{YYYY}/{M}/{D}', time_context.value.timezone))
 const initial_revision = is_edit.value ? (story.value?.revision ?? null) : null
 
 draft_store.initialize(initial_markdown, initial_revision)
@@ -1603,7 +1604,7 @@ draft_store.initialize(initial_markdown, initial_revision)
 if (import.meta.client && is_edit.value) {
   // Synced refetches land in this setter, which applies the dirty-draft merge
   // rule instead of blindly overwriting the editor state.
-  const synced_story = computed<ContentStoryDetail | null>({
+  const synced_story = useSyncedState(computed<ContentStoryDetail | null>({
     get: () => story.value,
     set: (latest_story) => {
       if (! latest_story)
@@ -1616,7 +1617,7 @@ if (import.meta.client && is_edit.value) {
       story.value = latest_story
       draft_store.mark_saved(latest_story.markdown, latest_story.revision)
     },
-  })
+  }))
   const story_sync_loading = ref(false)
   await useSyncedData<ContentStoryDetail | null>(
     computed(() => sync_resource('content_story', story_id.value)),

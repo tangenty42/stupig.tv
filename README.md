@@ -124,16 +124,50 @@ server-side YAML file would leave the browser's compiled settings out of sync.
   behind the reverse proxy). Nitro loads it through the YAML placeholder and injects the
   validated URL into `runtimeConfig.public`.
   Missing or invalid public deployment fields fail startup validation.
-- EMQX must require authentication, otherwise anyone can publish sync events. Set
-  `MQTT_USERNAME`/`MQTT_PASSWORD` to non-empty credentials in `.env`, then configure the
-  broker once via its Dashboard (or REST API):
+- EMQX TCP publishers require authentication; browser WebSocket connections are
+  anonymous and subscribe-only. Set `MQTT_USERNAME`/`MQTT_PASSWORD` to non-empty
+  credentials in `.env`, then configure the broker via its Dashboard (or REST API):
   - Access Control → Authentication → Create → `Password-Based` + `Built-in Database`,
     with `User ID Type` = `username`, then add the `MQTT_USERNAME`/`MQTT_PASSWORD` user
-    under its User Management tab. This is the server-side publisher account.
+    under its User Management tab. This is the server-side publisher account;
+    enable `Super User` (`is_superuser = true`). Development and production use
+    this same scheme on EMQX 5.x / 6.x. The account bypasses all publish/subscribe
+    ACL checks and can access every topic, not only the application's prefix;
+    use a dedicated broker for this application and keep its credentials server-only.
+  - Management → Listeners → Edit → Custom Configuration: set the TCP listener to
+    `{zone = "default", enable_authn = true}` and the browser WebSocket listener to
+    `{zone = "default", enable_authn = false}`. Merge these fields with any existing
+    custom configuration; do not discard unrelated settings. No custom zones or
+    `mqtt.client_attrs_init` are required.
+    If EMQX terminates TLS itself, apply the browser settings to the actual `wss`
+    listener instead of `ws`. With reverse-proxy TLS termination, use the internal
+    `ws` listener. The development Compose file already supplies these settings.
   - Access Control → Authorization: mirror [emqx-acl.conf](emqx-acl.conf) — the same file
-    the dev container mounts — so `server_*` client ids may publish/subscribe
-    `stupig/sync/#`, `web_*` client ids (browsers) may only subscribe, and unmatched
-    clients are denied (`no_match: deny`).
+    the dev container mounts — using exactly these rules:
+    ```erlang
+    {allow, all, subscribe, ["stupig/sync/#"]}.
+    {deny, all}.
+    ```
+    All non-superuser connections can only subscribe to application topics;
+    publishing is denied. Set `No Match Action` to `deny` and `Deny Action` to
+    `disconnect`, and disable any other authorization source that grants broader
+    access. A username or `server_*` client ID supplied by an anonymous client
+    does not confer superuser status: that status comes from successful authentication.
+  - When upgrading from the zone-based scheme, first enable Super User for the
+    existing publisher account and reconnect the publisher, then install the new
+    ACL and reset the listeners to the default zone. Remove the old custom zones
+    and zone-derived client attribute only after no listener references them.
+    Clear authorization caches under Access Control → Authorization → Settings,
+    and reconnect clients. Confirm that anonymous WebSocket subscription succeeds,
+    authenticated TCP publishing reaches the subscriber, anonymous WebSocket
+    publishing is rejected even with a spoofed server username/client ID, and
+    anonymous TCP connections are rejected. Dashboard changes apply at runtime;
+    production EMQX is managed separately, not deployed by the app's Compose file.
+  - For development changes, run `docker compose -f docker-compose.dev.yml up -d
+    --no-deps --force-recreate emqx`. Ordinary Compose recreation reuses the image's
+    anonymous data volume; do not use `--renew-anon-volumes` or remove that volume.
+    Export broker state with `emqx ctl data export` before recreation. Publisher
+    credentials must also exist in EMQX's built-in database, not just in `.env`.
   - Change the Dashboard's default `admin/public` password and never expose its port,
     or the TCP listener (1883), publicly; only the reverse-proxied WebSocket port should
     be reachable from the internet.

@@ -295,7 +295,7 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 | `task-uploader.ts` | 分片上传执行器 | util |
 | edit.vue | 组合上述模块 + 对话框 | 页面 |
 
-**Pinia 使用原则（回答"store 是否应该应用在更多地方"）**：是，但只用于**客户端工作区状态**（编辑器/任务/草稿）——跨组件共享、逻辑复杂、devtools 可观测。服务端同步数据（stories/story detail）继续走 `useSyncedData` + `useState`，其 SSR payload 序列化与共享代理语义与 Pinia 叠加无收益且有 hydration 风险。useDataSync 内部传输态不进 Pinia（属 risk #5 的 SyncRuntime 议题，正交）。
+**Pinia 使用原则（回答"store 是否应该应用在更多地方"）**：是，但只用于**客户端工作区状态**（编辑器/任务/草稿）——跨组件共享、逻辑复杂、devtools 可观测。服务端同步数据（stories/story detail）继续走 `useSyncedData` + `useSyncedState`：数据快照进入 SSR payload，应用级 QueryClient 管理共享查询与请求生命周期，Vue 适配层将客户端结果暂存至 hydration 完成；不要另加 Pinia 镜像这些状态。`useDataSync` 的连接、监听器和跨标签页传输状态由应用级传输实例管理，不进 Pinia 或 payload；当前三层职责与信息流见 [架构说明第 5 节](./architecture-risks.md#5-实时同步的所有权与兼容约束)。
 
 ### 11.1 编辑器与渲染器收敛
 

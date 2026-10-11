@@ -8,6 +8,16 @@
 
 当前架构的优点是边界清晰、业务建模充分、前后端类型共享完整，并且处理了 SSR、并发登录、跨标签页同步和附件操作冲突等真实场景。主要风险集中在跨系统一致性、实时事件可靠性、全局状态复杂度和部分服务体量过大。
 
+## SSR 与 Hydration 约束
+
+首屏的相对时间、在线状态和服务端数据必须在 SSR 与客户端 hydration 期间保持同一份渲染快照。共享时间上下文由 `useDisplayTimeContext()` 序列化 `{ now_ms, timezone }`：服务端从时区 cookie 初始化（缺省 UTC），客户端在 hydration 前只复用 payload；`app:suspense:resolve` 后才切换到浏览器时区、写回 cookie 并启动时钟。`app:mounted` 不保证异步页面已完成 hydration。所有日期/时长工具都显式接收 timezone，不得使用模块级可变 timezone 或在渲染路径提前读取浏览器时区。
+
+对由 `useState` 序列化的 SSR 数据，使用 `useSyncedState()` 创建传给 `useSyncedData` 的 data ref（writable computed 包装 payload state 时也用此 helper 标记）。客户端首次请求照常发出；识别到品牌 ref 后，data/loading、`on_data` 和 `on_error` 更新会暂存到 `app:suspense:resolve` 再应用，避免 hydration 中途用不同的在线状态或内容覆盖 SSR 快照。若响应到达时 hydration 已结束，则立即应用。资源切换、查询失效和组件卸载会清除旧暂存结果。完全不传 data ref 的 options-only 重载也会在 hydration 期间暂存回调；显式传入普通 `ref` 则保持立即更新。Fetcher 应返回数据，不应直接修改参与渲染的共享状态。
+
+`useSyncedData(resource, fetcher, data, options)` 会在内部管理 loading；只有界面确实消费 loading 状态时，才额外传 `loading` ref（`useSyncedData(resource, fetcher, data, loading, options)`）。
+
+新增或调整日期显示、在线状态与 SSR 数据同步时，必须检查是否使用了共享时间上下文、显式 timezone 和 hydration 暂存机制；直接调用 `Date.now()`/`Intl.DateTimeFormat()`、默认 timezone 格式化或在 fetcher 中直接写渲染状态都需要说明并证明不会造成首帧不一致。
+
 ## 主要风险
 
 ### 1. OSS 与数据库之间缺少原子一致性
@@ -116,30 +126,64 @@ catch (error) {
 
 优先级：**中**。
 
-### 5. 实时同步依赖较多模块级全局状态
+### 5. 实时同步的所有权与兼容约束
 
-[app/composables/useDataSync.ts](../app/composables/useDataSync.ts) 管理 MQTT client、BroadcastChannel、连接 generation、listener map、客户端 ID 和连接状态；[app/composables/useSyncedData.ts](../app/composables/useSyncedData.ts) 又管理共享代理、请求合并和轮询。
+同步分为三个职责层，运行时实例通过 Nuxt app 对象关联，不写入 payload：
 
-这套设计解决了前台标签页、后台标签页、SSR 和 hydration 等问题，但也增加了：
+- [app/composables/useDataSync.ts](../app/composables/useDataSync.ts)：应用级传输工厂，管理 MQTT、BroadcastChannel、事件分发和连接生命周期；[app/plugins/data-sync.client.ts](../app/plugins/data-sync.client.ts) 显式提供身份变化与退出处理，并启动传输。不再依赖首次调用组件的 `useAuth` 或生命周期。
+- [app/utils/sync/query.ts](../app/utils/sync/query.ts)：`QueryClient` 管理共享注册表；共享与独立 `Query` 使用同一个请求引擎，负责缓存、请求版本、在途失效、事件订阅和轮询。
+- [app/composables/useSyncedData.ts](../app/composables/useSyncedData.ts)：适配 Vue refs、订阅者回调和 hydration 暂存。只有数据快照由 `useSyncedState` 进入 payload。
 
-- 测试隔离难度；
-- 热更新和页面卸载时的状态残留风险；
-- 并发连接切换时的控制流复杂度；
-- 新开发者理解成本。
+**信息流：**
 
-**建议：**
+```mermaid
+flowchart TD
+    Page[页面或组件] -->|resources / fetcher / refs / options| Adapter[useSyncedData]
+    Adapter -->|获取查询并加入订阅者| Query[QueryClient / Query]
+    Query -->|订阅资源| Transport[useDataSync]
+    Events[MQTT / BroadcastChannel] --> Transport
+    Transport -->|资源失效| Query
+    Query -->|执行 fetcher| API[业务 API]
+    API -->|结果或错误| Query
+    Query -->|data / loading / error| Adapter
+    Adapter -->|立即应用或水合后应用| Page
+```
 
-逐步抽象一个明确的 `SyncRuntime`，集中管理：
+首次调用会按 `immediate` 加载；已有共享缓存时直接采用。服务端快照不替代客户端首个查询的请求。手动 `refresh()` 和轮询直接进入 Query，不经过传输层。资源事件进入 `invalidate()`，使旧响应与水合暂存结果失效；在途请求结束后合并补一次请求。普通刷新事件不携带业务数据，实际数据由 fetcher 获取；`task_progress` 等自带快照的事件是例外，可通过 `useDataSync().subscribe()` 直接应用，不必进入查询层。
 
-- `start()` / `stop()`；
-- `subscribe()` / `unsubscribe()`；
-- `publishLocal()`；
-- 连接状态；
-- 生命周期清理。
+组件仅拥有自己的订阅者、refs 和水合暂存，不拥有共享查询或连接。组件卸载先退订；最后一个订阅者离开才释放 Query 的缓存、事件订阅与轮询。应用卸载清理整个 QueryClient 和传输实例。SSR 当前使用独立 Query，客户端才按 key 共享；运行时 Promise、回调和连接状态均不序列化。
 
-保持 `useDataSync` 作为 Vue 适配层，不让业务页面直接依赖底层 MQTT 细节。
+**调用示例：**
 
-优先级：**中**。
+```typescript
+await useSyncedData(sync_resource('content_stories', 'all'), fetch_stories, stories)
+
+await useSyncedData(
+  [otp_sync_source, otp_sync_by_identity_source],
+  sync_otp_cooldown,
+  otp_cooldown_until,
+  otp_sync_loading,
+)
+
+const { refresh } = await useSyncedData(null, fetch_users, users, {
+  universal: false,
+  fetch_without_resource: true,
+  polling_interval: settings.app.admin.pollIntervalSeconds * 1000,
+})
+```
+
+固定资源直接传字符串或 `sync_resource()` 的返回值，无需包 `ref`/`computed`；动态资源使用 ref/computed，资源数组也可包含它们。OTP 的手机号和身份事件触发同一个带手机号的查询，服务端已按身份或手机号查询冷却记录。`query_key` 接受字符串、`null` 或 ref，只覆盖查询身份，不改变事件订阅；同一事件资源下的不同筛选/分页结果应使用不同 key，并把所有影响结果的参数纳入 key。多个资源直接放在第一个参数，options 不再提供 `resources` 字段。
+
+**行为规则：**
+
+- 第一个参数直接接受单个资源、资源数组、ref 或包含 ref 的数组，例如 `'profile:1'`、`['profile:1', 'profile_sessions:1']`、`ref(['profile:1'])` 和 `['profile:1', ref('profile_sessions:1')]`。资源会过滤空值、去重并排序；单资源保持原查询 key，多资源默认以排序后的数组 JSON 作为查询 key，顺序和重复项不影响共享。可用 `query_key` 字面量或 ref 独立指定缓存身份；未传时回退到资源集合，显式 `null`/空字符串停用查询（除非启用 `fetch_without_resource`）。空数组/null 默认停用查询；显式非空 query key 可以启用无事件订阅的查询，独立无 key 查询继续使用 `universal: false` 和 `fetch_without_resource: true`。相同 query key 的 fetcher 必须等价；兼容模式在每次请求开始时选择第一个仍活跃的 fetcher。创建者离开后自动交接；其在途响应不再发布，剩余订阅者重新请求。依赖组件私有状态的不同 fetcher 应使用不同 query key 或 `universal: false`。
+- 共享手动刷新合并为一个任务；独立手动刷新允许并发，默认仅最新响应生效。同步/身份失效令旧版本无效；在途失效会在当前请求结束后补一次请求，不丢失通知。
+- 请求失败通知所有活跃自定义错误回调，默认 toast 对同一次失败只显示一次；401 保持不弹 toast。订阅者回调异常单独记录，不改写为请求失败。
+- 每个查询只持有一份轮询，采用活跃订阅者请求的最短间隔；仅在标签页可见、没有在途请求且距上次完成达到间隔时运行。失败也计入完成时间。最后一个订阅者离开时停止轮询/事件订阅并忽略晚到结果。
+- 传输按 tab ID 保存远端资源并取并集；一个标签页退订不影响其他标签页。事件 ID 在可配置的有界集合内去重。重连由传输层单独调度；pagehide、bfcache 恢复和应用卸载分别暂停、恢复和清理连接、监听器及计时器。
+- 身份变化通过传输的全资源失效通知刷新有订阅的查询与原始监听者；插件另行失效没有事件资源的查询，避免漏掉无 key 的 admin 请求。HTTP 请求身份仍由服务端 cookie 决定，不能用页面身份 ref 跳过请求。
+
+**剩余约束：** 没有加入 leader election，仍保持隐藏标签页断开 MQTT 的现有策略。tab ID 来自 sessionStorage；异常终止的远端订阅会在下一次资源收集时清除。底层 fetcher 暂无统一取消协议，失效/卸载通过版本与订阅生命周期阻止晚到写入，而不是中止 HTTP 请求。
 
 ### 6. 生产错误响应可能泄露内部信息
 

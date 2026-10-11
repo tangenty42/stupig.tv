@@ -248,6 +248,7 @@
 
 <script lang="ts" setup>
 import type { FormInstance, FormSubmitEvent } from '@primevue/forms'
+import type { LoginUser } from '~/composables/useAuth'
 import { Form } from '@primevue/forms'
 import { zodResolver } from '@primevue/forms/resolvers/zod'
 import { form_default, form_schema } from '@shared/schemas'
@@ -257,6 +258,7 @@ const static_url = useStaticUrl()
 const { error, ok, info, clear: clear_toasts } = useMyToast()
 const { auth: auth_api, profile: profile_api } = useApi()
 const { user, apply_auth, update_user, logout } = useAuth()
+const synced_user = useSyncedState(user)
 const { verify: captcha_verify, showing: captcha_showing } = useCaptcha()
 const color_mode = useColorMode()
 const my_color_mode = useMyColorMode()
@@ -449,25 +451,22 @@ function toggle_color_mode() {
   color_mode.preference = color_mode.value === 'dark' ? 'light' : 'dark'
 }
 
-async function sync_current_user() {
+async function sync_current_user(): Promise<LoginUser | null> {
   if (! user.value) {
-    return
+    return null
   }
 
   const profile = await profile_api.get_me()
-
-  update_user({
+  return {
     id: profile.id,
     username: profile.username,
-    phone: profile.phone || user.value?.phone || '',
+    phone: profile.phone || user.value.phone || '',
     avatar_file: profile.avatar_file,
     avatar_version: profile.avatar_version,
     is_verified: profile.is_verified,
     is_admin: profile.is_admin,
     permissions: profile.permissions,
-  })
-
-  return profile
+  }
 }
 
 const auth_user_sync_resource = computed(() => {
@@ -477,6 +476,25 @@ const auth_user_sync_resource = computed(() => {
 await useSyncedData(
   auth_user_sync_resource,
   sync_current_user,
+  synced_user,
+  {
+    on_data: (profile) => {
+      if (! profile || ! user.value) {
+        return
+      }
+
+      update_user({
+        id: profile.id,
+        username: profile.username,
+        phone: profile.phone || user.value.phone || '',
+        avatar_file: profile.avatar_file,
+        avatar_version: profile.avatar_version,
+        is_verified: profile.is_verified,
+        is_admin: profile.is_admin,
+        permissions: profile.permissions,
+      })
+    },
+  },
 )
 
 watch(lor_modal, (visible) => {

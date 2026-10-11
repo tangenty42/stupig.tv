@@ -315,10 +315,10 @@
                   IP：{{ record.last_seen_ip || record.login_ip || '-' }}
                 </div>
                 <div v-if="record.login_at && record.last_seen_at">
-                  登录：{{ duration_build_string([record.login_at, date_now], ['{formated}前', '刚刚']) }}
+                  登录：{{ duration_build_string([record.login_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) }}
                 </div>
                 <div>
-                  最近活跃：{{ duration_build_string([record.last_seen_at, date_now], ['{formated}前', '刚刚']) }}
+                  最近活跃：{{ duration_build_string([record.last_seen_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) }}
                 </div>
               </div>
             </div>
@@ -377,10 +377,11 @@ const { user: auth_user } = useAuth()
 const { error, ok, info } = useMyToast()
 const { verify: captcha_verify } = useCaptcha()
 const { confirm_require } = useMyConfirm()
+const time_context = useDisplayTimeContext()
 const date_now = useReactiveDateNow()
 
 const sync_loading = useState('sync_loading', () => false)
-const profile = useState<Profile | null>('profile', () => null)
+const profile = useSyncedState<Profile | null>('profile', () => null)
 
 useHead({
   title: computed(() => profile.value ? `用户主页 - ${profile.value.username}` : undefined),
@@ -438,9 +439,9 @@ const new_phone = computed(() => String(phone_form.value?.getFieldState('new_pho
 const old_phone_otp_sending = ref(false)
 const new_phone_otp_sending = ref(false)
 const phone_change_pending = ref(false)
-const self_sessions_loading = ref(false)
+const self_sessions_loading = useState('profile_sessions_loading', () => false)
 const self_session_pending_id = ref<number | null>(null)
-const self_sessions = ref<SessionOverview | null>(null)
+const self_sessions = useSyncedState<SessionOverview | null>('profile_sessions', () => null)
 
 const birthday_resolver = zodResolver(form_schema.profile_birthday_update)
 const password_resolver = zodResolver(form_schema.profile_change_password)
@@ -481,10 +482,10 @@ function build_date_budget_text(item: ProfileMetaItem) {
   const normal = item.value_date!.isBefore(reactive_date_now.value)
 
   if (item.key === 'birthday' && ! normal) {
-    return duration_build_string([item.value_date!, reactive_date_now.value], '还有{formated}重生🪽', { just_now: '几十秒' })
+    return duration_build_string([item.value_date!, reactive_date_now.value], '还有{formated}重生🪽', { just_now: '几十秒', timezone: time_context.value.timezone })
   }
   else if (item.date_template) {
-    return duration_build_string([item.value_date!, reactive_date_now.value], item.date_template)
+    return duration_build_string([item.value_date!, reactive_date_now.value], item.date_template, { timezone: time_context.value.timezone })
   }
   return null
 }
@@ -509,7 +510,7 @@ const profile_meta_items = computed(() => {
       key: 'created_at',
       label: '注册时间',
       type: 'date',
-      value_date: localize_date(profile.value.created_at),
+      value_date: localize_date(profile.value.created_at, false, time_context.value.timezone),
       date_template: ['已成为蠢猪{formated}', '刚刚成为蠢猪'],
       icon: 'lucide:user-round-check',
     },
@@ -519,7 +520,7 @@ const profile_meta_items = computed(() => {
           label: '最近活跃',
           type: 'date',
           value: profile.value.last_seen_at,
-          value_date: localize_date(profile.value.last_seen_at),
+          value_date: localize_date(profile.value.last_seen_at, false, time_context.value.timezone),
           date_template: ['{formated}前', '刚刚'],
           icon: 'lucide:person-standing',
         }]
@@ -537,7 +538,7 @@ const profile_meta_items = computed(() => {
       label: '生日',
       type: profile.value.birthday ? 'date' : 'text',
       value: profile.value.birthday ? undefined : '暂未设置',
-      value_date: profile.value.birthday ? localize_date(profile.value.birthday) : undefined,
+      value_date: profile.value.birthday ? localize_date(profile.value.birthday, false, time_context.value.timezone) : undefined,
       date_template: '{Y} 岁',
       icon: 'lucide:cake',
     },
