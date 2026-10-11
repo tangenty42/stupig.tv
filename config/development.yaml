@@ -7,7 +7,7 @@ redis:
 
 mqtt:
   web:
-    wsUrl: ws://localhost:${MQTT_WS_PORT:-8083}/mqtt
+    wsUrl: ws://localhost:${MQTT_WS_PORT}/mqtt
 
 oss:
   bucket: static-stupig-tv-dev

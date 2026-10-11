@@ -3,7 +3,7 @@ import { settings } from '../../server/shared/settings'
 import { interpolate_config, load_config, load_database_config, merge_config_layers, public_config_from } from './loader'
 import { public_config_defaults } from './schema'
 
-const database_env = { MYSQL_HOST: 'db', MYSQL_PORT: '3306', MYSQL_PASSWORD: 'placeholder' }
+const database_env = { MYSQL_HOST: 'db', MYSQL_PORT: '3306', MYSQL_PASSWORD: 'placeholder', MYSQL_USER: 'stupig_tv', MYSQL_DATABASE: 'stupig_tv' }
 const public_env = {
   MQTT_WEB_URL: 'wss://mqtt.example.com/mqtt',
 }
@@ -15,10 +15,12 @@ const deployment_env = {
   REDIS_PORT: '6379',
   MQTT_HOST: 'mqtt',
   MQTT_TCP_PORT: '1883',
+  MQTT_WS_PORT: '8083',
   OSS_ACCESS_KEY_ID: 'placeholder',
   OSS_ACCESS_KEY_SECRET: 'placeholder',
   ALIYUN_ACCESS_KEY_ID: 'placeholder',
   ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
+  ALIYUN_CAPTCHA_APP_KEY: 'placeholder',
   JWT_SECRET: 'x'.repeat(40),
 }
 
@@ -59,6 +61,13 @@ describe('deployment configuration', () => {
     vi.stubEnv('NODE_ENV', 'development')
     expect(load_config({ ... deployment_env, MQTT_WS_PORT: '18083' }).mqtt.web.wsUrl).toBe('ws://localhost:18083/mqtt')
     expect(load_config(deployment_env).mqtt.web.wsUrl).toBe('ws://localhost:8083/mqtt')
+    expect(() => load_config({ ... deployment_env, MQTT_WS_PORT: undefined })).toThrow(/MQTT_WS_PORT/)
+  })
+
+  it('requires explicit database identity and captcha configuration', () => {
+    expect(() => load_database_config({ ... database_env, MYSQL_USER: undefined })).toThrow(/MYSQL_USER/)
+    expect(() => load_database_config({ ... database_env, MYSQL_DATABASE: undefined })).toThrow(/MYSQL_DATABASE/)
+    expect(() => load_config({ ... deployment_env, ALIYUN_CAPTCHA_APP_KEY: undefined })).toThrow(/ALIYUN_CAPTCHA_APP_KEY/)
   })
 
   it('loads non-secret Aliyun settings from YAML and credentials from the environment', () => {

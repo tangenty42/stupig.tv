@@ -5,9 +5,9 @@
 db:
   host: ${MYSQL_HOST}
   port: ${MYSQL_PORT}
-  user: ${MYSQL_USER:-stupig_tv}
+  user: ${MYSQL_USER}
   password: ${MYSQL_PASSWORD}
-  name: ${MYSQL_DATABASE:-stupig_tv}
+  name: ${MYSQL_DATABASE}
 
 redis:
   host: ${REDIS_HOST}
@@ -46,7 +46,7 @@ aliyun:
   captcha:
     # appId 会下发到浏览器；appKey 仅服务端验签使用
     appId: 804af2e773219386ce8ff865dac64fbe
-    appKey: ${ALIYUN_CAPTCHA_APP_KEY:-}
+    appKey: ${ALIYUN_CAPTCHA_APP_KEY}
 
 site:
   url: https://www.stupig.tv
