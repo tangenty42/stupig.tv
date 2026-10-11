@@ -129,4 +129,14 @@ describe('部署的健康检查与自愈接线', () => {
     expect(script).toMatch(/cp -p \.env \.env\.bak/)
     expect(script).toMatch(/cp -p docker-compose\.yml docker-compose\.yml\.bak/)
   })
+
+  it('cI 环境变量提供配置加载所需的显式数据库标识', () => {
+    // MYSQL_USER / MYSQL_DATABASE 不再有默认值，CI 缺了它们时 check 与 migrations 都会直接挂
+    const environment = parse(read('.github/workflows/check.yml')).env
+    expect(environment.MYSQL_HOST).toBeDefined()
+    expect(environment.MYSQL_PORT).toBeDefined()
+    expect(environment.MYSQL_USER).toBeDefined()
+    expect(environment.MYSQL_DATABASE).toBeDefined()
+    expect(environment.MYSQL_PASSWORD).toBeDefined()
+  })
 })
