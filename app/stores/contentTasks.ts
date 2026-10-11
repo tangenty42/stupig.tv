@@ -1,6 +1,7 @@
 import type { ContentStoryAttachment, ContentTaskProgressSnapshot, ContentTaskState, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
 import type { AttachmentUploadPick } from '~/utils/content/attachment'
-import type { PendingUploadRow } from '~/utils/content/task-row'
+import type { PendingTaskRow } from '~/utils/content/task-row'
+import { content_task_transfer_actions } from '@shared/types/content'
 import { defineStore } from 'pinia'
 import { upload_task_item } from '~/utils/content/task-uploader'
 import { create_xhr_upload_transport } from '~/utils/content/upload-transport'
@@ -84,19 +85,23 @@ function create_tasks_state(story_id: number) {
     return Array.isArray(uploads) ? uploads : []
   }
 
-  /** Rows for the attachment list: every item of every live task. */
-  const pending_rows = computed<PendingUploadRow[]>(() => {
-    const rows: PendingUploadRow[] = []
+  /** Rows for the attachment list: every live item of every live task. */
+  const pending_rows = computed<PendingTaskRow[]>(() => {
+    const rows: PendingTaskRow[] = []
     for (const entry of tasks.value) {
       const uploads = task_uploads(entry)
       for (const item of entry.items) {
-        // A landed item is a stored attachment now: the list's own rows carry it.
-        if (item.status === 'done' && item.result?.attachment)
+        // A done item landed (or was resolved) already: the list's own stored
+        // rows carry it, and a renamed row arrives with the story refresh.
+        if (item.status === 'done')
           continue
         rows.push({
           task_id: entry.task.id,
           item_id: item.id,
           path: item.path,
+          kind: entry.task.kind,
+          action: item.action,
+          is_transfer: (content_task_transfer_actions as readonly string[]).includes(item.action),
           status: item.status,
           bytes_done: item.bytes_done,
           bytes_total: item.bytes_total,
@@ -348,6 +353,51 @@ function create_tasks_state(story_id: number) {
     adopt(await content.resume_task(task_id) as ContentTaskState)
   }
 
+  /**
+   * Creates a server-executed task (encrypt/decrypt) and adopts it for the
+   * pending rows. There is nothing to drive: the runner does the work and the
+   * sync channel reports the progress.
+   */
+  async function start_server_task(kind: 'encrypt' | 'decrypt', file_names: string[]): Promise<ContentTaskState> {
+    const created = await content.create_task(story_id, kind, { file_names }, client_id) as ContentTaskState
+    adopt(created)
+    return created
+  }
+
+  /**
+   * Creates a 删减版 of an encrypted image: the redacted bitmap goes through
+   * the same transfer pipeline as any upload, then lands as the source's
+   * plaintext twin. Unlike a batch upload the caller awaits the whole drive —
+   * the redact editor stays open (pending) until the twin exists.
+   */
+  async function start_redact(input: {
+    file: File
+    source_file_name: string
+    on_landed?: (attachment: ContentStoryAttachment) => void
+  }): Promise<StartTransferResult> {
+    const payload = {
+      source_file_name: input.source_file_name,
+      content_type: input.file.type || null,
+      size: input.file.size,
+    }
+    const verdicts = await content.preflight_task(story_id, 'redact', payload)
+    const refused = verdicts.items.find(verdict => ! verdict.ok)
+    if (refused)
+      return { task: null, rejected: [{ path: refused.path, reason: refused.reason ?? '无法创建删减版' }] }
+
+    const created = await content.create_task(story_id, 'redact', payload, client_id) as ContentTaskState
+    adopt(created)
+    const item = created.items.find(candidate => candidate.status === 'active')
+    if (! item) {
+      // The prepare stage refused it after all (the source changed since the
+      // preflight): surface the item's reason like a preflight refusal.
+      const reason = created.items.find(candidate => typeof candidate.result?.reason === 'string')?.result?.reason
+      return { task: created, rejected: [{ path: input.source_file_name, reason: String(reason ?? '无法创建删减版') }] }
+    }
+    await drive_item(item.id, { file: input.file, insert_position: null, on_landed: input.on_landed })
+    return { task: created, rejected: [] }
+  }
+
   /** Cancels a task server-side (freeing its paths) and drops it from view. */
   async function cancel(task_id: number) {
     const cancelled = await content.cancel_task(task_id) as ContentTaskState
@@ -388,6 +438,8 @@ function create_tasks_state(story_id: number) {
     drive_item,
     start_uploads,
     start_replace,
+    start_redact,
+    start_server_task,
     resume_item,
     resume_task,
     cancel,

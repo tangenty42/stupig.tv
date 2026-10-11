@@ -258,4 +258,14 @@ describe('cancel / resume（任务级）', () => {
     await expect(cancel_content_task(9)).rejects.toMatchObject({ statusCode: 404 })
     await expect(resume_content_task(9)).rejects.toMatchObject({ statusCode: 404 })
   })
+
+  it('正在服务端执行的加密任务只能标记 cancelling：锁与暂存留给 dispatch 收尾', async () => {
+    state.task = make_task({ kind: 'encrypt', payload: { file_names: ['a.png'] } })
+
+    await cancel_content_task(9)
+
+    expect(state.transitioned).toEqual([{ id: 9, to: 'cancelling' }])
+    expect(state.discarded).toEqual([])
+    expect(state.published).toEqual(['content_story_tasks:42'])
+  })
 })

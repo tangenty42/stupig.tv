@@ -331,7 +331,7 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 | **0. 拆分预热**（✅ 已完成，2026-10-08） | `content_locks` 表 + 锁管理器内部替换 operation-lock（保持 409 语义）；按 §10 拆 service（不改行为） | 全部既有测试绿（546）+ typecheck + lint；锁语义单测（operation-lock.test.ts）；迁移在开发库真实执行 |
 | **1. 任务内核**（✅ 已完成，2026-10-08） | 任务表、runner plugin、路径锁 + 续租、preflight；move/rename/folder/delete 四类纯 DB 操作切换为任务（旧端点转同步包装，tRPC 形状不变）；新增 preflightTask/createTask/cancelTask/listScopeTasks 端点 | 状态机、排队/冲突/超时/中断恢复、锁前缀冲突矩阵、preflight 逐项判定测试；既有 57 个 content 服务测试不改断言、全程走任务管线通过 |
 | **2. 上传任务化**（✅ 已完成，2026-10-08） | signTaskParts/reportTaskItem/resume、上传任务化（服务端准备 + 客户端灌字节）、实时进度事件；前端 task-uploader 替换 Uppy、pending 行来自服务端任务；旧上传端点删除 | task-uploader（12 测试）+ 任务 store（27 测试）+ task-row 投影（9 测试）+ 服务端 task-api 测试；`@uppy/*` 依赖移除；lint/typecheck/668 测试全绿 |
-| **3. 加解密/删减版/替换任务化** | 移出请求，runner 异步执行（重活只需 1 个任务项）；redact 模态框接任务流。**详规见 §13.1** | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
+| **3. 加解密/删减版/替换任务化**（✅ 已完成，2026-10-12） | 移出请求，runner 异步执行（重活只需 1 个任务项）；redact 模态框接任务流。**详规见 §13.1** | 大批量不再触碰 TTL；权限矩阵回归（content_private 密钥下发不变） |
 | **4. 前端收敛** | scope 统一投影、preflight 接入全部入口（右键/拖拽/模态框）、edit.vue 抽离 §11 的 composable/store 并瘦身收尾、Pinia store 落定。**详规见 §13.2** | 客户端规则代码删除量核对；disabled 状态走查清单；行投影单测 |
 | **5. 方言清单** | content-dialect 收编 + `create_story_editor` 工厂 + Preview composable 抽取。**详规见 §13.3** | 清单完备性测试；渲染快照对比不变 |
 
@@ -339,7 +339,7 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 
 ### 13.1 阶段 3 详规（加解密 / 删减版 / 替换任务化）
 
-> 状态：**计划，未开工**（2026-10-08 定稿）。以下所有"现状"行均指 `main` 上的实现。
+> 状态：**已完成**（2026-10-08 定稿，2026-10-12 落地）。以下所有"现状"行均指定稿时 `main` 上的实现。
 
 #### 目标（要消掉的三个具体痛点）
 

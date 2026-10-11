@@ -1,12 +1,15 @@
-import type { PendingUploadRow } from '~/utils/content/task-row'
+import type { PendingTaskRow } from '~/utils/content/task-row'
 import { describe, expect, it } from 'vitest'
 import { pending_upload_card, pending_upload_percent, pending_upload_status } from '~/utils/content/task-row'
 
-function make_row(overrides: Partial<PendingUploadRow> = {}): PendingUploadRow {
+function make_row(overrides: Partial<PendingTaskRow> = {}): PendingTaskRow {
   return {
     task_id: 7,
     item_id: 1,
     path: 'a.png',
+    kind: 'upload',
+    action: 'upload',
+    is_transfer: true,
     status: 'active',
     bytes_done: 0,
     bytes_total: 100,
@@ -40,6 +43,12 @@ describe('pending upload row status', () => {
 
   it('落地的任务项读作完成', () => {
     expect(pending_upload_status(make_row({ status: 'done' }))).toBe('completed')
+  })
+
+  it('服务端执行的任务项（加解密）从排队起就是进行中，没有客户端暂停态', () => {
+    const encrypt = { kind: 'encrypt', action: 'encrypt', is_transfer: false } as const
+    expect(pending_upload_status(make_row({ ... encrypt, status: 'pending' }))).toBe('uploading')
+    expect(pending_upload_status(make_row({ ... encrypt, status: 'active' }))).toBe('uploading')
   })
 })
 
@@ -78,6 +87,9 @@ describe('pending upload card', () => {
       speed: 1024,
       message: null,
       can_resume: true,
+      indeterminate: false,
+      pending_label: null,
+      server_side: false,
     })
   })
 
@@ -85,5 +97,46 @@ describe('pending upload card', () => {
     const card = pending_upload_card(make_row({ status: 'failed', error: '任务中断，请重试', can_resume: false }))
 
     expect(card).toMatchObject({ status: 'error', message: '任务中断，请重试', can_resume: false })
+  })
+
+  it('服务端执行的加密项：不定进度 + 文案，无字节进度', () => {
+    const card = pending_upload_card(make_row({
+      kind: 'encrypt',
+      action: 'encrypt',
+      is_transfer: false,
+      status: 'pending',
+      bytes_total: 0,
+    }))
+
+    expect(card).toMatchObject({
+      status: 'uploading',
+      progress: 0,
+      indeterminate: true,
+      pending_label: '加密中',
+      server_side: true,
+    })
+  })
+
+  it('解密项的文案是解密中', () => {
+    const card = pending_upload_card(make_row({
+      kind: 'decrypt',
+      action: 'decrypt',
+      is_transfer: false,
+      status: 'pending',
+    }))
+
+    expect(card).toMatchObject({ indeterminate: true, pending_label: '解密中' })
+  })
+
+  it('服务端项终态后不再是不定进度（失败行按错误显示）', () => {
+    const card = pending_upload_card(make_row({
+      kind: 'encrypt',
+      action: 'encrypt',
+      is_transfer: false,
+      status: 'failed',
+      error: '任务已取消',
+    }))
+
+    expect(card).toMatchObject({ status: 'error', indeterminate: false, pending_label: null, message: '任务已取消' })
   })
 })

@@ -132,7 +132,21 @@ const task_payload_schemas = {
     source_folder: existing_path_input,
     new_folder: folder_path_input.unwrap(),
   }),
+  encrypt: z.object({
+    file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
+  }),
+  decrypt: z.object({
+    file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
+  }),
+  redact: z.object({
+    source_file_name: z.string().min(1).max(255),
+    content_type: z.string().max(127).nullable(),
+    size: z.number().int().min(1).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
+  }),
 } as const
+
+/** Every task kind, derived from the payload table so the enum cannot drift from it. */
+const task_kind_input = z.enum(Object.keys(task_payload_schemas) as [keyof typeof task_payload_schemas])
 
 function refine_task_payload(value: { kind: keyof typeof task_payload_schemas, payload: Record<string, unknown> }, ctx: z.RefinementCtx) {
   const result = task_payload_schemas[value.kind].safeParse(value.payload)
@@ -232,13 +246,6 @@ export const api_schema = {
         target_folder: existing_path_input.nullable(),
       })).min(1).max(500),
     }),
-    encrypt_attachments: content_scope_input.extend({
-      file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
-    }),
-    decrypt_attachments: content_scope_input.extend({
-      file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
-    }),
-    create_abridged_attachment: z.instanceof(FormData),
     create_folder: content_scope_input.extend({
       folder: folder_path_input.unwrap(),
     }),
@@ -255,12 +262,12 @@ export const api_schema = {
     // 复用各操作的字段规则，避免请求层与服务层漂移。
     preflight_task: z.object({
       story_id: z.coerce.number().int().positive(),
-      kind: z.enum(['upload', 'replace', 'move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
+      kind: task_kind_input,
       payload: z.record(z.string(), z.unknown()),
     }).superRefine(refine_task_payload),
     create_task: z.object({
       story_id: z.coerce.number().int().positive(),
-      kind: z.enum(['upload', 'replace', 'move', 'rename', 'delete', 'folder_create', 'folder_delete', 'folder_rename']),
+      kind: task_kind_input,
       payload: z.record(z.string(), z.unknown()),
       client_id: z.string().max(64).nullish(),
     }).superRefine(refine_task_payload),

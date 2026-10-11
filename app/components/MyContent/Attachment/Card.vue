@@ -208,7 +208,7 @@ const upload = computed(() => data.value.kind === 'upload' ? data.value : null)
 const folder = computed(() => data.value.kind === 'folder' ? data.value : null)
 const file_row = computed(() => data.value.kind === 'folder' ? null : data.value)
 const progress_percent = computed(() => {
-  if (upload.value && upload.value.status !== 'error' && upload.value.status !== 'queued')
+  if (upload.value && ! upload.value.indeterminate && upload.value.status !== 'error' && upload.value.status !== 'queued')
     return upload.value.progress
   return null
 })
@@ -227,6 +227,8 @@ const row_pending = computed(() => {
 /** Measured progress text for the meta slot (transfer rate, or paused bytes). */
 const row_progress_text = computed(() => {
   const task = upload.value
+  if (task?.indeterminate)
+    return null
   if (task?.status === 'uploading')
     return task.speed > 0 ? format_speed(task.speed) : null
   if (task?.status === 'paused')
@@ -415,6 +417,13 @@ const menu_items = computed<AttachmentMenuItem[]>(() => {
   const task = upload.value
   if (! task)
     return []
+  // A server-executed row (encrypt/decrypt) is the runner's business: it cannot
+  // be paused or retried from here, only cancelled while it runs.
+  if (task.server_side) {
+    if (task.status === 'error')
+      return [{ label: '移除', icon_name: 'lucide:x', command: () => emit('remove', row_anchor_event()) }]
+    return [{ label: '取消', icon_name: 'lucide:x', command: () => emit('cancel', row_anchor_event()) }]
+  }
   if (selection_count.value > 1 && state.value.selected) {
     return [
       { label: `开始 ${selection_count.value} 个上传`, icon_name: 'lucide:play', command: () => emit('start-selection') },
@@ -455,6 +464,9 @@ const upload_status_text = computed(() => {
   const current = upload.value
   if (! current)
     return ''
+  // A server-executed item reports its verb, not a percentage.
+  if (current.pending_label && current.status !== 'error')
+    return current.pending_label
   if (current.status === 'queued')
     return '等待上传'
   if (current.status === 'paused') {

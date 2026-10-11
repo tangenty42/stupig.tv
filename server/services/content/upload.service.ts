@@ -2,9 +2,9 @@ import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
-import { copy_object, delete_object_best_effort, head_object, put_object, signed_object_url } from '@server/lib/storage'
+import { copy_object, delete_object_best_effort, get_object, head_object, signed_object_url } from '@server/lib/storage'
 import { create_folder_rows, get_scope_attachment, get_scope_object_keys, insert_attachment_row, list_scope_file_rows, list_scope_paths, update_attachment_row_object } from '@server/services/content-attachments.service'
-import { publish_attachment_change, resolve_attachment_name, with_attachment_lock } from '@server/services/content/attachment-structure.service'
+import { publish_attachment_change, resolve_attachment_name } from '@server/services/content/attachment-structure.service'
 import { cover_version_from, get_story } from '@server/services/content/story.service'
 import { attachment_ancestor_folders, attachment_download_name, attachment_folder_of, attachment_mime_type, attachment_path_join, decrypted_attachment_name, is_encrypted_attachment, redactable_attachment_mime, rename_attachment_references, sanitize_attachment_file_name } from '@shared/content-markdown'
 import { settings } from '@shared/settings'
@@ -42,14 +42,6 @@ export async function sign_attachment_download(story_id: number, file_name: stri
     ResponseContentDisposition: `attachment; filename*=UTF-8''${rfc5987_ext_value(attachment_download_name(row.file_name))}`,
   }), settings.app.content.download.urlTtlSeconds)
   return { url }
-}
-
-function get_form_file(form: FormData, field: string) {
-  const file = form.get(field)
-  if (! (file instanceof Blob) || file.size === 0) {
-    throw new ApiError(400, '请先选择要上传的文件')
-  }
-  return file
 }
 
 /**
@@ -93,56 +85,59 @@ function sniff_image_mime(data: Uint8Array) {
  * silently transcoded, and the name is never taken over — an existing twin is
  * a conflict the caller has to resolve, since replacing it would be a silent
  * edit of a file that may already be published.
+ *
+ * The task executor calls this with path locks already held and the redacted
+ * bytes already staged at `key`; the validation repeats here because the
+ * finalize may run long after the prepare checked the same things.
  */
-export async function create_abridged_attachment(story_id: number, source_file_name: string, input: FormData) {
-  return await with_attachment_lock(story_id, 'redact', async () => {
-    const [source] = await list_scope_file_rows(story_id, [source_file_name])
-    if (! source)
-      throw new ApiError(404, '附件不存在或已被删除')
-    if (! source.encryption_key || ! is_encrypted_attachment(source.file_name))
-      throw new ApiError(400, '只有已加密的图片才能创建删减版')
-    const file_name = decrypted_attachment_name(source.file_name)
-    const mime_type = redactable_attachment_mime(file_name)
-    if (! mime_type)
-      throw new ApiError(400, '该图片格式不支持创建删减版')
+export async function apply_abridged_attachment(story_id: number, source_file_name: string, key: string) {
+  const [source] = await list_scope_file_rows(story_id, [source_file_name])
+  if (! source)
+    throw new ApiError(404, '附件不存在或已被删除')
+  if (! source.encryption_key || ! is_encrypted_attachment(source.file_name))
+    throw new ApiError(400, '只有已加密的图片才能创建删减版')
+  const file_name = decrypted_attachment_name(source.file_name)
+  const mime_type = redactable_attachment_mime(file_name)
+  if (! mime_type)
+    throw new ApiError(400, '该图片格式不支持创建删减版')
 
-    const upload = get_form_file(input, 'file')
-    const file_data = Buffer.from(await upload.arrayBuffer())
-    // The exported bytes must match the name they land under; the client sends
-    // no type of its own, so this is the only check the payload gets.
-    if (sniff_image_mime(file_data) !== mime_type)
-      throw new ApiError(400, '删减版内容与文件格式不符')
+  const file_data = await get_object(key)
+  // The exported bytes must match the name they land under; the client sends
+  // no type of its own, so this is the only check the payload gets.
+  if (sniff_image_mime(file_data) !== mime_type)
+    throw new ApiError(400, '删减版内容与文件格式不符')
 
-    const existing = await list_scope_paths(story_id)
-    // The twin keeps the source's plaintext name, so it can never itself carry
-    // the `.good` suffix; the guard is here so this path answers to the same
-    // rules as every other name, including a folder in the way.
-    resolve_attachment_name(file_name, existing, 'reject')
+  const existing = await list_scope_paths(story_id)
+  // The twin keeps the source's plaintext name, so it can never itself carry
+  // the `.good` suffix; the guard is here so this path answers to the same
+  // rules as every other name, including a folder in the way.
+  resolve_attachment_name(file_name, existing, 'reject')
 
-    const object_key = `content/att/${crypto.randomUUID()}`
-    const etag = await put_object(object_key, file_data, mime_type)
-    const version = etag ?? String(Date.now())
-    try {
-      await insert_attachment_row({
-        story_id,
-        file_name,
-        object_key,
-        mime_type,
-        file_size: file_data.length,
-        version,
-      })
-    }
-    catch (ex) {
-      await delete_object_best_effort(object_key)
-      throw ex
-    }
+  const object_key = `content/att/${crypto.randomUUID()}`
+  const etag = await copy_object(key, object_key)
+  await delete_object_best_effort(key)
+  const version = etag ?? String(Date.now())
+  try {
+    await insert_attachment_row({
+      story_id,
+      file_name,
+      object_key,
+      mime_type,
+      file_size: file_data.length,
+      version,
+    })
+  }
+  catch (ex) {
+    await delete_object_best_effort(object_key)
+    throw ex
+  }
 
-    await publish_attachment_change(story_id)
-    const row = await get_scope_attachment(story_id, file_name)
-    if (! row)
-      throw new ApiError(500, '附件写入失败，请重试')
-    return row
-  })
+  await materialize_attachment_folders(story_id, file_name)
+  await publish_attachment_change(story_id)
+  const row = await get_scope_attachment(story_id, file_name)
+  if (! row)
+    throw new ApiError(500, '附件写入失败，请重试')
+  return row
 }
 
 /** Compute the extension (including the dot) of a file name, or '' when absent. */

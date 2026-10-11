@@ -193,16 +193,6 @@ export function useApi() {
       return trpc_call(trpc.content.renameAttachment.mutate({ id, old_file_name, file_name }))
     },
 
-    /** Uploads the redacted bitmap the 删减版 editor exported for an encrypted image. */
-    async create_abridged_attachment(id: number, source_file_name: string, file: File) {
-      const form = new FormData()
-      form.append('story_id', String(id))
-      form.append('source_file_name', source_file_name)
-      form.append('file', file)
-
-      return trpc_upload('content.createAbridgedAttachment', form)
-    },
-
     async delete_attachment(id: number, file_name: string, markdown: string, base_revision: number) {
       await trpc_call(trpc.content.deleteAttachment.mutate({ id, file_name, markdown, base_revision }))
     },
@@ -213,14 +203,6 @@ export function useApi() {
 
     async move_attachments(id: number, moves: { file_name: string, target_folder: string | null }[]) {
       return trpc_call(trpc.content.moveAttachments.mutate({ id, moves }))
-    },
-
-    async encrypt_attachments(id: number, file_names: string[]) {
-      return trpc_call(trpc.content.encryptAttachments.mutate({ id, file_names }))
-    },
-
-    async decrypt_attachments(id: number, file_names: string[]) {
-      return trpc_call(trpc.content.decryptAttachments.mutate({ id, file_names }))
     },
 
     async create_folder(id: number, folder: string) {

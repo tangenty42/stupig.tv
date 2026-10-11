@@ -142,6 +142,18 @@ describe('content tasks store: row projection', () => {
     expect(store.pending_rows.map(row => row.item_id)).toEqual([2])
   })
 
+  it('服务端执行的任务项（加密）带上 kind 与非传输标记，done 项一律出列', async () => {
+    const store = useContentTasksStore(STORY_ID)
+    store.adopt(make_state([
+      make_item({ id: 1, action: 'encrypt', status: 'pending', staging_key: null }),
+      make_item({ id: 2, path: 'b.png', action: 'encrypt', status: 'done', result: { new_path: 'b.png.good' } }),
+    ], { kind: 'encrypt', payload: { file_names: ['a.png', 'b.png'] } }))
+
+    const rows = store.pending_rows
+    expect(rows.map(row => row.item_id)).toEqual([1])
+    expect(rows[0]).toMatchObject({ kind: 'encrypt', action: 'encrypt', is_transfer: false })
+  })
+
   it('done 但没有附件（例如被跳过）时仍然出列，并带出原因', async () => {
     const store = useContentTasksStore(STORY_ID)
     store.adopt(make_state([

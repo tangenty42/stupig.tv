@@ -1,6 +1,7 @@
-import type { ContentAttachmentBatchResult, ContentTask, ContentTaskItem, ContentTaskKind, ContentTaskPart, ContentTaskPartPlan, ContentTaskReplacePayload, ContentTaskResumeState, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
+import type { ContentAttachmentBatchResult, ContentTask, ContentTaskItem, ContentTaskKind, ContentTaskPart, ContentTaskPartPlan, ContentTaskRedactPayload, ContentTaskReplacePayload, ContentTaskResumeState, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
 import type { ContentTaskWithItems } from './task.service'
 import { ApiError } from '@server/errors/ApiError'
+import { error_fields, log_error } from '@server/lib/log'
 import { release_task_locks } from '@server/lib/operation-lock'
 import { signed_part_upload_url, signed_put_url } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
@@ -22,6 +23,11 @@ import { create_task, get_task, publish_task_state, transition_task, update_task
  * Creates a task and best-effort dispatches it inline. Contention leaves it
  * queued for the runner tick; executor failures land on the task (status
  * failed + error), so the caller always gets the task state back.
+ *
+ * Server-side long-running kinds (encrypt/decrypt) are the exception: their
+ * dispatch is kicked without awaiting, because awaiting it would re-create the
+ * request-length problem the task queue exists to solve (§13.1) — the queued
+ * task row is the receipt, and progress arrives over the sync channel.
  */
 export async function create_content_task(input: {
   scope_id: number
@@ -38,11 +44,22 @@ export async function create_content_task(input: {
     actor_id: input.actor_id,
     client_id: input.client_id,
   })
-  try {
-    await dispatch_task(created.task.id)
+  if (input.kind === 'encrypt' || input.kind === 'decrypt') {
+    void dispatch_task(created.task.id).catch((error) => {
+      log_error('content task dispatch failed', {
+        task_id: created.task.id,
+        kind: input.kind,
+        ... error_fields(error),
+      })
+    })
   }
-  catch {
-    // The failure is recorded on the task; the async API reports state.
+  else {
+    try {
+      await dispatch_task(created.task.id)
+    }
+    catch {
+      // The failure is recorded on the task; the async API reports state.
+    }
   }
   // A new task is a membership change: tell peers to fold it into their list.
   publish_refresh({ resource: sync_resource('content_story_tasks', created.task.scope_id) })
@@ -50,11 +67,22 @@ export async function create_content_task(input: {
   return current ?? created
 }
 
-/** Cancels a task; a running one is a 409 (phase-1 executors finish within the request). */
+/**
+ * Cancels a task. A task still waiting (queued, or paused mid-transfer) is
+ * cancelled outright; one the runner is executing right now can only be marked
+ * `cancelling` — the executor notices at its next item boundary and the
+ * dispatch winds it down onto `cancelled` (which is also what releases its
+ * locks and its stage).
+ */
 export async function cancel_content_task(task_id: number): Promise<ContentTaskWithItems> {
   const current = await get_task(task_id)
   if (! current)
     throw new ApiError(404, '任务不存在或已被删除')
+  if (current.task.status === 'running' && (current.task.kind === 'encrypt' || current.task.kind === 'decrypt')) {
+    await transition_task(task_id, 'cancelling')
+    publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
+    return (await get_task(task_id)) ?? current
+  }
   await transition_task(task_id, 'cancelled')
   // A cancelled task keeps nothing: its paths are freed and whatever it staged
   // is released — cancelling is the user saying the transfer is never coming back.
@@ -118,6 +146,8 @@ export async function sign_task_parts(input: { task_id: number, item_id: number,
 function transfer_content_type(task: ContentTask, item: ContentTaskItem) {
   if (item.action === 'replace')
     return (task.payload as unknown as ContentTaskReplacePayload).content_type
+  if (item.action === 'redact')
+    return (task.payload as unknown as ContentTaskRedactPayload).content_type
   const payload = task.payload as unknown as ContentTaskUploadPayload
   return payload.uploads.find(entry => entry.path === item.path)?.mime_type ?? null
 }

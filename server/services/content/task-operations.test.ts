@@ -16,6 +16,10 @@ const state = vi.hoisted(() => ({
   scope_files: [] as string[],
   scope_folders: [] as string[],
   scope_paths: [] as string[],
+  /** 行级数据（加解密/redact 的判定需要 file_size 与 encryption_key） */
+  scope_file_rows: [] as Record<string, unknown>[],
+  /** attachment_object_key_in_use 回答为 true 的 key 集合 */
+  keys_in_use: [] as string[],
   story_markdown: '',
   scope_locks: [] as { path: string, kind: string, task_id: number | null, expires_at: string }[],
   name_error: null as Error | null,
@@ -28,6 +32,7 @@ const state = vi.hoisted(() => ({
   deleted_objects: [] as string[],
   uploaded_parts: [] as { part_number: number, etag: string, size: number }[],
   replaced: null as { old_name: string, key: string } | null,
+  redacted: null as { source: string, key: string } | null,
   changed: [] as number[],
 }))
 
@@ -68,10 +73,33 @@ vi.mock('@server/services/content/attachment-structure.service', () => ({
       throw state.name_error
     return new_name
   }),
+  rewrite_story_attachment_refs: vi.fn(async () => {}),
+}))
+
+vi.mock('@server/services/content/encryption.service', () => ({
+  transform_attachment_encryption_bytes: vi.fn((kind: string, data: Uint8Array) => ({
+    data,
+    encryption_key: kind === 'encrypt' ? 'new-key' : null,
+  })),
+}))
+
+vi.mock('@server/lib/db', () => ({
+  db: {
+    execute: vi.fn(async () => [[]]),
+    getConnection: vi.fn(async () => ({
+      execute: vi.fn(async () => [[]]),
+      beginTransaction: vi.fn(async () => {}),
+      commit: vi.fn(async () => {}),
+      rollback: vi.fn(async () => {}),
+      release: vi.fn(),
+    })),
+  },
 }))
 
 vi.mock('@server/services/content-attachments.service', () => ({
   list_scope_attachments: vi.fn(async () => state.scope_files.map(file_name => ({ file_name }))),
+  list_scope_file_rows: vi.fn(async (_scope: number, names: string[]) => state.scope_file_rows.filter(row => names.includes(row.file_name as string))),
+  attachment_object_key_in_use: vi.fn(async (key: string) => state.keys_in_use.includes(key)),
   list_scope_folders: vi.fn(async () => state.scope_folders),
   list_scope_paths: vi.fn(async () => state.scope_paths),
   insert_attachment_row: vi.fn(async (row: Record<string, unknown>) => {
@@ -84,6 +112,10 @@ vi.mock('@server/services/content/upload.service', () => ({
   apply_attachment_replace: vi.fn(async (_scope: number, old_name: string, key: string) => {
     state.replaced = { old_name, key }
     return { file_name: old_name }
+  }),
+  apply_abridged_attachment: vi.fn(async (_scope: number, source: string, key: string) => {
+    state.redacted = { source, key }
+    return { file_name: source }
   }),
   materialize_attachment_folders: vi.fn(async (_scope: number, file_name: string) => {
     state.materialized.push(file_name)
@@ -107,6 +139,8 @@ vi.mock('@server/lib/storage', () => ({
   list_parts: vi.fn(async () => state.uploaded_parts),
   head_object: vi.fn(async () => ({ size: 123, content_type: 'image/png', etag: 'staged-etag' })),
   copy_object: vi.fn(async () => 'copied-etag'),
+  get_object: vi.fn(async () => new Uint8Array([1, 2, 3])),
+  put_object: vi.fn(async () => 'put-etag'),
   delete_object_best_effort: vi.fn(async (key: string) => {
     state.deleted_objects.push(key)
   }),
@@ -195,6 +229,8 @@ beforeEach(() => {
   state.scope_files = []
   state.scope_folders = []
   state.scope_paths = []
+  state.scope_file_rows = []
+  state.keys_in_use = []
   state.story_markdown = ''
   state.scope_locks = []
   state.name_error = null
@@ -207,6 +243,7 @@ beforeEach(() => {
   state.deleted_objects = []
   state.uploaded_parts = []
   state.replaced = null
+  state.redacted = null
 })
 
 describe('task_lock_paths', () => {
@@ -233,9 +270,11 @@ describe('task_lock_paths', () => {
     expect(task_lock_paths('folder_delete', { folder: 'a/b' })).toEqual(['a/b'])
   })
 
-  it('传输类已实现（走锁路径推导），加密类尚未实现：抛 400', () => {
+  it('传输类与加密类都锁源与目标名（加解密语义同改名）', () => {
     expect(task_lock_paths('upload', { uploads: [{ path: 'a.png', size: 1, mime_type: null }] })).toEqual(['a.png'])
-    expect(() => task_lock_paths('encrypt', {})).toThrow('不支持的任务类型')
+    expect(task_lock_paths('encrypt', { file_names: ['a.png', 'dir/b.png'] }).sort()).toEqual(['a.png', 'a.png.good', 'dir/b.png', 'dir/b.png.good'])
+    expect(task_lock_paths('decrypt', { file_names: ['a.png.good'] }).sort()).toEqual(['a.png', 'a.png.good'])
+    expect(task_lock_paths('redact', { source_file_name: 'a.png.good', content_type: 'image/png', size: 10 }).sort()).toEqual(['a.png', 'a.png.good'])
   })
 })
 
@@ -252,6 +291,15 @@ describe('task_item_paths', () => {
   it('delete：文件项与文件夹项分开', () => {
     const items = task_item_paths('delete', { file_names: ['a.png'], folders: ['dir'], markdown: '', base_revision: 1, can_private: true })
     expect(items).toEqual([{ path: 'a.png', action: 'delete' }, { path: 'dir', action: 'folder_delete' }])
+  })
+
+  it('encrypt/decrypt：每文件一项；redact：单一项带字节总量', () => {
+    expect(task_item_paths('encrypt', { file_names: ['a.png', 'b.png', 'a.png'] }))
+      .toEqual([{ path: 'a.png', action: 'encrypt' }, { path: 'b.png', action: 'encrypt' }])
+    expect(task_item_paths('decrypt', { file_names: ['a.png.good'] }))
+      .toEqual([{ path: 'a.png.good', action: 'decrypt' }])
+    expect(task_item_paths('redact', { source_file_name: 'a.png.good', content_type: 'image/png', size: 42 }))
+      .toEqual([{ path: 'a.png.good', action: 'redact', bytes_total: 42 }])
   })
 })
 
@@ -611,5 +659,161 @@ describe('discard_task_staging', () => {
     ])).resolves.toBeUndefined()
 
     expect(state.deleted_objects).toEqual(['content-upload/42/z'])
+  })
+
+  it('任务自产对象（加密中断的孤儿）：未被引用则删除，已落行则保留', async () => {
+    state.keys_in_use = ['content/att/live']
+
+    await discard_task_staging([
+      make_transfer_item('a.png', 'encrypt', { result: { staged_object_key: 'content/att/orphan' } }),
+      make_transfer_item('b.png', 'encrypt', { result: { staged_object_key: 'content/att/live' } }),
+    ])
+
+    expect(state.deleted_objects).toEqual(['content/att/orphan'])
+  })
+})
+
+function file_row(file_name: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    story_id: 42,
+    is_folder: 0,
+    file_name,
+    object_key: `content/att/${file_name}`,
+    mime_type: 'image/png',
+    file_size: 10,
+    version: 'v1',
+    encryption_key: null,
+    ... overrides,
+  }
+}
+
+describe('preflight：加密与解密', () => {
+  it('逐项判定：不存在 / 已加密 / 超限 / 目标冲突 / 正常', async () => {
+    state.scope_file_rows = [
+      file_row('a.png'),
+      file_row('b.png.good', { encryption_key: 'key' }),
+      file_row('big.png', { file_size: 21 * 1024 * 1024 }),
+      file_row('taken.png'),
+    ]
+    // taken.png.good 已被别人占着（哪怕是个文件夹）。
+    state.scope_paths = ['a.png', 'b.png.good', 'big.png', 'taken.png', 'taken.png.good']
+
+    const result = await preflight_task(42, 'encrypt', { file_names: ['a.png', 'ghost.png', 'b.png.good', 'big.png', 'taken.png'] })
+
+    expect(result.items.map(item => [item.path, item.ok, item.reason])).toEqual([
+      ['a.png', true, null],
+      ['ghost.png', false, '附件不存在或已被删除'],
+      ['b.png.good', false, '已加密'],
+      ['big.png', false, '文件太大'],
+      ['taken.png', false, '操作时发生文件名冲突'],
+    ])
+  })
+
+  it('解密：未加密与缺密钥的各自原因；批内按序让位', async () => {
+    state.scope_file_rows = [
+      file_row('a.png.good', { encryption_key: 'key' }),
+      file_row('b.png'),
+      file_row('c.png.good', { encryption_key: null }),
+    ]
+    state.scope_paths = ['a.png.good', 'b.png', 'c.png.good']
+
+    const result = await preflight_task(42, 'decrypt', { file_names: ['a.png.good', 'b.png', 'c.png.good'] })
+
+    expect(result.items.map(item => [item.path, item.ok, item.reason])).toEqual([
+      ['a.png.good', true, null],
+      ['b.png', false, '未加密'],
+      ['c.png.good', false, '附件缺少密钥，无法解密'],
+    ])
+  })
+
+  it('解密落点被已有明文占用时报告冲突（删减版双胞胎占名）', async () => {
+    state.scope_file_rows = [file_row('a.png.good', { encryption_key: 'key' })]
+    state.scope_paths = ['a.png.good', 'a.png']
+
+    const result = await preflight_task(42, 'decrypt', { file_names: ['a.png.good'] })
+
+    expect(result.items[0]).toMatchObject({ ok: false, reason: '操作时发生文件名冲突' })
+  })
+})
+
+describe('preflight：删减版', () => {
+  const redact_payload = { source_file_name: 'a.png.good', content_type: 'image/png', size: 100 }
+
+  it('源已加密且双胞胎名空闲时通过', async () => {
+    state.scope_file_rows = [file_row('a.png.good', { encryption_key: 'key' })]
+    state.scope_paths = ['a.png.good']
+
+    const result = await preflight_task(42, 'redact', redact_payload)
+
+    expect(result.items).toEqual([{ path: 'a.png.good', action: 'redact', bytes_total: 100, ok: true, reason: null }])
+  })
+
+  it('逐项拒绝：未加密 / 格式不支持 / 声明类型不符 / 双胞胎名被占 / 源不存在', async () => {
+    state.scope_file_rows = [file_row('b.png'), file_row('c.gif.good', { encryption_key: 'key', mime_type: 'image/gif' }), file_row('d.png.good', { encryption_key: 'key' }), file_row('e.png.good', { encryption_key: 'key' })]
+    state.scope_paths = ['b.png', 'c.gif.good', 'd.png.good', 'd.png', 'e.png.good']
+
+    const unencrypted = await preflight_task(42, 'redact', { ... redact_payload, source_file_name: 'b.png' })
+    expect(unencrypted.items[0]).toMatchObject({ ok: false, reason: '只有已加密的图片才能创建删减版' })
+
+    const bad_format = await preflight_task(42, 'redact', { ... redact_payload, source_file_name: 'c.gif.good', content_type: null })
+    expect(bad_format.items[0]).toMatchObject({ ok: false, reason: '该图片格式不支持创建删减版' })
+
+    const type_mismatch = await preflight_task(42, 'redact', { ... redact_payload, source_file_name: 'd.png.good', content_type: 'image/jpeg' })
+    expect(type_mismatch.items[0]).toMatchObject({ ok: false, reason: '删减版内容与文件格式不符' })
+
+    const taken = await preflight_task(42, 'redact', { ... redact_payload, source_file_name: 'd.png.good' })
+    expect(taken.items[0]).toMatchObject({ ok: false, reason: '操作时发生文件名冲突' })
+
+    const missing = await preflight_task(42, 'redact', { ... redact_payload, source_file_name: 'ghost.png.good' })
+    expect(missing.items[0]).toMatchObject({ ok: false, reason: '附件不存在或已被删除' })
+  })
+})
+
+describe('execute_task：删减版准备', () => {
+  const redact_task = () => make_task('redact', { source_file_name: 'a.png.good', content_type: 'image/png', size: 100 })
+
+  it('校验通过后分配暂存并等待客户端灌字节', async () => {
+    state.scope_file_rows = [file_row('a.png.good', { encryption_key: 'key' })]
+    state.scope_paths = ['a.png.good']
+
+    const outcome = await execute_task(redact_task(), [make_transfer_item('a.png.good', 'redact')])
+
+    expect(outcome.complete).toBe(false)
+    const patch = state.item_updates[0]?.patch
+    expect(patch?.status).toBe('active')
+    expect(String(patch?.staging_key)).toMatch(/^content-upload\/42\//)
+    // 100 字节远小于片大小：单次 PUT，无 multipart
+    expect(patch?.upload_id).toBeNull()
+  })
+
+  it('源未加密 / 格式不支持 / 双胞胎名被占：准备阶段直接 skipped', async () => {
+    state.scope_file_rows = [file_row('a.png')]
+    state.scope_paths = ['a.png']
+
+    const outcome = await execute_task(make_task('redact', { source_file_name: 'a.png', content_type: 'image/png', size: 100 }), [make_transfer_item('a.png', 'redact')])
+
+    expect(outcome.complete).toBe(true)
+    expect(state.item_updates[0]?.patch).toMatchObject({ status: 'skipped', result: { reason: '只有已加密的图片才能创建删减版' } })
+    expect(state.multipart_created).toEqual([])
+  })
+
+  it('恢复时不重新分配暂存（客户端继续灌原 key）', async () => {
+    const outcome = await execute_task(redact_task(), [make_transfer_item('a.png.good', 'redact', { status: 'active', staging_key: 'content-upload/42/existing' })])
+
+    expect(outcome.complete).toBe(false)
+    expect(state.item_updates).toEqual([])
+    expect(state.multipart_created).toEqual([])
+  })
+})
+
+describe('finalize_transfer_item：删减版', () => {
+  it('交给 apply_abridged_attachment 落行', async () => {
+    const task = make_task('redact', { source_file_name: 'a.png.good', content_type: 'image/png', size: 100 })
+    const item = make_transfer_item('a.png.good', 'redact', { staging_key: 'content-upload/42/redact' })
+
+    await finalize_transfer_item(task, item, [])
+
+    expect(state.redacted).toEqual({ source: 'a.png.good', key: 'content-upload/42/redact' })
   })
 })

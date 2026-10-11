@@ -8,7 +8,6 @@ import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { settings } from '@shared/settings'
 import { discard_task_staging, execute_task, task_lock_paths } from './task-operations.service'
 import { delete_finished_task, get_task, heartbeat_task, is_terminal_task_status, list_expired_tasks, list_queued_tasks, publish_task_state, transition_task } from './task.service'
-
 /**
  * The attachment task runner (docs/content-task-refactor.md §5): an in-process
  * loop that dispatches queued tasks FIFO. Tasks hold path locks for their
@@ -51,16 +50,47 @@ export function kick_task_runner() {
 }
 
 /**
+ * Kinds whose executor runs long server-side work (the byte transforms). They
+ * get the dispatch-time heartbeat below; pure-DB kinds finish in milliseconds
+ * and transfer kinds are kept alive by the client's progress reports instead.
+ */
+const heartbeat_executed_kinds = ['encrypt', 'decrypt']
+
+/**
+ * Keeps a server-executed task's leases alive while its executor runs, and
+ * pulls the abort signal when the claim is gone: a short renew means the locks
+ * were swept or stolen, and a heartbeat that no longer lands means the task
+ * itself moved on (cancelled). The executor checks the signal between items.
+ */
+function start_execution_heartbeat(task: ContentTaskWithItems['task'], lock_path_count: number) {
+  const controller = new AbortController()
+  const timer = setInterval(() => {
+    void (async () => {
+      const renewed = await renew_task_locks(task.scope_id, task.id)
+      if (renewed < lock_path_count) {
+        controller.abort()
+        return
+      }
+      await heartbeat_task(task.id)
+    })().catch(() => controller.abort())
+  }, settings.app.content.task.heartbeatSeconds * 1000)
+  // Like the runner's own timer, the heartbeat must not keep the process alive.
+  timer.unref?.()
+  return { signal: controller.signal, stop: () => clearInterval(timer) }
+}
+
+/**
  * Drives one queued task: take its path locks, run the executor, release. A
  * lock conflict leaves the task queued for the next tick. Executor errors mark
  * the task failed and are rethrown so a synchronous caller gets the original
  * ApiError; the tick path logs them instead.
  *
- * Transfer tasks (upload/replace) are the exception to "dispatch finishes the
- * task": their executor only prepares staging and the client then feeds bytes
- * in through `reportTaskItem`. Such a task KEEPS its path locks after dispatch
- * returns — the locks are the claim the whole upload rests on — and they are
- * released when the last item lands, or by the sweeper if the client vanishes.
+ * Transfer tasks (upload/replace/redact) are the exception to "dispatch finishes
+ * the task": their executor only prepares staging and the client then feeds
+ * bytes in through `reportTaskItem`. Such a task KEEPS its path locks after
+ * dispatch returns — the locks are the claim the whole upload rests on — and
+ * they are released when the last item lands, or by the sweeper if the client
+ * vanishes.
  */
 export async function dispatch_task(task_id: number) {
   const current = await get_task(task_id)
@@ -72,6 +102,9 @@ export async function dispatch_task(task_id: number) {
   if (! acquired.acquired)
     return
   let completed = false
+  const heartbeat = heartbeat_executed_kinds.includes(task.kind)
+    ? start_execution_heartbeat(task, paths.length)
+    : null
   try {
     try {
       await transition_task(task.id, 'running')
@@ -82,7 +115,7 @@ export async function dispatch_task(task_id: number) {
       await release_path_locks(acquired.lock).catch(() => {})
       return
     }
-    const outcome = await execute_task(task, items)
+    const outcome = await execute_task(task, items, heartbeat?.signal)
     if (outcome.complete) {
       await transition_task(task.id, 'done')
       completed = true
@@ -91,11 +124,26 @@ export async function dispatch_task(task_id: number) {
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    // The task may have moved on (cancelled mid-flight); then that wins.
+    // A cancel requested mid-execution wins over the failure the abort caused:
+    // the wind-down lands the task on cancelled, not failed. Either way the
+    // task may have moved on already (swept); then that state wins.
+    const latest = await get_task(task.id).catch(() => null)
+    if (latest?.task.status === 'cancelling') {
+      await transition_task(task.id, 'cancelled').catch(() => {})
+      await release_task_locks(task.scope_id, task.id).catch(() => {})
+      // Cancelling is the user saying the stage is never coming back — release
+      // it here, the way a direct cancel of a waiting task does.
+      await discard_task_staging(items).catch(() => {})
+      publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
+      return
+    }
     await transition_task(task.id, 'failed', { error: message }).catch(() => {})
     await release_task_locks(task.scope_id, task.id).catch(() => {})
     publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
     throw error
+  }
+  finally {
+    heartbeat?.stop()
   }
   if (completed) {
     await release_task_locks(task.scope_id, task.id).catch(() => {})

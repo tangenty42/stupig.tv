@@ -90,7 +90,7 @@ export type ContentOperationKind = 'move' | 'rename' | 'folder_create' | 'folder
 export type ContentTaskKind = 'upload' | 'replace' | 'move' | 'rename' | 'delete' | 'encrypt' | 'decrypt' | 'redact' | 'folder_create' | 'folder_delete' | 'folder_rename'
 
 /** Item actions that wait on the client's bytes; the rest are server-only. */
-export const content_task_transfer_actions = ['upload', 'replace'] as const
+export const content_task_transfer_actions = ['upload', 'replace', 'redact'] as const
 
 /** Task lifecycle: queued → running → done/failed/cancelled; running ↔ paused only for transfer tasks. */
 export type ContentTaskStatus = 'queued' | 'running' | 'paused' | 'cancelling' | 'done' | 'failed' | 'cancelled'
@@ -225,6 +225,21 @@ export interface ContentTaskReplacePayload {
   /** The incoming file name, which decides the result in `new-name` mode. */
   file_name: string
   content_type: string | null
+}
+
+/** Encrypt/decrypt: one item per file; the rename (± `.good`) is derived server-side. */
+export interface ContentTaskEncryptionPayload {
+  file_names: string[]
+}
+
+/**
+ * Redact: the client exports the censored bitmap and uploads it through the
+ * transfer pipeline; the server lands it as the source's plaintext twin.
+ */
+export interface ContentTaskRedactPayload {
+  source_file_name: string
+  content_type: string | null
+  size: number
 }
 
 /** One part the client still has to PUT, with its signed URL. */
