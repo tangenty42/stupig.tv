@@ -35,6 +35,8 @@ const bundle_env = {
   MYSQL_HOST: '127.0.0.1',
   MYSQL_PORT: '1',
   MYSQL_PASSWORD: 'placeholder',
+  MYSQL_USER: 'stupig_tv',
+  MYSQL_DATABASE: 'stupig_tv',
   REDIS_HOST: '127.0.0.1',
   REDIS_PORT: '1',
   MQTT_HOST: '127.0.0.1',
@@ -44,6 +46,7 @@ const bundle_env = {
   JWT_SECRET: 'p'.repeat(40),
   ALIYUN_ACCESS_KEY_ID: 'placeholder',
   ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
+  ALIYUN_CAPTCHA_APP_KEY: 'placeholder',
   OSS_ACCESS_KEY_ID: 'placeholder',
   OSS_ACCESS_KEY_SECRET: 'placeholder',
 }
@@ -73,7 +76,7 @@ describe('维护脚本产物', () => {
   })
 
   it('迁移产物同样能在容器里跑起来（只读 --status，不写库）', async () => {
-    const env = { NODE_ENV: 'production', MYSQL_HOST: '127.0.0.1', MYSQL_PORT: '1', MYSQL_PASSWORD: 'placeholder' }
+    const env = { NODE_ENV: 'production', MYSQL_HOST: '127.0.0.1', MYSQL_PORT: '1', MYSQL_PASSWORD: 'placeholder', MYSQL_USER: 'stupig_tv', MYSQL_DATABASE: 'stupig_tv' }
     const migrate = resolve(work_dir, 'migrate.mjs')
     await cp(resolve(project_root, '.output/server/maintenance/migrate.mjs'), migrate)
 
