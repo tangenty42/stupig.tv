@@ -326,7 +326,7 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 >
 > 修订记录（2026-10-08，阶段 2）：① 上传的命名冲突在**建任务时不再解析**——preflight 只判合法性与给出 `suggested_name`，权威的一次冲突解析发生在 finalize（锁内，见 §6.1）；② 客户端 `sign_batch_size` 由服务端随任务项下发，预签批处理无需试探上限；③ 续传靠 staging key + multipart `list_parts`，`client_id` 只用于「本机可续传」提示（决策 6）；④ 前端 `task-uploader` 取代 Uppy，`@uppy/*` 依赖与旧上传端点（signAttachmentUpload / confirmAttachmentUpload / replaceAttachment）一并删除；`confirm_attachment_upload` 的服务端实现同样删除，其逻辑由 `finalize_transfer_item` 独占；⑤ 粘贴改名不再需要「先入队后改名」的中间态：任务直接以最终名字创建。
 >
-> 修订记录（2026-10-12）：新增 **§13.4 冲突与和谐的 resolve 体系**（决策 8-11）——任何解决冲突的内置行为（suffix/merge/sanitize）一律改为显式 resolve，载体是持久 paused 任务；§6.1「finalize 静默 suffix」随之收紧为「跳过并提示重来」。§13.4 落地前，阶段 2 修订①与 §6.1 描述的现状保持不变。
+> 修订记录（2026-10-12）：新增 **§13.4 冲突与和谐的 resolve 体系**（决策 8-11）——任何解决冲突的内置行为（suffix/merge/sanitize）一律改为显式 resolve，载体是持久 paused 任务；命名仲裁从 finalize 前移到 prepare（取锁后、分配 staging 前），finalize 的静默 suffix 随之删除。§13.4 落地前，阶段 2 修订①与 §6.1 描述的现状保持不变。
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
@@ -529,7 +529,7 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
    - `apply`：把内置结果名写回任务项 path 与 payload（path 是 `UNIQUE(task_id, path)` 的键，直接改写）；写回前对照最新 scope 重查，`to` 刚被占则该项 `skipped`（冲突原因，用户重来）。
    - `skip`：标 `skipped`。
    - 全部提供项解决后 `paused → queued`，runner 接手。
-4. **finalize 收紧**（决策 9）：upload/replace 落库时名字再次被占 → 不再静默 suffix，该项 `skipped` + 「名字刚被占用，请重新操作」。竞态窗口由路径锁压在 finalize 内，代价是极端情况下重传一次。
+4. **命名仲裁前移到 prepare，finalize 不再仲裁**（决策 9）：传输任务的锁从 dispatch 起全程持有到 finalize，所以行级冲突只需要在两个时刻判定——建任务时（出提供项）与 prepare 时（取锁后、分配 staging 前，覆盖「排队期间名字被别人落掉」与「锁被 sweeper 收走后续传」两个窗口）。prepare 查到撞名 → 该项生成新的 resolve 提供项（suffix）、任务回 `paused`；apply 后重新排队、按新名重新取锁再传——**staging 与已传分片全保留，不重传**。finalize 的静默 suffix 删除：锁不间断则 prepare 查过的名字必然还空着，finalize 撞名只剩理论可能，直接报错而非悄悄改名。
 5. **schema**：upload 的 `path` 从 `attachment_path_input` 放宽为非空、限长（1024）字符串——原始名必须能到达服务端才能算出 sanitize 提供项；清洗在 resolve-apply 写回时完成。
 6. legacy 同步包装（move/folder_rename）语义不变；页面改走新流程后 folder_rename 包装闲置，随阶段 4 删除。
 
@@ -585,6 +585,6 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
 | 6 | 设备标识 | `client_id` 仅作"可续传"提示，不强制同设备 |
 | 7 | 文档与开工 | 先落本文档；**阶段 0 暂缓** |
 | 8 | 移动撞名（2026-10-12） | 维持**跳过**，不进 resolve 体系（撞名是例外，无内置重命名） |
-| 9 | finalize 竞态（2026-10-12） | resolve 后名字再被占 → 该项 **skipped + 提示重来**，不再静默二次 suffix |
+| 9 | finalize 竞态（2026-10-12，同日修订） | 命名仲裁**前移到 prepare**（取锁后、分配 staging 前），撞名 → 重新出 resolve 提供项而非 finalize 时跳过；staging 与分片保留，不重传。finalize 不再做任何静默改名 |
 | 10 | resolve 载体（2026-10-12） | **持久 paused 任务**（跨端可见、可续），不是 pre-task 一次性对话框 |
 | 11 | resolve 对话框形态（2026-10-12） | 与 skipped 报告**统一为一个组件**（`MyContentResolveDialog`，三种行态） |
