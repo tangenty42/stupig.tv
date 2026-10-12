@@ -1765,7 +1765,14 @@ async function upload_picks(picks: AttachmentUploadPick[], insert_position: numb
     insert_position,
     on_landed: upload_landing_handler(pick, insert_position),
   }))
-  const result = await tasks_store.start_uploads(entries)
+  // A preflight refusal (an illegal name fails the whole request, not one
+  // entry) has no per-item verdict to show, so it is reported directly.
+  const result = await tasks_store.start_uploads(entries).catch((ex: unknown) => {
+    report_operation_error(ex)
+    return null
+  })
+  if (! result)
+    return
   for (const refusal of result.rejected)
     error(`${attachment_base_name(refusal.path)}：${refusal.reason}`)
 

@@ -1,6 +1,8 @@
 import type { ContentStoryAttachment, ContentTaskProgressSnapshot, ContentTaskState, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
 import type { AttachmentUploadPick } from '~/utils/content/attachment'
 import type { PendingTaskRow } from '~/utils/content/task-row'
+import { sanitize_attachment_file_name } from '@shared/content-markdown'
+import { settings } from '@shared/settings'
 import { content_task_transfer_actions } from '@shared/types/content'
 import { defineStore } from 'pinia'
 import { upload_task_item } from '~/utils/content/task-uploader'
@@ -327,7 +329,9 @@ function create_tasks_state(story_id: number) {
       mode: input.mode,
       size: input.file.size,
       mime_type: input.file.type || null,
-      file_name: input.file.name,
+      // The incoming name is harmonized here, the same rule the server applies
+      // when it lands the row — the client never offers a name that would 400.
+      file_name: sanitize_attachment_file_name(input.file.name, settings.app.content.link.fileNameMaxBytes),
       content_type: input.file.type || null,
     }
     const verdicts = await content.preflight_task(story_id, 'replace', payload)

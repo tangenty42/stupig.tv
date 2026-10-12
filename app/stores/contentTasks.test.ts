@@ -538,6 +538,19 @@ describe('content tasks store: replacing', () => {
     }, CLIENT_ID)
   })
 
+  it('新文件名在发送前按共享规则和谐（空格等非法字符不会 400）', async () => {
+    const store = useContentTasksStore(STORY_ID)
+    mocks.api.preflight_task.mockResolvedValue({ items: [{ path: 'a.png', action: 'replace', ok: true, reason: null }], locks: [] })
+    mocks.api.create_task.mockResolvedValue(make_state([make_item({ id: 3, path: 'a.png', action: 'replace', status: 'active' })]))
+
+    await store.start_replace({ file: make_file(20, '我的 照片.JPEG'), old_file_name: 'a.png', mode: 'new-name' })
+    await vi.waitFor(() => expect(mocks.upload_calls).toHaveLength(1))
+
+    expect(mocks.api.create_task).toHaveBeenCalledWith(STORY_ID, 'replace', expect.objectContaining({
+      file_name: '我的照片.jpeg',
+    }), CLIENT_ID)
+  })
+
   it('预检不通过时根本不建任务', async () => {
     const store = useContentTasksStore(STORY_ID)
     mocks.api.preflight_task.mockResolvedValue({ items: [{ path: 'a.png', action: 'replace', ok: false, reason: '已加密' }], locks: [] })

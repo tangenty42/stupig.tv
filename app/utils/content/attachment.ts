@@ -1,6 +1,7 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { PendingTaskRow } from './task-row'
-import { attachment_download_name, decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
+import { attachment_download_name, decrypted_attachment_name, is_encrypted_attachment, sanitize_attachment_path } from '@shared/content-markdown'
+import { settings } from '@shared/settings'
 import { decrypted_blob_url } from './attachment-crypto'
 
 /**
@@ -79,8 +80,15 @@ export interface AttachmentUploadPick {
   handle?: FileSystemFileHandle | null
 }
 
+/**
+ * Upload names are harmonized at the boundary: whatever the local filesystem
+ * allows (spaces, full-width punctuation) is stripped by the shared rule, so
+ * the name the list shows is the name the server stores.
+ */
+const attachment_name_max_bytes = settings.app.content.link.fileNameMaxBytes
+
 export function attachment_pick_from_file(file: File): AttachmentUploadPick {
-  return { file, file_name: file.webkitRelativePath || file.name }
+  return { file, file_name: sanitize_attachment_path(file.webkitRelativePath || file.name, attachment_name_max_bytes) }
 }
 
 /** Recursively flatten File System Access handles (files or folders) into picks. */
@@ -88,7 +96,7 @@ async function collect_file_system_handle(handle: FileSystemHandle, parent: stri
   const path = parent ? `${parent}/${handle.name}` : handle.name
   if (handle.kind === 'file') {
     try {
-      out.push({ file: await (handle as FileSystemFileHandle).getFile(), file_name: path, handle: handle as FileSystemFileHandle })
+      out.push({ file: await (handle as FileSystemFileHandle).getFile(), file_name: sanitize_attachment_path(path, attachment_name_max_bytes), handle: handle as FileSystemFileHandle })
     }
     catch {
       // Skip unreadable files rather than failing the whole drop.
@@ -125,7 +133,7 @@ async function collect_file_system_entry(entry: FileSystemEntry, parent: string,
   const path = parent ? `${parent}/${entry.name}` : entry.name
   if (entry.isFile) {
     try {
-      out.push({ file: await file_system_entry_file(entry as FileSystemFileEntry), file_name: path })
+      out.push({ file: await file_system_entry_file(entry as FileSystemFileEntry), file_name: sanitize_attachment_path(path, attachment_name_max_bytes) })
     }
     catch {
       // Skip unreadable files rather than failing the whole drop.

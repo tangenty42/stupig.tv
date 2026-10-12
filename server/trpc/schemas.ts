@@ -91,11 +91,11 @@ const task_payload_schemas = {
       size: z.number().int().min(1).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
       mime_type: z.string().max(127).nullable(),
       insert_position: z.number().int().min(0).nullish(),
-    })).min(1).max(200)
-      // Task items are keyed by path, so a batch has to arrive with distinct
-      // plans: preflightTask hands back `suggested_name` for the client to
-      // apply rather than letting two files collide on one item.
-      .refine(entries => new Set(entries.map(entry => entry.path)).size === entries.length, '同一批次存在同名文件，请先处理重名'),
+    })).min(1).max(200),
+    // A batch legitimately plans two files onto the same path (identical names,
+    // or names that sanitize to the same stored name): preflight answers the
+    // dupe with a `suggested_name` instead of refusing the whole request. The
+    // distinct-path requirement only binds at creation — see create_task.
   }),
   replace: z.object({
     old_file_name: z.string().min(1).max(255),
@@ -270,7 +270,17 @@ export const api_schema = {
       kind: task_kind_input,
       payload: z.record(z.string(), z.unknown()),
       client_id: z.string().max(64).nullish(),
-    }).superRefine(refine_task_payload),
+    }).superRefine(refine_task_payload)
+      // Task items are keyed by path, so a created batch has to arrive with
+      // distinct plans: preflightTask hands back `suggested_name` for the
+      // client to apply rather than letting two files collide on one item.
+      .superRefine((value, ctx) => {
+        if (value.kind !== 'upload')
+          return
+        const uploads = (value.payload as { uploads?: { path: string }[] }).uploads ?? []
+        if (new Set(uploads.map(entry => entry.path)).size !== uploads.length)
+          ctx.addIssue({ code: 'custom', message: '同一批次存在同名文件，请先处理重名', path: ['payload', 'uploads'] })
+      }),
     cancel_task: z.object({
       task_id: z.coerce.number().int().positive(),
     }),

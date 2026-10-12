@@ -89,3 +89,23 @@ describe('content schemas: new names vs existing identifiers', () => {
     })
   })
 })
+
+/**
+ * Upload batches may plan two files onto one path (identical names, or names
+ * that sanitize to the same stored name). Preflight must SEE the dupe to answer
+ * it with a suggested_name; creation must NOT, because task items are keyed by
+ * path and a collision would silently merge two files into one item.
+ */
+describe('content schemas: duplicate planned upload paths', () => {
+  const content = api_schema.content
+  const batch = { uploads: [{ path: 'a.png', size: 10, mime_type: null }, { path: 'a.png', size: 10, mime_type: null }] }
+
+  it('preflightTask accepts the dupe', () => {
+    expect(content.preflight_task.safeParse({ story_id: 1, kind: 'upload', payload: batch }).success).toBe(true)
+  })
+
+  it('createTask refuses it', () => {
+    const result = content.create_task.safeParse({ story_id: 1, kind: 'upload', payload: batch })
+    expect(result.success).toBe(false)
+  })
+})

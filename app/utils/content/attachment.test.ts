@@ -1,6 +1,6 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { describe, expect, it } from 'vitest'
-import { attachment_is_media, attachment_leading_action } from './attachment'
+import { attachment_is_media, attachment_leading_action, attachment_pick_from_file } from './attachment'
 
 function attachment(mime_type: string | null) {
   return { mime_type } as Pick<ContentStoryAttachment, 'mime_type'>
@@ -49,5 +49,18 @@ describe('attachment_leading_action', () => {
   it('has no encrypted input that could override the type', () => {
     const media = { mime_type: 'video/mp4', is_image: false, is_encrypted: true, encryption_key: 'k' }
     expect(attachment_leading_action(media)).toBe('open')
+  })
+})
+
+describe('attachment_pick_from_file', () => {
+  // The pick is where local filesystem names enter the app: they are harmonized
+  // by the shared rule so the list shows exactly the name the server stores.
+  it('strips characters the stored-name rule cannot carry', () => {
+    const pick = attachment_pick_from_file(new File([new Uint8Array(1)], 'Thomas’ Calculus in SI Units, 14th Edition.pdf'))
+    expect(pick.file_name).toBe('Thomas’CalculusinSIUnits,14thEdition.pdf')
+  })
+
+  it('lowercases the extension like the stored name does', () => {
+    expect(attachment_pick_from_file(new File([new Uint8Array(1)], '照片 2026.PNG')).file_name).toBe('照片2026.png')
   })
 })
