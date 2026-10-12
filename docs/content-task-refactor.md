@@ -325,6 +325,8 @@ server/plugins/task-runner.ts —— 进程内 runner 循环 + sweeper
 > 修订记录（2026-10-08，阶段 1）：① 同步派发模型——旧端点建任务后进程内 inline 执行（run_task_synchronously），执行器 ApiError 原样透传，锁冲突保持原 409 语义，无需轮询等待；② scope 锁与任务路径锁共享 per-scope 命名锁临界区，双向互斥，过渡期未任务化的操作（encrypt/decrypt/redact/replace）不会与任务并发；③ `get_operation_lock` 折叠路径锁（任一活跃锁即禁用结构操作），细粒度按路径禁用留给阶段 4 的 preflight 接线；④ 锁续租用 `operationLock.ttlSeconds` 单一配置，runner 心跳续租随阶段 2 的传输任务一起启用（纯 DB 任务毫秒级完成，无需续租）；⑤ 前端接线（任务事件订阅、pending 行）不在阶段 1 单独做，并入阶段 4 前端收敛。
 >
 > 修订记录（2026-10-08，阶段 2）：① 上传的命名冲突在**建任务时不再解析**——preflight 只判合法性与给出 `suggested_name`，权威的一次冲突解析发生在 finalize（锁内，见 §6.1）；② 客户端 `sign_batch_size` 由服务端随任务项下发，预签批处理无需试探上限；③ 续传靠 staging key + multipart `list_parts`，`client_id` 只用于「本机可续传」提示（决策 6）；④ 前端 `task-uploader` 取代 Uppy，`@uppy/*` 依赖与旧上传端点（signAttachmentUpload / confirmAttachmentUpload / replaceAttachment）一并删除；`confirm_attachment_upload` 的服务端实现同样删除，其逻辑由 `finalize_transfer_item` 独占；⑤ 粘贴改名不再需要「先入队后改名」的中间态：任务直接以最终名字创建。
+>
+> 修订记录（2026-10-12）：新增 **§13.4 冲突与和谐的 resolve 体系**（决策 8-11）——任何解决冲突的内置行为（suffix/merge/sanitize）一律改为显式 resolve，载体是持久 paused 任务；§6.1「finalize 静默 suffix」随之收紧为「跳过并提示重来」。§13.4 落地前，阶段 2 修订①与 §6.1 描述的现状保持不变。
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
@@ -498,6 +500,58 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
 
 **验收**：Editor.vue ≈ 350 行、Preview.vue 的 script 明显缩小；渲染输出零变化（`render.test.ts` 的全部等价/快照断言不改）；清单完备性守卫能变红。
 
+### 13.4 冲突与和谐的 resolve 体系（待 resolve 状态）
+
+> 状态：**计划，未开工**（2026-10-12 定稿，基线 `main = 9777121` + 阶段 3 落地后的分支）。
+> 准则：**任何解决冲突的内置行为都必须经用户显式 resolve**。resolve 只有两种行为：按内置行为（默认），或跳过。
+
+#### 内置行为清单（现状 → 目标）
+
+| 操作 | 冲突/非法时的内置行为 | 现状 | 目标 |
+|---|---|---|---|
+| 上传撞名 | suffix | 静默（preflight `suggested_name` 直接采用） | 待 resolve |
+| 上传非法名 | sanitize | 静默（pick 边界清洗） | 待 resolve（pick 边界回退，原名上送） |
+| 替换（new-name 撞名） | suffix | 静默（finalize） | 待 resolve |
+| 文件夹改名撞已有文件夹 | merge | 静默（`apply_folder_rename`） | 待 resolve |
+| 移动撞名 | 跳过 | 跳过 | **维持跳过**（决策 8，不进 resolve 体系） |
+| 改名 / 新建文件夹 / 删减版撞名 | 拒绝 | 显式报错 | 不动（本来就是显式的） |
+
+#### 服务端模型：待 resolve 的任务是真实的 paused 任务
+
+决策 10：resolve 的载体是**持久任务**而非建任务前的一次性对话框——paused 任务跨端可见、可在任一设备上解决，后续文件列表下方的任务分组列表直接读它。
+
+1. **建任务时计算 resolve 提供项**（与 preflight 同一份规则代码）：
+   - `upload`：sanitize 会改名 → `sanitize` 项；撞名 → `rename`（suffix）项；硬非法（`.good`、空文件）→ 建任务时直接 `skipped` 带原因。
+   - `replace` new-name 撞名 → `rename` 项；`folder_rename` 目标是已有文件夹 → `merge` 项。
+   - 提供项存放在任务项 `result.resolve = { kind, from, to, reason }`（JSON 列，**无迁移**）。
+2. **有提供项的任务创建为 `paused`**（复用状态机里"等人"的既有语义；runner 不派发 paused）。无提供项的任务照旧创建即 dispatch。
+3. **新端点 `resolveTask`**：`{ task_id, resolutions: [{ item_id, choice: 'apply' | 'skip' }] }`。
+   - `apply`：把内置结果名写回任务项 path 与 payload（path 是 `UNIQUE(task_id, path)` 的键，直接改写）；写回前对照最新 scope 重查，`to` 刚被占则该项 `skipped`（冲突原因，用户重来）。
+   - `skip`：标 `skipped`。
+   - 全部提供项解决后 `paused → queued`，runner 接手。
+4. **finalize 收紧**（决策 9）：upload/replace 落库时名字再次被占 → 不再静默 suffix，该项 `skipped` + 「名字刚被占用，请重新操作」。竞态窗口由路径锁压在 finalize 内，代价是极端情况下重传一次。
+5. **schema**：upload 的 `path` 从 `attachment_path_input` 放宽为非空、限长（1024）字符串——原始名必须能到达服务端才能算出 sanitize 提供项；清洗在 resolve-apply 写回时完成。
+6. legacy 同步包装（move/folder_rename）语义不变；页面改走新流程后 folder_rename 包装闲置，随阶段 4 删除。
+
+#### 前端
+
+7. **行投影**：`PendingTaskRow` 增加 `resolution`（来自 `result.resolve`）；带提供项的行显示「待处理」状态与 resolve 按钮。
+8. **`MyContentResolveDialog`（统一组件）**：三种行态——可 resolve（`按内置行为` 默认 / `跳过`）、只读跳过、纯报告模式（无可 resolve 项时即现 skipped_notice 的形态）。现有 `show_skipped_attachments` 的全部调用点（加密/删除/移动的跳过报告）切到它的只读模式。
+9. **入口流程**（上传/替换/文件夹改名）：`createTask` → 有提供项 → 开对话框 → `resolveTask` → 驱动传输；取消对话框则任务保持 paused，之后（或别的设备）从任务行继续 resolve。
+10. 上传 pick 边界**回退静默 sanitize**（原名原样上送），和谐动作移到 resolve-apply。
+
+#### 测试
+
+- 建任务提供项计算：各 kind × 冲突矩阵（sanitize 改名 / 撞名 suffix / merge / 硬非法直接 skipped）。
+- paused 任务不被 runner 派发；`resolveTask` 的 apply / skip / 新鲜冲突三分支；全部解决后进入派发。
+- finalize 严格拒绝（名字在传输期间被占 → skipped）。
+- 行投影的 resolution 透传；对话框的选择汇总辅助函数（全默认 / 部分跳过 → 最终 resolutions）。
+
+#### 明确不做（本轮）
+
+- 文件列表下方的任务分组列表 UI（持久状态已就位，列表是后续纯前端工作）。
+- move 撞名的 suffix 化（决策 8 排除）。
+
 ## 14. 测试策略（在既有测试规范上追加）
 
 - **锁管理器**：前缀冲突矩阵（文件-祖先-子树）、续租、过期抢占、多任务字典序获取无死锁。
@@ -530,3 +584,7 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
 | 5 | 旧端点 | 阶段 2 前转同步包装，之后**一次性删除** |
 | 6 | 设备标识 | `client_id` 仅作"可续传"提示，不强制同设备 |
 | 7 | 文档与开工 | 先落本文档；**阶段 0 暂缓** |
+| 8 | 移动撞名（2026-10-12） | 维持**跳过**，不进 resolve 体系（撞名是例外，无内置重命名） |
+| 9 | finalize 竞态（2026-10-12） | resolve 后名字再被占 → 该项 **skipped + 提示重来**，不再静默二次 suffix |
+| 10 | resolve 载体（2026-10-12） | **持久 paused 任务**（跨端可见、可续），不是 pre-task 一次性对话框 |
+| 11 | resolve 对话框形态（2026-10-12） | 与 skipped 报告**统一为一个组件**（`MyContentResolveDialog`，三种行态） |

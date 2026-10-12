@@ -102,6 +102,7 @@ pnpm test                # vitest run
 ## 8. 已知遗留与待办
 
 - **阶段 4**（前端收敛）：`edit.vue` 仍有约 2900 行，客户端规则与 preflight 重复；拆分映射与顺序见 §13.2。
+- **resolve 体系**（冲突/和谐的显式确认）：计划见 §13.4（决策 8-11），独立于阶段 4/5，可先做；它会回退 pick 边界的静默 sanitize，并把 finalize 的静默 suffix 收紧为跳过。
 - **阶段 5**（方言清单）：见 §13.3（含"方言其实已大部分单源"的现状核对）。
 - 与重构无关但已记录的风险：`docs/architecture-risks.md` 的高优先级项（OSS 对账任务、删除失败重试、生产错误响应脱敏、MQTT 重连刷新与版本校验、故障注入测试）。
 - 小项：结构类旧端点（move/rename/delete/folder）待阶段 4 把这些入口接上 preflight 后再删；`with_attachment_lock` 已无调用方，是否连 scope 锁机制一起移除在阶段 4 评估。
