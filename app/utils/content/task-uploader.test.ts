@@ -103,6 +103,29 @@ function run(size: number, overrides: Partial<Parameters<typeof upload_task_item
   })
 }
 
+describe('multipart progress events', () => {
+  it('多片交错重复回调按各片累计已发送字节，进度有界且不回退', async () => {
+    const puts: { size: number, progress: (sent: number) => void, finish: () => void }[] = []
+    const uploading = run(16 * MB, {
+      transport: {
+        put: ({ body, on_progress }) => new Promise((resolve) => {
+          puts.push({ size: body.size, progress: on_progress, finish: () => resolve({ etag: 'part-etag' }) })
+        }),
+      },
+    })
+    await vi.waitFor(() => expect(puts).toHaveLength(2))
+    for (const sent of [MB, 2 * MB, 4 * MB, 8 * MB]) {
+      for (const put of puts)
+        put.progress(sent)
+    }
+    puts.forEach(put => put.finish())
+    await uploading
+
+    expect(state.progress).toEqual([0, MB, 2 * MB, 3 * MB, 4 * MB, 6 * MB, 8 * MB, 12 * MB, 16 * MB, 16 * MB, 16 * MB, 16 * MB])
+    expect(state.completed[0]).toHaveLength(2)
+  })
+})
+
 describe('upload_task_item：单次 PUT', () => {
   it('无 multipart 时整文件一次 PUT，并把 ETag 报回完成', async () => {
     state.resume = { staging_key: 'k', upload_id: null, part_size: null, uploaded_parts: [], sign_batch_size: 20 }
@@ -186,6 +209,7 @@ describe('upload_task_item：断点续传', () => {
 
     expect(state.sign_calls).toEqual([[2, 3]])
     expect(state.puts.map(put => put.url)).toEqual(['https://signed/2', 'https://signed/3'])
+    expect(state.progress[0]).toBe(8 * MB)
     // 完成回报要带上全部三片（含先前已上传的），CompleteMultipartUpload 需要完整清单
     expect(state.completed[0]!.map(part => part.part_number)).toEqual([1, 2, 3])
     expect(state.completed[0]![0]!.etag).toBe('existing')
@@ -210,6 +234,83 @@ describe('upload_task_item：断点续传', () => {
 })
 
 describe('upload_task_item：进度与失败', () => {
+  it.each([false, true])('progress failure rejects the upload without completing (multipart=%s)', async (multipart) => {
+    if (! multipart)
+      state.resume = { ... state.resume, upload_id: null, part_size: null }
+    const callbacks = make_callbacks()
+    const failure = new Error('progress failed')
+    callbacks.report_progress.mockImplementation(async (bytes_done) => {
+      if (bytes_done > 0)
+        throw failure
+    })
+
+    await expect(run(1024, { callbacks })).rejects.toBe(failure)
+    expect(callbacks.report_completed).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('handles pending progress rejection after cancellation (multipart=%s)', async (multipart) => {
+    if (! multipart)
+      state.resume = { ... state.resume, upload_id: null, part_size: null }
+    const controller = new AbortController()
+    const callbacks = make_callbacks()
+    let reject_progress: ((error: Error) => void) | undefined
+    callbacks.report_progress.mockImplementation((bytes_done) => {
+      if (bytes_done === 0)
+        return Promise.resolve()
+      return new Promise((_resolve, reject) => {
+        reject_progress = reject
+      })
+    })
+    const aborted = new Error('cancelled')
+    aborted.name = 'AbortError'
+    const uploading = run(1024, {
+      callbacks,
+      signal: controller.signal,
+      transport: {
+        put: ({ signal, on_progress }) => new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(aborted), { once: true })
+          on_progress(512)
+          on_progress(768)
+        }),
+      },
+    })
+    const result = expect(uploading).rejects.toBe(aborted)
+    await vi.waitFor(() => expect(reject_progress).toBeTypeOf('function'))
+    controller.abort()
+    await result
+    reject_progress!(new Error('task cancelled'))
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(callbacks.report_completed).not.toHaveBeenCalled()
+    expect(callbacks.report_progress).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not complete after cancellation during the final progress report', async () => {
+    const controller = new AbortController()
+    const callbacks = make_callbacks()
+    let finish_progress: (() => void) | undefined
+    callbacks.report_progress.mockImplementation((bytes_done) => {
+      if (bytes_done === 0)
+        return Promise.resolve()
+      return new Promise((resolve) => {
+        finish_progress = resolve
+      })
+    })
+    const uploading = run(1024, {
+      callbacks,
+      signal: controller.signal,
+      transport: { put: async () => ({ etag: 'etag' }) },
+      progress_step: 2 * MB,
+    })
+    const result = expect(uploading).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(finish_progress).toBeTypeOf('function'))
+    controller.abort()
+    finish_progress!()
+    await result
+
+    expect(callbacks.report_completed).not.toHaveBeenCalled()
+  })
+
   it('按 progress_step 节流上报，最后一定上报一次全量', async () => {
     await run(20 * MB, { progress_step: 9 * MB })
 

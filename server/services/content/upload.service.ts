@@ -202,7 +202,7 @@ export async function apply_attachment_replace(
     file_name = resolve_attachment_name(
       attachment_path_join(attachment_folder_of(old_file_name), new_name),
       existing,
-      'suffix',
+      'reject',
       old_file_name,
     )
   }

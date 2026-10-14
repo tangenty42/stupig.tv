@@ -1,6 +1,6 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { readdirSync, readFileSync } from 'node:fs'
-import { CONTENT_ATTACHMENT_DENIED_TEXT, CONTENT_IMAGE_DENIED_TEXT } from '@shared/content-markdown'
+import { CONTENT_ATTACHMENT_DENIED_TEXT, CONTENT_IMAGE_DENIED_TEXT, upgrade_legacy_refs } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_DENIED_TEXT, CONTENT_PRIVATE_INLINE_PLACEHOLDER } from '@shared/content-private'
 import { describe, expect, it } from 'vitest'
 import { content_attachment_markdown, content_folder_markdown } from '~/utils/content/attachment-drag'
@@ -48,6 +48,31 @@ function render(markdown: string, list: ContentStoryAttachment[] = attachments, 
 function image_sources(html: string) {
   return [... html.matchAll(/<img[^>]*src="([^"]*)"/g)].map(match => match[1])
 }
+
+describe('explicit reference rendering equivalence', () => {
+  it.each(['![](cards)', '[](cards)', '[说明](cards/notes.txt)', '![](其他/x.png)', '[](@不存在)'])('keeps rendering after upgrading %s', (markdown) => {
+    expect(render(upgrade_legacy_refs(markdown))).toEqual(render(markdown))
+  })
+  it('updates literal source in image alt text while preserving nested caption rendering', () => {
+    const legacy = render('![alt [](cards/notes.txt)](solo.png)')
+    const canonical = render('![alt [](att://cards/notes.txt)](att://solo.png)')
+    expect(canonical.images).toEqual(legacy.images)
+    expect(canonical.html).toBe(legacy.html.replaceAll('alt [](cards/notes.txt)', 'alt [](att://cards/notes.txt)'))
+  })
+  it('retains labeled missing titles as unresolved destinations in the new syntax', () => {
+    const { html } = render('[文字](content://不存在)')
+    expect(html).toContain('href="content://%E4%B8%8D%E5%AD%98%E5%9C%A8"')
+    expect(html).toContain('class="link-card-label">文字</span>')
+  })
+  it('resolves a Chinese content:// title to the same card and labeled link as before', () => {
+    const md = create_story_markdown({
+      story_id: () => 1, attachments: () => [], static_url: path => path,
+      stories: () => [{ id: 2, title: '其他档案', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null, cover: null, cover_label: null, cover_version: null, cover_url: null }],
+      video_card: () => null, folder_card_openable: () => false,
+    })
+    expect(md.render('[](content://其他档案) [说明](content://其他档案)')).toBe(md.render('[](@其他档案) [说明](@其他档案)'))
+  })
+})
 
 describe('folder image expansion', () => {
   it('expands an image reference to a folder into its images', () => {
@@ -328,12 +353,12 @@ describe('folder card activation', () => {
 
 describe('folder markdown shorthand', () => {
   it('copies the plain link form, with no image prefix', () => {
-    expect(content_folder_markdown('cards')).toBe('[](cards)')
+    expect(content_folder_markdown('cards')).toBe('[](att://cards)')
     expect(content_folder_markdown('cards')).not.toContain('!')
   })
 
   it('keeps a nested path intact', () => {
-    expect(content_folder_markdown('cards/sub')).toBe('[](cards/sub)')
+    expect(content_folder_markdown('cards/sub')).toBe('[](att://cards/sub)')
   })
 
   it('is the same shape a non-image file link uses', () => {

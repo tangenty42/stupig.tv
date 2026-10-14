@@ -1,3 +1,4 @@
+import { upgrade_legacy_refs } from '@shared/content-markdown'
 import { settings } from '@shared/settings'
 import { defineStore } from 'pinia'
 
@@ -6,6 +7,8 @@ export interface ContentDraftRecord {
   story_id: number | null
   markdown: string
   base_revision: number | null
+  base_namespace_revision?: number | null
+  base_title_revision?: number | null
   saved_at: string
 }
 
@@ -23,6 +26,8 @@ function is_draft_record(value: unknown, story_id: number | null, schema_version
     && typeof draft.markdown === 'string'
     && (typeof draft.base_revision === 'number' || draft.base_revision === null)
     && typeof draft.saved_at === 'string'
+    && (draft.base_namespace_revision === undefined || draft.base_namespace_revision === null || (Number.isSafeInteger(draft.base_namespace_revision) && draft.base_namespace_revision >= 0))
+    && (draft.base_title_revision === undefined || draft.base_title_revision === null || (Number.isSafeInteger(draft.base_title_revision) && draft.base_title_revision >= 0))
 }
 
 /**
@@ -44,6 +49,8 @@ function create_draft_state(target_story_id: number | null) {
   const markdown = ref('')
   const database_markdown = ref('')
   const base_revision = ref<number | null>(null)
+  const base_namespace_revision = ref<number | null>(null)
+  const base_title_revision = ref<number | null>(null)
   const draft_saved_at = ref<string | null>(null)
   const initialized = ref(false)
   const autosave_pending = ref(false)
@@ -89,6 +96,23 @@ function create_draft_state(target_story_id: number | null) {
       if (is_draft_record(parsed, target_story_id, draft_schema_version)) {
         return parsed
       }
+      if (draft_schema_version === 3 && is_draft_record(parsed, target_story_id, 2)) {
+        const upgraded: ContentDraftRecord = {
+          ... parsed,
+          schema_version: draft_schema_version,
+          markdown: upgrade_legacy_refs(parsed.markdown),
+          base_namespace_revision: null,
+          base_title_revision: null,
+        }
+        // Return the recovered draft even if browser storage is full.
+        try {
+          localStorage.setItem(storage_key, JSON.stringify(upgraded))
+        }
+        catch {
+          storage_error.value = true
+        }
+        return upgraded
+      }
 
       localStorage.removeItem(storage_key)
     }
@@ -115,6 +139,8 @@ function create_draft_state(target_story_id: number | null) {
       story_id: target_story_id,
       markdown: markdown.value,
       base_revision: base_revision.value,
+      base_namespace_revision: base_namespace_revision.value,
+      base_title_revision: base_title_revision.value,
       saved_at,
     }
 
@@ -151,9 +177,11 @@ function create_draft_state(target_story_id: number | null) {
 
   function initialize(current_markdown: string, current_revision: number | null) {
     clear_timer()
-    markdown.value = current_markdown
-    database_markdown.value = current_markdown
+    markdown.value = upgrade_legacy_refs(current_markdown)
+    database_markdown.value = markdown.value
     base_revision.value = current_revision
+    base_namespace_revision.value = null
+    base_title_revision.value = null
     draft_saved_at.value = null
     storage_error.value = false
     initialized.value = true
@@ -161,24 +189,26 @@ function create_draft_state(target_story_id: number | null) {
 
   function restore(draft: ContentDraftRecord, current_markdown: string, current_revision = draft.base_revision) {
     clear_timer()
-    markdown.value = draft.markdown
-    database_markdown.value = current_markdown
+    markdown.value = upgrade_legacy_refs(draft.markdown)
+    database_markdown.value = upgrade_legacy_refs(current_markdown)
     base_revision.value = current_revision
+    base_namespace_revision.value = draft.base_namespace_revision ?? null
+    base_title_revision.value = draft.base_title_revision ?? null
     draft_saved_at.value = draft.saved_at
     storage_error.value = false
     initialized.value = true
   }
 
   function advance_base(current_markdown: string, current_revision: number) {
-    database_markdown.value = current_markdown
+    database_markdown.value = upgrade_legacy_refs(current_markdown)
     base_revision.value = current_revision
     schedule_persist()
   }
 
   function mark_saved(current_markdown: string, current_revision: number) {
     clear_timer()
-    markdown.value = current_markdown
-    database_markdown.value = current_markdown
+    markdown.value = upgrade_legacy_refs(current_markdown)
+    database_markdown.value = markdown.value
     base_revision.value = current_revision
     remove_persisted()
   }
@@ -194,6 +224,8 @@ function create_draft_state(target_story_id: number | null) {
   return {
     markdown,
     base_revision,
+    base_namespace_revision,
+    base_title_revision,
     draft_saved_at,
     initialized,
     autosave_pending,

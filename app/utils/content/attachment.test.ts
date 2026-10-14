@@ -53,14 +53,13 @@ describe('attachment_leading_action', () => {
 })
 
 describe('attachment_pick_from_file', () => {
-  // The pick is where local filesystem names enter the app: they are harmonized
-  // by the shared rule so the list shows exactly the name the server stores.
-  it('strips characters the stored-name rule cannot carry', () => {
+  // Raw names must reach the server intact so sanitize is an explicit resolve.
+  it('preserves spaces and punctuation for server-side resolve', () => {
     const pick = attachment_pick_from_file(new File([new Uint8Array(1)], 'Thomas’ Calculus in SI Units, 14th Edition.pdf'))
-    expect(pick.file_name).toBe('Thomas’CalculusinSIUnits,14thEdition.pdf')
+    expect(pick.file_name).toBe('Thomas’ Calculus in SI Units, 14th Edition.pdf')
   })
 
-  it('lowercases the extension like the stored name does', () => {
-    expect(attachment_pick_from_file(new File([new Uint8Array(1)], '照片 2026.PNG')).file_name).toBe('照片2026.png')
+  it('preserves the local extension case until resolve', () => {
+    expect(attachment_pick_from_file(new File([new Uint8Array(1)], '照片 2026.PNG')).file_name).toBe('照片 2026.PNG')
   })
 })

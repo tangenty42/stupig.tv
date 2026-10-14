@@ -7,9 +7,9 @@ import { acquire_path_locks, release_path_locks, release_task_locks, renew_task_
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { settings } from '@shared/settings'
 import { discard_task_staging, execute_task, task_lock_paths } from './task-operations.service'
-import { delete_finished_task, get_task, heartbeat_task, is_terminal_task_status, list_expired_tasks, list_queued_tasks, publish_task_state, transition_task } from './task.service'
+import { delete_finished_task, get_task, heartbeat_task, is_terminal_task_status, list_expired_tasks, list_queued_tasks, pause_task_if_all_items_paused, publish_task_state, transition_task } from './task.service'
 /**
- * The attachment task runner (docs/content-task-refactor.md §5): an in-process
+ * The attachment task runner (docs/old/content-task-refactor.md §5): an in-process
  * loop that dispatches queued tasks FIFO. Tasks hold path locks for their
  * whole execution; a contended task stays queued and is retried on the next
  * tick — it is never failed for contention inside the timeout window.
@@ -102,6 +102,7 @@ export async function dispatch_task(task_id: number) {
   if (! acquired.acquired)
     return
   let completed = false
+  let paused = false
   const heartbeat = heartbeat_executed_kinds.includes(task.kind)
     ? start_execution_heartbeat(task, paths.length)
     : null
@@ -119,6 +120,10 @@ export async function dispatch_task(task_id: number) {
     if (outcome.complete) {
       await transition_task(task.id, 'done')
       completed = true
+    }
+    else if (outcome.pause) {
+      await transition_task(task.id, 'paused')
+      paused = true
     }
     // Not complete: a transfer task stays running with its locks held.
   }
@@ -151,6 +156,12 @@ export async function dispatch_task(task_id: number) {
     publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
     return
   }
+  if (paused) {
+    await release_task_locks(task.scope_id, task.id).catch(() => {})
+    publish_refresh({ resource: sync_resource('content_story_tasks', task.scope_id) })
+    await publish_task_state(task.id)
+    return
+  }
   // A transfer task now waits on the client: a snapshot reports its active
   // items without turning every dispatch into a refetch.
   await publish_task_state(task.id)
@@ -167,6 +178,14 @@ export async function complete_task_if_finished(task_id: number) {
   const current = await get_task(task_id)
   if (! current || current.task.status !== 'running')
     return false
+  const waiting = current.items.filter(item => ['pending', 'active'].includes(item.status) && ! item.superseded_at)
+  if (waiting.length && waiting.every(item => item.paused_at)) {
+    if (await pause_task_if_all_items_paused(task_id)) {
+      publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
+      await publish_task_state(task_id)
+    }
+    return false
+  }
   const unfinished = current.items.some(item => item.status === 'pending' || item.status === 'active')
   if (unfinished)
     return false

@@ -86,9 +86,10 @@ const existing_path_input = z.string().trim().min(1).max(255)
 const task_payload_schemas = {
   upload: z.object({
     uploads: z.array(z.object({
-      // The client's desired path; the server settles the final name at finalize.
-      path: attachment_path_input,
-      size: z.number().int().min(1).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
+      // Raw filesystem paths must reach preflight so sanitize becomes explicit.
+      path: z.string().min(1, '文件名不能为空').max(255),
+      source_file_name: z.string().min(1).max(255).optional(),
+      size: z.number().int().min(0).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
       mime_type: z.string().max(127).nullable(),
       insert_position: z.number().int().min(0).nullish(),
     })).min(1).max(200),
@@ -100,9 +101,10 @@ const task_payload_schemas = {
   replace: z.object({
     old_file_name: z.string().min(1).max(255),
     mode: z.enum(['keep-name', 'new-name']),
-    size: z.number().int().min(1).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
+    size: z.number().int().min(0).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
     mime_type: z.string().max(127).nullable(),
-    file_name: attachment_path_input,
+    file_name: z.string().min(1, '文件名不能为空').max(255),
+    source_file_name: z.string().min(1).max(255).optional(),
     content_type: z.string().max(255).nullable(),
   }),
   move: z.object({
@@ -258,7 +260,7 @@ export const api_schema = {
       source_folder: existing_path_input,
       new_folder: folder_path_input.unwrap(),
     }),
-    // 任务队列（docs/content-task-refactor.md §7）。payload 按 kind 分别校验，
+    // 任务队列（docs/old/content-task-refactor.md §7）。payload 按 kind 分别校验，
     // 复用各操作的字段规则，避免请求层与服务层漂移。
     preflight_task: z.object({
       story_id: z.coerce.number().int().positive(),
@@ -270,22 +272,34 @@ export const api_schema = {
       kind: task_kind_input,
       payload: z.record(z.string(), z.unknown()),
       client_id: z.string().max(64).nullish(),
-    }).superRefine(refine_task_payload)
-      // Task items are keyed by path, so a created batch has to arrive with
-      // distinct plans: preflightTask hands back `suggested_name` for the
-      // client to apply rather than letting two files collide on one item.
-      .superRefine((value, ctx) => {
-        if (value.kind !== 'upload')
-          return
-        const uploads = (value.payload as { uploads?: { path: string }[] }).uploads ?? []
-        if (new Set(uploads.map(entry => entry.path)).size !== uploads.length)
-          ctx.addIssue({ code: 'custom', message: '同一批次存在同名文件，请先处理重名', path: ['payload', 'uploads'] })
-      }),
+    }).superRefine(refine_task_payload),
     cancel_task: z.object({
       task_id: z.coerce.number().int().positive(),
     }),
     resume_task: z.object({
       task_id: z.coerce.number().int().positive(),
+    }),
+    pause_task_item: z.object({
+      task_id: z.coerce.number().int().positive(),
+      item_id: z.coerce.number().int().positive(),
+    }),
+    continue_task_item: z.object({
+      task_id: z.coerce.number().int().positive(),
+      item_id: z.coerce.number().int().positive(),
+    }),
+    retry_task_item: z.object({
+      task_id: z.coerce.number().int().positive(),
+      item_id: z.coerce.number().int().positive(),
+      source_file_name: z.string().min(1).max(255),
+      size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+      client_id: z.string().max(64).nullish(),
+    }),
+    resolve_task: z.object({
+      task_id: z.coerce.number().int().positive(),
+      resolutions: z.array(z.object({
+        item_id: z.coerce.number().int().positive(),
+        choice: z.enum(['apply', 'skip']),
+      })).min(1).max(500),
     }),
     list_scope_tasks: z.object({
       story_id: z.coerce.number().int().positive(),

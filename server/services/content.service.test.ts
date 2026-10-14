@@ -1,8 +1,10 @@
 import type { AuthUser } from '@server/types/auth'
+import type { Connection } from 'mysql2/promise'
 import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { encrypt_attachment } from '@server/lib/attachment-crypto'
 import { attachment_name_conflict_message } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_DENIED_TEXT } from '@shared/content-private'
+import { settings } from '@shared/settings'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -72,12 +74,12 @@ const task_sim = vi.hoisted(() => {
   function handle(sql: string, params: unknown[]): unknown[] | null {
     if (sql.includes('INSERT INTO content_tasks')) {
       const id = next_task_id ++
-      tasks.push({ id, scope_id: Number(params[0]), kind: String(params[1]), status: 'queued', payload: String(params[2]), actor_id: params[3] as number | null, client_id: params[4] as string | null, error: null })
+      tasks.push({ id, scope_id: Number(params[0]), kind: String(params[1]), status: String(params[2]), payload: String(params[3]), actor_id: params[4] as number | null, client_id: params[5] as string | null, error: null })
       return [{ insertId: id }]
     }
     if (sql.includes('INSERT INTO content_task_items')) {
       const id = next_item_id ++
-      items.push({ id, task_id: Number(params[0]), path: String(params[1]), action: String(params[2]), status: 'pending', bytes_done: 0, bytes_total: Number(params[3] ?? 0), staging_key: null, upload_id: null, part_size: null, result: null })
+      items.push({ id, task_id: Number(params[0]), path: String(params[1]), action: String(params[2]), status: String(params[3]), bytes_done: 0, bytes_total: Number(params[4] ?? 0), staging_key: null, upload_id: null, part_size: null, result: params[5] === null ? null : String(params[5]) })
       return [{ affectedRows: 1 }]
     }
     if (sql.includes('FROM content_tasks WHERE id ='))
@@ -170,9 +172,55 @@ vi.mock('@server/lib/sync', async () => ({
 
 const { apply_abridged_attachment, apply_attachment_replace, create_folder, get_story, move_attachment, move_attachments, move_folder, rename_attachment, sign_attachment_download } = await import('@server/services/content.service')
 const { execute_task } = await import('@server/services/content/task-operations.service')
+const { rewrite_story_attachment_refs } = await import('@server/services/content/attachment-structure.service')
+const { create_story, update_story } = await import('@server/services/content/story.service')
 
 beforeEach(() => {
   task_sim.reset()
+})
+
+describe('reference syntax at service entry points', () => {
+  it('upgrades old client saves during compatibility before writing the story', async () => {
+    mocks.db_execute.mockImplementation(async (sql: string) => sql.startsWith('INSERT') ? [{ insertId: 3 }] : [[]])
+    const markdown = '---\ntitle: 测试\ntime: 2026/10/14\ncover: ![](cover.jpg)\n---\n![](old.png)'
+    await create_story(1, markdown, true)
+    const insert = mocks.db_execute.mock.calls.find(([sql]) => String(sql).startsWith('INSERT INTO content_stories'))!
+    expect(insert[1]).toContain(markdown.replace('![](cover.jpg)', '![](att://cover.jpg)').replace('![](old.png)', '![](att://old.png)'))
+    expect(insert[1]).toContain('cover.jpg')
+  })
+  it('rejects legacy references with structured line numbers before database writes when compatibility is off', async () => {
+    mocks.db_execute.mockClear()
+    const original = settings.app.content.reference.legacyCompat
+    settings.app.content.reference.legacyCompat = false
+    try {
+      const markdown = '---\ntitle: 测试\ntime: 2026/10/14\n---\n[](old.png)\n[](@其他档案)'
+      await expect(update_story(1, markdown, [], 2, true)).rejects.toMatchObject({
+        statusCode: 400, public_data: { code: 'LEGACY_REF', details: { lines: [5, 6] } },
+      })
+      expect(mocks.db_execute).not.toHaveBeenCalled()
+    }
+    finally {
+      settings.app.content.reference.legacyCompat = original
+    }
+  })
+})
+
+describe('transactional attachment reference rewrites', () => {
+  it('does not chain mappings inside one batch, and maps cover from its original path', async () => {
+    const execute = vi.fn(async (sql: string, _params?: unknown[]) => sql.startsWith('SELECT') ? [[{ markdown: '[](att://X/n) [](att://Y/n)', cover: 'X/n' }]] : [{ affectedRows: 1 }])
+    await rewrite_story_attachment_refs({ execute } as unknown as Connection, 1, [
+      { old_file_name: 'X/n', new_file_name: 'Y/n' }, { old_file_name: 'Y/n', new_file_name: 'Z/n' },
+    ])
+    expect(execute.mock.calls[1]).toEqual([
+      'UPDATE content_stories SET markdown = ?, cover = ?, revision = revision + 1 WHERE id = ?',
+      ['[](att://Y/n) [](att://Z/n)', 'Y/n', 1],
+    ])
+  })
+  it('rewrites folder cards and descendants in the stored document', async () => {
+    const execute = vi.fn(async (sql: string, _params?: unknown[]) => sql.startsWith('SELECT') ? [[{ markdown: '[](att://cards) ![](att://cards/a.png) [](att://cards2)', cover: 'cards/a.png' }]] : [{ affectedRows: 1 }])
+    await rewrite_story_attachment_refs({ execute } as unknown as Connection, 1, [{ old_file_name: 'cards', new_file_name: 'gallery', is_folder: true }])
+    expect(execute.mock.calls[1]?.[1]).toEqual(['[](att://gallery) ![](att://gallery/a.png) [](att://cards2)', 'gallery/a.png', 1])
+  })
 })
 
 function stub_story_row(story_id: number, markdown = '') {

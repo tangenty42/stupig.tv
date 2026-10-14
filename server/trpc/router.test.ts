@@ -2,6 +2,7 @@ import type { AuthUser } from '@server/types/auth'
 import type { H3Event } from 'h3'
 import { ApiError } from '@server/errors/ApiError'
 import { public_procedure, router } from '@server/trpc/init'
+import { getTRPCErrorShape, TRPCError } from '@trpc/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const auth_mocks = vi.hoisted(() => ({
@@ -95,6 +96,20 @@ describe('tRPC router contracts', () => {
     await expect(caller.content.getStory({ id: 0 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
+  })
+
+  it('serializes only validated application error metadata from ApiError', () => {
+    const shape = (cause: Error) => getTRPCErrorShape({
+      config: app_router._def._config,
+      error: new TRPCError({ code: 'BAD_REQUEST', message: 'error', cause }),
+      type: 'mutation', path: 'content.updateStory', input: undefined, ctx: { event: create_event() },
+    })
+    const public_data = { code: 'LEGACY_REF' as const, details: { lines: [5, 6] } }
+    expect(shape(new ApiError(400, '旧引用', public_data)).data.applicationError).toEqual(public_data)
+    // A lookalike internal error cannot smuggle its SQL/metadata through the formatter.
+    expect(shape(Object.assign(new Error('internal'), { public_data })).data.applicationError).toBeUndefined()
+    const unsafe = Object.assign(new ApiError(400, 'expected'), { public_data: { ... public_data, details: { lines: [5], sql: 'private SQL' } } })
+    expect(shape(unsafe).data.applicationError).toBeUndefined()
   })
 
   it.each([

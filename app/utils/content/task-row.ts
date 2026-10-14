@@ -1,9 +1,30 @@
-import type { ContentTaskItemStatus, ContentTaskKind } from '@shared/types/content'
+import type { ContentTaskItem, ContentTaskItemStatus, ContentTaskKind, ContentTaskResolution, ContentTaskStatus } from '@shared/types/content'
 import type { AttachmentFileCardData, AttachmentUploadStatus } from './attachment'
+import { attachment_base_name } from '@shared/content-markdown'
+
+export interface ContentTaskResolveDialogItem {
+  name: string
+  reason?: string
+  item_id?: number
+  resolution?: ContentTaskResolution | null
+}
+
+/** A skipped resolve keeps its synthetic storage path; reports show the user's original name. */
+export function task_item_display_name(item: Pick<ContentTaskItem, 'path' | 'result'>) {
+  const resolution = (item.result?.resolve ?? item.result?.resolution) as ContentTaskResolution | undefined
+  return resolution?.from ?? item.path
+}
+
+/** Reports have no choices; every undecided resolvable item defaults to skip. */
+export function task_resolution_choices(items: readonly ContentTaskResolveDialogItem[], choices: ReadonlyMap<number, 'apply' | 'skip'> = new Map()) {
+  return items.flatMap(item => item.resolution && item.item_id !== undefined
+    ? [{ item_id: item.item_id, choice: choices.get(item.item_id) ?? 'skip' }]
+    : [])
+}
 
 /**
  * One row of a live task — the projection the attachment list renders
- * (docs/content-task-refactor.md §11). Everything the server owns is copied
+ * (docs/old/content-task-refactor.md §11). Everything the server owns is copied
  * straight from the task item; only genuinely local things (`is_driving`,
  * `speed`) are added by the store.
  */
@@ -12,8 +33,11 @@ export interface PendingTaskRow {
   item_id: number
   /** The path the item plans to land on; the final name may differ (suffix). */
   path: string
+  /** Original local source name; destination suffix/sanitize must not change the resume picker. */
+  source_file_name: string | null
   /** The task's kind and the item's action (upload / replace / redact / encrypt…). */
   kind: ContentTaskKind
+  task_status: ContentTaskStatus
   action: string
   /** Whether this item waits on client bytes; the rest run on the server. */
   is_transfer: boolean
@@ -23,6 +47,8 @@ export interface PendingTaskRow {
   mime_type: string | null
   /** Local-only: this client is pushing this item's bytes right now. */
   is_driving: boolean
+  /** This page explicitly stopped its transfer; retained bytes are not activity. */
+  is_paused?: boolean
   /** Local-only: measured transfer rate in bytes per second, 0 when idle. */
   speed: number
   /**
@@ -32,11 +58,17 @@ export interface PendingTaskRow {
   can_resume: boolean
   /** Failure text from the task or the item. */
   error: string | null
+  /** A durable built-in decision the user still needs to apply or skip. */
+  resolution: ContentTaskResolution | null
+}
+
+export function pending_upload_source_name(row: PendingTaskRow) {
+  return row.source_file_name ?? attachment_base_name(row.path)
 }
 
 /** An item whose bytes the server moves itself has no percentage to report. */
 export function pending_task_indeterminate(row: PendingTaskRow) {
-  return ! row.is_transfer && (row.status === 'pending' || row.status === 'active')
+  return ! row.resolution && ! row.is_transfer && (row.status === 'pending' || row.status === 'active')
 }
 
 /**
@@ -49,6 +81,14 @@ export function pending_task_indeterminate(row: PendingTaskRow) {
  * the moment it is queued: there is no client-side pause for it.
  */
 export function pending_upload_status(row: PendingTaskRow): AttachmentUploadStatus {
+  if (row.status === 'skipped')
+    return 'completed'
+  if (row.resolution)
+    return 'queued'
+  if (row.is_paused && row.is_transfer && row.status === 'active')
+    return 'paused'
+  if (row.task_status === 'paused')
+    return 'queued'
   switch (row.status) {
     case 'pending':
       return pending_task_indeterminate(row) ? 'uploading' : 'queued'
@@ -57,8 +97,7 @@ export function pending_upload_status(row: PendingTaskRow): AttachmentUploadStat
     case 'done':
       return 'completed'
     default:
-      // 'failed' (the task or the sweeper gave up) and 'skipped' (the server
-      // refused this file) both land on the retryable error row.
+      // Only failures have a retryable error row; skipped items are report-only.
       return 'error'
   }
 }
@@ -73,6 +112,8 @@ export function pending_upload_percent(row: PendingTaskRow) {
 
 /** The status line of a server-executed item — no bytes, no rate, just the verb. */
 function pending_task_label(row: PendingTaskRow) {
+  if (row.resolution)
+    return '待处理名称'
   switch (row.kind) {
     case 'encrypt':
       return '加密中'
@@ -97,7 +138,8 @@ export function pending_upload_card(row: PendingTaskRow): AttachmentFileCardData
     message: row.error,
     can_resume: row.can_resume,
     indeterminate,
-    pending_label: indeterminate ? pending_task_label(row) : null,
+    pending_label: row.is_paused && row.is_transfer ? null : row.resolution ? '待处理' : row.task_status === 'paused' ? '等待名称处理' : indeterminate ? pending_task_label(row) : null,
     server_side: ! row.is_transfer,
+    resolution: row.resolution,
   }
 }

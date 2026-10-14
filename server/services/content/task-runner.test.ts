@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   transitioned: [] as { id: number, to: string }[],
   transition_error_once: false,
   execute_incomplete: false,
+  execute_pause: false,
   expired: [] as number[],
   delete_claimed: true,
   deleted: [] as number[],
@@ -63,6 +64,11 @@ function make_task(id: number, status = 'queued', kind = 'move'): ContentTaskWit
 }
 
 vi.mock('@server/services/content/task.service', () => ({
+  pause_task_if_all_items_paused: vi.fn(async (id: number) => {
+    const entry = state.tasks.get(id)!
+    entry.task.status = 'paused'
+    return true
+  }),
   get_task: vi.fn(async (id: number) => state.tasks.get(id) ?? null),
   list_queued_tasks: vi.fn(async () => [... state.tasks.values()].filter(entry => entry.task.status === 'queued')),
   transition_task: vi.fn(async (id: number, to: string, patch?: { error?: string | null }) => {
@@ -108,7 +114,7 @@ vi.mock('@server/services/content/task-operations.service', () => ({
     if (state.execute_error)
       throw state.execute_error
     // 传输类任务返回 complete: false（留给客户端回报），默认按纯 DB 任务处理
-    return { complete: state.execute_incomplete !== true }
+    return { complete: state.execute_incomplete !== true && state.execute_pause !== true, pause: state.execute_pause }
   }),
 }))
 
@@ -141,7 +147,17 @@ vi.mock('@server/lib/log', () => ({ log_error: vi.fn(), log_info: vi.fn(), log_w
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ app: { content: { task: { sweepIntervalSeconds: 60, queuedTimeoutSeconds: 300 } } } }) }))
 vi.mock('@server/lib/db', () => ({ db: { execute: vi.fn(async () => [[]]) } }))
 
-const { dispatch_task, run_task_synchronously, run_task_tick } = await import('@server/services/content/task-runner.service')
+const { complete_task_if_finished, dispatch_task, run_task_synchronously, run_task_tick } = await import('@server/services/content/task-runner.service')
+
+describe('paused sibling completion', () => {
+  it('最后一个运行项完成后，剩余暂停项使任务暂停而非失败或完成', async () => {
+    const entry = make_task(7, 'running', 'upload')
+    entry.items = [{ ... entry.items[0]!, status: 'active', paused_at: '2026-10-13T06:00:00Z' }, { ... entry.items[0]!, id: 71, status: 'done' }]
+    state.tasks.set(7, entry)
+    expect(await complete_task_if_finished(7)).toBe(false)
+    expect(entry.task.status).toBe('paused')
+  })
+})
 
 beforeEach(() => {
   state.tasks = new Map()
@@ -159,6 +175,7 @@ beforeEach(() => {
   state.transitioned = []
   state.transition_error_once = false
   state.execute_incomplete = false
+  state.execute_pause = false
   state.expired = []
   state.delete_claimed = true
   state.deleted = []
@@ -190,6 +207,18 @@ describe('dispatch_task', () => {
     // 锁不释放：上传任务的全部主张就建立在这些路径锁上
     expect(state.lock_released).toEqual([])
     expect(state.tasks.get(1)?.task.status).toBe('running')
+  })
+
+  it('prepare 要求 resolve 时转 paused、释放旧路径锁并发布持久状态', async () => {
+    state.tasks.set(1, make_task(1, 'queued', 'upload'))
+    state.execute_pause = true
+
+    await dispatch_task(1)
+
+    expect(state.tasks.get(1)?.task.status).toBe('paused')
+    expect(state.transitioned.map(entry => entry.to)).toEqual(['running', 'paused'])
+    expect(state.lock_released).toEqual([[42, 1]])
+    expect(state.published).toEqual(['content_story_tasks:42'])
   })
 
   it('锁冲突时留在队列，不执行、不改状态', async () => {

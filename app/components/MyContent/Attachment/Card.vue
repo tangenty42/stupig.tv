@@ -46,6 +46,20 @@
             <template v-else-if="row_progress_text">{{ row_progress_text }}</template>
             <template v-else>{{ format_bytes(file_row.file_size) }}</template>
           </span>
+          <Button
+            v-if="upload?.resolution"
+            v-tooltip.top="'处理名称'"
+            class="h-7 w-7 shrink-0 p-0"
+            rounded
+            severity="secondary"
+            text
+            aria-label="处理名称"
+            @click.stop="emit('resolve')"
+          >
+            <template #icon>
+              <MyIcon name="lucide:arrow-left-right" />
+            </template>
+          </Button>
         </div>
 
         <div v-if="upload && upload.status !== 'error'" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -110,6 +124,7 @@ const emit = defineEmits<{
   'decrypt': [event: MouseEvent]
   'delete': [event: MouseEvent]
   'retry': []
+  'resolve': []
   'pause': []
   'cancel': [event: MouseEvent]
   'remove': [event: MouseEvent]
@@ -417,6 +432,13 @@ const menu_items = computed<AttachmentMenuItem[]>(() => {
   const task = upload.value
   if (! task)
     return []
+  if (task.resolution) {
+    return [
+      { label: '处理名称', icon_name: 'lucide:arrow-left-right', command: () => emit('resolve') },
+      { separator: true },
+      { label: '取消任务', icon_name: 'lucide:x', command: () => emit('cancel', row_anchor_event()) },
+    ]
+  }
   // A server-executed row (encrypt/decrypt) is the runner's business: it cannot
   // be paused or retried from here, only cancelled while it runs.
   if (task.server_side) {
@@ -441,7 +463,8 @@ const menu_items = computed<AttachmentMenuItem[]>(() => {
     items.push({ label: '重试上传', icon_name: 'lucide:rotate-cw', disabled: state.value.retry_disabled, command: () => emit('retry') })
   }
   if (task.status === 'uploading') {
-    items.push({ label: '暂停上传', icon_name: 'lucide:pause', command: () => emit('pause') })
+    const is_driving = props.row.item?.kind === 'upload' && props.row.item.row.is_driving
+    items.push({ label: is_driving ? '暂停上传' : '继续上传', icon_name: is_driving ? 'lucide:pause' : 'lucide:play', command: () => emit('pause') })
     items.push({ label: '取消上传', icon_name: 'lucide:x', command: () => emit('cancel', row_anchor_event()) })
   }
   else if (task.status === 'queued') {

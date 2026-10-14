@@ -40,6 +40,7 @@ export const settings_schema = z.strictObject({
       }),
       link: z.strictObject({ fileNameMaxBytes: positive_integer.max(255) }),
       draft: z.strictObject({ schemaVersion: positive_integer, storagePrefix: identifier, autosaveDelayMs: positive_integer }),
+      reference: z.strictObject({ legacyCompat: z.boolean() }),
       upload: z.strictObject({
         handleStorageName: identifier,
         partSizeMb: positive_integer.min(5),

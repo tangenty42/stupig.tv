@@ -217,7 +217,7 @@ export function useApi() {
       return trpc_call(trpc.content.moveFolder.mutate({ id, source_folder, new_folder }))
     },
 
-    /* ---- 附件任务队列（docs/content-task-refactor.md §7）---- */
+    /* ---- 附件任务队列（docs/old/content-task-refactor.md §7）---- */
 
     async preflight_task(story_id: number, kind: ContentTaskKind, payload: Record<string, unknown>) {
       return trpc_call(trpc.content.preflightTask.query({ story_id, kind: kind as 'upload', payload }))
@@ -233,6 +233,22 @@ export function useApi() {
 
     async resume_task(task_id: number) {
       return trpc_call(trpc.content.resumeTask.mutate({ task_id }))
+    },
+
+    async pause_task_item(task_id: number, item_id: number) {
+      return trpc_call(trpc.content.pauseTaskItem.mutate({ task_id, item_id }))
+    },
+
+    async continue_task_item(task_id: number, item_id: number) {
+      return trpc_call(trpc.content.continueTaskItem.mutate({ task_id, item_id }))
+    },
+
+    async retry_task_item(task_id: number, item_id: number, source_file_name: string, size: number, client_id: string | null) {
+      return trpc_call(trpc.content.retryTaskItem.mutate({ task_id, item_id, source_file_name, size, client_id }))
+    },
+
+    async resolve_task(task_id: number, resolutions: { item_id: number, choice: 'apply' | 'skip' }[]) {
+      return trpc_call(trpc.content.resolveTask.mutate({ task_id, resolutions }))
     },
 
     async list_scope_tasks(story_id: number) {

@@ -290,7 +290,7 @@ watch(fullscreen, async (active) => {
 
 const search = useMarkdownSearch(() => view)
 
-const get_lint_config = () => story_lint_config(settings.app.content.story, props.stories, props.storyId)
+const get_lint_config = () => story_lint_config(settings.app.content.story, props.stories, props.storyId, props.attachments, props.folders)
 
 const lint_source = create_markdown_lint(get_lint_config, (items) => {
   if (! view) {
@@ -406,7 +406,7 @@ watch(model, (value) => {
   }
 })
 
-watch(() => props.stories, () => {
+watch([() => props.stories, () => props.attachments, () => props.folders], () => {
   // Re-run duplicate-title / dead-reference lints when the story list changes (e.g. after a sync refresh).
   if (view) {
     refresh_markdown_lint(view)
@@ -604,20 +604,56 @@ function on_overlay_drop(event: DragEvent) {
   @apply rounded-sm overflow-hidden border border-slate-200 bg-white text-xs text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200;
 }
 
-:deep(.cm-tooltip-autocomplete) {
-  @apply p-1;
+:deep(.cm-tooltip.cm-tooltip-autocomplete) {
+  background: var(--p-contextmenu-background);
+  color: var(--p-contextmenu-color);
+  border-color: var(--p-contextmenu-border-color);
+  border-radius: var(--p-contextmenu-border-radius);
+  box-shadow: var(--p-contextmenu-shadow);
+  display: flex;
+  flex-direction: column;
+  max-height: 20em;
+  overflow: hidden;
+  padding: 0;
 }
 
-:deep(.cm-tooltip-autocomplete > ul > li) {
-  @apply flex items-center gap-1.5 rounded-sm px-2 py-1 transition-colors;
+/* Separate clipping from scrolling: the tooltip clips the native scrollbar
+   to its rounded border, and its unpadded list owns the scroll area. */
+:deep(.cm-tooltip.cm-tooltip-autocomplete > ul) {
+  min-height: 0;
+  max-height: inherit;
+  height: auto;
+  overflow: hidden auto;
+  padding: 0;
 }
 
-:deep(.cm-tooltip-autocomplete > ul > li:not([aria-selected]):hover) {
-  @apply bg-slate-100 dark:bg-slate-700/60;
+:deep(.cm-tooltip-autocomplete > ul > li[role='option']) {
+  @apply flex items-center transition-colors;
+  gap: var(--p-contextmenu-item-gap);
+  margin: var(--p-contextmenu-list-padding);
+  padding: var(--p-contextmenu-item-padding);
+  border-radius: var(--p-contextmenu-item-border-radius);
 }
 
-:deep(.cm-tooltip-autocomplete > ul > li[aria-selected]) {
-  @apply bg-primary dark:bg-primary-700 text-white dark:text-white;
+:deep(.cm-tooltip-autocomplete > ul > li[role='option']:hover),
+:deep(.cm-tooltip-autocomplete > ul > li[aria-selected='true']) {
+  background: var(--p-contextmenu-item-focus-background);
+  color: var(--p-contextmenu-item-focus-color);
+}
+
+:deep(.cm-tooltip.cm-tooltip-autocomplete > ul > completion-section) {
+  @apply text-xs font-normal;
+  font-style: normal;
+  opacity: 1;
+  background: var(--p-contextmenu-item-focus-background);
+  padding: var(--p-contextmenu-item-padding);
+  color: var(--p-contextmenu-color);
+  border-bottom: 1px solid var(--p-contextmenu-separator-border-color);
+}
+
+:deep(.cm-tooltip.cm-tooltip-autocomplete > ul > completion-section:not(:first-child)) {
+  border-top: 1px solid var(--p-contextmenu-separator-border-color);
+  margin: 0;
 }
 
 :deep(.cm-completionMatchedText) {
@@ -632,12 +668,18 @@ function on_overlay_drop(event: DragEvent) {
    glyph is off via `icons: false`), in a fixed-width column so the labels line
    up whatever the type. */
 :deep(.completion-type-icon) {
-  @apply h-4 w-4 shrink-0 text-slate-400 dark:text-slate-500 transition;
+  @apply h-4 w-4 shrink-0 transition;
+  color: var(--p-contextmenu-item-icon-color);
 }
 
-/* On the selected (primary) row the muted accents would vanish. */
-:deep(.cm-tooltip-autocomplete > ul > li[aria-selected]) :is(.cm-completionMatchedText, .cm-completionDetail, .completion-type-icon) {
-  @apply text-white/70;
+:deep(.completion-folder-indicator) {
+  @apply h-3.5 w-3.5 shrink-0;
+  margin-left: auto;
+  color: var(--p-contextmenu-submenu-icon-color);
+}
+
+:deep(.cm-tooltip-autocomplete > ul > li[aria-selected='true']) .completion-type-icon {
+  color: var(--p-contextmenu-item-icon-focus-color);
 }
 
 :deep(.cm-search-hit) {

@@ -8,7 +8,7 @@ import { get_operation_lock, list_scope_locks } from '@server/lib/operation-lock
 import { delete_object_best_effort } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { delete_attachment_rows, delete_story_attachment_rows, get_scope_object_keys, get_story_object_keys, list_cover_urls, list_scope_attachments, list_scope_encryption_keys, list_scope_folders } from '@server/services/content-attachments.service'
-import { extract_attachment_names, extract_story_reference_titles, parse_story_markdown, rename_story_references } from '@shared/content-markdown'
+import { extract_attachment_names, extract_story_reference_titles, lint_content_refs, parse_story_markdown, rename_story_references, upgrade_legacy_refs } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 import { has_permission } from '@shared/permissions'
@@ -53,10 +53,24 @@ const content_markdown_config = {
   markdown_max_bytes: settings.app.content.story.markdownMaxBytes,
 } satisfies ContentMarkdownConfig
 
+export function normalize_story_refs(markdown: string) {
+  if (settings.app.content.reference.legacyCompat)
+    return upgrade_legacy_refs(markdown)
+  const issues = lint_content_refs(markdown, { ... content_markdown_config, legacy_compat: false }).filter(issue => issue.source === 'legacy-ref')
+  if (issues.length) {
+    throw new ApiError(400, `旧引用写法已停用（第 ${[... new Set(issues.map(issue => issue.line))].join('、')} 行）`, {
+      code: 'LEGACY_REF',
+      details: { lines: [... new Set(issues.map(issue => issue.line))] },
+    })
+  }
+  return markdown
+}
+
 function parse_or_throw(markdown: string, existing_titles: ContentMarkdownConfig['existing_titles']) {
   const { meta, issues } = parse_story_markdown(markdown, {
     ... content_markdown_config,
     existing_titles,
+    legacy_compat: settings.app.content.reference.legacyCompat,
   })
   if (! meta) {
     throw new ApiError(400, issues[0]?.message ?? '档案格式不正确')
@@ -262,6 +276,7 @@ function story_event_dates(meta: ContentStoryMeta) {
 }
 
 export async function create_story(created_by: number, markdown: string, can_private: boolean) {
+  markdown = normalize_story_refs(markdown)
   if (! can_private && has_private_content(markdown)) {
     throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
   }
@@ -285,6 +300,7 @@ export async function create_story(created_by: number, markdown: string, can_pri
  * names for callers that need to confirm a requested deletion occurred.
  */
 export async function update_story(id: number, markdown: string, delete_files: string[], base_revision: number, can_private: boolean) {
+  markdown = normalize_story_refs(markdown)
   const story = await get_story(id)
   // Old markdown checked too: an editor without the private permission must
   // not silently delete private elements by saving over them.

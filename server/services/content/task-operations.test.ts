@@ -1,3 +1,4 @@
+import type { ContentTask, ContentTaskItem, ContentTaskKind } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -7,6 +8,7 @@ const state = vi.hoisted(() => ({
   applied_moves: null as unknown,
   applied_rename: null as unknown,
   applied_folder: [] as string[],
+  applied_folder_rename: [] as { source: string, target: string }[],
   update_story: null as unknown,
   item_updates: [] as { task_id: number, item_id: number, patch: Record<string, unknown> }[],
   move_result: { succeeded: [] as { old_file_name: string, new_file_name: string }[], skipped: [] as { file_name: string, reason: string }[] },
@@ -53,7 +55,9 @@ vi.mock('@server/services/content/attachment-structure.service', () => ({
       throw state.folder_delete_error
     state.applied_folder.push(folder)
   }),
-  apply_folder_rename: vi.fn(async () => {}),
+  apply_folder_rename: vi.fn(async (_scope: number, source: string, target: string) => {
+    state.applied_folder_rename.push({ source, target })
+  }),
   publish_attachment_change: vi.fn(async () => {
     state.changed.push(... [])
   }),
@@ -101,7 +105,9 @@ vi.mock('@server/services/content-attachments.service', () => ({
   list_scope_file_rows: vi.fn(async (_scope: number, names: string[]) => state.scope_file_rows.filter(row => names.includes(row.file_name as string))),
   attachment_object_key_in_use: vi.fn(async (key: string) => state.keys_in_use.includes(key)),
   list_scope_folders: vi.fn(async () => state.scope_folders),
-  list_scope_paths: vi.fn(async () => state.scope_paths),
+  // Each SELECT returns a fresh result; prepare's local name claims must not
+  // turn suggested (uncommitted) names into persisted scope paths in this mock.
+  list_scope_paths: vi.fn(async () => [... state.scope_paths]),
   insert_attachment_row: vi.fn(async (row: Record<string, unknown>) => {
     state.inserted_rows.push(row)
   }),
@@ -168,7 +174,7 @@ const { task_lock_paths, task_item_paths, discard_task_staging, execute_task, pr
 
 const ITEM_ID = 11
 
-function make_transfer_item(path: string, action: string, overrides: Record<string, unknown> = {}) {
+function make_transfer_item(path: string, action: string, overrides: Partial<ContentTaskItem> = {}): ContentTaskItem {
   return {
     id: ITEM_ID,
     task_id: 1,
@@ -182,10 +188,10 @@ function make_transfer_item(path: string, action: string, overrides: Record<stri
     part_size: null,
     result: null,
     ... overrides,
-  } as never
+  }
 }
 
-function make_task(kind: string, payload: Record<string, unknown>) {
+function make_task(kind: ContentTaskKind, payload: Record<string, unknown>): ContentTask {
   return {
     id: 1,
     scope_id: 42,
@@ -198,7 +204,7 @@ function make_task(kind: string, payload: Record<string, unknown>) {
     heartbeat_at: null,
     created_at: '',
     updated_at: '',
-  } as never
+  }
 }
 
 function make_item(id: number, path: string, action: string) {
@@ -221,6 +227,7 @@ beforeEach(() => {
   state.applied_moves = null
   state.applied_rename = null
   state.applied_folder = []
+  state.applied_folder_rename = []
   state.update_story = null
   state.item_updates = []
   state.move_result = { succeeded: [], skipped: [] }
@@ -301,6 +308,16 @@ describe('task_item_paths', () => {
     expect(task_item_paths('redact', { source_file_name: 'a.png.good', content_type: 'image/png', size: 42 }))
       .toEqual([{ path: 'a.png.good', action: 'redact', bytes_total: 42 }])
   })
+
+  it('upload：重复原始路径有稳定的内部 item path，不会合并两个源文件', () => {
+    expect(task_item_paths('upload', { uploads: [
+      { path: 'same.png', size: 10, mime_type: null },
+      { path: 'same.png', size: 20, mime_type: null },
+    ] })).toEqual([
+      { path: 'same.png', action: 'upload', bytes_total: 10 },
+      { path: '__pending_upload_1', action: 'upload', bytes_total: 20 },
+    ])
+  })
 })
 
 describe('execute_task', () => {
@@ -354,6 +371,63 @@ describe('execute_task', () => {
 
     expect(state.applied_folder).toEqual(['a/b'])
     expect(state.item_updates[0]?.patch.status).toBe('done')
+  })
+
+  it('folder_rename merge 被用户跳过时不执行文件夹合并', async () => {
+    const task = make_task('folder_rename', { source_folder: 'old', new_folder: 'target' })
+    const item = {
+      id: 11,
+      task_id: 1,
+      path: 'old',
+      action: 'folder_rename',
+      status: 'skipped',
+      bytes_done: 0,
+      bytes_total: 0,
+      staging_key: null,
+      upload_id: null,
+      part_size: null,
+      result: { reason: '用户选择跳过' },
+    }
+
+    const outcome = await execute_task(task, [item as never])
+
+    expect(outcome.complete).toBe(true)
+    expect(state.applied_folder_rename).toEqual([])
+  })
+
+  it('folder_rename prepare 发现目标文件夹后暂停并等待 resolve', async () => {
+    state.scope_folders = ['target']
+    state.scope_paths = ['old', 'target']
+    const task = make_task('folder_rename', { source_folder: 'old', new_folder: 'target' })
+
+    const outcome = await execute_task(task, [make_item(11, 'old', 'folder_rename')])
+
+    expect(outcome).toEqual({ complete: false, pause: true })
+    expect(state.applied_folder_rename).toEqual([])
+    expect(state.item_updates[0]?.patch).toMatchObject({ result: { resolve: { kind: 'merge', from: 'old', to: 'target' } } })
+  })
+
+  it('folder_rename 只有持久 resolve 批准 merge 后才执行', async () => {
+    state.scope_folders = ['target']
+    const task = make_task('folder_rename', { source_folder: 'old', new_folder: 'target' })
+    const item = {
+      id: 11,
+      task_id: 1,
+      path: 'old',
+      action: 'folder_rename',
+      status: 'pending',
+      bytes_done: 0,
+      bytes_total: 0,
+      staging_key: null,
+      upload_id: null,
+      part_size: null,
+      result: { resolution_applied: { kind: 'merge' } },
+    } as never
+
+    const outcome = await execute_task(task, [item])
+
+    expect(outcome.complete).toBe(true)
+    expect(state.applied_folder_rename).toEqual([{ source: 'old', target: 'target' }])
   })
 })
 
@@ -422,6 +496,15 @@ describe('preflight_task', () => {
     expect(result.items[0]?.ok).toBe(false)
     expect(result.items[0]?.reason).toContain('自身内部')
   })
+
+  it('folder_rename：大小写不同的已存在目录也提供 merge resolve', async () => {
+    state.scope_folders = ['source', 'Target']
+    state.scope_paths = ['source', 'Target']
+
+    const result = await preflight_task(42, 'folder_rename', { source_folder: 'source', new_folder: 'target' })
+
+    expect(result.items[0]).toMatchObject({ ok: true, resolution: { kind: 'merge', to: 'target' } })
+  })
 })
 
 describe('upload_part_size', () => {
@@ -451,6 +534,15 @@ describe('传输类任务的锁路径与任务项', () => {
 
 describe('execute_task：上传准备', () => {
   const upload_task = (uploads: unknown[]) => make_task('upload', { uploads })
+
+  it('恢复旧批任务时不重新准备已被替代项，同批未替代项照常准备', async () => {
+    const task = upload_task([{ path: 'old.png', size: 1024 }, { path: 'other.png', size: 1024 }])
+    const old = make_transfer_item('old.png', 'upload', { status: 'failed', superseded_at: '2026-10-13T00:00:00Z' })
+    const other = make_transfer_item('other.png', 'upload', { id: 12 })
+    await execute_task(task, [old, other])
+    expect(state.item_updates.map(update => update.item_id)).toEqual([other.id])
+    expect(state.item_updates[0]?.patch).toMatchObject({ status: 'active' })
+  })
 
   it('小文件只分配暂存 key（无 multipart），大文件建 multipart', async () => {
     const part = 8 * 1024 * 1024
@@ -487,13 +579,81 @@ describe('execute_task：上传准备', () => {
 
     const outcome = await execute_task(task, [make_transfer_item('a.png', 'upload')])
 
-    expect(outcome.complete).toBe(false)
+    expect(outcome.complete).toBe(true)
     expect(state.multipart_created).toEqual([])
     expect(state.item_updates[0]?.patch).toMatchObject({ status: 'skipped' })
+  })
+
+  it('锁内 prepare 发现排队期间出现的撞名，保存 resolve 并暂停，不分配 staging', async () => {
+    state.scope_paths = ['a.png']
+    const task = upload_task([{ path: 'a.png', size: 1024, mime_type: null }])
+
+    const outcome = await execute_task(task, [make_transfer_item('a.png', 'upload')])
+
+    expect(outcome).toEqual({ complete: false, pause: true })
+    expect(state.item_updates[0]?.patch).toMatchObject({
+      result: { resolve: { kind: 'rename', from: 'a.png', to: 'a-suffixed.png' } },
+    })
+    expect(state.multipart_created).toEqual([])
+  })
+
+  it('已有 staging 时 prepare 撞名仍保留暂存与分片锚，供 resolve 后续传', async () => {
+    state.scope_paths = ['a.png']
+    const task = upload_task([{ path: 'a.png', size: 1024, mime_type: null }])
+    const item = make_transfer_item('a.png', 'upload', {
+      status: 'active',
+      staging_key: 'content-upload/42/existing',
+      upload_id: 'up-existing',
+      part_size: 8 * 1024 * 1024,
+    })
+
+    const outcome = await execute_task(task, [item])
+
+    expect(outcome.pause).toBe(true)
+    expect(state.multipart_created).toEqual([])
+    expect(state.item_updates[0]?.patch).toMatchObject({ result: { resolve: { to: 'a-suffixed.png' } } })
+  })
+
+  it('所有上传项都已由用户跳过时直接完成，不留下 running 空任务', async () => {
+    const task = upload_task([{ path: 'a.png', size: 1024, mime_type: null }])
+
+    const outcome = await execute_task(task, [make_transfer_item('a.png', 'upload', { status: 'skipped' })])
+
+    expect(outcome).toEqual({ complete: true })
+    expect(state.multipart_created).toEqual([])
+  })
+
+  it('已有分片的上传在 prepare 再撞名后，确认新路径并重派发仍复用全部暂存', async () => {
+    state.scope_paths = ['a.png']
+    const task = upload_task([{ path: 'a.png', size: 1024, mime_type: null }])
+    const item = make_transfer_item('a.png', 'upload', { status: 'active', bytes_done: 512, staging_key: 'content-upload/42/existing', upload_id: 'up-existing', part_size: 512 })
+    state.uploaded_parts = [{ part_number: 1, etag: 'existing-etag', size: 512 }]
+
+    expect(await execute_task(task, [item])).toEqual({ complete: false, pause: true })
+    const resolution = state.item_updates[0]?.patch.result as { resolve: { to: string } }
+    item.path = resolution.resolve.to
+    item.result = null
+    task.payload = { uploads: [{ path: item.path, size: 1024, mime_type: null }] }
+    state.item_updates = []
+
+    expect(await execute_task(task, [item])).toEqual({ complete: false })
+    expect(state.item_updates).toEqual([{ task_id: task.id, item_id: item.id, patch: { status: 'active' } }])
+    expect(state.multipart_created).toEqual([])
+    expect(item).toMatchObject({ bytes_done: 512, staging_key: 'content-upload/42/existing', upload_id: 'up-existing', part_size: 512 })
+    expect(await transfer_item_resume_state(item)).toMatchObject({ staging_key: 'content-upload/42/existing', upload_id: 'up-existing', uploaded_parts: [{ part_number: 1, etag: 'existing-etag', size: 512 }] })
   })
 })
 
 describe('execute_task：替换准备', () => {
+  it('用户已经跳过的 replace 项不分配 staging，任务可正常收尾', async () => {
+    const task = make_task('replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'a.png', size: 10, mime_type: null, content_type: null })
+
+    const outcome = await execute_task(task, [make_transfer_item('a.png', 'replace', { status: 'skipped' })])
+
+    expect(outcome).toEqual({ complete: true })
+    expect(state.multipart_created).toEqual([])
+  })
+
   it('已加密的目标被跳过（替换会留下明文配密钥的坏行）', async () => {
     state.scope_files = ['a.png']
     const task = make_task('replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'a.png', size: 10, mime_type: null, content_type: null })
@@ -506,6 +666,31 @@ describe('execute_task：替换准备', () => {
     expect(outcome.complete).toBe(true)
     expect(state.item_updates[0]?.patch).toMatchObject({ status: 'skipped' })
     expect(state.multipart_created).toEqual([])
+  })
+
+  it('new-name 在排队期间被占用时先 resolve，不分配 staging', async () => {
+    state.scope_files = ['old.png']
+    state.scope_paths = ['old.png', 'new.png']
+    const task = make_task('replace', { old_file_name: 'old.png', mode: 'new-name', file_name: 'new.png', size: 10, mime_type: null, content_type: null })
+
+    const outcome = await execute_task(task, [make_transfer_item('old.png', 'replace')])
+
+    expect(outcome).toEqual({ complete: false, pause: true })
+    expect(state.item_updates[0]?.patch).toMatchObject({ result: { resolve: { kind: 'rename', from: 'new.png' } } })
+    expect(state.multipart_created).toEqual([])
+  })
+
+  it('重新派发 replace 时复用已有 staging 与分片锚', async () => {
+    state.scope_files = ['old.png']
+    state.scope_paths = ['old.png']
+    const task = make_task('replace', { old_file_name: 'old.png', mode: 'new-name', file_name: 'new.png', size: 10, mime_type: null, content_type: null })
+    const item = make_transfer_item('old.png', 'replace', { status: 'active', staging_key: 'content-upload/42/existing', upload_id: 'up-existing' })
+
+    const outcome = await execute_task(task, [item])
+
+    expect(outcome).toEqual({ complete: false })
+    expect(state.multipart_created).toEqual([])
+    expect(state.item_updates[0]?.patch).toEqual({ status: 'active' })
   })
 })
 
@@ -559,6 +744,18 @@ describe('finalize_transfer_item', () => {
 
     await expect(finalize_transfer_item(task, item, [])).rejects.toMatchObject({ statusCode: 409 })
   })
+
+  it('finalize 不再静默 suffix：意外撞名拒绝落行', async () => {
+    state.scope_paths = ['a.png']
+    state.name_error = new ApiError(409, '操作时发生文件名冲突')
+    const task = make_task('upload', { uploads: [{ path: 'a.png', size: 10, mime_type: null }] })
+    const item = make_transfer_item('a.png', 'upload', { staging_key: 'content-upload/42/x' })
+
+    await expect(finalize_transfer_item(task, item, [])).rejects.toMatchObject({ statusCode: 409 })
+
+    expect(state.inserted_rows).toEqual([])
+    expect(state.deleted_objects).toEqual([])
+  })
 })
 
 describe('transfer_item_resume_state', () => {
@@ -600,6 +797,22 @@ describe('preflight：上传与替换', () => {
     ] })
 
     expect(result.items[1]?.suggested_name).toMatch(/^a-.+\.png$/)
+    expect(result.items[1]?.resolution).toMatchObject({ entry_index: 1, kind: 'rename' })
+  })
+
+  it('upload：sanitize 与 sanitize 后的撞名都变成显式 resolve 提供项', async () => {
+    state.scope_paths = ['ab.png']
+
+    const result = await preflight_task(42, 'upload', { uploads: [
+      { path: 'a b.png', size: 10, mime_type: null },
+      { path: 'plain.png', size: 10, mime_type: null },
+    ] })
+
+    expect(result.items[0]).toMatchObject({
+      ok: true,
+      resolution: { kind: 'sanitize', from: 'a b.png', to: 'ab-suffixed.png' },
+    })
+    expect(result.items[1]?.resolution).toBeNull()
   })
 
   it('upload：空文件被拒绝', async () => {
@@ -619,6 +832,37 @@ describe('preflight：上传与替换', () => {
     vi.mocked(attachments.list_scope_attachments).mockResolvedValueOnce([{ file_name: 'a.png', is_encrypted: true }] as never)
     const encrypted = await preflight_task(42, 'replace', { old_file_name: 'a.png', mode: 'keep-name', file_name: 'a.png', size: 10, mime_type: null, content_type: null })
     expect(encrypted.items[0]).toMatchObject({ ok: false, reason: '已加密' })
+  })
+
+  it('replace new-name：sanitize 与撞名均显式提供内置目标', async () => {
+    state.scope_files = ['dir/old.png']
+    state.scope_paths = ['dir/old.png', 'dir/photo.png']
+
+    const result = await preflight_task(42, 'replace', {
+      old_file_name: 'dir/old.png',
+      mode: 'new-name',
+      file_name: 'photo .PNG',
+      size: 10,
+      mime_type: 'image/png',
+      content_type: 'image/png',
+    })
+
+    expect(result.items[0]).toMatchObject({
+      ok: true,
+      resolution: { kind: 'sanitize', from: 'photo .PNG', to: 'photo-suffixed.png', reason: expect.any(String) },
+    })
+  })
+
+  it('folder_rename：已有文件夹目标提供 merge resolve', async () => {
+    state.scope_folders = ['old', 'target']
+    state.scope_paths = ['old', 'target']
+
+    const result = await preflight_task(42, 'folder_rename', { source_folder: 'old', new_folder: 'target' })
+
+    expect(result.items[0]).toMatchObject({
+      ok: true,
+      resolution: { kind: 'merge', from: 'old', to: 'target' },
+    })
   })
 })
 
