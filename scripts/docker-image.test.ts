@@ -52,6 +52,23 @@ describe('镜像自带的运行期配置注入', () => {
       '{deny, all}.',
     ])
   })
+
+  it('开发 EMQX 启动时从环境生成超级发布账号并交回原镜像入口', () => {
+    const emqx = parse(read('docker-compose.dev.yml')).services.emqx
+    expect(emqx.environment.MQTT_USERNAME).toContain('${MQTT_USERNAME:?')
+    expect(emqx.environment.MQTT_PASSWORD).toContain('${MQTT_PASSWORD:?')
+    expect(emqx.environment.EMQX_AUTHENTICATION__1__BOOTSTRAP_TYPE).toBe('plain')
+    expect(emqx.environment.EMQX_AUTHENTICATION__1__BOOTSTRAP_FILE).toBe('/opt/emqx/etc/dev-auth-bootstrap.json')
+    expect(emqx.entrypoint).toEqual(['/bin/sh', '/opt/emqx/etc/dev-entrypoint.sh'])
+    expect(emqx.command).toEqual(['/opt/emqx/bin/emqx', 'foreground'])
+    expect(emqx.volumes).toContain('./scripts/emqx-entrypoint.sh:/opt/emqx/etc/dev-entrypoint.sh:ro')
+    const script = read('scripts/emqx-entrypoint.sh')
+    expect(script).not.toContain('\r')
+    expect(script).toContain('umask 077')
+    expect(script).toContain('\\"is_superuser\\":true')
+    expect(script).toContain('> "$EMQX_AUTHENTICATION__1__BOOTSTRAP_FILE"')
+    expect(script).toContain('exec /usr/bin/docker-entrypoint.sh "$@"')
+  })
 })
 
 // 2026-10-09 事故的教训：镜像里一个字节的改动（连注释都算）可以让容器启动即失败，
