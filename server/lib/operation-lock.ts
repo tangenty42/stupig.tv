@@ -14,7 +14,7 @@ const config = runtime_config()
 // expires instead of wedging the scope.
 //
 // Rows live in content_locks. path '' is the whole scope (legacy structural
-// operations); the attachment task runner (docs/content-task-refactor.md)
+// operations); the attachment task runner (docs/old/content-task-refactor.md)
 // holds path-granular rows keyed by task_id. The two levels are mutually
 // exclusive: the scope row contends with every live path row and vice versa.
 

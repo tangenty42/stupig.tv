@@ -1,6 +1,6 @@
 # Content 附件任务队列与前端瘦身重构方案
 
-> 状态：**计划已定稿，未开工**（阶段 0 暂缓）。
+> 状态：**阶段 0–3 已完成，§13.4 resolve 代码与自动化验收完成，阶段 4–5 未开工**（2026-10-12）。真实浏览器与 OSS 双端走查待验收。§1 的现状诊断保留为重构前背景，当前进度以 §13 为准。
 > 关联文档：[architecture-risks.md](./architecture-risks.md)（本方案覆盖其 #1、#3、#4、#7 四项）。
 > 决策记录见文末「附录 A：决策记录」。
 
@@ -197,14 +197,14 @@ app:
 
 | kind | payload | 任务项分解 | 执行（runner / 客户端） | 锁路径 |
 |---|---|---|---|---|
-| `upload` | `[{ path, size, mime, insert_position? }]` | 每文件一项 | runner 分配 staging_key + 建 multipart（或单 PUT）→ 客户端预签分片、上传、回报 ETag 列表 → runner CompleteMultipart → head → copy 至 `content/att/<uuid>` → 落行 → 物化文件夹 | 各文件计划路径（最终名执行时锁定后重解析，见 §6.1） |
+| `upload` | `[{ path, size, mime, insert_position? }]` | 每文件一项 | runner 取路径锁并 prepare 命名；有 resolve 提供项时暂停等待选择 → 分配 staging/multipart → 客户端灌字节 → finalize 按已确认名落行 | 计划路径；resolve 后按最终名重新取锁 |
 | `replace` | `{ old_file_name, mode: keep-name/new-name, size, mime, file_name? }` | 一项 | 同 upload 的传输段；落库时换对象不换 key 语义沿用现状（加密件拒绝替换的规则进 preflight）；new-name 时引用改写 | 源路径 + 目标路径 |
 | `move` | `{ moves: [{ file_name, target_folder }] }` | 每文件一项 | 整任务单事务：两阶段改名 + 引用改写（沿用现逻辑） | 全部源路径 + 目标文件夹路径 |
 | `rename` | `{ old_file_name, new_file_name }` | 一项 | 同上 | 源 + 目标 |
 | `folder_create` | `{ folder }` | 一项 | 建行（含祖先物化） | 目标路径 |
 | `folder_rename`（现 moveFolder） | `{ source_folder, new_folder }` | 一项 | 子树行改写 + 引用改写 | 源 + 目标（前缀锁覆盖子树） |
 | `folder_delete` | `{ folder }` | 一项 | 删除空文件夹行 | 目标路径 |
-| `delete` | `{ file_names: [], folders: [] }` | 每项一行 | 逐项：引用检查 → 删行 → 删对象（`delete_object_best_effort` 不再裸 catch，失败记 sweeper 重试单） | 全部路径 |
+| `delete` | `{ file_names: [], folders: [] }` | 每项一行 | 引用检查 → 删行 → 删对象（`delete_object_best_effort` 失败记录日志；持久删除重试单仍未实现，见 architecture-risks #3） | 全部路径 |
 | `encrypt` / `decrypt` | `{ file_names: [] }` | 每文件一项 | runner：下载 → AES-256-GCM 转换 → 新对象 → 事务换行 + 引用改写 → 删旧对象 | 源路径 + 目标路径（`.good` 增减） |
 | `redact` | `{ source_file_name }` + 一幅涂抹后的位图 | 一项 | 传输段同单 PUT 上传；落库走现 `create_abridged_attachment` 逻辑（sniff 校验等） | 源 + twin 路径 |
 
@@ -212,20 +212,21 @@ app:
 
 ### 6.1 命名冲突的时序
 
-preflight 给出计划名（含自动加后缀建议）；**执行时锁定计划路径后再跑一遍权威校验**，若期间名字被占则按 `resolve_attachment_name` 的 suffix 策略重解析，新名须同文件夹且未被他人锁定，否则该项 skipped。markdown 引用插入（`insert_position`）以**最终落点名**为准，在任务项 done 后由前端应用（见 §8.2）。
+`preflightTask` 只报告内置结果，不替用户采用。任务创建/prepare 在取得路径锁后再次校验；发现 sanitize/suffix/merge 内置处理时将提供项持久化并暂停，等待 `resolveTask` 的 apply/skip。apply 后按新路径重新取锁，**staging 与已上传分片保留**。finalize 只按已确认名称落行，不再静默 suffix；若租约丢失或有 writer 绕过锁导致目标仍被占，该 item skipped 并提示重试。markdown 引用插入（`insert_position`）以**最终落点名**为准，在任务项 done 后由前端应用（见 §8.2）。
 
 ## 7. tRPC API（新端点；schema 集中于 `api_schema.content`）
 
 ```text
 // 预检：只读无锁，返回逐项结论。前端"先知"disabled 的唯一权威。
 content.preflightTask({ story_id, kind, payload })
-  → { items: [{ path, ok, reason?, suggested_name? }], conflicts: string[], active_locks: [{ path, kind }] }
+  → { items: [{ path, ok, reason?, suggested_name?, resolution? }], locks: [{ path, kind }] }
 
 content.createTask({ story_id, kind, payload, client_id })
   → { task, items }                    // 幂等：同 scope+kind+payload 哈希的 queued 任务直接返回既有任务
 
 content.cancelTask({ task_id })
 content.resumeTask({ task_id })        // paused/failed(中断) → 重新排队
+content.resolveTask({ task_id, resolutions: [{ item_id, choice: 'apply' | 'skip' }] })
 content.listScopeTasks({ story_id })   // 活跃 + 保留期内任务（断线补全/进入页面）
 
 // 传输段（上传器专用，校验任务归属与 staging_key）
@@ -502,8 +503,8 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
 
 ### 13.4 冲突与和谐的 resolve 体系（待 resolve 状态）
 
-> 状态：**计划，未开工**（2026-10-12 定稿，基线 `main = 9777121` + 阶段 3 落地后的分支）。
-> 准则：**任何解决冲突的内置行为都必须经用户显式 resolve**。resolve 只有两种行为：按内置行为（默认），或跳过。
+> 状态：**代码与自动化验收完成**（2026-10-12；阶段 3 基线 `23df1ca`，命名仲裁修订基线 `30177fb`，实现尚在工作区）。持久 paused、resolveTask、统一对话框与 prepare 仲裁已落地；本轮修复任务创建回归、跨端并发覆盖、同批唯一键冲突与源文件名续传，补齐任务集合同步与回归守卫。56 个测试文件、872 项测试、lint、typecheck 均通过；新增关键守卫已验证变红。当前无可用浏览器自动化通道，真实浏览器和 OSS 双端走查尚待验证。
+> 准则：**任何解决冲突的内置行为都必须经用户显式 resolve**。resolve 只有两种行为：按内置行为，或跳过（**统一默认**）。
 
 #### 内置行为清单（现状 → 目标）
 
@@ -523,22 +524,25 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
 1. **建任务时计算 resolve 提供项**（与 preflight 同一份规则代码）：
    - `upload`：sanitize 会改名 → `sanitize` 项；撞名 → `rename`（suffix）项；硬非法（`.good`、空文件）→ 建任务时直接 `skipped` 带原因。
    - `replace` new-name 撞名 → `rename` 项；`folder_rename` 目标是已有文件夹 → `merge` 项。
-   - 提供项存放在任务项 `result.resolve = { kind, from, to, reason }`（JSON 列，**无迁移**）。
+  - 提供项存放在任务项 `result.resolve = { kind, from, to, reason, entry_index? }`（JSON 列，**无迁移**）。upload 提供项携带 `entry_index`，同批重名与 sanitize 后重名都按原始 entry 独立处理。
 2. **有提供项的任务创建为 `paused`**（复用状态机里"等人"的既有语义；runner 不派发 paused）。无提供项的任务照旧创建即 dispatch。
 3. **新端点 `resolveTask`**：`{ task_id, resolutions: [{ item_id, choice: 'apply' | 'skip' }] }`。
    - `apply`：把内置结果名写回任务项 path 与 payload（path 是 `UNIQUE(task_id, path)` 的键，直接改写）；写回前对照最新 scope 重查，`to` 刚被占则该项 `skipped`（冲突原因，用户重来）。
    - `skip`：标 `skipped`。
    - 全部提供项解决后 `paused → queued`，runner 接手。
+   - 事务内在任务行锁下核对建更新时读取的原 payload；另一端已处理部分项则返回 409，刷新后重试，避免旧 payload 覆盖其修改。
 4. **命名仲裁前移到 prepare，finalize 不再仲裁**（决策 9）：传输任务的锁从 dispatch 起全程持有到 finalize，所以行级冲突只需要在两个时刻判定——建任务时（出提供项）与 prepare 时（取锁后、分配 staging 前，覆盖「排队期间名字被别人落掉」与「锁被 sweeper 收走后续传」两个窗口）。prepare 查到撞名 → 该项生成新的 resolve 提供项（suffix）、任务回 `paused`；apply 后重新排队、按新名重新取锁再传——**staging 与已传分片全保留，不重传**。finalize 的静默 suffix 删除：锁不间断则 prepare 查过的名字必然还空着，finalize 撞名只剩理论可能，直接报错而非悄悄改名。
-5. **schema**：upload 的 `path` 从 `attachment_path_input` 放宽为非空、限长（1024）字符串——原始名必须能到达服务端才能算出 sanitize 提供项；清洗在 resolve-apply 写回时完成。
+5. **schema**：upload 的 `path` 与 replace 的 `file_name` 使用非空、限长 255 字符的原始字符串——不能在 Zod 或 pick 边界 trim/sanitize，否则原名无法进入 resolve 提供项。清洗在 resolve-apply 写回时完成。同批重复 raw path 与待 resolve 上传项通过稳定的内部任务项 path（`__pending_upload_<index>`，必要时加前缀避让）保留为独立 item；内部 path 避开原始名与全部建议名，防止 sanitize 目标等于另一项原名时撞唯一键。apply 按 `entry_index` 回写具体 payload entry。
 6. legacy 同步包装（move/folder_rename）语义不变；页面改走新流程后 folder_rename 包装闲置，随阶段 4 删除。
 
 #### 前端
 
 7. **行投影**：`PendingTaskRow` 增加 `resolution`（来自 `result.resolve`）；带提供项的行显示「待处理」状态与 resolve 按钮。
-8. **`MyContentResolveDialog`（统一组件）**：三种行态——可 resolve（`按内置行为` 默认 / `跳过`）、只读跳过、纯报告模式（无可 resolve 项时即现 skipped_notice 的形态）。现有 `show_skipped_attachments` 的全部调用点（加密/删除/移动的跳过报告）切到它的只读模式。
+8. **`MyContentResolveDialog`（统一组件）**：三种行态——可 resolve（`跳过` 默认 / `按内置行为`）、只读跳过、纯报告模式（无可 resolve 项时即现 skipped_notice 的形态）。现有 `show_skipped_attachments` 的全部调用点（加密/删除/移动的跳过报告）切到它的只读模式。
 9. **入口流程**（上传/替换/文件夹改名）：`createTask` → 有提供项 → 开对话框 → `resolveTask` → 驱动传输；取消对话框则任务保持 paused，之后（或别的设备）从任务行继续 resolve。
 10. 上传 pick 边界**回退静默 sanitize**（原名原样上送），和谐动作移到 resolve-apply。
+11. **任务同步**：`useContentTaskSync` 用 `useSyncedData` 读取首次列表、任务集合 refresh 与重连 sync；store 的 `apply_list` 应用返回值并清理不再存在项的本地 driver。`task_progress` 仍直接应用快照，查询层忽略这类事件，不为每个进度 tick 重拉列表；页面卸载清理两类订阅。
+12. **源文件身份**：upload entry 与 replace payload 可携带原始 `source_file_name`（JSON 元数据，无迁移）；客户端发送实际 `File.name`，resolve 改目的名称时保留它，旧任务在首次 resolve 时补齐。行投影及进度快照应用保留这个源名，续传选择器按源名与大小核对文件，不按已经 suffix/sanitize 的目的名称核对。
 
 #### 测试
 
@@ -551,6 +555,24 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
 
 - 文件列表下方的任务分组列表 UI（持久状态已就位，列表是后续纯前端工作）。
 - move 撞名的 suffix 化（决策 8 排除）。
+
+#### 真实浏览器回归（2026-10-13，开发环境）
+
+- 独立测试档案 `#2`（浏览器回归测试20261013），未修改原有档案。普通文件真实上传；上传与替换撞名默认跳过，取消后可从任务行重开；sanitize/suffix 混合批次分别落盘，空文件与 `.good` 拒绝并报告。
+- 文件夹重命名到已有空文件夹显式确认 merge，完成后只保留目标文件夹。16 MiB 文件经 sanitize 后用原始文件名重新选择；分片上传到 50% 暂停、刷新、重新选择后最终 `done`，字节数 `16777216`。
+- 走查修复：全部跳过在 resolve 事务内直接写 `done`；跳过报告显示原始名称；分片重复进度回调按各片增量累计；失败传输恢复在返回前准备任务；已存在目标不再被前端文件夹改名校验拦截；非本机驱动的进度行提供“继续上传”。新增逻辑守卫均先确认失败再恢复通过。
+- 自动化工具不能接管 File System Access 原生选择器；上传使用现有 file input，续传临时切到现有 input fallback 并显露输入元素，完成后刷新清除测试插桩。未覆盖原生句柄授权恢复。
+- **MQTT 修复与补测（同日）**：开发 EMQX 的密码认证器存在，但内置用户库为空；已按 `.env` 补建服务端发布账号并启用 `is_superuser`，服务端连接恢复。真实浏览器两页不刷新同步新文件夹与 paused 任务；另一页 resolve-skip 后，原页自动变为 `done`，页面 `timeOrigin` 保持不变。认证 TCP 发布→匿名 WS 订阅验证通过，匿名 TCP 登录及匿名 WS 伪装发布账号的发布均被拒绝。首次开发启动的账号注册要求已补充到 README。
+- **仍未验收**：独立设备、连续进度快照与断线恢复的完整场景；以上双页补测不替代这些场景。
+- **跳过语义修正（同日，替代先前跳过项重试方案）**：`skipped` 只保留在任务报告中，不进入附件列表、不参与批量操作、不提供重试。列表统一按服务端状态过滤，快照、列表重载及新页面行为一致；旧菜单事件也不能重试已跳过或完成的 item。真正失败项仍可重试，取消重选或创建失败保留旧行。守卫先复现旧行为失败，再验证修复；覆盖部分/全部跳过、快照与重载、全新 store，以及连续暂停恢复不新增任务。真实浏览器验证撞名后选择跳过立即退出列表、报告无重试、另一标签同步及刷新后不复现。
+- **失败重试持久化（同日，已批准实施）**：新增 `20261013130000_content_task_retries.sql`，新 item 的 `retry_of_item_id` 唯一关联前一次尝试，旧 item 的 `superseded_at` 持久标记被替代，保留原失败状态与原因。`retryTaskItem` 从服务端原 payload 重建单项 upload/replace/redact，重新 preflight，并在同一事务中锁原 task/item、检查状态与 payload、创建后继、标记旧项；重复请求返回已有后继。仍有暂存分片的失败 upload 继续原任务。附件列表过滤被替代项，列表与快照不能撤销已确认的替代标记，不再依赖本地隐藏集合。旧批任务恢复也跳过被替代项，同批其他项不受影响。
+- **清理与兼容**：任务和 items 的过期删除改为同一事务，与重试共用 task→item 锁顺序；暂存对象仍属于各自尝试。关系无级联外键，各次历史独立过期，后继被清理也不撤销旧项标记。既有记录字段为空，不按文件名推断旧关系。新代码运行前须应用迁移，开发库已执行 `pnpm migrate`。
+- **持久化验证**：事务测试覆盖并发/重放、失败回滚、状态或 payload 变化、重试链和清理竞争；store 覆盖取消/失败保留、跨刷新、乱序列表/快照、原分片续传。移除持久标记、列表过滤及执行器守卫后确认测试失败，恢复后通过。真实 MySQL 两个并发请求和一次重放只返回同一后继；真实浏览器测试档案 #2 中旧 item 25 被替代为 item 26（task 23），resolve 改名后真实上传完成，刷新和另一标签只显示新附件。并发检查创建的独立临时任务已清理，浏览器回归记录保留供查看。原生 File System Access 选择器仍未覆盖，使用现有 input fallback 后刷新清除测试插桩。
+- **重试后的大文件恢复**：16 MiB 失败 item 27 被持久替代为 item 28（task 25）；resolve 后改为 `largeraw-XQYOEmY5dzw.bin`。暂停、刷新后显示 13% 进度，重新选择原始 `large raw.bin` 继续上传并最终完成（`16777216` 字节），使用原 item 28，未创建第三次尝试。全量 58 文件、910 项测试，lint 与类型检查通过。
+- **暂停协议修正（替代本页内存方案）**：新增 `20261013131000_content_task_pause.sql`，item 保存 `paused_at` 和 `control_version`。`pauseTaskItem`/`continueTaskItem` 在 task→item 行锁下保存暂停或清除暂停；全体剩余项暂停时把父任务置为 `paused` 并在同一事务释放路径锁，继续重新排队准备原任务，保留暂存分片与 item ID。混合批次的其他项继续运行；最后运行项结束后以条件 SQL 再检查剩余项是否全部暂停，防止覆盖并发继续。名称 resolve 与传输暂停按 item 元数据区分。列表与快照均携带控制版本，旧消息不能撤销暂停或继续；跨端暂停会停止本机驱动，已取消任务始终不进入附件列表。
+- **取消修正**：真实浏览器发现运行中的传输直接转 `cancelled` 被状态机拒绝；改为 `running → cancelling → cancelled`，重复取消保持幂等。服务端长执行加解密仍先进入 `cancelling`，由执行器收尾。取消记录可继续作为历史保留，但其 active/pending 子项不再显示或续传。
+- **清空旧任务后重新验证（2026-10-13）**：开发库清理 25 个旧 task、28 个 item 与任务锁，清理后 task/item/任务锁均为 0，17 条已落盘附件记录保留；旧元数据归档于本机临时目录。部分 OSS 暂存对象删除被 `AccessDenied` 拒绝，不能声称云端暂存已全部清理，归档保留其清理依据。清理后用户创建的新任务不再属于旧记录，未再次删除。
+- **新协议浏览器验收**：测试档案 #2 的 task 30/item 33 上传 16 MiB，暂停在 25%；数据库父任务 `paused`、item `paused_at` 非空、控制版本 1。刷新及另一标签均只有一行“已暂停 25%”，spinner 数为 0；重新选择原文件继续后版本 2，原 item 33 完成 `16777216` 字节。task 31/item 34 在约 52% 取消，刷新及另一标签均无该行；数据库 `cancelled`，保留原 item 历史。新失败 item 35 重试为 item 36，旧项替代标记持久化，resolve 后真实上传 32 字节完成，旧失败行不再显示。相关守卫移除暂停持久化、取消过滤及合法取消迁移后确认失败，恢复通过；最终全量 58 文件、921 项测试、lint 与类型检查通过。File System Access 原生句柄授权仍未覆盖，使用现有 input fallback，结束后刷新清除插桩。
 
 ## 14. 测试策略（在既有测试规范上追加）
 
@@ -588,3 +610,4 @@ export const content_dialect: readonly ContentDialectConstruct[] = [/* … */]
 | 9 | finalize 竞态（2026-10-12，同日修订） | 命名仲裁**前移到 prepare**（取锁后、分配 staging 前），撞名 → 重新出 resolve 提供项而非 finalize 时跳过；staging 与分片保留，不重传。finalize 不再做任何静默改名 |
 | 10 | resolve 载体（2026-10-12） | **持久 paused 任务**（跨端可见、可续），不是 pre-task 一次性对话框 |
 | 11 | resolve 对话框形态（2026-10-12） | 与 skipped 报告**统一为一个组件**（`MyContentResolveDialog`，三种行态） |
+| 12 | resolve 默认选项（2026-10-12） | 所有待处理项默认 **跳过**；用户明确选择“按内置行为”才采用 sanitize/suffix/merge |

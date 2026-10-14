@@ -100,6 +100,8 @@ catch (error) {
 
 ### 4. 内容服务职责过多
 
+**现状（2026-10-12 代码核对）：** `server/services/content.service.ts` 已是重导出的兼容入口；正文、附件结构、上传、加密、任务存储、执行器、runner 与任务 API 已分拆到 `server/services/content/`。以下描述保留为重构前背景。当前收敛重点是编辑页与客户端规则去重，见 content-task-refactor §13.2。
+
 [server/services/content.service.ts](../server/services/content.service.ts) 同时处理：
 
 - Story 创建、更新、删除；
@@ -186,6 +188,8 @@ const { refresh } = await useSyncedData(null, fetch_users, users, {
 **剩余约束：** 没有加入 leader election，仍保持隐藏标签页断开 MQTT 的现有策略。tab ID 来自 sessionStorage；异常终止的远端订阅会在下一次资源收集时清除。底层 fetcher 暂无统一取消协议，失效/卸载通过版本与订阅生命周期阻止晚到写入，而不是中止 HTTP 请求。
 
 ### 6. 生产错误响应可能泄露内部信息
+
+**现状（2026-10-12 代码核对）：** tRPC 的 `errorFormatter` 已将生产环境非 `ApiError` 的异常消息替换成统一公开文案，业务错误与自定义校验消息保留。后续应继续核对各错误出口，不能将以下建议当作尚无任何脱敏实现。
 
 [server/error-handler.ts](../server/error-handler.ts) 对一般 `Error` 会直接使用 `error.message` 返回给客户端。某些数据库、OSS 或第三方 SDK 异常可能包含内部路径、SQL 片段、服务地址或实现细节。
 
@@ -311,11 +315,11 @@ const { refresh } = await useSyncedData(null, fetch_users, users, {
 
 ### 中优先级
 
-1. 拆分 `content.service.ts`；
-2. 抽象 `SyncRuntime`；
+1. ~~拆分 `content.service.ts`~~（已完成，见 #4；编辑页收敛见 content-task-refactor §13.2）；
+2. 维护实时同步的三层所有权与兼容约束（见 #5；本轮补齐任务集合同步）；
 3. ~~建立正式数据库迁移执行记录~~（已完成，见上文 #8 现状）；
 4. 增加结构化日志、request ID 和关键指标；
-5. 让批量操作返回结构化部分成功结果。
+5. 保持批量操作的结构化部分成功结果（已实施，见 #7；客户端规则去重待阶段 4）。
 
 ### 低优先级
 
@@ -326,10 +330,10 @@ const { refresh } = await useSyncedData(null, fetch_users, users, {
 
 ## 验证基线
 
-当前项目已有较完整的单元测试，最近验证结果为：
+当前项目已有较完整的单元测试，2026-10-12 在 resolve 收尾后的验证结果为：
 
-- 19 个测试文件；
-- 436 个测试通过；
+- 56 个测试文件；
+- 872 个测试通过；
 - `npx nuxt typecheck` 通过；
 - `pnpm lint` 通过。
 

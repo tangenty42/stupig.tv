@@ -2,7 +2,7 @@ import { ApiError } from '@server/errors/ApiError'
 import { decrypt_attachment, encrypt_attachment } from '@server/lib/attachment-crypto'
 
 /**
- * Attachment encryption transform (docs/content-task-refactor.md §13.1).
+ * Attachment encryption transform (docs/old/content-task-refactor.md §13.1).
  *
  * The batch orchestration lives in the task executor
  * (content/task-operations.service.ts); this module owns the one thing that
