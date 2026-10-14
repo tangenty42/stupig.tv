@@ -146,6 +146,11 @@ export function useCaptcha() {
     if (import.meta.server) {
       throw new Error('verify() cannot run on the server')
     }
+    // This public flag comes from the validated deployment config; the loader
+    // rejects it outside development and the server independently checks NODE_ENV.
+    if (config.public.app.captcha.debug) {
+      return
+    }
 
     if (captcha_verify_pending) {
       throw new Error('不兑！我成替身了？')

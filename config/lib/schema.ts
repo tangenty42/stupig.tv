@@ -122,6 +122,7 @@ export const deployment_config_schema = z.object({
   app: z.object({
     auth: z.object({ jwt: z.object({ secret: z.string().min(32) }) }),
     otp: z.object({ debug: boolean_value }),
+    captcha: z.object({ debug: boolean_value }),
   }),
 })
 
@@ -130,6 +131,7 @@ export const public_config_schema = z.object({
   site: site_config_schema,
   mqtt: z.object({ web: mqtt_web_config_schema }),
   aliyun: z.object({ captcha: captcha_config_schema.pick({ appId: true }) }),
+  app: z.object({ captcha: deployment_config_schema.shape.app.shape.captcha }),
 })
 
 // Build-time shape only; Nitro fills the real values at startup.
@@ -137,4 +139,5 @@ export const public_config_defaults = {
   site: { url: '', indexable: false, staticBaseUrl: '' },
   mqtt: { web: { wsUrl: '' } },
   aliyun: { captcha: { appId: '' } },
+  app: { captcha: { debug: false } },
 } satisfies z.input<typeof public_config_schema>
