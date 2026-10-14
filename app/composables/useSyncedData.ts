@@ -193,7 +193,12 @@ export async function useSyncedData<T>(
   let client = query_clients.get(nuxt_app)
   if (! client) {
     client = new QueryClient({
-      subscribe,
+      // Progress is already an inline snapshot, not a query invalidation.
+      // Membership refreshes and reconnect sync still fetch the complete list.
+      subscribe: (resource, invalidate) => subscribe(resource, (event) => {
+        if (event?.type !== 'task_progress')
+          return invalidate()
+      }),
       now: () => Date.now(),
       visible: () => import.meta.client && document.visibilityState === 'visible',
       start_polling: (tick) => {
