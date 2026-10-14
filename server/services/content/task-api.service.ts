@@ -1,18 +1,20 @@
-import type { ContentAttachmentBatchResult, ContentTask, ContentTaskItem, ContentTaskKind, ContentTaskPart, ContentTaskPartPlan, ContentTaskReplacePayload, ContentTaskResumeState, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
-import type { ContentTaskWithItems } from './task.service'
+import type { ContentAttachmentBatchResult, ContentTask, ContentTaskItem, ContentTaskKind, ContentTaskPart, ContentTaskPartPlan, ContentTaskRedactPayload, ContentTaskReplacePayload, ContentTaskResolution, ContentTaskResumeState, ContentTaskUploadedPart, ContentTaskUploadPayload } from '@shared/types/content'
+import type { ContentTaskItemInput, ContentTaskWithItems } from './task.service'
 import { ApiError } from '@server/errors/ApiError'
+import { error_fields, log_error } from '@server/lib/log'
 import { release_task_locks } from '@server/lib/operation-lock'
 import { signed_part_upload_url, signed_put_url } from '@server/lib/storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { get_scope_attachment } from '@server/services/content-attachments.service'
+import { get_scope_attachment, list_scope_attachments, list_scope_folders, list_scope_paths } from '@server/services/content-attachments.service'
+import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken } from '@shared/content-markdown'
 import { settings } from '@shared/settings'
 import { attachment_scope_payload } from './attachment-structure.service'
-import { discard_task_staging, finalize_transfer_item, task_item_paths, transfer_item_resume_state } from './task-operations.service'
+import { discard_task_staging, finalize_transfer_item, preflight_task, task_item_paths, transfer_item_resume_state } from './task-operations.service'
 import { complete_task_if_finished, dispatch_task, kick_task_runner, run_task_synchronously, touch_task } from './task-runner.service'
-import { create_task, get_task, publish_task_state, transition_task, update_task_item } from './task.service'
+import { apply_task_resolutions, create_task, get_retry_task, get_task, publish_task_state, set_transfer_paused, transition_task, update_task_item } from './task.service'
 
 /**
- * The application-facing task API (docs/content-task-refactor.md §7): creates
+ * The application-facing task API (docs/old/content-task-refactor.md §7): creates
  * tasks from validated payloads and runs them. The legacy per-operation
  * endpoints below are thin wrappers over the same path, keeping their exact
  * old shapes while everything flows through the task queue.
@@ -22,39 +24,170 @@ import { create_task, get_task, publish_task_state, transition_task, update_task
  * Creates a task and best-effort dispatches it inline. Contention leaves it
  * queued for the runner tick; executor failures land on the task (status
  * failed + error), so the caller always gets the task state back.
+ *
+ * Server-side long-running kinds (encrypt/decrypt) are the exception: their
+ * dispatch is kicked without awaiting, because awaiting it would re-create the
+ * request-length problem the task queue exists to solve (§13.1) — the queued
+ * task row is the receipt, and progress arrives over the sync channel.
  */
 export async function create_content_task(input: {
+  retry?: { task_id: number, item_id: number, base_payload: Record<string, unknown> }
   scope_id: number
   kind: ContentTaskKind
   payload: Record<string, unknown>
   actor_id: number | null
   client_id: string | null
 }): Promise<ContentTaskWithItems> {
+  const resolution_kinds: ContentTaskKind[] = ['upload', 'replace', 'folder_rename']
+  const preflight = resolution_kinds.includes(input.kind)
+    ? await preflight_task(input.scope_id, input.kind, input.payload)
+    : null
+  const items = task_item_paths(input.kind, input.payload).map<ContentTaskItemInput>((item, index) => {
+    if (! preflight)
+      return item
+    const verdict = preflight
+      ? input.kind === 'upload'
+        ? preflight.items[index]
+        : preflight.items.find(candidate => candidate.path === item.path && candidate.action === item.action)
+      : undefined
+    if (! verdict?.ok)
+      return { ... item, status: 'skipped' as const, result: { reason: verdict?.reason ?? '无法执行', ... (input.kind === 'upload' ? { display_path: verdict?.path } : {}) } }
+    if (verdict?.resolution)
+      return { ... item, result: { resolve: verdict.resolution } }
+    return item
+  })
+  if (input.kind === 'upload') {
+    // A sanitized target can be another unresolved entry's raw name. Reserve
+    // independent item keys now so applying either choice cannot hit uq_task_path.
+    const suggested_paths = new Set((preflight?.items ?? []).flatMap(item => item.resolution ? [item.resolution.to.toLowerCase()] : []))
+    const reserved = new Set([... items.map(item => item.path.toLowerCase()), ... suggested_paths])
+    for (const [index, item] of items.entries()) {
+      if (! item.result?.resolve)
+        continue
+      let path = `__pending_upload_${index}`
+      while (reserved.has(path.toLowerCase()) && (path !== item.path || suggested_paths.has(path.toLowerCase())))
+        path = `_${path}`
+      reserved.add(path.toLowerCase())
+      item.path = path
+    }
+  }
+  const has_resolution = items.some(item => item.result?.resolve)
+  const all_refused = items.length > 0 && items.every(item => item.status === 'skipped')
   const created = await create_task({
+    retry: input.retry,
     scope_id: input.scope_id,
     kind: input.kind,
     payload: input.payload,
-    items: task_item_paths(input.kind, input.payload),
+    items,
     actor_id: input.actor_id,
     client_id: input.client_id,
+    status: has_resolution ? 'paused' : all_refused ? 'done' : 'queued',
   })
-  try {
-    await dispatch_task(created.task.id)
+  if (created.task.status === 'paused' || created.task.status === 'done') {
+    // Waiting for a user's decision is durable state; an all-refused batch is
+    // already terminal and should not enter the runner.
   }
-  catch {
-    // The failure is recorded on the task; the async API reports state.
+  else if (input.kind === 'encrypt' || input.kind === 'decrypt') {
+    void dispatch_task(created.task.id).catch((error) => {
+      log_error('content task dispatch failed', {
+        task_id: created.task.id,
+        kind: input.kind,
+        ... error_fields(error),
+      })
+    })
+  }
+  else {
+    try {
+      await dispatch_task(created.task.id)
+    }
+    catch {
+      // The failure is recorded on the task; the async API reports state.
+    }
   }
   // A new task is a membership change: tell peers to fold it into their list.
   publish_refresh({ resource: sync_resource('content_story_tasks', created.task.scope_id) })
+  await publish_task_state(created.task.id)
   const current = await get_task(created.task.id)
   return current ?? created
 }
 
-/** Cancels a task; a running one is a 409 (phase-1 executors finish within the request). */
+/** Retry a terminal failed attempt, preserving its operation and original payload. */
+export async function retry_content_task_item(input: {
+  task_id: number
+  item_id: number
+  source_file_name: string
+  size: number
+  actor_id: number
+  client_id: string | null
+}) {
+  const previous = await get_task(input.task_id)
+  const item = previous?.items.find(item => item.id === input.item_id)
+  if (! previous || ! item)
+    throw new ApiError(404, '原任务项不存在或已过期')
+  const existing = await get_retry_task(item.id)
+  if (existing) {
+    // The first request can commit between our two reads; return the new marker.
+    const updated = await get_task(previous.task.id)
+    if (! updated)
+      throw new ApiError(409, '原任务已过期，请刷新查看新任务')
+    return { previous: updated, current: existing }
+  }
+  if (item.superseded_at || item.status !== 'failed' || ! ['failed', 'done'].includes(previous.task.status))
+    throw new ApiError(409, '该任务项不能重新创建，请继续当前任务')
+  const kind = previous.task.kind
+  if (kind === 'upload' && item.staging_key)
+    throw new ApiError(409, '该上传仍可续传，请继续原任务')
+  let payload: Record<string, unknown>
+  if (kind === 'upload') {
+    const uploads = (previous.task.payload as unknown as ContentTaskUploadPayload).uploads
+    const entry = uploads.find(entry => entry.path === item.path)
+    if (! entry)
+      throw new ApiError(409, '原上传信息不存在，请刷新')
+    if (input.source_file_name !== (entry.source_file_name ?? attachment_base_name(entry.path)) || input.size !== entry.size)
+      throw new ApiError(400, '请选择名称和大小一致的原文件')
+    payload = { uploads: [{ ... entry }] }
+  }
+  else if (kind === 'replace' || kind === 'redact') {
+    payload = structuredClone(previous.task.payload)
+    const source = kind === 'replace' ? (payload.source_file_name ?? payload.file_name) : null
+    if (input.size !== payload.size || (source && input.source_file_name !== source))
+      throw new ApiError(400, '请选择名称和大小一致的原文件')
+  }
+  else {
+    throw new ApiError(400, '该任务类型不支持上传重试')
+  }
+  const current = await create_content_task({
+    scope_id: previous.task.scope_id, kind, payload,
+    actor_id: input.actor_id, client_id: input.client_id,
+    retry: { task_id: previous.task.id, item_id: item.id, base_payload: previous.task.payload },
+  })
+  const updated = await get_task(previous.task.id)
+  if (! updated)
+    throw new ApiError(409, '原任务已过期，请刷新查看新任务')
+  await publish_task_state(previous.task.id)
+  return { previous: updated, current }
+}
+
+/**
+ * Cancels a task. A task still waiting (queued, or paused mid-transfer) is
+ * cancelled outright; one the runner is executing right now can only be marked
+ * `cancelling` — the executor notices at its next item boundary and the
+ * dispatch winds it down onto `cancelled` (which is also what releases its
+ * locks and its stage).
+ */
 export async function cancel_content_task(task_id: number): Promise<ContentTaskWithItems> {
   const current = await get_task(task_id)
   if (! current)
     throw new ApiError(404, '任务不存在或已被删除')
+  if (current.task.status === 'running' && (current.task.kind === 'encrypt' || current.task.kind === 'decrypt')) {
+    await transition_task(task_id, 'cancelling')
+    publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
+    return (await get_task(task_id)) ?? current
+  }
+  if (current.task.status === 'cancelled')
+    return current
+  if (current.task.status === 'running')
+    await transition_task(task_id, 'cancelling')
   await transition_task(task_id, 'cancelled')
   // A cancelled task keeps nothing: its paths are freed and whatever it staged
   // is released — cancelling is the user saying the transfer is never coming back.
@@ -69,10 +202,119 @@ export async function resume_content_task(task_id: number): Promise<ContentTaskW
   const current = await get_task(task_id)
   if (! current)
     throw new ApiError(404, '任务不存在或已被删除')
+  if (current.items.some(item => item.result?.resolve))
+    throw new ApiError(409, '请先处理待确认的名称')
+  if (current.items.some(item => item.paused_at))
+    throw new ApiError(409, '请对已暂停的文件选择继续上传')
   await transition_task(task_id, 'queued')
+  // The client resumes bytes immediately after this response. Prepare transfer
+  // items before returning so resumeTaskItem cannot race the periodic runner.
+  if (['upload', 'replace', 'redact'].includes(current.task.kind))
+    await dispatch_task(task_id)
   kick_task_runner()
   publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
   return (await get_task(task_id)) ?? current
+}
+
+export async function pause_content_task_item(task_id: number, item_id: number) {
+  const current = await set_transfer_paused(task_id, item_id, true)
+  publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
+  await publish_task_state(task_id)
+  return current
+}
+
+export async function continue_content_task_item(task_id: number, item_id: number) {
+  const current = await set_transfer_paused(task_id, item_id, false)
+  if (current.task.status === 'queued')
+    await dispatch_task(task_id)
+  publish_refresh({ resource: sync_resource('content_story_tasks', current.task.scope_id) })
+  await publish_task_state(task_id)
+  return await require_task(task_id)
+}
+
+/** Resolves one or more durable built-in choices, then re-queues the task when none remain. */
+export async function resolve_content_task(input: {
+  task_id: number
+  resolutions: { item_id: number, choice: 'apply' | 'skip' }[]
+}): Promise<ContentTaskWithItems> {
+  const current = await get_task(input.task_id)
+  if (! current)
+    throw new ApiError(404, '任务不存在或已被删除')
+  if (current.task.status !== 'paused')
+    throw new ApiError(409, '任务已不在待处理状态，请刷新后重试')
+  if (new Set(input.resolutions.map(entry => entry.item_id)).size !== input.resolutions.length)
+    throw new ApiError(400, '待处理项重复')
+
+  const payload = structuredClone(current.task.payload)
+  const paths = await list_scope_paths(current.task.scope_id)
+  const attachments = await list_scope_attachments(current.task.scope_id)
+  const folders = new Set((await list_scope_folders(current.task.scope_id)).map(folder => folder.toLowerCase()))
+  for (const attachment of attachments) {
+    let parent = attachment_folder_of(attachment.file_name)
+    while (parent) {
+      folders.add(parent.toLowerCase())
+      parent = attachment_folder_of(parent)
+    }
+  }
+  const updates = input.resolutions.map(({ item_id, choice }) => {
+    const item = current.items.find(entry => entry.id === item_id)
+    const resolution = item?.result?.resolve as ContentTaskResolution | undefined
+    if (! item || ! resolution)
+      throw new ApiError(404, '待处理项不存在或已被解决')
+    if (choice === 'skip') {
+      return { item_id, path: item.path, status: 'skipped' as const, result: { reason: '用户选择跳过', resolution } }
+    }
+
+    let target_path = resolution.to
+    if (current.task.kind === 'replace') {
+      const replace = current.task.payload as unknown as ContentTaskReplacePayload
+      target_path = attachment_path_join(attachment_folder_of(replace.old_file_name), resolution.to)
+    }
+    const occupied_file = attachments.some(entry => entry.file_name.toLowerCase() === target_path.toLowerCase())
+    const is_folder_merge = resolution.kind === 'merge' && folders.has(target_path.toLowerCase())
+    const conflict = resolution.kind === 'merge'
+      ? occupied_file
+      : attachment_path_taken(paths, target_path, current.task.kind === 'replace' ? (current.task.payload as unknown as ContentTaskReplacePayload).old_file_name : null)
+    if (conflict && ! is_folder_merge) {
+      return { item_id, path: item.path, status: 'skipped' as const, result: { reason: '目标名称已被占用，请重新操作', resolution } }
+    }
+
+    if (current.task.kind === 'upload') {
+      const upload = (payload as unknown as ContentTaskUploadPayload).uploads
+      const entry = resolution.entry_index === undefined
+        ? upload.find(candidate => candidate.path === resolution.from)
+        : upload[resolution.entry_index]
+      if (! entry)
+        throw new ApiError(409, '上传任务内容已变化，请刷新后重试')
+      entry.source_file_name ??= attachment_base_name(resolution.from)
+      entry.path = resolution.to
+      return { item_id, path: resolution.to, status: 'pending' as const, result: null }
+    }
+    if (current.task.kind === 'replace') {
+      const replace = payload as unknown as ContentTaskReplacePayload
+      replace.source_file_name ??= replace.file_name
+      replace.file_name = resolution.to
+      return { item_id, path: target_path, status: 'pending' as const, result: null }
+    }
+    if (current.task.kind === 'folder_rename') {
+      ;(payload as unknown as { new_folder: string }).new_folder = resolution.to
+      return {
+        item_id,
+        path: item.path,
+        status: 'pending' as const,
+        result: resolution.kind === 'merge' ? { resolution_applied: { kind: 'merge' } } : null,
+      }
+    }
+    throw new ApiError(400, '该任务类型不支持名称处理')
+  })
+
+  const updated = await apply_task_resolutions(input.task_id, payload, updates, current.task.payload)
+  if (updated.task.status === 'queued')
+    await dispatch_task(input.task_id)
+  const latest = await get_task(input.task_id) ?? updated
+  publish_refresh({ resource: sync_resource('content_story_tasks', latest.task.scope_id) })
+  await publish_task_state(input.task_id)
+  return latest
 }
 
 /* ------------------------------------------------------------------------- */
@@ -118,6 +360,8 @@ export async function sign_task_parts(input: { task_id: number, item_id: number,
 function transfer_content_type(task: ContentTask, item: ContentTaskItem) {
   if (item.action === 'replace')
     return (task.payload as unknown as ContentTaskReplacePayload).content_type
+  if (item.action === 'redact')
+    return (task.payload as unknown as ContentTaskRedactPayload).content_type
   const payload = task.payload as unknown as ContentTaskUploadPayload
   return payload.uploads.find(entry => entry.path === item.path)?.mime_type ?? null
 }
@@ -148,7 +392,18 @@ export async function report_task_item(input: {
     return await require_task(task.id)
   }
 
-  const attachment = await finalize_transfer_item(task, item, input.parts ?? [])
+  let attachment: Awaited<ReturnType<typeof finalize_transfer_item>>
+  try {
+    attachment = await finalize_transfer_item(task, item, input.parts ?? [])
+  }
+  catch (error) {
+    if (! (error instanceof ApiError) || error.statusCode !== 409 || error.message !== attachment_name_conflict_message)
+      throw error
+    await update_task_item(task.id, item.id, { status: 'skipped', result: { reason: '目标名称已被占用，请重新操作' } })
+    await publish_task_state(task.id)
+    await complete_task_if_finished(task.id)
+    return await require_task(task.id)
+  }
   await update_task_item(task.id, item.id, {
     status: 'done',
     bytes_done: item.bytes_total,
@@ -182,7 +437,7 @@ async function require_active_item(task_id: number, item_id: number) {
   const item = current.items.find(entry => entry.id === item_id)
   if (! item)
     throw new ApiError(404, '任务项不存在或已被删除')
-  if (item.status !== 'active')
+  if (item.paused_at || item.superseded_at || item.status !== 'active')
     throw new ApiError(409, '任务项尚未就绪或已结束')
   return { task: current.task, item }
 }
@@ -195,11 +450,30 @@ async function run_structural_task<T>(
   actor_id: number | null,
   shape: (result: ContentTaskWithItems) => Promise<T> | T,
 ): Promise<T> {
+  const items: ContentTaskItemInput[] = task_item_paths(kind, payload)
+  if (kind === 'folder_rename') {
+    const { new_folder } = payload as { source_folder: string, new_folder: string }
+    const [folders, attachments] = await Promise.all([
+      list_scope_folders(scope_id),
+      list_scope_attachments(scope_id),
+    ])
+    const existing_folders = new Set(folders.map(folder => folder.toLowerCase()))
+    for (const attachment of attachments) {
+      for (const folder of attachment_ancestor_folders(attachment.file_name))
+        existing_folders.add(folder.toLowerCase())
+    }
+    const target_is_file = attachments.some(attachment => attachment.file_name.toLowerCase() === new_folder.toLowerCase())
+    if (existing_folders.has(new_folder.toLowerCase()) && ! target_is_file) {
+      for (const item of items) {
+        item.result = { resolution_applied: { kind: 'merge' } }
+      }
+    }
+  }
   const created = await create_task({
     scope_id,
     kind,
     payload,
-    items: task_item_paths(kind, payload),
+    items,
     actor_id,
     client_id: null,
   })

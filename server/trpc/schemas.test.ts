@@ -89,3 +89,57 @@ describe('content schemas: new names vs existing identifiers', () => {
     })
   })
 })
+
+/**
+ * Upload batches may plan two files onto one path (identical names, or names
+ * that sanitize to the same stored name). Both requests preserve the entries;
+ * the task service creates distinct items and persists an explicit resolution.
+ */
+describe('content schemas: duplicate planned upload paths', () => {
+  const content = api_schema.content
+  const batch = { uploads: [{ path: 'a.png', size: 10, mime_type: null }, { path: 'a.png', size: 10, mime_type: null }] }
+
+  it('preflightTask accepts the dupe', () => {
+    expect(content.preflight_task.safeParse({ story_id: 1, kind: 'upload', payload: batch }).success).toBe(true)
+  })
+
+  it('createTask preserves it for durable per-entry resolution', () => {
+    const result = content.create_task.safeParse({ story_id: 1, kind: 'upload', payload: batch })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('content schemas: raw names reach resolve', () => {
+  const content = api_schema.content
+
+  it('上传和替换的原始源文件名不会被 schema 去掉或清洗', () => {
+    const source_file_name = 'local source.PNG'
+    const upload = content.create_task.parse({ story_id: 1, kind: 'upload', payload: { uploads: [{ path: 'ab.png', source_file_name, size: 10, mime_type: null }] } })
+    expect(upload.payload).toMatchObject({ uploads: [{ source_file_name }] })
+    const replace = content.create_task.parse({ story_id: 1, kind: 'replace', payload: { old_file_name: 'old.png', mode: 'keep-name', file_name: 'local source.PNG', source_file_name, size: 10, mime_type: null, content_type: null } })
+    expect(replace.payload).toMatchObject({ source_file_name })
+    expect(content.create_task.safeParse({ ... upload, payload: { uploads: [{ path: 'ab.png', source_file_name: '', size: 10, mime_type: null }] } }).success).toBe(false)
+    expect(content.create_task.safeParse({ ... replace, payload: { ... replace.payload, source_file_name: '' } }).success).toBe(false)
+  })
+
+  it('preflight/create 保留上传原始空格和标点', () => {
+    const payload = { uploads: [{ path: 'Thomas’ Calculus in SI Units, 14th Edition.pdf', size: 10, mime_type: 'application/pdf' }] }
+    expect(content.preflight_task.safeParse({ story_id: 1, kind: 'upload', payload }).success).toBe(true)
+    expect(content.create_task.safeParse({ story_id: 1, kind: 'upload', payload }).success).toBe(true)
+  })
+
+  it('replace new-name 保留原始文件名，sanitize 由服务端 resolve 处理', () => {
+    expect(content.create_task.safeParse({
+      story_id: 1,
+      kind: 'replace',
+      payload: {
+        old_file_name: 'old.png',
+        mode: 'new-name',
+        size: 10,
+        mime_type: 'image/png',
+        file_name: 'new photo.PNG',
+        content_type: 'image/png',
+      },
+    }).success).toBe(true)
+  })
+})

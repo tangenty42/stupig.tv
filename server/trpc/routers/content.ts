@@ -1,23 +1,19 @@
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { get_bilibili_video_cards } from '@server/services/bilibili.service'
 import {
-  create_abridged_attachment,
   create_story,
-  decrypt_attachments,
   delete_story,
-  encrypt_attachments,
   get_story,
   list_stories,
   sign_attachment_download,
   update_story,
 } from '@server/services/content.service'
-import { cancel_content_task, create_content_task, create_folder, delete_attachment, delete_folder, move_attachment, move_attachments, move_folder, rename_attachment, report_task_item, resume_content_task, resume_task_item, sign_task_parts } from '@server/services/content/task-api.service'
+import { cancel_content_task, continue_content_task_item, create_content_task, create_folder, delete_attachment, delete_folder, move_attachment, move_attachments, move_folder, pause_content_task_item, rename_attachment, report_task_item, resolve_content_task, resume_content_task, resume_task_item, retry_content_task_item, sign_task_parts } from '@server/services/content/task-api.service'
 import { preflight_task } from '@server/services/content/task-operations.service'
 import { list_scope_tasks } from '@server/services/content/task.service'
 import { permission_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
 import { has_permission } from '@shared/permissions'
-import * as z from 'zod'
 
 const content_admin_procedure = permission_procedure('content_manage', 'full')
 
@@ -104,22 +100,6 @@ export const content_router = router({
       ctx.auth_user.id,
     )),
 
-  encryptAttachments: content_admin_procedure
-    .input(api_schema.content.encrypt_attachments)
-    .mutation(({ input }) => encrypt_attachments(input.id, input.file_names)),
-
-  decryptAttachments: content_admin_procedure
-    .input(api_schema.content.decrypt_attachments)
-    .mutation(({ input }) => decrypt_attachments(input.id, input.file_names)),
-
-  createAbridgedAttachment: content_admin_procedure
-    .input(api_schema.content.create_abridged_attachment)
-    .mutation(({ input }) => {
-      const story_id = z.coerce.number().int().positive().parse(input.get('story_id'))
-      const source_file_name = z.string().min(1).max(255).parse(input.get('source_file_name'))
-      return create_abridged_attachment(story_id, source_file_name, input)
-    }),
-
   createFolder: content_admin_procedure
     .input(api_schema.content.create_folder)
     .mutation(({ ctx, input }) => create_folder(input.id, input.folder, ctx.auth_user.id)),
@@ -141,7 +121,7 @@ export const content_router = router({
     .input(api_schema.content.get_bilibili_video_cards)
     .query(({ input }) => get_bilibili_video_cards(input.hrefs)),
 
-  /* ---- 附件任务队列（docs/content-task-refactor.md §7）---- */
+  /* ---- 附件任务队列（docs/old/content-task-refactor.md §7）---- */
 
   preflightTask: content_admin_procedure
     .input(api_schema.content.preflight_task)
@@ -165,11 +145,27 @@ export const content_router = router({
     .input(api_schema.content.resume_task)
     .mutation(({ input }) => resume_content_task(input.task_id)),
 
+  pauseTaskItem: content_admin_procedure
+    .input(api_schema.content.pause_task_item)
+    .mutation(({ input }) => pause_content_task_item(input.task_id, input.item_id)),
+
+  continueTaskItem: content_admin_procedure
+    .input(api_schema.content.continue_task_item)
+    .mutation(({ input }) => continue_content_task_item(input.task_id, input.item_id)),
+
+  retryTaskItem: content_admin_procedure
+    .input(api_schema.content.retry_task_item)
+    .mutation(({ ctx, input }) => retry_content_task_item({ ... input, actor_id: ctx.auth_user.id, client_id: input.client_id ?? null })),
+
+  resolveTask: content_admin_procedure
+    .input(api_schema.content.resolve_task)
+    .mutation(({ input }) => resolve_content_task(input)),
+
   listScopeTasks: content_admin_procedure
     .input(api_schema.content.list_scope_tasks)
     .query(({ input }) => list_scope_tasks(input.story_id)),
 
-  /* ---- 传输段（上传任务专用）---- */
+  /* ---- 传输段（上传 / 替换 / 删减版任务）---- */
 
   signTaskParts: content_admin_procedure
     .input(api_schema.content.sign_task_parts)

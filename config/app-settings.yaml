@@ -55,9 +55,11 @@ app:
     link:
       fileNameMaxBytes: 255
     draft:
-      schemaVersion: 2
+      schemaVersion: 3
       storagePrefix: stupig_content_draft_
       autosaveDelayMs: 1000
+    reference:
+      legacyCompat: true
     upload:
       handleStorageName: stupig_content_upload_handles
       partSizeMb: 8
@@ -76,6 +78,9 @@ app:
       retentionHours: 24
       sweepIntervalSeconds: 60
       clientIdStorageName: stupig_content_task_client_id
+    # 加解密是整块 buffer 处理（AES-GCM 单 tag 认证整段，不能流式），这个上限就是
+    # 它的内存/耗时边界：只挡加密入口——现存每一份密文都出自 ≤ 该值的明文，解密天然
+    # 在界内。调大它等于放宽整块处理的边界，需要连同解密内存一起评估。
     encrypt:
       maxSizeMb: 20
 

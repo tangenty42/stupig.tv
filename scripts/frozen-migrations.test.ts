@@ -29,6 +29,8 @@ import { describe, expect, it } from 'vitest'
  * existed, and that copy's hash is not what any deployment sees.
  */
 const frozen_migrations: Record<string, string> = {
+  '20261013131000_content_task_pause.sql': '0c0fff571c758b4927ef8624ec8dd5d381ce4ff28de3694bb341d59e7c09f092',
+  '20261013130000_content_task_retries.sql': '100c26d0c9392981305a0b4df2ae6920e3f4cb0e597ffeaff5dfac47424361bb',
   '20261008000000_init_schema.sql': 'e2b16a74b603fe579ab6b832e1664e61680b9f8e45dd64c3fefe218373214853',
   '20261008140000_content_locks.sql': '3ab1b3e673c11a33ba0f9e81756c33114f76f336ff2160faa50d956bf77429e6',
   '20261008160000_content_tasks.sql': 'e0aa6dbd70ad16ed0a4d0010a5e74a92f585af37a9c364c8e39875716c9a9422',

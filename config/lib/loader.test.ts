@@ -91,6 +91,19 @@ describe('deployment configuration', () => {
     expect(() => load_config({ ... deployment_env, NUXT_OTP_DEBUG: 'true' })).toThrow(/app\.otp\.debug/)
   })
 
+  it('captcha debug defaults on only in development and can be suppressed there', () => {
+    const config = load_config({ ... deployment_env, NODE_ENV: 'development' })
+    expect(config.app).toHaveProperty('captcha.debug', true)
+    expect(public_config_from(config)).toHaveProperty('app.captcha.debug', true)
+    expect(load_config({ ... deployment_env, NODE_ENV: 'development', NUXT_CAPTCHA_DEBUG: 'false' }).app).toHaveProperty('captcha.debug', false)
+    expect(() => load_config({ ... deployment_env, NODE_ENV: 'development', NUXT_CAPTCHA_DEBUG: 'yes' })).toThrow(/app\.captcha\.debug/)
+  })
+
+  it.each(['production', 'test', 'staging', ''])('rejects captcha debug outside development (%s)', (NODE_ENV) => {
+    expect(load_config({ ... deployment_env, NODE_ENV, NUXT_CAPTCHA_DEBUG: 'false' }).app).toHaveProperty('captcha.debug', false)
+    expect(() => load_config({ ... deployment_env, NODE_ENV, NUXT_CAPTCHA_DEBUG: 'true' })).toThrow(/app\.captcha\.debug/)
+  })
+
   it('loads database configuration without unrelated services or secrets', () => {
     expect(load_database_config(database_env)).toEqual({ host: 'db', port: 3306, password: 'placeholder', user: 'stupig_tv', name: 'stupig_tv' })
   })
@@ -100,6 +113,7 @@ describe('deployment configuration', () => {
       site: { url: 'https://www.stupig.tv', indexable: false, staticBaseUrl: 'https://stupig.oss.tangenty.cn' },
       mqtt: { web: { wsUrl: public_env.MQTT_WEB_URL } },
       aliyun: { captcha: { appId: '804af2e773219386ce8ff865dac64fbe' } },
+      app: { captcha: { debug: false } },
     })
     expect(() => load_config({ ... deployment_env, MQTT_WEB_URL: 'https://invalid.example.com' })).toThrow(/mqtt\.web\.wsUrl/)
   })

@@ -76,9 +76,12 @@ export const settings: Settings = {
         fileNameMaxBytes: 255,
       },
       draft: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         storagePrefix: 'stupig_content_draft_',
         autosaveDelayMs: 1000,
+      },
+      reference: {
+        legacyCompat: true,
       },
       upload: {
         handleStorageName: 'stupig_content_upload_handles',

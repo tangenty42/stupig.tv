@@ -14,6 +14,11 @@ export interface UploadFileHandleRecord {
 
 const OBJECT_STORE = 'handles'
 
+/** Source identity survives destination rename/resolve and duplicate file names. */
+export function upload_source_handle_key(story_id: number, item_id: number) {
+  return `${story_id}:item:${item_id}`
+}
+
 function open_db(db_name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(db_name, 1)

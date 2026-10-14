@@ -297,30 +297,14 @@
       @save="save_abridged_attachment"
     />
 
-    <MyDialog
-      :visible="!! skipped_notice"
-      header="部分项目已跳过"
-      @update:visible="skipped_notice = null"
-    >
-      <div v-if="skipped_notice" class="space-y-3 text-sm text-slate-600 dark:text-slate-300">
-        <span>{{ skipped_notice.message }}</span>
-        <ul class="max-h-48 space-y-1 overflow-y-auto rounded-sm border border-slate-200 p-2 font-mono text-xs dark:border-slate-700">
-          <li
-            v-for="item in skipped_notice.items"
-            :key="item.name"
-            class="truncate"
-          >
-            {{ item.name }}{{ item.reason ? ` — ${item.reason}` : '' }}
-          </li>
-        </ul>
-      </div>
-
-      <template #footer>
-        <div class="flex justify-end">
-          <Button label="OK" @click="skipped_notice = null" />
-        </div>
-      </template>
-    </MyDialog>
+    <MyContentResolveDialog
+      :visible="!! resolve_dialog"
+      :message="resolve_dialog?.message"
+      :items="resolve_dialog?.items ?? []"
+      :pending="resolve_dialog_pending"
+      @update:visible="on_resolve_dialog_visibility"
+      @resolve="submit_task_resolutions"
+    />
 
     <ClientOnly>
       <MyImagePreview
@@ -334,13 +318,13 @@
 
 <script setup lang="ts">
 import type { ContentStoryMeta } from '@shared/content-markdown'
-import type { ContentAttachmentScope, ContentStoryAttachment, ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
+import type { ContentAttachmentScope, ContentStoryAttachment, ContentStoryDetail, ContentStorySummary, ContentTaskState } from '@shared/types/content'
 import type MyContentMarkdownEditor from '~/components/MyContent/Markdown/Editor.vue'
 import type { ContentDraftRecord } from '~/stores/contentDraft'
 import type { UploadEntry } from '~/stores/contentTasks'
 import type { AttachmentListItem, AttachmentUploadPick, MyContentAttachmentRow } from '~/utils/content/attachment'
-import type { PendingUploadRow } from '~/utils/content/task-row'
-import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, compare_attachment_names, decrypted_attachment_name, encrypted_attachment_suffix, extract_attachment_names, is_encrypted_attachment, link_file_name_illegal_chars, parse_story_markdown, rename_attachment_references, split_attachment_editable_name, story_markdown_template } from '@shared/content-markdown'
+import type { PendingTaskRow } from '~/utils/content/task-row'
+import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, compare_attachment_names, decrypted_attachment_name, extract_attachment_names, is_encrypted_attachment, link_file_name_illegal_chars, parse_story_markdown, rename_attachment_references, split_attachment_editable_name, story_markdown_template } from '@shared/content-markdown'
 import { has_permission } from '@shared/permissions'
 import { settings } from '@shared/settings'
 import { sync_resource } from '@shared/types/sync'
@@ -350,8 +334,8 @@ import { useContentTasksStore } from '~/stores/contentTasks'
 import { attachment_picks_from_data_transfer } from '~/utils/content/attachment'
 import { content_attachment_drag_file_names, content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, get_content_attachment_drag_data, get_content_folder_drag_data, set_content_attachment_drag_data, set_content_folder_drag_data } from '~/utils/content/attachment-drag'
 import { format_event_range } from '~/utils/content/event'
-import { pending_upload_card, pending_upload_status } from '~/utils/content/task-row'
-import { delete_upload_file_handle, load_upload_file_handle, save_upload_file_handle } from '~/utils/content/upload-file-handle'
+import { pending_upload_card, pending_upload_source_name, pending_upload_status, task_item_display_name } from '~/utils/content/task-row'
+import { delete_upload_file_handle, load_upload_file_handle, save_upload_file_handle, upload_source_handle_key } from '~/utils/content/upload-file-handle'
 
 definePageMeta({
   middleware: 'require-content-manage-auth',
@@ -459,8 +443,13 @@ type AttachmentRenameTarget
 
 const save_pending = ref(false)
 const delete_pending = ref(false)
-/** Files a batch operation had to leave behind, with the reason for each; drives the notice dialog. */
-const skipped_notice = ref<{ message: string, items: { name: string, reason?: string }[] } | null>(null)
+/** One shared dialog for durable resolve choices and read-only skipped reports. */
+const resolve_dialog = ref<{
+  task_id: number | null
+  message: string
+  items: { name: string, reason?: string, item_id?: number, resolution?: PendingTaskRow['resolution'] }[]
+} | null>(null)
+const resolve_dialog_pending = ref(false)
 const rename_visible = ref(false)
 const rename_pending = ref(false)
 const rename_target = ref<AttachmentRenameTarget | null>(null)
@@ -483,8 +472,6 @@ const redact_target = ref<ContentStoryAttachment | null>(null)
 const redact_pending = ref(false)
 /** File names with an in-flight delete; a batch marks every member, not just one. */
 const delete_attachment_pending = reactive(new Set<string>())
-/** File names with an in-flight encrypt/decrypt; drives the row spinner like delete. */
-const encrypt_attachment_pending = reactive(new Set<string>())
 const move_attachment_pending = ref<{
   names: string[]
   target: string | null
@@ -731,72 +718,48 @@ const selected_folder_paths = computed(() => [... selection]
 /** The selected stored files — what a bulk encrypt/decrypt actually acts on. */
 const selected_stored_attachments = computed(() => stored_attachments.value.filter(attachment => selection.has(file_selection_key(attachment.file_name))))
 
+/** Stored file names with a live server-side encrypt/decrypt task item (the row's spinner state). */
+const encryption_task_pending_names = computed(() => {
+  const names = new Set<string>()
+  for (const row of tasks_store.pending_rows) {
+    if (row.kind === 'encrypt' || row.kind === 'decrypt')
+      names.add(row.path)
+  }
+  return names
+})
+
 /** The size cap a file must fit under to be encrypted. */
 const max_encrypt_bytes = settings.app.content.encrypt.maxSizeMb * 1024 * 1024
 
 /** The state abbreviations the menus report in place of an action they cannot offer. */
 const encrypted_reason = '已加密'
 
-/** Whether encrypting or decrypting this file would land on a path the scope already holds. */
-function encryption_target_taken(kind: 'encrypt' | 'decrypt', attachment: ContentStoryAttachment) {
-  const target = kind === 'encrypt'
-    ? `${attachment.file_name}${encrypted_attachment_suffix}`
-    : decrypted_attachment_name(attachment.file_name)
-  // The scope's files and folders share one path space, so a folder can be the
-  // thing in the way (an existing 删减版 holds the very name a decrypt needs).
-  return attachment_path_taken(stored_scope_paths.value, target)
-}
-
-/**
- * Why this file cannot take the encrypt/decrypt action, or null when it can.
- * The one place the per-file rule lives: the menu aggregates these into its
- * reasons, and the batch execution uses them to drop exactly those files.
- */
-function encryption_skip_reason(kind: 'encrypt' | 'decrypt', attachment: ContentStoryAttachment) {
-  if (kind === 'encrypt') {
-    if (attachment.is_encrypted)
-      return encrypted_reason
-    if (attachment.file_size > max_encrypt_bytes)
-      return '文件太大'
-  }
-  else if (! attachment.is_encrypted) {
-    return '未加密'
-  }
-  return encryption_target_taken(kind, attachment) ? '文件名冲突' : null
-}
-
-/** Splits a target set into what the action can take and what it has to leave behind. */
-function split_encryption_targets(kind: 'encrypt' | 'decrypt', attachments: ContentStoryAttachment[]) {
-  const planned: ContentStoryAttachment[] = []
-  const skipped: { name: string, reason: string }[] = []
-  for (const attachment of attachments) {
-    const reason = encryption_skip_reason(kind, attachment)
-    if (reason)
-      skipped.push({ name: attachment.file_name, reason })
-    else
-      planned.push(attachment)
-  }
-  return { planned, skipped }
-}
-
 /**
  * Why encrypt/decrypt cannot run on this target set, or empty when it can.
  *
- * The rule for a batch is "at least one item has to be able to take it": the
- * rest is skipped when it runs, so a mixed selection still does the work it
- * can. Only when nothing qualifies does the entry turn into its reasons — and
- * there can be several, because different members can be inapplicable for
- * different causes (a selection holding encrypted files and an oversized
- * plaintext one is both 已加密 and 文件太大).
+ * Only the data-level gates live here (the row's own state and size); the name
+ * arbitration belongs to preflightTask, which reports it on the items it
+ * refuses. The rule for a batch is "at least one item has to be able to take
+ * it": the rest is skipped when it runs, so a mixed selection still does the
+ * work it can. Only when nothing qualifies does the entry turn into its
+ * reasons — and there can be several, because different members can be
+ * inapplicable for different causes (a selection holding encrypted files and
+ * an oversized plaintext one is both 已加密 and 文件太大).
  */
 function encryption_blocked_reasons(kind: 'encrypt' | 'decrypt', attachments: ContentStoryAttachment[]) {
   if (! attachments.length)
     return [kind === 'encrypt' ? '无可加密的附件' : '无可解密的附件']
   const skipped: string[] = []
   for (const attachment of attachments) {
-    const reason = encryption_skip_reason(kind, attachment)
-    if (reason)
-      skipped.push(reason)
+    if (kind === 'encrypt') {
+      if (attachment.is_encrypted)
+        skipped.push(encrypted_reason)
+      else if (attachment.file_size > max_encrypt_bytes)
+        skipped.push('文件太大')
+    }
+    else if (! attachment.is_encrypted) {
+      skipped.push('未加密')
+    }
   }
   // Anything without a reason can take the action, so it stays available.
   if (skipped.length < attachments.length)
@@ -905,11 +868,11 @@ function file_row_state(item: AttachmentListItem) {
     selection_edges: null,
     selection_count: selected ? selection.size : 0,
     delete_pending: item.kind === 'stored' && delete_attachment_pending.has(item.card.file_name),
-    delete_disabled: delete_attachment_pending.size > 0 || encrypt_attachment_pending.size > 0 || structure_locked.value,
+    delete_disabled: delete_attachment_pending.size > 0 || encryption_task_pending_names.value.size > 0 || structure_locked.value,
     delete_blocked_reasons: bulk
       ? selection_delete_blocked_reasons.value
       : item.kind === 'stored' && is_referenced(item.attachment.file_name) ? [delete_reference_reason] : [],
-    encrypt_pending: item.kind === 'stored' && encrypt_attachment_pending.has(item.card.file_name),
+    encrypt_pending: item.kind === 'stored' && encryption_task_pending_names.value.has(item.card.file_name),
     encrypt_blocked_reasons: encryption_blocked_reasons('encrypt', check_targets),
     decrypt_blocked_reasons: encryption_blocked_reasons('decrypt', check_targets),
     replace_blocked_reasons: item.kind === 'stored' && item.attachment.is_encrypted ? [encrypted_reason] : [],
@@ -951,7 +914,7 @@ const file_rows = computed<MyContentAttachmentRow[]>(() => {
           selection_edges: null,
           selection_count: folder_selected ? selection.size : 0,
           delete_pending: delete_folder_pending.has(folder),
-          delete_disabled: delete_attachment_pending.size > 0 || delete_folder_pending.size > 0 || encrypt_attachment_pending.size > 0 || structure_locked.value,
+          delete_disabled: delete_attachment_pending.size > 0 || delete_folder_pending.size > 0 || encryption_task_pending_names.value.size > 0 || structure_locked.value,
           delete_blocked_reasons: folder_bulk
             ? selection_delete_blocked_reasons.value
             : folder_delete_blocked_reasons(folder),
@@ -1011,6 +974,7 @@ const file_list_handlers = {
   'decrypt': (event: MouseEvent, row: MyContentAttachmentRow) => on_file_row_encrypt(event, row, 'decrypt'),
   'delete': on_file_row_delete,
   'retry': on_file_row_retry,
+  'resolve': on_file_row_resolve,
   'pause': on_file_row_pause,
   'cancel': on_file_row_cancel,
   'remove': on_file_row_remove,
@@ -1461,13 +1425,17 @@ async function save_abridged_attachment(file: File) {
     return
   redact_pending.value = true
   try {
-    await content.create_abridged_attachment(story_id.value, target.file_name, file)
+    const result = await tasks_store.start_redact({
+      file,
+      source_file_name: target.file_name,
+      on_landed: () => ok('删减版已创建'),
+    })
+    if (result.rejected.length) {
+      show_skipped_attachments(result.rejected.map(item => ({ name: item.path, reason: item.reason })), '以下项目无法创建删减版，已跳过：')
+      return
+    }
     redact_visible.value = false
     redact_target.value = null
-    story.value = await fetch_story()
-    if (story.value)
-      draft_store.advance_base(story.value.markdown, story.value.revision)
-    ok('删减版已创建')
   }
   catch (ex) {
     report_operation_error(ex)
@@ -1484,19 +1452,39 @@ function on_file_row_encrypt(event: MouseEvent, row: MyContentAttachmentRow, kin
   const targets = from_selection
     ? stored_attachments.value.filter(attachment => selected_file_names.value.includes(attachment.file_name))
     : item?.kind === 'stored' ? [item.attachment] : []
-  if (! targets.length || encrypt_attachment_pending.size)
+  if (! targets.length)
     return
-
-  // The batch is split here, not by the server: the action is refused as a
-  // whole when a single member cannot take it (an already-encrypted file, one
-  // over the size cap, a taken target name), so the doable part is executed and
-  // the rest is reported instead.
-  const { planned, skipped } = split_encryption_targets(kind, targets)
   // Selected folders cannot take the action either, and they are part of what
   // the user selected, so they are counted and listed alongside the files.
-  if (from_selection)
-    skipped.push(... selected_folder_paths.value.map(name => ({ name, reason: '文件夹' })))
+  const folder_skipped = from_selection
+    ? selected_folder_paths.value.map(name => ({ name, reason: '文件夹' }))
+    : []
+  void execute_attachment_encryption(event, kind, targets.map(attachment => attachment.file_name), folder_skipped)
+}
+
+/**
+ * Runs an encrypt/decrypt batch through the task queue: preflight decides what
+ * the server will take (its per-item reasons are what the skipped notice
+ * reports), the confirm keeps the wording the synchronous flow used, and the
+ * task's items land on the pending rows for progress.
+ */
+async function execute_attachment_encryption(event: MouseEvent, kind: 'encrypt' | 'decrypt', names: string[], skipped: { name: string, reason: string }[]) {
   const verb = kind === 'encrypt' ? '加密' : '取消加密'
+  let verdicts
+  try {
+    verdicts = await content.preflight_task(story_id.value, kind, { file_names: names })
+  }
+  catch (ex) {
+    report_operation_error(ex)
+    return
+  }
+  const planned: string[] = []
+  for (const verdict of verdicts.items) {
+    if (verdict.ok)
+      planned.push(verdict.path)
+    else
+      skipped.push({ name: verdict.path, reason: verdict.reason ?? `无法${verb}` })
+  }
   if (! planned.length) {
     show_skipped_attachments(skipped, `以下项目无法${verb}，已全部跳过：`)
     return
@@ -1505,40 +1493,19 @@ function on_file_row_encrypt(event: MouseEvent, row: MyContentAttachmentRow, kin
     ? `确定要${verb}选中的 ${planned.length} 个附件吗？`
     : `确定要${verb}该附件吗？`
   confirm_require(event, skipped.length ? `${message}（另有 ${skipped.length} 个项目将跳过）` : message, () => {
-    void execute_attachment_encryption(kind, planned, skipped)
+    void create_encryption_task(kind, planned)
   }, {
     acceptProps: { label: verb },
   })
 }
 
-async function execute_attachment_encryption(kind: 'encrypt' | 'decrypt', attachments: ContentStoryAttachment[], skipped: { name: string, reason: string }[]) {
-  const names = attachments.map(attachment => attachment.file_name)
-  for (const name of names)
-    encrypt_attachment_pending.add(name)
+async function create_encryption_task(kind: 'encrypt' | 'decrypt', names: string[]) {
   try {
-    const result = kind === 'encrypt'
-      ? await content.encrypt_attachments(story_id.value, names)
-      : await content.decrypt_attachments(story_id.value, names)
-    const succeeded = new Set(result.succeeded)
-    const server_skipped = result.skipped.map(item => ({ name: item.file_name, reason: item.reason }))
-    // The server renamed the rows (± .good) and, for a stored story, rewrote
-    // the stored markdown; follow the rename in the local draft like a rename.
-    for (const attachment of attachments.filter(attachment => succeeded.has(attachment.file_name))) {
-      const new_name = kind === 'encrypt' ? `${attachment.file_name}${encrypted_attachment_suffix}` : decrypted_attachment_name(attachment.file_name)
-      markdown.value = rename_attachment_references(markdown.value, attachment.file_name, new_name)
-    }
-    story.value = await fetch_story()
-    if (story.value)
-      draft_store.advance_base(story.value.markdown, story.value.revision)
+    await tasks_store.start_server_task(kind, names)
     clear_selection()
-    show_skipped_attachments([... skipped, ... server_skipped], `以下项目无法${kind === 'encrypt' ? '加密' : '取消加密'}，已跳过：`)
   }
   catch (ex) {
     report_operation_error(ex)
-  }
-  finally {
-    for (const name of names)
-      encrypt_attachment_pending.delete(name)
   }
 }
 
@@ -1744,7 +1711,7 @@ function upload_handle_key(path: string) {
 }
 
 /** The bytes a landed item's reference is inserted at; the caret lives here, not on the server. */
-function upload_landing_handler(pick: AttachmentUploadPick, insert_position: number | null) {
+function upload_landing_handler(pick: Pick<AttachmentUploadPick, 'file_name'>, insert_position: number | null) {
   return (attachment: ContentStoryAttachment) => {
     // The story's own list arrives through the content_story refresh; merging
     // here just keeps the row visible until it does.
@@ -1772,37 +1739,47 @@ async function upload_picks(picks: AttachmentUploadPick[], insert_position: numb
   if (! picks.length)
     return
 
-  const bad_suffix = picks.filter(pick => is_encrypted_attachment(pick.file_name))
-  if (bad_suffix.length)
-    error('文件名中包含非法字段')
-  const accepted = picks.filter(pick => ! is_encrypted_attachment(pick.file_name))
-  if (! accepted.length)
-    return
-
-  for (const pick of accepted)
+  for (const pick of picks)
     expand_folder(attachment_folder_of(pick.file_name))
 
-  const entries: UploadEntry[] = accepted.map(pick => ({
+  const entries: UploadEntry[] = picks.map(pick => ({
     file: pick.file,
+    handle: pick.handle,
     file_name: pick.file_name,
     insert_position,
     on_landed: upload_landing_handler(pick, insert_position),
   }))
-  const result = await tasks_store.start_uploads(entries)
-  for (const refusal of result.rejected)
-    error(`${attachment_base_name(refusal.path)}：${refusal.reason}`)
+  // A preflight refusal (an illegal name fails the whole request, not one
+  // entry) has no per-item verdict to show, so it is reported directly.
+  const result = await tasks_store.start_uploads(entries).catch((ex: unknown) => {
+    report_operation_error(ex)
+    return null
+  })
+  if (! result)
+    return
+  if (result.task?.task.status === 'paused') {
+    open_task_resolutions(result.task)
+  }
+  else if (result.rejected.length) {
+    const skipped = result.rejected.map(item => ({ name: item.path, reason: item.reason }))
+    show_skipped_attachments(skipped, '以下项目无法上传，已跳过：')
+  }
 
   // The handle is stored under the picked path; a name the server had to suffix
-  // simply loses the hint and asks for the file again on a later resume.
-  for (const pick of accepted) {
-    if (! pick.handle)
+  // moves to its resolved path later. For exact duplicate names only the first
+  // handle can use the shared raw-path key until the other item is resolved.
+  const stored_handle_paths = new Set<string>()
+  for (const [index, pick] of picks.entries()) {
+    if (! pick.handle || stored_handle_paths.has(pick.file_name) || result.task?.items[index]?.status === 'skipped')
       continue
+    stored_handle_paths.add(pick.file_name)
     void save_upload_file_handle(upload_handle_db_name, upload_handle_key(pick.file_name), {
       file_name: pick.file.name,
       file_size: pick.file.size,
       handle: pick.handle,
     })
   }
+  return result
 }
 
 function insert_attachment_markdown(file_name: string, is_image: boolean, position: number | null) {
@@ -1869,8 +1846,10 @@ function on_editor_files_pasted(picks: AttachmentUploadPick[], position: number 
  * File, then the remembered File System Access handle, then a picker. Returns
  * null when the user declines or picks a different file.
  */
-async function resolve_upload_file(row: PendingUploadRow): Promise<File | null> {
-  const record = await load_upload_file_handle(upload_handle_db_name, upload_handle_key(row.path)).catch(() => null)
+async function resolve_upload_file(row: PendingTaskRow): Promise<File | null> {
+  const source_key = upload_source_handle_key(story_id.value, row.item_id)
+  const record = await load_upload_file_handle(upload_handle_db_name, source_key).catch(() => null)
+    ?? await load_upload_file_handle(upload_handle_db_name, upload_handle_key(row.path)).catch(() => null)
   if (record) {
     let permission: PermissionState | null = null
     try {
@@ -1893,30 +1872,40 @@ async function resolve_upload_file(row: PendingUploadRow): Promise<File | null> 
         return file
     }
   }
-  const expected_name = record?.file_name ?? attachment_base_name(row.path)
+  const expected_name = record?.file_name ?? pending_upload_source_name(row)
   const expected_size = record?.file_size ?? row.bytes_total
-  return await pick_resume_file(expected_name, expected_size)
+  return await pick_resume_file(expected_name, expected_size, source_key)
 }
 
 /** Ask the user to re-select the source file, matching name and size (fallback B). */
-function pick_resume_file(expected_name: string, expected_size: number): Promise<File | null> {
+function pick_resume_file(expected_name: string, expected_size: number, source_key: string): Promise<File | null> {
   if (typeof window.showOpenFilePicker === 'function') {
     return window.showOpenFilePicker({ multiple: false })
       .then(async ([handle]) => {
         if (! handle)
           return null
         const file = await handle.getFile()
-        if (file.name !== expected_name || file.size !== expected_size)
+        if (file.name !== expected_name || file.size !== expected_size) {
+          error(`请选择原文件『${expected_name}』，且文件大小须与原文件一致`)
           return null
+        }
+        await save_upload_file_handle(upload_handle_db_name, source_key, { file_name: file.name, file_size: file.size, handle }).catch(() => {})
         return file
       })
-      .catch(() => null)
+      .catch((ex: unknown) => {
+        if ((ex as DOMException).name === 'AbortError')
+          return null
+        throw ex
+      })
   }
   return new Promise((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
+    input.oncancel = () => resolve(null)
     input.onchange = () => {
       const file = input.files?.[0] ?? null
+      if (file && (file.name !== expected_name || file.size !== expected_size))
+        error(`请选择原文件『${expected_name}』，且文件大小须与原文件一致`)
       resolve(file && file.name === expected_name && file.size === expected_size ? file : null)
     }
     input.click()
@@ -1928,7 +1917,7 @@ function pick_resume_file(expected_name: string, expected_size: number): Promise
  * again. The uploader skips the parts the server already has, so re-running a
  * partly finished transfer is the resume.
  */
-async function continue_upload(row: PendingUploadRow) {
+async function continue_upload(row: PendingTaskRow) {
   const entry = tasks_store.tasks.find(candidate => candidate.task.id === row.task_id)
   // Only an item the server has prepared can be driven: a queued one is still
   // waiting for its turn, and the runner flips it to active when it gets it.
@@ -1948,14 +1937,14 @@ async function continue_upload(row: PendingUploadRow) {
     file,
     // The caret is long gone after a refresh, so a resumed landing only refreshes.
     insert_position: null,
-    on_landed: upload_landing_handler({ file, file_name: row.path }, null),
+    on_landed: upload_landing_handler({ file_name: row.path }, null),
   })
 }
 
 /** The card's 暂停/继续 toggle: abort the local transfer, or start it again. */
-async function toggle_upload(row: PendingUploadRow) {
+async function toggle_upload(row: PendingTaskRow) {
   if (row.is_driving) {
-    tasks_store.pause_item(row.item_id)
+    await tasks_store.pause_item(row.item_id)
     return
   }
   await continue_upload(row)
@@ -1963,17 +1952,20 @@ async function toggle_upload(row: PendingUploadRow) {
 
 /**
  * Retries a failed row: an item the server still holds open continues from where
- * it stopped, while one it already finished with (refused, or reaped by the
- * sweeper) needs a task of its own — driven again it would only 409.
+ * it stopped, while a terminal failure needs a new task. Skipped and done
+ * items are not retryable, including stale menu events after a sync update.
  */
-async function retry_upload(row: PendingUploadRow) {
+async function retry_upload(row: PendingTaskRow) {
   const entry = tasks_store.tasks.find(candidate => candidate.task.id === row.task_id)
   const item = entry?.items.find(candidate => candidate.id === row.item_id)
-  if (item && item.status !== 'active' && item.status !== 'pending') {
-    const local = tasks_store.local_item(row.item_id)
-    await tasks_store.remove(row.task_id)
-    if (local)
-      await upload_picks([{ file: local.file, file_name: row.path }], local.insert_position)
+  if (! item || item.status === 'skipped' || item.status === 'done')
+    return
+  if (item.status === 'failed') {
+    const next = await tasks_store.retry_item(row.item_id, () => resolve_upload_file(row), upload_landing_handler({ file_name: row.path }, null))
+    if (next?.task.status === 'paused')
+      open_task_resolutions(next)
+    else if (next?.items.some(item => item.status === 'skipped'))
+      show_skipped_attachments(next.items.filter(item => item.status === 'skipped').map(item => ({ name: task_item_display_name(item), reason: String(item.result?.reason ?? '无法执行') })), '以下项目已跳过：')
     return
   }
   await continue_upload(row)
@@ -1992,7 +1984,7 @@ function batch_start_selected_uploads() {
 function batch_pause_selected_uploads() {
   for (const row of selected_upload_rows.value) {
     if (row.is_driving)
-      tasks_store.pause_item(row.item_id)
+      void tasks_store.pause_item(row.item_id).catch(report_operation_error)
   }
 }
 
@@ -2016,13 +2008,7 @@ function batch_delete_selected_uploads(event: MouseEvent) {
  * membership changes, which need a fetch.
  */
 if (import.meta.client && is_edit.value) {
-  const unsubscribe_tasks = useDataSync().subscribe(sync_resource('content_story_tasks', story_id.value), (event) => {
-    if (event?.type !== 'task_progress' || ! event.task_snapshot)
-      return
-    tasks_store.apply_snapshot(event.task_snapshot)
-  })
-  onBeforeUnmount(unsubscribe_tasks)
-  onMounted(() => void tasks_store.load().catch(report_operation_error))
+  await useContentTaskSync(story_id.value)
 }
 
 function on_attachment_copy(item: AttachmentListItem) {
@@ -2050,6 +2036,77 @@ function on_attachment_retry(item: AttachmentListItem) {
     void retry_upload(item.row).catch(report_operation_error)
 }
 
+function on_file_row_resolve(row: MyContentAttachmentRow) {
+  const item = row.item
+  if (item?.kind !== 'upload')
+    return
+  const task = tasks_store.tasks.find(entry => entry.task.id === item.row.task_id)
+  if (task)
+    open_task_resolutions(task)
+}
+
+function open_task_resolutions(task: ContentTaskState) {
+  const items = task.items.flatMap((item) => {
+    const resolution = item.result?.resolve as PendingTaskRow['resolution'] | undefined
+    if (resolution)
+      return [{ name: item.path, item_id: item.id, resolution, reason: resolution.reason }]
+    if (item.status === 'skipped' && typeof item.result?.reason === 'string')
+      return [{ name: task_item_display_name(item), reason: String(item.result.reason) }]
+    return []
+  })
+  if (! items.length)
+    return
+  resolve_dialog.value = {
+    task_id: task.task.id,
+    message: '选择按内置行为处理，或跳过对应项目。',
+    items,
+  }
+}
+
+function on_resolve_dialog_visibility(visible: boolean) {
+  if (! visible && ! resolve_dialog_pending.value)
+    resolve_dialog.value = null
+}
+
+async function submit_task_resolutions(resolutions: { item_id: number, choice: 'apply' | 'skip' }[]) {
+  const task_id = resolve_dialog.value?.task_id
+  if (task_id === null || task_id === undefined)
+    return
+  const previous = tasks_store.tasks.find(entry => entry.task.id === task_id)
+  resolve_dialog_pending.value = true
+  try {
+    const resolved = await tasks_store.resolve_task(task_id, resolutions)
+    if (resolved.task.status === 'paused') {
+      open_task_resolutions(resolved)
+      return
+    }
+    if (resolved.task.kind === 'folder_rename' && resolved.task.status === 'done' && resolved.items.some(item => item.status === 'done') && previous) {
+      const payload = previous.task.payload as { source_folder: string, new_folder: string }
+      const old_names = stored_attachments.value
+        .filter(attachment => attachment.file_name.startsWith(`${payload.source_folder}/`))
+        .map(attachment => attachment.file_name)
+      apply_local_attachment_moves(old_names.map((file_name) => {
+        const suffix = file_name.slice(payload.source_folder.length + 1)
+        return { file_name, target_folder: attachment_folder_of(`${payload.new_folder}/${suffix}`) }
+      }))
+      story.value = await fetch_story()
+      if (story.value)
+        draft_store.advance_base(story.value.markdown, story.value.revision)
+    }
+    resolve_dialog.value = null
+    const skipped = resolved.items
+      .filter(item => item.status === 'skipped' && typeof item.result?.reason === 'string')
+      .map(item => ({ name: task_item_display_name(item), reason: String(item.result?.reason) }))
+    show_skipped_attachments(skipped, '以下项目未按内置行为处理，已跳过：')
+  }
+  catch (ex) {
+    report_operation_error(ex)
+  }
+  finally {
+    resolve_dialog_pending.value = false
+  }
+}
+
 function on_attachment_pause(item: AttachmentListItem) {
   if (item.kind === 'upload')
     void toggle_upload(item.row).catch(report_operation_error)
@@ -2058,10 +2115,12 @@ function on_attachment_pause(item: AttachmentListItem) {
 function on_attachment_cancel(event: MouseEvent, item: AttachmentListItem) {
   if (item.kind !== 'upload')
     return
-  confirm_require(event, '确定要取消该文件的上传吗？', () => {
+  // A server-executed row (encrypt/decrypt) cancels the task itself.
+  const message = item.row.is_transfer ? '确定要取消该文件的上传吗？' : '确定要取消该任务吗？'
+  confirm_require(event, message, () => {
     void tasks_store.cancel(item.row.task_id).catch(report_operation_error)
   }, {
-    acceptProps: { label: '取消上传', severity: 'danger' },
+    acceptProps: { label: item.row.is_transfer ? '取消上传' : '取消', severity: 'danger' },
   })
 }
 
@@ -2311,10 +2370,7 @@ async function create_folder() {
 
 /**
  * Why the folder rename cannot be submitted (null when the name is submittable).
- * Runs the shared name rules first (so a `.good` folder is refused here rather
- * than by a server round-trip), then the scope's path space: a folder shares it
- * with the files, so a file holding the destination name collides just like
- * another folder would.
+ * Runs the shared name rules; occupied targets are resolved by the server.
  */
 const rename_folder_conflict = computed(() => {
   const source = rename_folder_target.value
@@ -2327,7 +2383,9 @@ const rename_folder_conflict = computed(() => {
   const violation = attachment_path_violation(new_folder)
   if (violation)
     return violation
-  return attachment_path_taken(stored_scope_paths.value, new_folder) ? '目标位置已有同名文件或文件夹' : null
+  // Existing targets are a durable server-side merge/rename choice, not a
+  // client-side refusal that prevents the resolve dialog from opening.
+  return null
 })
 
 function on_attachment_rename_folder(folder: string) {
@@ -2372,7 +2430,7 @@ function show_skipped_attachments(items: { name: string, reason?: string }[], me
     .sort((left, right) => compare_attachment_names(left.name, right.name))
   if (! unique.length)
     return
-  skipped_notice.value = { message, items: unique }
+  resolve_dialog.value = { task_id: null, message, items: unique }
 }
 /** Reports a delete's leftovers, files and folders alike. */
 function show_delete_skipped(names: string[]) {
@@ -2660,7 +2718,23 @@ async function move_folder_to(source_folder: string, new_folder: string) {
   }))
   move_attachment_pending.value = { names, target: attachment_folder_of(new_folder), moves, source_folder, new_folder }
   try {
-    await content.move_folder(story_id.value, source_folder, new_folder)
+    const task = await tasks_store.start_task('folder_rename', { source_folder, new_folder })
+    if (task.task.status === 'paused') {
+      open_task_resolutions(task)
+      return false
+    }
+    const skipped = task.items
+      .filter(item => item.status === 'skipped' && typeof item.result?.reason === 'string')
+      .map(item => ({ name: item.path, reason: String(item.result?.reason) }))
+    if (skipped.length) {
+      show_skipped_attachments(skipped, '以下项目无法重命名文件夹，已跳过：')
+      return false
+    }
+    if (task.task.status !== 'done') {
+      if (task.task.error)
+        error(task.task.error)
+      return false
+    }
     apply_local_attachment_moves(moves)
     story.value = await fetch_story()
     if (story.value)
@@ -2756,9 +2830,16 @@ async function start_replace_upload(file: File) {
       if (story.value)
         draft_store.advance_base(story.value.markdown, story.value.revision)
     },
+  }).catch((ex: unknown) => {
+    report_operation_error(ex)
+    return null
   })
-  for (const refusal of result.rejected)
-    error(refusal.reason)
+  if (! result)
+    return
+  if (result.rejected.length)
+    show_skipped_attachments(result.rejected.map(item => ({ name: item.path, reason: item.reason })), '以下项目无法替换，已跳过：')
+  if (result.task?.task.status === 'paused')
+    open_task_resolutions(result.task)
 }
 
 function confirm_delete_attachment(event: Event, attachment: ContentStoryAttachment) {

@@ -26,6 +26,7 @@ const config_env = {
   MQTT_TCP_PORT: '1883',
   MQTT_WEB_URL: injected_url,
   NUXT_OTP_DEBUG: 'false',
+  NUXT_CAPTCHA_DEBUG: 'false',
 }
 
 // Nuxt build declares this shape; Nitro fills its validated values from YAML at startup.
@@ -33,12 +34,14 @@ const empty_public = {
   site: { url: '', indexable: false, staticBaseUrl: '' },
   mqtt: { web: { wsUrl: '' } },
   aliyun: { captcha: { appId: '' } },
+  app: { captcha: { debug: false } },
 }
 
 const frozen_public = Object.freeze({
   site: Object.freeze({ ... empty_public.site }),
   mqtt: Object.freeze({ web: Object.freeze({ ... empty_public.mqtt.web }) }),
   aliyun: Object.freeze({ captcha: Object.freeze({ ... empty_public.aliyun.captcha }) }),
+  app: Object.freeze({ captcha: Object.freeze({ ... empty_public.app.captcha }) }),
 })
 const request_configs = new WeakMap<object, { public: Record<string, unknown> }>()
 let request_hook: ((event: object) => void) | undefined
@@ -92,6 +95,7 @@ describe('public 配置的运行期注入守卫', () => {
       site: { url: 'https://www.stupig.tv', indexable: false, staticBaseUrl: 'https://stupig.oss.tangenty.cn' },
       mqtt: { web: { wsUrl: injected_url } },
       aliyun: { captcha: { appId: '804af2e773219386ce8ff865dac64fbe' } },
+      app: { captcha: { debug: false } },
     })
     expect(frozen_public.site.url).toBe('')
     expect(JSON.stringify(request_config.public)).not.toContain('placeholder')

@@ -64,7 +64,7 @@
               <div class="w-full flex gap-2 items-center justify-between text-slate-500 dark:text-slate-400 px-2 py-1">
                 <div class="shrink-0 flex gap-2 items-center">
                   <MyIcon :name="item.icon" class="text-xl" />
-                  <span class="me-1 text-lg font-semibold">{{ item.label }}</span>
+                  <span class="text-lg font-semibold">{{ item.label }}</span>
                 </div>
                 <div class="shrink-0">
                   <Button

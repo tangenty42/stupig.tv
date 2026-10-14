@@ -46,6 +46,20 @@
             <template v-else-if="row_progress_text">{{ row_progress_text }}</template>
             <template v-else>{{ format_bytes(file_row.file_size) }}</template>
           </span>
+          <Button
+            v-if="upload?.resolution"
+            v-tooltip.top="'处理名称'"
+            class="h-7 w-7 shrink-0 p-0"
+            rounded
+            severity="secondary"
+            text
+            aria-label="处理名称"
+            @click.stop="emit('resolve')"
+          >
+            <template #icon>
+              <MyIcon name="lucide:arrow-left-right" />
+            </template>
+          </Button>
         </div>
 
         <div v-if="upload && upload.status !== 'error'" class="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -110,6 +124,7 @@ const emit = defineEmits<{
   'decrypt': [event: MouseEvent]
   'delete': [event: MouseEvent]
   'retry': []
+  'resolve': []
   'pause': []
   'cancel': [event: MouseEvent]
   'remove': [event: MouseEvent]
@@ -208,7 +223,7 @@ const upload = computed(() => data.value.kind === 'upload' ? data.value : null)
 const folder = computed(() => data.value.kind === 'folder' ? data.value : null)
 const file_row = computed(() => data.value.kind === 'folder' ? null : data.value)
 const progress_percent = computed(() => {
-  if (upload.value && upload.value.status !== 'error' && upload.value.status !== 'queued')
+  if (upload.value && ! upload.value.indeterminate && upload.value.status !== 'error' && upload.value.status !== 'queued')
     return upload.value.progress
   return null
 })
@@ -227,6 +242,8 @@ const row_pending = computed(() => {
 /** Measured progress text for the meta slot (transfer rate, or paused bytes). */
 const row_progress_text = computed(() => {
   const task = upload.value
+  if (task?.indeterminate)
+    return null
   if (task?.status === 'uploading')
     return task.speed > 0 ? format_speed(task.speed) : null
   if (task?.status === 'paused')
@@ -415,6 +432,20 @@ const menu_items = computed<AttachmentMenuItem[]>(() => {
   const task = upload.value
   if (! task)
     return []
+  if (task.resolution) {
+    return [
+      { label: '处理名称', icon_name: 'lucide:arrow-left-right', command: () => emit('resolve') },
+      { separator: true },
+      { label: '取消任务', icon_name: 'lucide:x', command: () => emit('cancel', row_anchor_event()) },
+    ]
+  }
+  // A server-executed row (encrypt/decrypt) is the runner's business: it cannot
+  // be paused or retried from here, only cancelled while it runs.
+  if (task.server_side) {
+    if (task.status === 'error')
+      return [{ label: '移除', icon_name: 'lucide:x', command: () => emit('remove', row_anchor_event()) }]
+    return [{ label: '取消', icon_name: 'lucide:x', command: () => emit('cancel', row_anchor_event()) }]
+  }
   if (selection_count.value > 1 && state.value.selected) {
     return [
       { label: `开始 ${selection_count.value} 个上传`, icon_name: 'lucide:play', command: () => emit('start-selection') },
@@ -432,7 +463,8 @@ const menu_items = computed<AttachmentMenuItem[]>(() => {
     items.push({ label: '重试上传', icon_name: 'lucide:rotate-cw', disabled: state.value.retry_disabled, command: () => emit('retry') })
   }
   if (task.status === 'uploading') {
-    items.push({ label: '暂停上传', icon_name: 'lucide:pause', command: () => emit('pause') })
+    const is_driving = props.row.item?.kind === 'upload' && props.row.item.row.is_driving
+    items.push({ label: is_driving ? '暂停上传' : '继续上传', icon_name: is_driving ? 'lucide:pause' : 'lucide:play', command: () => emit('pause') })
     items.push({ label: '取消上传', icon_name: 'lucide:x', command: () => emit('cancel', row_anchor_event()) })
   }
   else if (task.status === 'queued') {
@@ -455,6 +487,9 @@ const upload_status_text = computed(() => {
   const current = upload.value
   if (! current)
     return ''
+  // A server-executed item reports its verb, not a percentage.
+  if (current.pending_label && current.status !== 'error')
+    return current.pending_label
   if (current.status === 'queued')
     return '等待上传'
   if (current.status === 'paused') {

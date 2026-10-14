@@ -1,12 +1,13 @@
-import type { ContentTask, ContentTaskItem, ContentTaskItemStatus, ContentTaskKind, ContentTaskProgressSnapshot, ContentTaskState, ContentTaskStatus } from '@shared/types/content'
+import type { ContentTask, ContentTaskItem, ContentTaskItemStatus, ContentTaskKind, ContentTaskProgressSnapshot, ContentTaskResolution, ContentTaskState, ContentTaskStatus } from '@shared/types/content'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+import { isDeepStrictEqual } from 'node:util'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { publish_task_snapshot } from '@server/lib/sync'
 import { settings } from '@shared/settings'
 
 /**
- * Attachment task storage (docs/content-task-refactor.md §3/§5). A task is one
+ * Attachment task storage (docs/old/content-task-refactor.md §3/§5). A task is one
  * user-level operation (a batch drop, one drag move, a multi-select encrypt…)
  * decomposed into items at creation; the runner drives the status machine and
  * the path locks (lib/operation-lock) give mutual exclusion. This module owns
@@ -29,6 +30,10 @@ interface TaskRow extends RowDataPacket {
 }
 
 interface TaskItemRow extends RowDataPacket {
+  paused_at?: string | null
+  control_version?: number | string
+  retry_of_item_id?: number | null
+  superseded_at?: string | null
   id: number
   task_id: number
   path: string
@@ -80,6 +85,10 @@ function format_task(row: TaskRow): ContentTask {
 
 function format_task_item(row: TaskItemRow): ContentTaskItem {
   return {
+    paused_at: row.paused_at ?? null,
+    control_version: Number(row.control_version ?? 0),
+    retry_of_item_id: row.retry_of_item_id == null ? null : Number(row.retry_of_item_id),
+    superseded_at: row.superseded_at ?? null,
     id: Number(row.id),
     task_id: Number(row.task_id),
     path: row.path,
@@ -102,12 +111,23 @@ export function task_snapshot(state: ContentTaskState): ContentTaskProgressSnaps
     task_id: state.task.id,
     scope_id: state.task.scope_id,
     status: state.task.status,
-    items: state.items.map(item => ({
-      id: item.id,
-      status: item.status,
-      bytes_done: item.bytes_done,
-      bytes_total: item.bytes_total,
-    })),
+    items: state.items.map((item) => {
+      const resolution = (item.result?.resolve ?? item.result?.resolution) as ContentTaskResolution | undefined
+      const display_path = typeof item.result?.display_path === 'string' ? item.result.display_path : null
+      return {
+        paused_at: item.paused_at ?? null,
+        control_version: item.control_version ?? 0,
+        retry_of_item_id: item.retry_of_item_id ?? null,
+        superseded_at: item.superseded_at ?? null,
+        id: item.id,
+        path: resolution?.from ?? display_path ?? item.path,
+        status: item.status,
+        bytes_done: item.bytes_done,
+        bytes_total: item.bytes_total,
+        resolution: item.result?.resolve as ContentTaskResolution | null ?? null,
+        reason: typeof item.result?.reason === 'string' ? item.result.reason : null,
+      }
+    }),
   }
 }
 
@@ -115,6 +135,15 @@ export interface ContentTaskItemInput {
   path: string
   action: string
   bytes_total?: number
+  status?: ContentTaskItemStatus
+  result?: Record<string, unknown> | null
+}
+
+export interface ContentTaskResolutionUpdate {
+  item_id: number
+  path: string
+  status: ContentTaskItemStatus
+  result: Record<string, unknown> | null
 }
 
 /**
@@ -122,26 +151,56 @@ export interface ContentTaskItemInput {
  * createTask API) has already validated the payload; this layer only persists.
  */
 export async function create_task(input: {
+  retry?: { task_id: number, item_id: number, base_payload: Record<string, unknown> }
   scope_id: number
   kind: ContentTaskKind
   payload: Record<string, unknown>
   items: ContentTaskItemInput[]
   actor_id: number | null
   client_id: string | null
+  status?: ContentTaskStatus
 }): Promise<ContentTaskWithItems> {
   const connection = await db.getConnection()
   try {
     await connection.beginTransaction()
+    if (input.retry) {
+      // Always lock task before item, matching resume, cancel and retention deletion.
+      const [old_tasks] = await connection.execute<TaskRow[]>('SELECT * FROM content_tasks WHERE id = ? FOR UPDATE', [input.retry.task_id])
+      const old_task = old_tasks[0]
+      if (! old_task || Number(old_task.scope_id) !== input.scope_id || old_task.kind !== input.kind)
+        throw new ApiError(404, '原任务不存在或已过期')
+      const [old_items] = await connection.execute<TaskItemRow[]>('SELECT * FROM content_task_items WHERE task_id = ? FOR UPDATE', [input.retry.task_id])
+      const old_item = old_items.find(item => Number(item.id) === input.retry!.item_id)
+      if (! old_item)
+        throw new ApiError(404, '原任务项不存在或已过期')
+      const [successors] = await connection.execute<TaskItemRow[]>('SELECT * FROM content_task_items WHERE retry_of_item_id = ?', [input.retry.item_id])
+      if (successors[0]) {
+        await connection.commit()
+        const existing = await get_task(Number(successors[0].task_id))
+        if (! existing)
+          throw new ApiError(409, '重试任务已过期，请刷新')
+        return existing
+      }
+      if (old_item.superseded_at || old_item.status !== 'failed' || ! ['done', 'failed'].includes(old_task.status))
+        throw new ApiError(409, '该任务项不能重新创建，请刷新后继续当前任务')
+      if (old_task.kind === 'upload' && old_item.staging_key)
+        throw new ApiError(409, '该上传仍可续传，请继续原任务')
+      if (! isDeepStrictEqual(parse_json_column(old_task.payload), input.retry.base_payload) || input.items.length !== 1)
+        throw new ApiError(409, '原任务内容已变化，请刷新后重试')
+    }
     const [result] = await connection.execute<ResultSetHeader>(
-      'INSERT INTO content_tasks (scope_id, kind, payload, actor_id, client_id) VALUES (?, ?, CAST(? AS JSON), ?, ?)',
-      [input.scope_id, input.kind, JSON.stringify(input.payload), input.actor_id, input.client_id],
+      'INSERT INTO content_tasks (scope_id, kind, status, payload, actor_id, client_id) VALUES (?, ?, ?, CAST(? AS JSON), ?, ?)',
+      [input.scope_id, input.kind, input.status ?? 'queued', JSON.stringify(input.payload), input.actor_id, input.client_id],
     )
     const task_id = Number(result.insertId)
     for (const item of input.items) {
       await connection.execute(
-        'INSERT INTO content_task_items (task_id, path, action, bytes_total) VALUES (?, ?, ?, ?)',
-        [task_id, item.path, item.action, item.bytes_total ?? 0],
+        'INSERT INTO content_task_items (task_id, path, action, status, bytes_total, result, retry_of_item_id) VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), ?)',
+        [task_id, item.path, item.action, item.status ?? 'pending', item.bytes_total ?? 0, item.result ? JSON.stringify(item.result) : null, input.retry?.item_id ?? null],
       )
+    }
+    if (input.retry) {
+      await connection.execute('UPDATE content_task_items SET superseded_at = CURRENT_TIMESTAMP WHERE id = ? AND task_id = ?', [input.retry.item_id, input.retry.task_id])
     }
     await connection.commit()
     const created = await get_task(task_id)
@@ -167,6 +226,83 @@ export async function get_task(task_id: number): Promise<ContentTaskWithItems | 
   if (! row)
     return null
   return { task: format_task(row), items: await list_task_items(task_id) }
+}
+
+export async function get_retry_task(item_id: number) {
+  const [rows] = await db.execute<TaskItemRow[]>('SELECT * FROM content_task_items WHERE retry_of_item_id = ?', [item_id])
+  return rows[0] ? get_task(Number(rows[0].task_id)) : null
+}
+
+/** Serialize pause/resume with cancel, retry and retention on the task row. */
+export async function set_transfer_paused(task_id: number, item_id: number, paused: boolean) {
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [tasks] = await connection.execute<TaskRow[]>('SELECT * FROM content_tasks WHERE id = ? FOR UPDATE', [task_id])
+    const task = tasks[0]
+    if (! task)
+      throw new ApiError(404, '任务不存在或已过期')
+    const [items] = await connection.execute<TaskItemRow[]>('SELECT * FROM content_task_items WHERE task_id = ? FOR UPDATE', [task_id])
+    const item = items.find(item => Number(item.id) === item_id)
+    if (! item || ! ['upload', 'replace', 'redact'].includes(item.action))
+      throw new ApiError(404, '上传任务项不存在')
+    if (item.superseded_at || item.status !== 'active' || ! ['running', 'paused', 'failed'].includes(task.status))
+      throw new ApiError(409, '任务项已结束，请刷新')
+    if (items.some(item => format_task_item(item).result?.resolve))
+      throw new ApiError(409, '请先处理待确认的名称')
+    if (!! item.paused_at !== paused) {
+      await connection.execute(
+        `UPDATE content_task_items SET paused_at = ${paused ? 'CURRENT_TIMESTAMP' : 'NULL'}, control_version = control_version + 1 WHERE id = ? AND task_id = ?`,
+        [item_id, task_id],
+      )
+      item.paused_at = paused ? 'paused' : null
+    }
+    const unfinished = items.filter(item => ['pending', 'active'].includes(item.status) && ! item.superseded_at)
+    const next_status = paused
+      ? unfinished.length && unfinished.every(item => item.paused_at) ? 'paused' : task.status
+      : task.status === 'paused' || task.status === 'failed' ? 'queued' : task.status
+    if (next_status !== task.status)
+      await connection.execute('UPDATE content_tasks SET status = ?, error = NULL WHERE id = ?', [next_status, task_id])
+    if (next_status === 'paused')
+      await connection.execute('DELETE FROM content_locks WHERE task_id = ?', [task_id])
+    await connection.commit()
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
+  const state = await get_task(task_id)
+  if (! state)
+    throw new ApiError(404, '任务不存在或已过期')
+  return state
+}
+
+/** Finishing a sibling must not overwrite a concurrent continue command. */
+export async function pause_task_if_all_items_paused(task_id: number) {
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [result] = await connection.execute<ResultSetHeader>(
+      `UPDATE content_tasks SET status = 'paused' WHERE id = ? AND status = 'running'
+       AND EXISTS (SELECT 1 FROM content_task_items WHERE task_id = ? AND status IN ('pending','active') AND superseded_at IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM content_task_items WHERE task_id = ? AND status IN ('pending','active') AND superseded_at IS NULL AND paused_at IS NULL)`,
+      [task_id, task_id, task_id],
+    )
+    if (result.affectedRows)
+      await connection.execute('DELETE FROM content_locks WHERE task_id = ?', [task_id])
+    await connection.commit()
+    return !! result.affectedRows
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
 }
 
 async function list_task_items(task_id: number) {
@@ -303,6 +439,77 @@ export async function update_task_item(task_id: number, item_id: number, patch: 
   )
 }
 
+/** Applies resolve choices and resumes the task atomically after its last choice. */
+export async function apply_task_resolutions(task_id: number, payload: Record<string, unknown>, updates: ContentTaskResolutionUpdate[], base_payload: Record<string, unknown>) {
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [tasks] = await connection.execute<(TaskRow & RowDataPacket)[]>(
+      'SELECT * FROM content_tasks WHERE id = ? FOR UPDATE',
+      [task_id],
+    )
+    const task = tasks[0]
+    if (! task)
+      throw new ApiError(404, '任务不存在或已被删除')
+    if (task.status !== 'paused')
+      throw new ApiError(409, '任务已不在待处理状态，请刷新后重试')
+    // Choices were computed from a snapshot before taking the row lock. A
+    // different device may have resolved another item meanwhile; never write
+    // its old paths back over the newly committed payload.
+    if (! isDeepStrictEqual(parse_json_column(task.payload) ?? {}, base_payload))
+      throw new ApiError(409, '任务内容已变化，请刷新后重试')
+
+    const [item_rows] = await connection.execute<TaskItemRow[]>(
+      'SELECT * FROM content_task_items WHERE task_id = ? FOR UPDATE',
+      [task_id],
+    )
+    const update_by_id = new Map(updates.map(update => [update.item_id, update]))
+    for (const row of item_rows) {
+      const update = update_by_id.get(Number(row.id))
+      if (! update)
+        continue
+      const current = format_task_item(row)
+      if (! current.result || ! current.result.resolve)
+        throw new ApiError(409, '待处理项已变化，请刷新后重试')
+      await connection.execute(
+        'UPDATE content_task_items SET path = ?, status = ?, result = CAST(? AS JSON) WHERE id = ? AND task_id = ?',
+        [update.path, update.status, update.result === null ? null : JSON.stringify(update.result), update.item_id, task_id],
+      )
+    }
+    if (update_by_id.size !== updates.length || [... update_by_id.keys()].some(id => ! item_rows.some(row => Number(row.id) === id)))
+      throw new ApiError(404, '任务项不存在或已被删除')
+
+    const unresolved = item_rows.some((row) => {
+      const update = update_by_id.get(Number(row.id))
+      const result = update ? update.result : format_task_item(row).result
+      return !! result?.resolve
+    })
+    const all_terminal = item_rows.every((row) => {
+      const status = update_by_id.get(Number(row.id))?.status ?? row.status
+      return ['done', 'skipped', 'failed'].includes(status)
+    })
+    // Finish a fully skipped task under the same lock; there is no work for
+    // the runner, and queued → done is not a legal runner transition.
+    const next_status = unresolved ? 'paused' : all_terminal ? 'done' : 'queued'
+    await connection.execute(
+      'UPDATE content_tasks SET payload = CAST(? AS JSON), status = ? WHERE id = ? AND status = \'paused\'',
+      [JSON.stringify(payload), next_status, task_id],
+    )
+    await connection.commit()
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
+  const result = await get_task(task_id)
+  if (! result)
+    throw new ApiError(404, '任务不存在或已被删除')
+  return result
+}
+
 /** The statuses list_scope_tasks treats as live; exported for the runner's sweeps. */
 export function is_terminal_task_status(status: ContentTaskStatus) {
   return terminal_statuses.includes(status)
@@ -327,12 +534,26 @@ export async function list_expired_tasks(): Promise<number[]> {
  * no longer owns.
  */
 export async function delete_finished_task(task_id: number) {
-  const [result] = await db.execute<ResultSetHeader>(
-    'DELETE FROM content_tasks WHERE id = ? AND status IN (\'done\', \'failed\', \'cancelled\')',
-    [task_id],
-  )
-  if (! result.affectedRows)
-    return false
-  await db.execute('DELETE FROM content_task_items WHERE task_id = ?', [task_id])
-  return true
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [result] = await connection.execute<ResultSetHeader>(
+      'DELETE FROM content_tasks WHERE id = ? AND status IN (\'done\', \'failed\', \'cancelled\')',
+      [task_id],
+    )
+    if (! result.affectedRows) {
+      await connection.commit()
+      return false
+    }
+    await connection.execute('DELETE FROM content_task_items WHERE task_id = ?', [task_id])
+    await connection.commit()
+    return true
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
 }

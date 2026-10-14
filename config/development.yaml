@@ -20,3 +20,5 @@ site:
 app:
   otp:
     debug: ${NUXT_OTP_DEBUG:-true}
+  captcha:
+    debug: ${NUXT_CAPTCHA_DEBUG:-true}

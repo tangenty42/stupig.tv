@@ -30,6 +30,14 @@ describe('镜像自带的运行期配置注入', () => {
     expect(dockerfile).toMatch(/^ENTRYPOINT \["\/usr\/local\/bin\/docker-entrypoint\.sh"\]$/m)
   })
 
+  it('镜像打包旧正文引用迁移工具，运行时不依赖源码和 tsx', () => {
+    const build = JSON.parse(read('package.json')).scripts['maintenance:build'] as string
+    expect(read('Dockerfile')).toMatch(/^RUN pnpm maintenance:build$/m)
+    expect(read('Dockerfile')).toMatch(/^COPY --from=build \/app\/\.output \.\/\.output$/m)
+    expect(build).toContain('esbuild scripts/migrate-content-references.ts --bundle --platform=node --format=esm')
+    expect(build).toContain('--outfile=.output/server/maintenance/content-references.mjs')
+  })
+
   it('compose 不再重复承担注入，避免与镜像两处走岔', () => {
     // 注释里提到变量名是为了说明"不需要在这里映射"，所以只钉映射行本身
     expect(read('docker-compose.yml')).not.toMatch(/^\s+MQTT_WEB_URL:/m)
@@ -51,6 +59,23 @@ describe('镜像自带的运行期配置注入', () => {
       '{allow, all, subscribe, ["stupig/sync/#"]}.',
       '{deny, all}.',
     ])
+  })
+
+  it('开发 EMQX 启动时从环境生成超级发布账号并交回原镜像入口', () => {
+    const emqx = parse(read('docker-compose.dev.yml')).services.emqx
+    expect(emqx.environment.MQTT_USERNAME).toContain('${MQTT_USERNAME:?')
+    expect(emqx.environment.MQTT_PASSWORD).toContain('${MQTT_PASSWORD:?')
+    expect(emqx.environment.EMQX_AUTHENTICATION__1__BOOTSTRAP_TYPE).toBe('plain')
+    expect(emqx.environment.EMQX_AUTHENTICATION__1__BOOTSTRAP_FILE).toBe('/opt/emqx/etc/dev-auth-bootstrap.json')
+    expect(emqx.entrypoint).toEqual(['/bin/sh', '/opt/emqx/etc/dev-entrypoint.sh'])
+    expect(emqx.command).toEqual(['/opt/emqx/bin/emqx', 'foreground'])
+    expect(emqx.volumes).toContain('./scripts/emqx-entrypoint.sh:/opt/emqx/etc/dev-entrypoint.sh:ro')
+    const script = read('scripts/emqx-entrypoint.sh')
+    expect(script).not.toContain('\r')
+    expect(script).toContain('umask 077')
+    expect(script).toContain('\\"is_superuser\\":true')
+    expect(script).toContain('> "$EMQX_AUTHENTICATION__1__BOOTSTRAP_FILE"')
+    expect(script).toContain('exec /usr/bin/docker-entrypoint.sh "$@"')
   })
 })
 
