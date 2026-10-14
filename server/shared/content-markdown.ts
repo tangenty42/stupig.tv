@@ -1,3 +1,8 @@
+import { html_no_markdown_tags, html_void_tags } from './content-html'
+import { content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref } from './content-reference'
+
+export { link_file_name_illegal_chars } from './content-reference'
+
 // 蠢猪档案 story markdown notation.
 // The markdown document is the single source of truth: title, labels and event
 // time live in a small front matter block at the very top of the document:
@@ -85,6 +90,8 @@ export interface ContentLintIssue {
   severity: 'error' | 'warning'
   source: string
   message: string
+  /** Safe destination replacement used by editor quick fixes. */
+  fix?: { from: number, to: number, insert: string }
 }
 
 export interface StoryMarkdownParseResult {
@@ -103,6 +110,8 @@ export interface ContentMarkdownConfig {
   markdown_max_bytes: number
   /** Existing story titles (id + title) for duplicate-title linting; `current_story_id` excludes the story being edited. */
   existing_titles?: { id: number, title: string }[]
+  attachment_paths?: string[]
+  legacy_compat?: boolean
 }
 
 const fm_key_line = /^([A-Z_]\w*)\s*:(.*)$/i
@@ -155,10 +164,6 @@ function expand_month_range(start: string, end: string) {
   }
   return entries
 }
-
-/** Characters not allowed in attachment file names; matches the rename schema's rejected set. */
-// eslint-disable-next-line no-control-regex -- control chars are exactly what we must reject
-export const link_file_name_illegal_chars = /[<>:"?*|()[\]\\/\s#@&=%`\x00-\x1F\x7F]/g
 
 /** True when `value` contains any attachment-illegal character (resets the shared regex's `lastIndex`). */
 function has_attachment_illegal_char(value: string) {
@@ -246,7 +251,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
           issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: '标题包含非法字符' })
         }
         else if (config.existing_titles?.some(item =>
-          item.title.toLocaleLowerCase() === value.toLocaleLowerCase(),
+          content_title_key(item.title) === content_title_key(value),
         )) {
           issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: `标题『${value}』已被使用，请换一个标题` })
         }
@@ -392,11 +397,11 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
         if (! link || /\s/.test(link) || (! image_match && /[[\]()]/.test(link))) {
           issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: 'cover 需为单个图片链接，如 ![](图片.jpg)' })
         }
-        else if (link_file_name_byte_length(link) > config.cover_max_bytes) {
+        else if (link_file_name_byte_length(attachment_name_from_url(link) ?? link) > config.cover_max_bytes) {
           issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: `cover 太长了，最多 ${config.cover_max_bytes} 字节` })
         }
         else {
-          cover = link
+          cover = attachment_name_from_url(link) ?? link
           // The markdown label is the image alt text; a bare link has none.
           cover_label = image_match ? (image_match[1]?.trim() || null) : null
         }
@@ -416,28 +421,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
     }
   }
 
-  // Body lines: dead `[](@title)` references lint as errors; a reference to
-  // the story's own front-matter title is a self-reference and is rejected.
-  const body_text = lines.slice(body_start).join('\n')
-  for_each_link_span(body_text, (span, offset) => {
-    if (! span.destination.startsWith('@')) {
-      return
-    }
-    const reference_title = span.destination.slice(1)
-    if (! reference_title) {
-      return
-    }
-    const line_no = body_start + line_number_at(body_text, offset + span.start)
-    const lower_title = reference_title.toLocaleLowerCase()
-    if (lower_title === (title ?? '').toLocaleLowerCase()) {
-      issues.push({ line: line_no, severity: 'error', source: 'at-story', message: '不允许自我引用' })
-    }
-    else if (! config.existing_titles?.some(item =>
-      item.title.toLocaleLowerCase() === lower_title,
-    )) {
-      issues.push({ line: line_no, severity: 'error', source: 'at-story', message: `档案『${reference_title}』不可引用` })
-    }
-  })
+  issues.push(... lint_content_refs(markdown, config, title))
 
   if (! front_matter_ok || issues.some(issue => issue.severity === 'error') || title === null || ! event_precision || ! event_entries.length) {
     return { meta: null, issues }
@@ -873,7 +857,7 @@ export function sanitize_attachment_path(raw: string, max_bytes: number) {
 export function attachment_markdown_path(file_name: string) {
   // Stored names are sanitized at the boundary (upload/rename) to exclude every
   // character that would break a raw markdown destination, so no encoding here.
-  return file_name
+  return format_attachment_ref(file_name)
 }
 
 interface MarkdownLinkSpan {
@@ -1052,6 +1036,7 @@ function parse_link_at(text: string, start: number, limit: number): MarkdownLink
 /** All top-level inline link/image spans; labels may contain nested links (walked separately). */
 function scan_markdown_links(text: string): MarkdownLinkSpan[] {
   const spans: MarkdownLinkSpan[] = []
+  const wrappers: string[] = []
   const fenced = fenced_code_ranges(text)
   let fence_index = 0
   let cursor = 0
@@ -1064,6 +1049,34 @@ function scan_markdown_links(text: string): MarkdownLinkSpan[] {
     const limit = fence_index < fenced.length ? fenced[fence_index]![0] : text.length
     let i = cursor
     while (i < limit) {
+      // Raw HTML attributes/comments and raw-text elements are not Markdown.
+      if (text[i] === '<') {
+        const html = /^(?:<!--[\s\S]*?(?:-->|$)|<([a-z][\w-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>|<\/([a-z][\w-]*)\s*>)/i.exec(text.slice(i, limit))
+        if (html) {
+          const tag = html[1]?.toLowerCase()
+          const opens_content = tag && ! html_void_tags.has(tag) && ! /\/>$/.test(html[0])
+          if (opens_content && html_no_markdown_tags.has(tag)) {
+            const close = new RegExp(`</${html[1]}\\s*>`, 'i').exec(text.slice(i + html[0].length, limit))
+            i = close ? i + html[0].length + close.index + close[0].length : limit
+          }
+          else {
+            if (opens_content)
+              wrappers.push(tag)
+            if (html[2]) {
+              const open = wrappers.lastIndexOf(html[2].toLowerCase())
+              if (open !== - 1)
+                wrappers.splice(open)
+            }
+            i += html[0].length
+          }
+          continue
+        }
+      }
+      if (! wrappers.length && (i === 0 || text[i - 1] === '\n') && /^(?: {4}|\t)/.test(text.slice(i, limit))) {
+        const end = text.indexOf('\n', i)
+        i = end === - 1 ? limit : end + 1
+        continue
+      }
       if (text[i] === '`') {
         const end = code_span_end(text, i, limit)
         i = end === - 1 ? i + 1 : end
@@ -1136,27 +1149,9 @@ function rewrite_markdown_links(text: string, patch: (span: MarkdownLinkSpan) =>
   return out + text.slice(cursor)
 }
 
-/** Attachment paths are bare names or folder paths (`a/b/file.png`) — no empty segments. */
-function is_attachment_path(name: string) {
-  return name.split('/').every(Boolean)
-}
-
 function attachment_name_from_url(url: string) {
-  // `@title` destinations are story references, not attachments.
-  if (url.startsWith('@') || url.startsWith('#') || /^[a-z][\w+.-]*:/i.test(url)) {
-    return null
-  }
-
-  if (! url) {
-    return null
-  }
-  try {
-    const decoded = decodeURIComponent(url)
-    return is_attachment_path(decoded) ? decoded : null
-  }
-  catch {
-    return is_attachment_path(url) ? url : null
-  }
+  const ref = parse_content_ref(url)
+  return ref?.kind === 'attachment' || ref?.kind === 'legacy_attachment' ? ref.path : null
 }
 
 /** Extract attachment file names referenced from the markdown body for a story. */
@@ -1173,43 +1168,148 @@ export function extract_attachment_names(markdown: string) {
 
 /** Rename matching attachment URLs and default link labels without touching custom labels. */
 export function rename_attachment_references(markdown: string, old_file_name: string, new_file_name: string): string {
-  const new_local_path = attachment_markdown_path(new_file_name)
-  return rewrite_markdown_links(markdown, (span) => {
-    // Links nested inside an image label (`![alt [](a.zip)](b.jpg)`) are
-    // references too: rewrite the label recursively so they are not missed.
-    const rewritten_label = rename_attachment_references(span.label, old_file_name, new_file_name)
-    const destination = attachment_name_from_url(span.destination) === old_file_name ? new_local_path : undefined
-    let label = rewritten_label === span.label ? undefined : rewritten_label
-    if (destination && span.label === old_file_name) {
-      label = new_file_name
-    }
-    if (destination === undefined && label === undefined) {
-      return null
-    }
-    return { destination, label }
-  })
+  return rewrite_content_refs(markdown, [{ attachments: [{ from: old_file_name, to: new_file_name }] }])
 }
 
 /** Extract the `@story_title` titles referenced from the markdown body (deduplicated). */
 export function extract_story_reference_titles(markdown: string) {
   const titles = new Set<string>()
   for_each_link_span(markdown, (span) => {
-    if (span.destination.length > 1 && span.destination.startsWith('@')) {
-      titles.add(span.destination.slice(1))
-    }
+    const ref = parse_content_ref(span.destination)
+    if (ref?.kind === 'story' || ref?.kind === 'legacy_story')
+      titles.add(ref.title)
   })
   return [... titles]
 }
 
 /** Rename `[](@old_title)` story references to `@new_title`; other text is left untouched. */
 export function rename_story_references(markdown: string, old_title: string, new_title: string): string {
-  return rewrite_markdown_links(markdown, (span) => {
-    const rewritten_label = rename_story_references(span.label, old_title, new_title)
-    const label = rewritten_label === span.label ? undefined : rewritten_label
-    const destination = span.destination === `@${old_title}` ? `@${new_title}` : undefined
-    if (destination === undefined && label === undefined) {
-      return null
+  return rewrite_content_refs(markdown, [{ stories: [{ from: old_title, to: new_title }] }])
+}
+
+export interface ContentRefRewriteStep {
+  attachments?: { from: string, to: string, is_folder?: boolean }[]
+  stories?: { from: string, to: string }[]
+}
+
+/** Each step is simultaneous; subsequent steps replay in journal order. */
+export function rewrite_attachment_path(path: string, step: ContentRefRewriteStep) {
+  // Exact file mappings win; otherwise the most specific folder mapping wins.
+  const mapping = step.attachments?.find(item => ! item.is_folder && path === item.from)
+    ?? step.attachments?.filter(item => item.is_folder && (path === item.from || path.startsWith(`${item.from}/`)))
+      .sort((left, right) => right.from.length - left.from.length)[0]
+  return mapping ? mapping.to + path.slice(mapping.from.length) : path
+}
+
+function rewrite_ref_step(markdown: string, step: ContentRefRewriteStep): string {
+  const rewritten = rewrite_markdown_links(markdown, (span) => {
+    let label = rewrite_ref_step(span.label, step)
+    const ref = parse_content_ref(span.destination)
+    let destination = span.destination
+    if (ref?.kind === 'attachment' || ref?.kind === 'legacy_attachment') {
+      const path = rewrite_attachment_path(ref.path, step)
+      if (path !== ref.path) {
+        destination = ref.kind === 'attachment' ? format_attachment_ref(path) : path
+        if (span.label === ref.path)
+          label = path
+      }
     }
-    return { destination, label }
+    else if (ref?.kind === 'story' || ref?.kind === 'legacy_story') {
+      const mapping = step.stories?.find(item => content_title_key(item.from) === content_title_key(ref.title))
+      if (mapping) {
+        destination = ref.kind === 'story' ? format_story_ref(mapping.to) : `@${mapping.to}`
+        if (span.label === ref.title)
+          label = mapping.to
+      }
+    }
+    return destination === span.destination && label === span.label ? null : { destination, label }
   })
+  return rewrite_bare_cover(rewritten, (destination) => {
+    const path = attachment_name_from_url(destination)
+    if (! path)
+      return destination
+    const next = rewrite_attachment_path(path, step)
+    return next === path ? destination : (destination.startsWith('att://') ? format_attachment_ref(next) : next)
+  })
+}
+
+export function rewrite_content_refs(markdown: string, steps: readonly ContentRefRewriteStep[]) {
+  return steps.reduce(rewrite_ref_step, markdown)
+}
+
+/** Bare cover destinations are outside Markdown's link scanner. */
+function rewrite_bare_cover(markdown: string, transform: (destination: string) => string) {
+  const count = front_matter_line_count(markdown)
+  if (! count)
+    return markdown
+  const lines = markdown.split('\n')
+  for (let index = 1; index < count - 1; index ++) {
+    lines[index] = lines[index]!.replace(/^(cover:\s*)([^\s[\]()]+)(\s*)$/, (_match, prefix, destination, suffix) => prefix + transform(destination) + suffix)
+  }
+  return lines.join('\n')
+}
+
+/** Syntax-only, idempotent conversion; never needs a live attachment catalog. */
+export function upgrade_legacy_refs(markdown: string): string {
+  const upgrade = (destination: string) => {
+    const ref = parse_content_ref(destination)
+    if (ref?.kind === 'legacy_attachment')
+      return format_attachment_ref(ref.path)
+    if (ref?.kind === 'legacy_story')
+      return format_story_ref(ref.title)
+    return destination
+  }
+  const rewritten = rewrite_markdown_links(markdown, span => ({
+    label: upgrade_legacy_refs(span.label),
+    destination: upgrade(span.destination),
+  }))
+  return rewrite_bare_cover(rewritten, upgrade)
+}
+
+/** Shared reference diagnostics, including exact ranges for safe editor fixes. */
+export function lint_content_refs(markdown: string, config: ContentMarkdownConfig, own_title: string | null = null) {
+  const issues: ContentLintIssue[] = []
+  const inspect = (destination: string, start: number, end: number) => {
+    const line = line_number_at(markdown, start)
+    const decoded = decode_content_destination(destination)
+    const ref = parse_content_ref(destination)
+    const source = 'content-ref'
+    const canonical = decoded.replace(/^att:\/\//i, 'att://').replace(/^content:\/\//i, 'content://')
+    if (canonical !== decoded) {
+      issues.push({ line, severity: 'warning', source, message: '引用 scheme 必须使用小写', fix: { from: start, to: end, insert: canonical } })
+      return
+    }
+    if (! ref) {
+      if (decoded.startsWith('att://') || decoded.startsWith('content://'))
+        issues.push({ line, severity: 'error', source, message: decoded.startsWith('content://') ? '档案引用标题不合法，不能包含 /' : '附件引用路径不合法' })
+      return
+    }
+    if (config.legacy_compat === false && ref.kind.startsWith('legacy_')) {
+      const exists = 'path' in ref
+        ? config.attachment_paths?.includes(ref.path)
+        : config.existing_titles?.some(item => content_title_key(item.title) === content_title_key(ref.title))
+      const insert = 'path' in ref ? format_attachment_ref(ref.path) : format_story_ref(ref.title)
+      issues.push({ line, severity: 'error', source: 'legacy-ref', message: '旧引用写法已停用，请使用 att:// 或 content://', ... (exists ? { fix: { from: start, to: end, insert } } : {}) })
+    }
+    if ('title' in ref) {
+      const key = content_title_key(ref.title)
+      if (key === content_title_key(own_title ?? ''))
+        issues.push({ line, severity: 'error', source: 'at-story', message: '不允许自我引用' })
+      else if (! config.existing_titles?.some(item => content_title_key(item.title) === key))
+        issues.push({ line, severity: 'error', source: 'at-story', message: `档案『${ref.title}』不可引用` })
+    }
+    else if (config.attachment_paths && ! config.attachment_paths.includes(ref.path)) {
+      issues.push({ line, severity: 'warning', source, message: `附件『${ref.path}』不存在` })
+    }
+  }
+  for_each_link_span(markdown, (span, offset) => inspect(span.destination, offset + span.dest_start, offset + span.dest_end))
+  const count = front_matter_line_count(markdown)
+  let offset = 0
+  for (const line of markdown.split('\n').slice(0, count)) {
+    const match = /^(cover:\s*)([^\s[\]()]+)\s*$/.exec(line)
+    if (match)
+      inspect(match[2]!, offset + match[1]!.length, offset + match[1]!.length + match[2]!.length)
+    offset += line.length + 1
+  }
+  return issues
 }

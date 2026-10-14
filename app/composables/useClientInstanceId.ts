@@ -5,7 +5,7 @@ import { settings } from '@shared/settings'
  * refresh and is shared by every tab.
  *
  * It exists for one purpose only: letting the editor say "this machine still
- * has the file, resume from here" (docs/content-task-refactor.md §9). It is not
+ * has the file, resume from here" (docs/old/content-task-refactor.md §9). It is not
  * an authorization boundary — any client holding the source file may resume a
  * task — so a client that loses this id simply loses the hint, not access.
  *

@@ -83,19 +83,30 @@ export type ContentOperationKind = 'move' | 'rename' | 'folder_create' | 'folder
 
 /**
  * Attachment task kinds: one per user-level operation (see
- * docs/content-task-refactor.md). A superset of ContentOperationKind — the
+ * docs/old/content-task-refactor.md). A superset of ContentOperationKind — the
  * structural kinds keep their lock names, upload/replace are new (they stay
  * outside the scope lock today) and folder_rename splits off from 'move'.
  */
 export type ContentTaskKind = 'upload' | 'replace' | 'move' | 'rename' | 'delete' | 'encrypt' | 'decrypt' | 'redact' | 'folder_create' | 'folder_delete' | 'folder_rename'
 
 /** Item actions that wait on the client's bytes; the rest are server-only. */
-export const content_task_transfer_actions = ['upload', 'replace'] as const
+export const content_task_transfer_actions = ['upload', 'replace', 'redact'] as const
 
 /** Task lifecycle: queued → running → done/failed/cancelled; running ↔ paused only for transfer tasks. */
 export type ContentTaskStatus = 'queued' | 'running' | 'paused' | 'cancelling' | 'done' | 'failed' | 'cancelled'
 
 export type ContentTaskItemStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed'
+
+export type ContentTaskResolutionKind = 'rename' | 'merge' | 'sanitize'
+
+export interface ContentTaskResolution {
+  kind: ContentTaskResolutionKind
+  from: string
+  to: string
+  reason: string
+  /** Upload payload index, needed when a batch contains the same raw path twice. */
+  entry_index?: number
+}
 
 export interface ContentTask {
   id: number
@@ -114,6 +125,11 @@ export interface ContentTask {
 }
 
 export interface ContentTaskItem {
+  paused_at?: string | null
+  control_version?: number
+  /** Optional for snapshots from clients started before the retry migration. */
+  retry_of_item_id?: number | null
+  superseded_at?: string | null
   id: number
   task_id: number
   path: string
@@ -136,6 +152,11 @@ export interface ContentTaskState {
   items: ContentTaskItem[]
 }
 
+export interface ContentTaskRetryResult {
+  previous: ContentTaskState
+  current: ContentTaskState
+}
+
 /**
  * Live task state pushed over the sync channel.
  *
@@ -148,10 +169,17 @@ export interface ContentTaskProgressSnapshot {
   scope_id: number
   status: ContentTaskStatus
   items: {
+    paused_at?: string | null
+    control_version?: number
+    retry_of_item_id?: number | null
+    superseded_at?: string | null
     id: number
+    path: string
     status: ContentTaskItemStatus
     bytes_done: number
     bytes_total: number
+    resolution: ContentTaskResolution | null
+    reason: string | null
   }[]
 }
 
@@ -205,8 +233,10 @@ export interface ContentTaskFolderRenamePayload {
 /* ---- Transfer payloads (upload / replace) ---- */
 
 export interface ContentTaskUploadEntry {
-  /** The attachment path the client wants; conflicts resolve to a suffixed name at finalize. */
+  /** The planned path; built-in name changes require an explicit resolve before transfer. */
   path: string
+  /** Original local file name, retained when the destination is renamed for cross-device resume. */
+  source_file_name?: string
   size: number
   mime_type: string | null
   /** Editor caret offset to insert the reference at once the item lands. */
@@ -224,7 +254,23 @@ export interface ContentTaskReplacePayload {
   mime_type: string | null
   /** The incoming file name, which decides the result in `new-name` mode. */
   file_name: string
+  source_file_name?: string
   content_type: string | null
+}
+
+/** Encrypt/decrypt: one item per file; the rename (± `.good`) is derived server-side. */
+export interface ContentTaskEncryptionPayload {
+  file_names: string[]
+}
+
+/**
+ * Redact: the client exports the censored bitmap and uploads it through the
+ * transfer pipeline; the server lands it as the source's plaintext twin.
+ */
+export interface ContentTaskRedactPayload {
+  source_file_name: string
+  content_type: string | null
+  size: number
 }
 
 /** One part the client still has to PUT, with its signed URL. */

@@ -1,5 +1,5 @@
 // Facade over the domain-split content services (./content/*; see
-// docs/content-task-refactor.md §10): keeps the original import path stable
+// docs/old/content-task-refactor.md §10): keeps the original import path stable
 // for the router and existing tests while the implementation lives in
 // per-domain modules.
 export * from './content/attachment-structure.service'

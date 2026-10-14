@@ -2,8 +2,8 @@
 
 给接手这个仓库的人（或 agent）的入口。目标是让一个没有上下文的接手者在**读完这一页 + 两份链接文档**后就能开工，不必重新考古。
 
-> 基线：`main` 的提交以本文写作时为准（写作时 `d7c0119`）。开始工作前先 `git log --oneline -5` 对一下。
-> 当前状态：content（蠢猪档案）模块的附件系统正处于一次分阶段重构中，阶段 0–2 已完成，阶段 3–5 有计划、未开工。
+> 代码核对基线：2026-10-12 的 `30177fb`；resolve 实现与收尾改动尚在工作区。开始工作前先 `git log --oneline -5` 和 `git status --short` 对一下。
+> 当前状态：content（蠢猪档案）模块的附件系统正处于一次分阶段重构中，阶段 0–3 已完成，§13.4 resolve 已完成主要真实浏览器/对象存储及双标签页同步走查；开发 MQTT 认证已修复，独立设备与断线恢复完整场景待验收，阶段 4–5 有计划、未开工。
 
 ## 1. 一分钟上手
 
@@ -83,10 +83,11 @@ pnpm test                # vitest run
 | 锁实现 | `server/lib/operation-lock.ts` | scope 锁（path `''`）与路径锁共享 per-scope 命名锁临界区；冲突判定是**双向前缀匹配**（`attachment_path_conflicts`） |
 | 前端上传器 | `app/utils/content/task-uploader.ts`（+ `upload-transport.ts`） | 分批预签、批内并发、隐式续传、进度节流、可取消；注入式传输层便于单测 |
 | 前端任务状态 | `app/stores/contentTasks.ts` | 服务端任务状态 + 本地 driver；`pending_rows` 是该 store 的行投影 |
+| 任务集合同步 | `app/composables/useContentTaskSync.ts` | 首次列表、集合 refresh 与重连 sync 走 `useSyncedData`；进度快照直接应用，页面卸载退订 |
 | 行投影 | `app/utils/content/task-row.ts` | 任务项 → 附件卡片数据（`pending_upload_card`/`pending_upload_status`） |
 | 实时进度 | `server/lib/sync.ts` 的 `publish_task_snapshot` + `useDataSync` 订阅 | `type: 'task_progress'` 事件**自带快照**，订阅方直接应用，不重拉；任务集增减才 `publish_refresh` |
 
-关键配置（`config/default.yaml` 的 `app.content`）：`operationLock.ttlSeconds`、`task.heartbeatSeconds`（必须短于租约，`config.ts` 有交叉校验）、`task.queuedTimeoutSeconds`、`task.retentionHours`、`task.sweepIntervalSeconds`、`task.clientIdStorageName`、`upload.partSizeMb`/`signBatchSize`/`urlTtlSeconds`/`maxSizeMb`、`encrypt.maxSizeMb`。
+关键配置（`config/app-settings.yaml` 的 `app.content`，由 `config/lib/schema.ts` 验证）：`operationLock.ttlSeconds`、`task.heartbeatSeconds`（必须短于租约）、`task.queuedTimeoutSeconds`、`task.retentionHours`、`task.sweepIntervalSeconds`、`task.clientIdStorageName`、`upload.partSizeMb`/`signBatchSize`/`urlTtlSeconds`/`maxSizeMb`、`encrypt.maxSizeMb`。
 
 ## 7. 不许动的既有决策
 
@@ -95,17 +96,21 @@ pnpm test                # vitest run
 - **正文保存不进锁体系**：`update_story` 与附件任务改写引用的竞态由 story 行 `FOR UPDATE` + `revision` 乐观锁覆盖，不要给它加锁。
 - **`client_id` 只做"本机可续传"提示**，不是授权边界；任何持有源文件的客户端都能续传。
 - **取消/失败任务的暂存语义**：`failed` 任务**保留** staging（续传要用），只有 `cancelTask` 与保留期清算才释放；清算必须先抢到行（条件 DELETE）再丢对象。
-- **上传的命名冲突在 finalize（锁内）解析**，preflight 只判合法性并给 `suggested_name`。
+- **上传名称由 resolve 任务显式确认**：preflight/prepare 报告 sanitize/suffix 提供项；prepare 持路径锁，确认后重新按最终路径取锁并复用 staging；finalize 不再静默 suffix。
 - **加解密是整块 buffer 处理**（上限 20 MiB，故意如此），不要为了"大文件可中断"改成流式（会改 AES-GCM 密文格式）或客户端解密（扩大密钥暴露面）。
 - **服务端分层**：tRPC router 只做鉴权+校验+委托；业务在 `server/services/`；`server/lib/` 是低层无状态基础设施且**不依赖 services**；`@shared` 里的规则模块是单一事实源。
 
 ## 8. 已知遗留与待办
 
-- **阶段 3**（加解密/删减版/替换任务化）：计划见 §13.1，决策已定；其中「任务清理范围要包含自身新产生的 `content/att/<uuid>` 对象」是必做项。
-- **阶段 4**（前端收敛）：`edit.vue` 仍有 2954 行，客户端规则与 preflight 重复；拆分映射与顺序见 §13.2。
+- **开发 MQTT 初始化（2026-10-13）**：`docker-compose.dev.yml` 挂载 `scripts/emqx-entrypoint.sh`，启动前从 `MQTT_USERNAME` / `MQTT_PASSWORD` 生成权限为 `0600` 的容器内 bootstrap JSON，原生认证器自动导入 Super User 发布账号。已有用户不会被覆盖，改密码仍走 Dashboard/API；生产 broker 的人工管理方式不变。独立全新容器已验证特殊字符密码登录、发布→匿名 WS 订阅、重启后登录与发布；Docker 配置守卫确认红/绿。
+
+- **阶段 4**（前端收敛）：`edit.vue` script 仍有约 2700 行，客户端规则与 preflight 重复；拆分映射与顺序见 §13.2，开工时先按当前代码重定位历史区间。
+- **resolve 体系**（冲突/和谐的显式确认）：详规与 2026-10-13 浏览器回归记录见 §13.4；上传、替换、sanitize/suffix、空文件拒绝、文件夹 merge、原始源名重新选择及 16 MiB 分片暂停/刷新/续传均已走查。开发 EMQX 的空用户库已补建 `.env` 发布账号（Super User），认证恢复；双页无需刷新同步新文件夹、paused 任务和 resolve-skip 终态已验证。独立设备、连续进度快照和断线恢复完整场景尚未验收。列表下方的 task groups UI 后续再做。
+- **本轮验证（2026-10-12）**：56 个测试文件、872 项测试通过，lint 与 typecheck 通过。曾在 lint/typecheck/test 并行运行时出现一项部署脚本测试超时，单独复跑及最终全量复跑均通过，未修改超时阈值或部署测试。
+- **浏览器回归（2026-10-13）**：新增全部跳过终态、报告名称与分片重复进度回调守卫，以及恢复时同步准备传输的断言，均确认红/绿。最终全量 `pnpm test --maxWorkers=1` 为 57 个文件、887/888 项通过，部署脚本一项触及既有 5 秒阈值；该文件单独复跑 12/12 通过，未修改断言或超时配置。lint、typecheck 与 diff 检查通过。测试档案 `#2` 保留供复核，MQTT 认证修复与补测见 §13.4 浏览器记录。
 - **阶段 5**（方言清单）：见 §13.3（含"方言其实已大部分单源"的现状核对）。
 - 与重构无关但已记录的风险：`docs/architecture-risks.md` 的高优先级项（OSS 对账任务、删除失败重试、生产错误响应脱敏、MQTT 重连刷新与版本校验、故障注入测试）。
-- 小项：结构类旧端点（move/rename/delete/folder/encrypt/decrypt/abridged）要到阶段 3 收尾才能删。
+- 小项：结构类旧端点（move/rename/delete/folder）待阶段 4 把这些入口接上 preflight 后再删；`with_attachment_lock` 已无调用方，是否连 scope 锁机制一起移除在阶段 4 评估。
 
 ## 9. 陷阱清单（都是真踩过的）
 

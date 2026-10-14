@@ -124,6 +124,9 @@ export function load_config(env = environment()) {
   if (node_env === 'production' && value.app.otp.debug) {
     throw new Error('Invalid configuration: app.otp.debug: OTP debug mode must be disabled in production')
   }
+  if (node_env !== 'development' && value.app.captcha.debug) {
+    throw new Error('Invalid configuration: app.captcha.debug: CAPTCHA debug mode is only allowed in development')
+  }
 
   return merge_config_layers(settings, value)
 }

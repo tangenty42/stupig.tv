@@ -5,12 +5,13 @@ import type { Diagnostic } from '@codemirror/lint'
 import type { Text } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import type { ContentMarkdownConfig } from '@shared/content-markdown'
-import type { ContentStorySummary } from '@shared/types/content'
+import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import type { Configuration as MarkdownlintConfiguration } from 'markdownlint'
 import { forceLinting, linter } from '@codemirror/lint'
 import { StateEffect } from '@codemirror/state'
 import { parse_story_markdown } from '@shared/content-markdown'
 import { build_html_diagnostics } from '@shared/html-lint'
+import { settings } from '@shared/settings'
 import { lint as markdownlint } from 'markdownlint/sync'
 
 export interface LintListItem {
@@ -29,13 +30,15 @@ export interface StoryLintLimits {
   markdownMaxBytes: number
 }
 
-export function story_lint_config(limits: StoryLintLimits, stories: ContentStorySummary[], story_id: number | null): ContentMarkdownConfig {
+export function story_lint_config(limits: StoryLintLimits, stories: ContentStorySummary[], story_id: number | null, attachments: ContentStoryAttachment[] = [], folders: string[] = []): ContentMarkdownConfig {
   return {
     title_max_length: limits.titleMaxLength,
     label_max_bytes: limits.labelMaxBytes,
     desc_max_bytes: limits.descMaxBytes,
     cover_max_bytes: limits.coverMaxBytes,
     markdown_max_bytes: limits.markdownMaxBytes,
+    attachment_paths: [... attachments.map(item => item.file_name), ... folders],
+    legacy_compat: settings.app.content.reference.legacyCompat,
     existing_titles: stories
       .filter(story => story.id !== story_id)
       .map(story => ({ id: story.id, title: story.title })),
@@ -61,12 +64,21 @@ export function build_diagnostics(doc_text: string, doc: Text, content_markdown_
 
   for (const issue of parse_story_markdown(doc_text, content_markdown_config).issues) {
     const line = doc.line(Math.min(issue.line, doc.lines))
+    const fix = issue.fix
     diagnostics.push({
-      from: line!.from,
-      to: line.to,
+      from: fix?.from ?? line!.from,
+      to: fix?.to ?? line.to,
       severity: issue.severity,
       message: issue.message,
       source: issue.source,
+      actions: fix
+        ? [{
+            name: '修复引用',
+            apply(view, from, to) {
+              view.dispatch({ changes: { from, to, insert: fix.insert } })
+            },
+          }]
+        : undefined,
     })
   }
 

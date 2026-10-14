@@ -30,6 +30,12 @@ services:
     # emqx/emqx 没有 :5 浮动标签,只能用具体版本(5.x 最新稳定版)
     image: emqx/emqx:5.10.5
     restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - /opt/emqx/etc/dev-entrypoint.sh
+    command:
+      - /opt/emqx/bin/emqx
+      - foreground
     ports:
       # 仅回环：这些端口只给本机开发用，不该暴露到局域网。
       # Dashboard 同理：默认 admin/public 是众所周知凭据，别对外开。
@@ -40,11 +46,16 @@ services:
       # Dashboard 管理密码，HOCON 值要带内层双引号，否则含 # 的字符串会被截断成注释。
       # 仅本机回环，仍然改掉默认值：本地网络里的其他进程也可能扫到 18083。
       EMQX_DASHBOARD__DEFAULT_PASSWORD: '"public"'
-      # 认证器：密码哈希存内置 Mnesia 库，通过 Dashboard/API 管理用户。
+      # 初始化发布账号；凭据来自同一份 .env，启动脚本生成容器内 bootstrap JSON。
+      MQTT_USERNAME: ${MQTT_USERNAME:?请在 .env 中设置 MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?请在 .env 中设置 MQTT_PASSWORD}
+      # 认证器：首次启动导入账号，密码哈希存内置 Mnesia 库。
       # 数组索引语法 EMQX_AUTHENTICATION__1__* 对应 EMQX 的 authentication 数组第 1 项。
       EMQX_AUTHENTICATION__1__MECHANISM: password_based
       EMQX_AUTHENTICATION__1__BACKEND: built_in_database
       EMQX_AUTHENTICATION__1__USER_ID_TYPE: username
+      EMQX_AUTHENTICATION__1__BOOTSTRAP_FILE: /opt/emqx/etc/dev-auth-bootstrap.json
+      EMQX_AUTHENTICATION__1__BOOTSTRAP_TYPE: plain
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__NAME: sha256
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__SALT_POSITION: suffix
       EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN: 'true'
@@ -59,6 +70,7 @@ services:
     volumes:
       # 挂一份固定的 ACL：规则是代码的一部分，不该靠 Dashboard 手点。
       - ./emqx-acl.conf:/opt/emqx/etc/acl.conf:ro
+      - ./scripts/emqx-entrypoint.sh:/opt/emqx/etc/dev-entrypoint.sh:ro
 
   phpmyadmin:
     image: phpmyadmin:5-apache

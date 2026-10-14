@@ -144,18 +144,18 @@ describe('attachment drag payload', () => {
 
 describe('markdown shorthand', () => {
   it('prefixes an image reference with !', () => {
-    expect(content_attachment_markdown({ file_name: 'a.png', is_image: true, url: '/a.png' })).toBe('![](a.png)')
+    expect(content_attachment_markdown({ file_name: 'a.png', is_image: true, url: '/a.png' })).toBe('![](att://a.png)')
   })
 
   it('leaves a non-image reference as a plain link', () => {
-    expect(content_attachment_markdown({ file_name: 'a.zip', is_image: false, url: '/a.zip' })).toBe('[](a.zip)')
+    expect(content_attachment_markdown({ file_name: 'a.zip', is_image: false, url: '/a.zip' })).toBe('[](att://a.zip)')
   })
 
   it('uses the same plain-link form for a folder', () => {
-    expect(content_folder_markdown('cards')).toBe('[](cards)')
+    expect(content_folder_markdown('cards')).toBe('[](att://cards)')
   })
 
   it('keeps nested paths intact', () => {
-    expect(content_folder_markdown('a/b')).toBe('[](a/b)')
+    expect(content_folder_markdown('a/b')).toBe('[](att://a/b)')
   })
 })

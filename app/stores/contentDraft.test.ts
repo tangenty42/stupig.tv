@@ -134,6 +134,21 @@ describe('content draft store: per-page draft ownership', () => {
     expect(mocks.storage.has(NEW_KEY)).toBe(false)
   })
 
+  it('upgrades a v2 draft without losing content, saved time or revision', () => {
+    seed_draft(STORY_KEY, { schema_version: 2, story_id: STORY_ID, markdown: `${STORY_24_MARKDOWN}[](file.pdf) [](@其他档案)`, base_revision: 6 })
+    const page = open_page(STORY_ID)
+    const recovered = page.read_persisted()!
+    expect(recovered).toMatchObject({
+      schema_version: 3, story_id: STORY_ID, base_revision: 6, base_namespace_revision: null, base_title_revision: null,
+      markdown: `${STORY_24_MARKDOWN}[](att://file.pdf) [](content://其他档案)`, saved_at: '2026-09-14T08:31:14.548Z',
+    })
+    expect(page.read_persisted()).toEqual(recovered)
+    page.restore(recovered, STORY_24_MARKDOWN)
+    expect(page.markdown).toBe(recovered.markdown)
+    expect(page.base_namespace_revision).toBeNull()
+    expect(page.base_title_revision).toBeNull()
+  })
+
   it('rejects the leak fingerprint: a create draft carrying a database revision', () => {
     // The contaminated record from DevTools: `story_id: null` (written while the
     // create page was current) together with a real base revision (the previous

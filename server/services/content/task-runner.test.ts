@@ -1,6 +1,6 @@
 import type { ContentTaskWithItems } from '@server/services/content/task.service'
 import { ApiError } from '@server/errors/ApiError'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // runner 的语义在调度与边界协作上：锁、状态迁移、执行器、事件都 mock 在边界，
 // 断言的是调度决策本身（何时执行、何时留下、错误怎么落地）。
@@ -10,10 +10,21 @@ const state = vi.hoisted(() => ({
   lock_released: [] as number[][],
   executed: [] as number[],
   execute_error: null as Error | null,
+  /** 非空时执行器挂起到它被解决（模拟服务端长执行） */
+  execute_hold: null as Promise<void> | null,
+  /** 执行器抛错前跑一下（模拟取消在执行中落地） */
+  execute_side_effect: null as (() => void) | null,
+  /** 执行器收到的中止信号（dispatch 的执行期心跳所建） */
+  execute_signal: undefined as AbortSignal | undefined,
+  renew_calls: 0,
+  /** renew_task_locks 的返回值（续到的锁行数） */
+  renew_result: 2,
+  heartbeat_calls: 0,
   published: [] as string[],
   transitioned: [] as { id: number, to: string }[],
   transition_error_once: false,
   execute_incomplete: false,
+  execute_pause: false,
   expired: [] as number[],
   delete_claimed: true,
   deleted: [] as number[],
@@ -21,14 +32,14 @@ const state = vi.hoisted(() => ({
   order: [] as string[],
 }))
 
-function make_task(id: number, status = 'queued'): ContentTaskWithItems {
+function make_task(id: number, status = 'queued', kind = 'move'): ContentTaskWithItems {
   return {
     task: {
       id,
       scope_id: 42,
-      kind: 'move',
+      kind: kind as ContentTaskWithItems['task']['kind'],
       status: status as ContentTaskWithItems['task']['status'],
-      payload: { moves: [{ file_name: 'a.png', target_folder: 'dir' }] },
+      payload: kind === 'move' ? { moves: [{ file_name: 'a.png', target_folder: 'dir' }] } : { file_names: ['a.png'] },
       actor_id: null,
       client_id: null,
       error: null,
@@ -40,7 +51,7 @@ function make_task(id: number, status = 'queued'): ContentTaskWithItems {
       id: id * 10,
       task_id: id,
       path: 'a.png',
-      action: 'move',
+      action: kind,
       status: 'pending',
       bytes_done: 0,
       bytes_total: 0,
@@ -53,6 +64,11 @@ function make_task(id: number, status = 'queued'): ContentTaskWithItems {
 }
 
 vi.mock('@server/services/content/task.service', () => ({
+  pause_task_if_all_items_paused: vi.fn(async (id: number) => {
+    const entry = state.tasks.get(id)!
+    entry.task.status = 'paused'
+    return true
+  }),
   get_task: vi.fn(async (id: number) => state.tasks.get(id) ?? null),
   list_queued_tasks: vi.fn(async () => [... state.tasks.values()].filter(entry => entry.task.status === 'queued')),
   transition_task: vi.fn(async (id: number, to: string, patch?: { error?: string | null }) => {
@@ -69,6 +85,7 @@ vi.mock('@server/services/content/task.service', () => ({
   }),
   is_terminal_task_status: (status: string) => ['done', 'failed', 'cancelled'].includes(status),
   heartbeat_task: vi.fn(async (id: number) => {
+    state.heartbeat_calls ++
     const entry = state.tasks.get(id)
     if (! entry || entry.task.status !== 'running')
       throw new ApiError(409, '任务状态已变化，请刷新后重试')
@@ -88,12 +105,16 @@ vi.mock('@server/services/content/task-operations.service', () => ({
     state.order.push('discard')
     state.discarded.push(items)
   }),
-  execute_task: vi.fn(async (task: ContentTaskWithItems['task']) => {
+  execute_task: vi.fn(async (task: ContentTaskWithItems['task'], _items: unknown, signal?: AbortSignal) => {
     state.executed.push(task.id)
+    state.execute_signal = signal
+    state.execute_side_effect?.()
+    if (state.execute_hold)
+      await state.execute_hold
     if (state.execute_error)
       throw state.execute_error
     // 传输类任务返回 complete: false（留给客户端回报），默认按纯 DB 任务处理
-    return { complete: state.execute_incomplete !== true }
+    return { complete: state.execute_incomplete !== true && state.execute_pause !== true, pause: state.execute_pause }
   }),
 }))
 
@@ -109,7 +130,10 @@ vi.mock('@server/lib/operation-lock', () => ({
   release_task_locks: vi.fn(async (scope_id: number, task_id: number) => {
     state.lock_released.push([scope_id, task_id])
   }),
-  renew_task_locks: vi.fn(async () => 1),
+  renew_task_locks: vi.fn(async () => {
+    state.renew_calls ++
+    return state.renew_result
+  }),
 }))
 
 vi.mock('@server/lib/sync', () => ({
@@ -123,7 +147,17 @@ vi.mock('@server/lib/log', () => ({ log_error: vi.fn(), log_info: vi.fn(), log_w
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ app: { content: { task: { sweepIntervalSeconds: 60, queuedTimeoutSeconds: 300 } } } }) }))
 vi.mock('@server/lib/db', () => ({ db: { execute: vi.fn(async () => [[]]) } }))
 
-const { dispatch_task, run_task_synchronously, run_task_tick } = await import('@server/services/content/task-runner.service')
+const { complete_task_if_finished, dispatch_task, run_task_synchronously, run_task_tick } = await import('@server/services/content/task-runner.service')
+
+describe('paused sibling completion', () => {
+  it('最后一个运行项完成后，剩余暂停项使任务暂停而非失败或完成', async () => {
+    const entry = make_task(7, 'running', 'upload')
+    entry.items = [{ ... entry.items[0]!, status: 'active', paused_at: '2026-10-13T06:00:00Z' }, { ... entry.items[0]!, id: 71, status: 'done' }]
+    state.tasks.set(7, entry)
+    expect(await complete_task_if_finished(7)).toBe(false)
+    expect(entry.task.status).toBe('paused')
+  })
+})
 
 beforeEach(() => {
   state.tasks = new Map()
@@ -131,10 +165,17 @@ beforeEach(() => {
   state.lock_released = []
   state.executed = []
   state.execute_error = null
+  state.execute_hold = null
+  state.execute_side_effect = null
+  state.execute_signal = undefined
+  state.renew_calls = 0
+  state.renew_result = 2
+  state.heartbeat_calls = 0
   state.published = []
   state.transitioned = []
   state.transition_error_once = false
   state.execute_incomplete = false
+  state.execute_pause = false
   state.expired = []
   state.delete_claimed = true
   state.deleted = []
@@ -166,6 +207,18 @@ describe('dispatch_task', () => {
     // 锁不释放：上传任务的全部主张就建立在这些路径锁上
     expect(state.lock_released).toEqual([])
     expect(state.tasks.get(1)?.task.status).toBe('running')
+  })
+
+  it('prepare 要求 resolve 时转 paused、释放旧路径锁并发布持久状态', async () => {
+    state.tasks.set(1, make_task(1, 'queued', 'upload'))
+    state.execute_pause = true
+
+    await dispatch_task(1)
+
+    expect(state.tasks.get(1)?.task.status).toBe('paused')
+    expect(state.transitioned.map(entry => entry.to)).toEqual(['running', 'paused'])
+    expect(state.lock_released).toEqual([[42, 1]])
+    expect(state.published).toEqual(['content_story_tasks:42'])
   })
 
   it('锁冲突时留在队列，不执行、不改状态', async () => {
@@ -207,6 +260,103 @@ describe('dispatch_task', () => {
     expect(state.executed).toEqual([])
     expect(state.tasks.get(1)?.task.status).toBe('queued')
     expect(state.lock_released).toEqual([[1]])
+  })
+
+  it('执行中被取消（cancelling）：执行器的中止错误收成 cancelled，清算暂存，不再上抛', async () => {
+    const entry = make_task(1, 'queued', 'encrypt')
+    state.tasks.set(1, entry)
+    // 取消在执行器运行期间落地；执行器在任务项边界看到中止标记后抛出
+    state.execute_side_effect = () => {
+      entry.task.status = 'cancelling'
+    }
+    state.execute_error = new ApiError(409, '任务已取消')
+
+    await dispatch_task(1)
+
+    expect(state.tasks.get(1)?.task.status).toBe('cancelled')
+    expect(state.lock_released).toEqual([[42, 1]])
+    expect(state.discarded).toHaveLength(1)
+    expect(state.published).toEqual(['content_story_tasks:42'])
+  })
+})
+
+describe('dispatch_task：执行期心跳（加解密这类服务端长任务）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** 让 dispatch 推进到执行器内部（心跳定时器已启动），返回收尾函数。 */
+  async function dispatch_held(id: number) {
+    let release!: () => void
+    state.execute_hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const dispatched = dispatch_task(id)
+    // 等 dispatch 走完取锁与 running 迁移、进入执行器（心跳定时器随之启动）。
+    await vi.waitFor(() => expect(state.executed).toContain(id))
+    return { dispatched, release }
+  }
+
+  it('encrypt 任务执行中按 heartbeatSeconds 续租并心跳', async () => {
+    state.tasks.set(1, make_task(1, 'queued', 'encrypt'))
+    const { dispatched, release } = await dispatch_held(1)
+
+    expect(state.renew_calls).toBe(0)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(state.renew_calls).toBe(1)
+    expect(state.heartbeat_calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(state.renew_calls).toBe(2)
+
+    release()
+    await dispatched
+    expect(state.tasks.get(1)?.task.status).toBe('done')
+    // 执行器 settle 后定时器被清掉：再推进也不该有第三次续租
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(state.renew_calls).toBe(2)
+  })
+
+  it('续租失败（锁被抢）拉起中止标记，执行器据此提前收尾', async () => {
+    state.tasks.set(1, make_task(1, 'queued', 'encrypt'))
+    const { dispatched, release } = await dispatch_held(1)
+
+    state.renew_result = 0
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(state.execute_signal?.aborted).toBe(true)
+
+    release()
+    await dispatched
+  })
+
+  it('心跳落空（任务已被取消）同样拉起中止标记', async () => {
+    state.tasks.set(1, make_task(1, 'queued', 'encrypt'))
+    const { dispatched, release } = await dispatch_held(1)
+
+    // 模拟取消在心跳间隔内落地：状态不再是 running，heartbeat_task 抛 409
+    state.tasks.get(1)!.task.status = 'cancelling'
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(state.execute_signal?.aborted).toBe(true)
+
+    release()
+    await dispatched
+  })
+
+  it('纯 DB 任务（毫秒级）不启心跳定时器', async () => {
+    state.tasks.set(1, make_task(1, 'queued', 'move'))
+    const { dispatched, release } = await dispatch_held(1)
+
+    expect(state.execute_signal).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(state.renew_calls).toBe(0)
+
+    release()
+    await dispatched
   })
 })
 

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   config: {
+    app: { captcha: { debug: false } },
     aliyun: {
       captcha: { appId: 'app-id-123', appKey: 'app-key-456' },
     },
@@ -36,6 +37,7 @@ function respond_with(body: unknown, init: { ok?: boolean, status?: number, thro
 }
 
 beforeEach(() => {
+  mocks.config.app.captcha.debug = false
   fetch_mock.mockReset()
   respond_with({ result: 'success', reason: '' })
   vi.stubGlobal('fetch', fetch_mock)
@@ -43,21 +45,45 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('verify_captcha', () => {
-  it('skips validation entirely when the captcha is not configured', async () => {
+  it('an empty captcha id does not implicitly suppress validation', async () => {
     const app_id = mocks.config.aliyun.captcha.appId
     mocks.config.aliyun.captcha.appId = ''
 
     try {
-      await expect(verify_captcha(undefined)).resolves.toBeUndefined()
+      await expect(verify_captcha(undefined)).rejects.toMatchObject({ statusCode: 400 })
     }
     finally {
       mocks.config.aliyun.captcha.appId = app_id
     }
 
     expect(fetch_mock).not.toHaveBeenCalled()
+  })
+
+  it('development debug skips both payload validation and the vendor request', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    mocks.config.app.captcha.debug = true
+    await expect(verify_captcha(undefined)).resolves.toBeUndefined()
+    await expect(verify_captcha(valid_params)).resolves.toBeUndefined()
+    expect(fetch_mock).not.toHaveBeenCalled()
+  })
+
+  it('development with debug disabled still requires captcha and calls the vendor', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    await expect(verify_captcha(undefined)).rejects.toMatchObject({ statusCode: 400 })
+    await verify_captcha(valid_params)
+    expect(fetch_mock).toHaveBeenCalledOnce()
+  })
+
+  it.each(['production', 'test', 'staging', ''])('debug cannot suppress server validation in %s even with a forged config', async (NODE_ENV) => {
+    vi.stubEnv('NODE_ENV', NODE_ENV)
+    mocks.config.app.captcha.debug = true
+    await expect(verify_captcha(undefined)).rejects.toMatchObject({ statusCode: 400 })
+    await verify_captcha(valid_params)
+    expect(fetch_mock).toHaveBeenCalledOnce()
   })
 
   it.each(Object.keys(valid_params))('rejects a submission missing %s', async (missing) => {

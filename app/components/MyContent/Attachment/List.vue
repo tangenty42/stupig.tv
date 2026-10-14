@@ -68,6 +68,7 @@
           @decrypt="emit('decrypt', $event, row)"
           @delete="emit('delete', $event, row)"
           @retry="emit('retry', row)"
+          @resolve="emit('resolve', row)"
           @pause="emit('pause', row)"
           @cancel="emit('cancel', $event, row)"
           @remove="emit('remove', $event, row)"
@@ -141,6 +142,7 @@ const emit = defineEmits<{
   'decrypt': [event: MouseEvent, row: MyContentAttachmentRow]
   'delete': [event: MouseEvent, row: MyContentAttachmentRow]
   'retry': [row: MyContentAttachmentRow]
+  'resolve': [row: MyContentAttachmentRow]
   'pause': [row: MyContentAttachmentRow]
   'cancel': [event: MouseEvent, row: MyContentAttachmentRow]
   'remove': [event: MouseEvent, row: MyContentAttachmentRow]

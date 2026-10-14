@@ -4,13 +4,14 @@ import type MarkdownIt from 'markdown-it'
 import type { FileCardData, RenderEnvironment, StoryCardMeta, StoryMarkdownContext, StoryMarkdownPlugin } from './types'
 import { parse_bilibili_href } from '@shared/bilibili'
 import { attachment_base_name, CONTENT_ATTACHMENT_DENIED_TEXT, decrypted_attachment_name, folder_file_count, is_attachment_folder } from '@shared/content-markdown'
+import { parse_content_ref } from '@shared/content-reference'
 import { story_rating, story_rating_rank } from '@shared/types/content'
 import { format_bilibili_count, format_bilibili_duration } from '~/utils/bilibili'
 import { bilibili_logo_svg } from '~/utils/bilibili-logo'
 import { abridged_twin_of, cover_alt, file_icon, story_front_cover_url } from '~/utils/content/attachment'
 import { format_bytes } from '~/utils/size'
 import { apply_chip_gaps } from './chips'
-import { decode_story_title, find_story_by_title, local_file_name, resolve_content_url } from './links'
+import { find_story_by_title, local_file_name, resolve_content_url } from './links'
 
 /**
  * Inner HTML of a video card link, laid out like Bilibili's own card: a
@@ -110,8 +111,9 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
       // `[](@title)` (label-off) renders as a story card; a labeled
       // `[text](@title)` keeps the normal-link rendering with the story URL
       // resolved, so it looks like any other link.
-      if (href.startsWith('@')) {
-        const story_title = decode_story_title(href.slice(1))
+      const reference = parse_content_ref(href)
+      if (reference?.kind === 'story' || reference?.kind === 'legacy_story') {
+        const story_title = reference.title
         const story = find_story_by_title(ctx.options, story_title)
         if (has_text_label) {
           if (story) {

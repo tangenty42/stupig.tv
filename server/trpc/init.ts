@@ -3,6 +3,7 @@ import type { PermissionField, PermissionLevel } from '@shared/permissions'
 import { ApiError } from '@server/errors/ApiError'
 import { INTERNAL_ERROR_MESSAGE } from '@server/errors/public-message'
 import { require_auth_user } from '@server/services/auth-guards.service'
+import { parse_public_api_error } from '@shared/api-error'
 import { has_permission } from '@shared/permissions'
 import { initTRPC, TRPCError } from '@trpc/server'
 import { ZodError } from 'zod'
@@ -58,6 +59,10 @@ const t = initTRPC.context<TrpcContext>().create({
     const cause = error.cause
     return {
       ... shape,
+      data: {
+        ... shape.data,
+        applicationError: cause instanceof ApiError ? parse_public_api_error(cause.public_data) : undefined,
+      },
       message: cause instanceof ZodError
         ? get_validation_message(cause)
         // Internal errors keep their message in dev; production must not leak

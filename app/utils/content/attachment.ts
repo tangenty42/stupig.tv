@@ -1,5 +1,5 @@
-import type { ContentStoryAttachment } from '@shared/types/content'
-import type { PendingUploadRow } from './task-row'
+import type { ContentStoryAttachment, ContentTaskResolution } from '@shared/types/content'
+import type { PendingTaskRow } from './task-row'
 import { attachment_download_name, decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
 import { decrypted_blob_url } from './attachment-crypto'
 
@@ -38,6 +38,15 @@ export type AttachmentFileCardData
     message: string | null
     /** True when the source file (blob or handle) is available to resume. */
     can_resume: boolean
+    /**
+     * Server-executed items (encrypt/decrypt) have no bytes to report: the bar
+     * hides and `pending_label` carries the verb (加密中/解密中).
+     */
+    indeterminate?: boolean
+    pending_label?: string | null
+    /** Server-executed rows cannot be paused/resumed from the client. */
+    server_side?: boolean
+    resolution?: ContentTaskResolution | null
   }
 
 /** Unified view model for MyContentAttachmentCard: a file row or a folder row. */
@@ -187,7 +196,7 @@ export type AttachmentListItem = {
   card: AttachmentFileCardData
 } & (
   | { kind: 'stored', attachment: ContentStoryAttachment, move_source_file_name?: string }
-  | { kind: 'upload', row: PendingUploadRow }
+  | { kind: 'upload', row: PendingTaskRow }
 )
 
 /** Which corners of a selected row to round, so contiguous selections read as one block. */

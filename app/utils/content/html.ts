@@ -1,12 +1,6 @@
-// Elements whose content is raw text, code, or structured/embedded markup and
-// must never be parsed as markdown. Everything else may contain markdown.
-export const html_no_markdown_tags = new Set([
-  'pre', 'code', 'script', 'style', 'textarea', 'title',
-  'kbd', 'samp', 'var', 'tt', 'xmp', 'plaintext',
-  'iframe', 'object', 'embed', 'noscript', 'template',
-  'select', 'option', 'optgroup', 'datalist', 'output',
-  'canvas', 'svg', 'math', 'video', 'audio', 'picture', 'source', 'track',
-])
+import { html_no_markdown_tags } from '@shared/content-html'
+
+export { html_no_markdown_tags } from '@shared/content-html'
 
 // Table structure tags: re-rendering their inner markup as markdown mangles
 // rows/cells (the wrapper recursion spans sibling rows and strands closing

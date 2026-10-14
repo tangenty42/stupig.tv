@@ -27,6 +27,11 @@ the server.
 - `pnpm dev:services` — start the dependency services only
   (`docker compose -f docker-compose.dev.yml up -d`; safe to re-run)
 - `pnpm dev` — run the dev server only, with the dependency services already up
+- Development EMQX automatically seeds the publisher from `.env`
+  (`MQTT_USERNAME` / `MQTT_PASSWORD`) with Super User enabled. The Compose entrypoint
+  generates a private bootstrap JSON file inside the container before starting EMQX.
+  Existing users are preserved; changing an existing account's password or privileges
+  still requires Dashboard/API User Management. See the broker setup below.
 - `docker compose -f docker-compose.dev.yml down` — stop the dependency services
   (add `-v` to also drop the MySQL volume)
 
@@ -92,12 +97,21 @@ Importing `nuxt.config.ts` alone also does not generate files: it reads app sett
 its configuration values but leaves generation and watching to the local Nuxt module.
 
 Production-only values such as site indexability and the OSS bucket live in
-`config/production.yaml`. Set the browser-facing MQTT URL and OTP debug switch in `.env`:
+`config/production.yaml`. Set the browser-facing MQTT URL and debug switches in `.env`:
 
 ```dotenv
 MQTT_WEB_URL=wss://mqtt.example.com/mqtt
 NUXT_OTP_DEBUG=false
+NUXT_CAPTCHA_DEBUG=false
 ```
+
+`NUXT_CAPTCHA_DEBUG` follows the OTP development defaults: `true` in development,
+`false` otherwise. When enabled, the browser skips the captcha popup and the server
+skips captcha verification; password, OTP and permission checks still run independently.
+Set it to `false` to test the real captcha. Configuration loading rejects `true`
+outside `NODE_ENV=development`, and the server verifier checks that environment again.
+The browser receives only `app.captcha.debug`, never captcha signing keys. Restart the
+development server after changing this deployment setting; runtime config is cached.
 
 Existing private secret names remain unchanged. Changing environment-variable values requires
 recreating the container (`docker compose up -d --force-recreate`), not rebuilding the image.
@@ -168,6 +182,11 @@ server-side YAML file would leave the browser's compiled settings out of sync.
     anonymous data volume; do not use `--renew-anon-volumes` or remove that volume.
     Export broker state with `emqx ctl data export` before recreation. Publisher
     credentials must also exist in EMQX's built-in database, not just in `.env`.
+    New development containers register them automatically via
+    [scripts/emqx-entrypoint.sh](scripts/emqx-entrypoint.sh) and EMQX's
+    [bootstrap mechanism](https://docs.emqx.com/en/emqx/latest/guides/access-control/authn/mnesia.html).
+    Bootstrap does not overwrite existing users; update an existing user's credentials
+    through Dashboard/API when rotating the password.
   - Change the Dashboard's default `admin/public` password and never expose its port,
     or the TCP listener (1883), publicly; only the reverse-proxied WebSocket port should
     be reachable from the internet.
@@ -193,6 +212,29 @@ server-side YAML file would leave the browser's compiled settings out of sync.
   容器 `stupig-tv` → 命令 `cd /app && node .output/server/maintenance/cleanup.mjs --delete --grace-hours=168`
   （先用不带 `--delete` 的同一命令跑一次，确认报告内容符合预期再开删）
 - Set `client_max_body_size 2m;` for your gateway safety
+
+# Content reference migration
+
+Attachment references use `att://folder/file`; story references use `content://title`.
+The compatibility flag `app.content.reference.legacyCompat` converts older clients'
+references on save. Draft schema v3 upgrades v2 browser drafts without discarding them.
+
+Run `pnpm content:refs:migrate` with the intended environment configured to report
+saved Markdown changes without writing. Add `--apply` to convert each story under
+a row lock, preserving its revision and publishing refreshes after commit. Run the
+report again before disabling compatibility in a subsequent release.
+
+Production images also include `.output/server/maintenance/content-references.mjs`.
+From `/app` inside the deployed app container, run
+`node .output/server/maintenance/content-references.mjs` for a dry-run, then the
+same command with `--apply` to migrate saved expressions. The tool uses the
+container's configured database and MQTT credentials; run the dry-run again after
+applying to confirm no further changes are needed. It does not run automatically
+at application startup.
+
+The complete attachment workspace migration is still pending private storage and
+session verification. See [the execution record](docs/content-refactor-progress.md)
+for completed work, validation and the remaining cutover requirements.
 
 # This is why you should always update your VSCode without reading the changelog
 

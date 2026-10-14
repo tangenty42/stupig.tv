@@ -1,7 +1,7 @@
 import type { ContentTaskPart, ContentTaskResumeState, ContentTaskUploadedPart } from '@shared/types/content'
 
 /**
- * The attachment uploader that replaced Uppy (docs/content-task-refactor.md §9).
+ * The attachment uploader that replaced Uppy (docs/old/content-task-refactor.md §9).
  *
  * It is deliberately thin: the server owns the task, the staging key, the part
  * plan and the resume state, so this module only
@@ -104,12 +104,24 @@ export async function upload_task_item(input: UploadTaskInput): Promise<void> {
   const progress_step = input.progress_step ?? default_progress_step
   throw_if_aborted(input.signal)
 
+  let pending_progress = Promise.resolve()
+  const report_progress = (bytes_done: number) => {
+    pending_progress = pending_progress.then(() => {
+      throw_if_aborted(input.signal)
+      return input.callbacks.report_progress(bytes_done)
+    })
+    void pending_progress.catch(() => {})
+    return pending_progress
+  }
+
   const resume = await input.callbacks.fetch_resume_state()
+  throw_if_aborted(input.signal)
   // A part size below the service's floor means the item was prepared for a
   // single PUT: multipart parts must clear 5 MiB.
   const part_size = resume.part_size && resume.part_size >= min_part_size ? resume.part_size : null
 
   if (! resume.upload_id || ! part_size) {
+    await report_progress(0)
     const signed = await input.callbacks.sign_parts([1])
     throw_if_aborted(input.signal)
     const { etag } = await input.transport.put({
@@ -117,9 +129,11 @@ export async function upload_task_item(input: UploadTaskInput): Promise<void> {
       body: input.file,
       signal: input.signal,
       on_progress: (sent) => {
-        void input.callbacks.report_progress(Math.min(sent, input.size))
+        void report_progress(Math.min(sent, input.size))
       },
     })
+    await pending_progress
+    throw_if_aborted(input.signal)
     // A single PUT has no part list; the ETag is still reported so both paths
     // hand the server the same shape.
     await input.callbacks.report_completed([{ part_number: 1, etag, size: input.size }])
@@ -132,13 +146,15 @@ export async function upload_task_item(input: UploadTaskInput): Promise<void> {
   let bytes_confirmed = resume.uploaded_parts.reduce((sum, part) => sum + part.size, 0)
   let bytes_in_flight = 0
   let bytes_reported = bytes_confirmed
+  // Start at durable parts, not at a stale total that included aborted requests.
+  await report_progress(bytes_confirmed)
 
-  const flush_progress = async (force: boolean) => {
+  const flush_progress = (force: boolean) => {
     const progress = bytes_confirmed + bytes_in_flight
     if (! force && progress - bytes_reported < progress_step)
       return
     bytes_reported = progress
-    await input.callbacks.report_progress(progress)
+    return report_progress(progress)
   }
 
   const batch_size = Math.max(1, resume.sign_batch_size || default_sign_batch_size)
@@ -153,24 +169,26 @@ export async function upload_task_item(input: UploadTaskInput): Promise<void> {
         throw new Error('上传分片未获得签名')
       const size = part_bytes(part_size, input.size, part_number)
       const offset = (part_number - 1) * part_size
-      bytes_in_flight += size
+      let bytes_sent = 0
       try {
         const { etag } = await input.transport.put({
           url,
           body: input.file.slice(offset, offset + size),
           signal: input.signal,
           on_progress: (sent) => {
-            bytes_in_flight = bytes_in_flight - size + Math.min(sent, size)
+            const next_sent = Math.max(bytes_sent, Math.min(sent, size))
+            bytes_in_flight += next_sent - bytes_sent
+            bytes_sent = next_sent
             void flush_progress(false)
           },
         })
         uploaded.set(part_number, { part_number, etag, size })
-        bytes_in_flight -= size
+        bytes_in_flight -= bytes_sent
         bytes_confirmed += size
         await flush_progress(false)
       }
       catch (error) {
-        bytes_in_flight -= size
+        bytes_in_flight -= bytes_sent
         throw error
       }
     })
@@ -178,6 +196,7 @@ export async function upload_task_item(input: UploadTaskInput): Promise<void> {
 
   throw_if_aborted(input.signal)
   await flush_progress(true)
+  throw_if_aborted(input.signal)
   const parts = [... uploaded.values()].sort((left, right) => left.part_number - right.part_number)
   await input.callbacks.report_completed(parts)
 }

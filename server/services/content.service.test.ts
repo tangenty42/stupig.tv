@@ -1,8 +1,10 @@
 import type { AuthUser } from '@server/types/auth'
+import type { Connection } from 'mysql2/promise'
 import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { encrypt_attachment } from '@server/lib/attachment-crypto'
 import { attachment_name_conflict_message } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_DENIED_TEXT } from '@shared/content-private'
+import { settings } from '@shared/settings'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -72,12 +74,12 @@ const task_sim = vi.hoisted(() => {
   function handle(sql: string, params: unknown[]): unknown[] | null {
     if (sql.includes('INSERT INTO content_tasks')) {
       const id = next_task_id ++
-      tasks.push({ id, scope_id: Number(params[0]), kind: String(params[1]), status: 'queued', payload: String(params[2]), actor_id: params[3] as number | null, client_id: params[4] as string | null, error: null })
+      tasks.push({ id, scope_id: Number(params[0]), kind: String(params[1]), status: String(params[2]), payload: String(params[3]), actor_id: params[4] as number | null, client_id: params[5] as string | null, error: null })
       return [{ insertId: id }]
     }
     if (sql.includes('INSERT INTO content_task_items')) {
       const id = next_item_id ++
-      items.push({ id, task_id: Number(params[0]), path: String(params[1]), action: String(params[2]), status: 'pending', bytes_done: 0, bytes_total: Number(params[3] ?? 0), staging_key: null, upload_id: null, part_size: null, result: null })
+      items.push({ id, task_id: Number(params[0]), path: String(params[1]), action: String(params[2]), status: String(params[3]), bytes_done: 0, bytes_total: Number(params[4] ?? 0), staging_key: null, upload_id: null, part_size: null, result: params[5] === null ? null : String(params[5]) })
       return [{ affectedRows: 1 }]
     }
     if (sql.includes('FROM content_tasks WHERE id ='))
@@ -168,10 +170,57 @@ vi.mock('@server/lib/sync', async () => ({
   publish_refresh: mocks.publish_refresh,
 }))
 
-const { apply_attachment_replace, create_abridged_attachment, create_folder, decrypt_attachments, encrypt_attachments, get_story, move_attachment, move_attachments, move_folder, rename_attachment, sign_attachment_download } = await import('@server/services/content.service')
+const { apply_abridged_attachment, apply_attachment_replace, create_folder, get_story, move_attachment, move_attachments, move_folder, rename_attachment, sign_attachment_download } = await import('@server/services/content.service')
+const { execute_task } = await import('@server/services/content/task-operations.service')
+const { rewrite_story_attachment_refs } = await import('@server/services/content/attachment-structure.service')
+const { create_story, update_story } = await import('@server/services/content/story.service')
 
 beforeEach(() => {
   task_sim.reset()
+})
+
+describe('reference syntax at service entry points', () => {
+  it('upgrades old client saves during compatibility before writing the story', async () => {
+    mocks.db_execute.mockImplementation(async (sql: string) => sql.startsWith('INSERT') ? [{ insertId: 3 }] : [[]])
+    const markdown = '---\ntitle: 测试\ntime: 2026/10/14\ncover: ![](cover.jpg)\n---\n![](old.png)'
+    await create_story(1, markdown, true)
+    const insert = mocks.db_execute.mock.calls.find(([sql]) => String(sql).startsWith('INSERT INTO content_stories'))!
+    expect(insert[1]).toContain(markdown.replace('![](cover.jpg)', '![](att://cover.jpg)').replace('![](old.png)', '![](att://old.png)'))
+    expect(insert[1]).toContain('cover.jpg')
+  })
+  it('rejects legacy references with structured line numbers before database writes when compatibility is off', async () => {
+    mocks.db_execute.mockClear()
+    const original = settings.app.content.reference.legacyCompat
+    settings.app.content.reference.legacyCompat = false
+    try {
+      const markdown = '---\ntitle: 测试\ntime: 2026/10/14\n---\n[](old.png)\n[](@其他档案)'
+      await expect(update_story(1, markdown, [], 2, true)).rejects.toMatchObject({
+        statusCode: 400, public_data: { code: 'LEGACY_REF', details: { lines: [5, 6] } },
+      })
+      expect(mocks.db_execute).not.toHaveBeenCalled()
+    }
+    finally {
+      settings.app.content.reference.legacyCompat = original
+    }
+  })
+})
+
+describe('transactional attachment reference rewrites', () => {
+  it('does not chain mappings inside one batch, and maps cover from its original path', async () => {
+    const execute = vi.fn(async (sql: string, _params?: unknown[]) => sql.startsWith('SELECT') ? [[{ markdown: '[](att://X/n) [](att://Y/n)', cover: 'X/n' }]] : [{ affectedRows: 1 }])
+    await rewrite_story_attachment_refs({ execute } as unknown as Connection, 1, [
+      { old_file_name: 'X/n', new_file_name: 'Y/n' }, { old_file_name: 'Y/n', new_file_name: 'Z/n' },
+    ])
+    expect(execute.mock.calls[1]).toEqual([
+      'UPDATE content_stories SET markdown = ?, cover = ?, revision = revision + 1 WHERE id = ?',
+      ['[](att://Y/n) [](att://Z/n)', 'Y/n', 1],
+    ])
+  })
+  it('rewrites folder cards and descendants in the stored document', async () => {
+    const execute = vi.fn(async (sql: string, _params?: unknown[]) => sql.startsWith('SELECT') ? [[{ markdown: '[](att://cards) ![](att://cards/a.png) [](att://cards2)', cover: 'cards/a.png' }]] : [{ affectedRows: 1 }])
+    await rewrite_story_attachment_refs({ execute } as unknown as Connection, 1, [{ old_file_name: 'cards', new_file_name: 'gallery', is_folder: true }])
+    expect(execute.mock.calls[1]?.[1]).toEqual(['[](att://gallery) ![](att://gallery/a.png) [](att://cards2)', 'gallery/a.png', 1])
+  })
 })
 
 function stub_story_row(story_id: number, markdown = '') {
@@ -440,9 +489,11 @@ describe('get_story version check', () => {
   })
 })
 
-describe('create_abridged_attachment', () => {
+describe('apply_abridged_attachment', () => {
   const png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
   const jpeg_header = [0xFF, 0xD8, 0xFF, 0xE0]
+  /** The staging key the task's redact item prepared and the client filled. */
+  const staging_key = 'content-upload/5/redact-staging'
 
   const encrypted_png: {
     id: number
@@ -466,15 +517,12 @@ describe('create_abridged_attachment', () => {
     encryption_key: 'a2V5',
   }
 
-  function abridged_form(bytes: number[]) {
-    const form = new FormData()
-    form.append('story_id', '5')
-    form.append('source_file_name', 'cards/photo.png.good')
-    form.append('file', new File([new Uint8Array(bytes)], 'ignored.png', { type: 'image/png' }))
-    return form
+  /** The staged bytes the client uploaded; finalize reads them for the sniff. */
+  function stub_staged_bytes(bytes: number[]) {
+    mocks.get_object.mockResolvedValue(new Uint8Array(bytes))
   }
 
-  /** Answers the scope's read-check-insert sequence for one redaction request. */
+  /** Answers the scope's read-check-insert sequence for one redaction finalize. */
   function stub_scope(source: typeof encrypted_png | null, existing_paths: string[] = []) {
     mocks.db_execute.mockImplementation(async (sql: string) => {
       if (sql.includes('file_name IN ('))
@@ -492,38 +540,46 @@ describe('create_abridged_attachment', () => {
   beforeEach(() => {
     mocks.db_execute.mockReset()
     mocks.db_execute.mockResolvedValue([[], []])
-    mocks.put_object.mockReset()
-    mocks.put_object.mockResolvedValue('etag-twin')
+    mocks.get_object.mockReset()
+    mocks.copy_object.mockReset()
+    mocks.copy_object.mockResolvedValue('etag-twin')
     mocks.delete_object_best_effort.mockReset()
     mocks.publish_refresh.mockReset()
   })
 
   it('stores the redaction under the name without the .good suffix', async () => {
     stub_scope(encrypted_png)
+    stub_staged_bytes([... png_header, 1, 2, 3])
 
-    const row = await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form([... png_header, 1, 2, 3]))
+    const row = await apply_abridged_attachment(5, 'cards/photo.png.good', staging_key)
 
     expect(row.file_name).toBe('cards/photo.png')
     expect(row.is_encrypted).toBe(false)
   })
 
-  it('uploads the exported bytes unchanged, typed as the source format', async () => {
+  it('moves the staged object into place and drops the staging copy', async () => {
     stub_scope(encrypted_png)
     const bytes = [... png_header, 9, 8, 7]
+    stub_staged_bytes(bytes)
 
-    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(bytes))
+    await apply_abridged_attachment(5, 'cards/photo.png.good', staging_key)
 
-    // No transcoding: the object is exactly what the editor exported, and the
-    // content type comes from the name rather than the form payload.
-    const [, stored, content_type] = mocks.put_object.mock.calls[0]!
-    expect([... (stored as Uint8Array)]).toEqual(bytes)
-    expect(content_type).toBe('image/png')
+    // No transcoding: the object is the staged bytes copied as-is, and the
+    // row's mime type comes from the name rather than the upload's metadata.
+    const [copied_from, copied_to] = mocks.copy_object.mock.calls[0]!
+    expect(copied_from).toBe(staging_key)
+    expect(String(copied_to)).toMatch(/^content\/att\//)
+    expect(mocks.delete_object_best_effort).toHaveBeenCalledWith(staging_key)
+    const insert = mocks.db_execute.mock.calls.find(([sql]) => String(sql).startsWith('INSERT INTO content_story_attachments') && String(sql).includes('object_key'))
+    expect(insert).toBeDefined()
+    expect(insert![1]).toEqual([5, 'cards/photo.png', copied_to, 'image/png', bytes.length, 'etag-twin'])
   })
 
   it('bumps the story so subscribers refetch the attachment list', async () => {
     stub_scope(encrypted_png)
+    stub_staged_bytes(png_header)
 
-    await create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header))
+    await apply_abridged_attachment(5, 'cards/photo.png.good', staging_key)
 
     const touch = mocks.db_execute.mock.calls.find(([sql]) => String(sql).includes('UPDATE content_stories SET updated_at'))
     expect(touch).toBeDefined()
@@ -532,40 +588,45 @@ describe('create_abridged_attachment', () => {
 
   it('refuses a source that is not encrypted', async () => {
     stub_scope({ ... encrypted_png, file_name: 'cards/photo.png', encryption_key: null })
+    stub_staged_bytes(png_header)
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png', abridged_form(png_header)))
+    await expect(apply_abridged_attachment(5, 'cards/photo.png', staging_key))
       .rejects.toMatchObject({ statusCode: 400, message: '只有已加密的图片才能创建删减版' })
-    expect(mocks.put_object).not.toHaveBeenCalled()
+    expect(mocks.copy_object).not.toHaveBeenCalled()
   })
 
   it('refuses a format the editor cannot write back', async () => {
     stub_scope({ ... encrypted_png, file_name: 'cards/anim.gif.good', mime_type: 'image/gif' })
+    stub_staged_bytes(png_header)
 
-    await expect(create_abridged_attachment(5, 'cards/anim.gif.good', abridged_form(png_header)))
+    await expect(apply_abridged_attachment(5, 'cards/anim.gif.good', staging_key))
       .rejects.toMatchObject({ statusCode: 400, message: '该图片格式不支持创建删减版' })
-    expect(mocks.put_object).not.toHaveBeenCalled()
+    expect(mocks.copy_object).not.toHaveBeenCalled()
   })
 
   it('refuses payload bytes that do not match the target name', async () => {
     stub_scope(encrypted_png)
+    stub_staged_bytes(jpeg_header)
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(jpeg_header)))
+    await expect(apply_abridged_attachment(5, 'cards/photo.png.good', staging_key))
       .rejects.toMatchObject({ statusCode: 400, message: '删减版内容与文件格式不符' })
-    expect(mocks.put_object).not.toHaveBeenCalled()
+    expect(mocks.copy_object).not.toHaveBeenCalled()
   })
 
   it('never takes over an existing twin, reporting the conflict instead', async () => {
     stub_scope(encrypted_png, ['cards/photo.png'])
+    stub_staged_bytes(png_header)
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header)))
+    await expect(apply_abridged_attachment(5, 'cards/photo.png.good', staging_key))
       .rejects.toMatchObject({ statusCode: 409, message: attachment_name_conflict_message })
-    expect(mocks.put_object).not.toHaveBeenCalled()
+    expect(mocks.copy_object).not.toHaveBeenCalled()
   })
 
   it('reports a missing source', async () => {
     stub_scope(null)
+    stub_staged_bytes(png_header)
 
-    await expect(create_abridged_attachment(5, 'cards/photo.png.good', abridged_form(png_header)))
+    await expect(apply_abridged_attachment(5, 'cards/photo.png.good', staging_key))
       .rejects.toMatchObject({ statusCode: 404 })
   })
 })
@@ -885,7 +946,8 @@ describe('attachment name guard', () => {
  * The encrypt/decrypt split decides from the row's own state: encrypt takes
  * plaintext rows, decrypt takes `.good` rows, and everything else is reported
  * as skipped — an inverted split encrypts the already-encrypted and refuses
- * exactly the files it exists for.
+ * exactly the files it exists for. Each item commits on its own, so outcomes
+ * are read off the task items the executor reports.
  */
 describe('attachment encryption transform', () => {
   const story_row = {
@@ -934,6 +996,43 @@ describe('attachment encryption transform', () => {
     })
   }
 
+  /** A running encrypt/decrypt task with its items registered in the task sim. */
+  function make_encryption_task(kind: 'encrypt' | 'decrypt', file_names: string[]) {
+    const items = file_names.map((name, index) => ({
+      id: index + 1,
+      task_id: 1,
+      path: name,
+      action: kind,
+      status: 'pending',
+      bytes_done: 0,
+      bytes_total: 0,
+      staging_key: null,
+      upload_id: null,
+      part_size: null,
+      result: null as string | null,
+    }))
+    task_sim.items.push(... items)
+    const task = {
+      id: 1,
+      scope_id: 5,
+      kind,
+      status: 'running',
+      payload: { file_names },
+      actor_id: null,
+      client_id: null,
+      error: null,
+      heartbeat_at: null,
+      created_at: '',
+      updated_at: '',
+    }
+    return { task, items }
+  }
+
+  function item_outcome(path: string) {
+    const item = task_sim.items.find(entry => entry.path === path)
+    return { status: item?.status, result: item?.result ? JSON.parse(item.result) as Record<string, unknown> : null }
+  }
+
   beforeEach(() => {
     mocks.get_connection.mockResolvedValue({
       execute: (... args: unknown[]) => mocks.db_execute(... args),
@@ -961,11 +1060,12 @@ describe('attachment encryption transform', () => {
 
   it('encrypts a plaintext row under the .good name with a fresh key', async () => {
     stub_scope([file_row('photo.png')])
+    const { task, items } = make_encryption_task('encrypt', ['photo.png'])
 
-    const result = await encrypt_attachments(5, ['photo.png'])
+    const outcome = await execute_task(task as never, items as never)
 
-    expect(result.succeeded).toEqual(['photo.png'])
-    expect(result.skipped).toEqual([])
+    expect(outcome.complete).toBe(true)
+    expect(item_outcome('photo.png')).toEqual({ status: 'done', result: { new_path: 'photo.png.good' } })
     const [update] = encryption_update_calls()
     expect(update![0]).toBe('photo.png.good')
     expect(typeof update![4]).toBe('string')
@@ -975,11 +1075,11 @@ describe('attachment encryption transform', () => {
 
   it('skips an already-encrypted row instead of encrypting it again', async () => {
     stub_scope([file_row('photo.png.good', 10, 'a2V5')])
+    const { task, items } = make_encryption_task('encrypt', ['photo.png.good'])
 
-    const result = await encrypt_attachments(5, ['photo.png.good'])
+    await execute_task(task as never, items as never)
 
-    expect(result.succeeded).toEqual([])
-    expect(result.skipped).toEqual([{ file_name: 'photo.png.good', reason: '已加密' }])
+    expect(item_outcome('photo.png.good')).toEqual({ status: 'skipped', result: { reason: '已加密' } })
     expect(mocks.get_object).not.toHaveBeenCalled()
     expect(mocks.put_object).not.toHaveBeenCalled()
   })
@@ -989,11 +1089,11 @@ describe('attachment encryption transform', () => {
     const { key, data } = encrypt_attachment(plaintext)
     stub_scope([file_row('photo.png.good', 10, key)])
     mocks.get_object.mockResolvedValue(data)
+    const { task, items } = make_encryption_task('decrypt', ['photo.png.good'])
 
-    const result = await decrypt_attachments(5, ['photo.png.good'])
+    await execute_task(task as never, items as never)
 
-    expect(result.succeeded).toEqual(['photo.png.good'])
-    expect(result.skipped).toEqual([])
+    expect(item_outcome('photo.png.good')).toEqual({ status: 'done', result: { new_path: 'photo.png' } })
     const [, stored] = mocks.put_object.mock.calls[0]!
     expect([... (stored as Uint8Array)]).toEqual([... plaintext])
     const [update] = encryption_update_calls()
@@ -1003,21 +1103,86 @@ describe('attachment encryption transform', () => {
 
   it('skips a plaintext row on decrypt', async () => {
     stub_scope([file_row('photo.png')])
+    const { task, items } = make_encryption_task('decrypt', ['photo.png'])
 
-    const result = await decrypt_attachments(5, ['photo.png'])
+    await execute_task(task as never, items as never)
 
-    expect(result.succeeded).toEqual([])
-    expect(result.skipped).toEqual([{ file_name: 'photo.png', reason: '未加密' }])
+    expect(item_outcome('photo.png')).toEqual({ status: 'skipped', result: { reason: '未加密' } })
     expect(mocks.get_object).not.toHaveBeenCalled()
     expect(mocks.put_object).not.toHaveBeenCalled()
   })
 
   it('reports names the scope does not hold', async () => {
     stub_scope([])
+    const { task, items } = make_encryption_task('encrypt', ['ghost.png'])
 
-    const result = await encrypt_attachments(5, ['ghost.png'])
+    await execute_task(task as never, items as never)
 
-    expect(result.succeeded).toEqual([])
-    expect(result.skipped).toEqual([{ file_name: 'ghost.png', reason: '附件不存在或已被删除' }])
+    expect(item_outcome('ghost.png')).toEqual({ status: 'skipped', result: { reason: '附件不存在或已被删除' } })
+  })
+
+  it('skips an encrypt target over the size cap (the whole-buffer boundary)', async () => {
+    // 上限来自共享 settings（app.content.encrypt.maxSizeMb = 20MiB）
+    const big = { ... file_row('big.png'), file_size: 21 * 1024 * 1024 }
+    stub_scope([big])
+    const { task, items } = make_encryption_task('encrypt', ['big.png'])
+
+    await execute_task(task as never, items as never)
+
+    expect(item_outcome('big.png')).toEqual({ status: 'skipped', result: { reason: '文件太大' } })
+    expect(mocks.get_object).not.toHaveBeenCalled()
+  })
+
+  it('skips an encrypt whose .good name another row already holds', async () => {
+    stub_scope([file_row('photo.png'), file_row('photo.png.good', 11, 'a2V5')])
+    const { task, items } = make_encryption_task('encrypt', ['photo.png'])
+
+    await execute_task(task as never, items as never)
+
+    expect(item_outcome('photo.png')).toEqual({ status: 'skipped', result: { reason: attachment_name_conflict_message } })
+    expect(mocks.put_object).not.toHaveBeenCalled()
+  })
+
+  it('reports a decrypt without a key instead of downloading the object', async () => {
+    stub_scope([file_row('photo.png.good', 10, null)])
+    const { task, items } = make_encryption_task('decrypt', ['photo.png.good'])
+
+    await execute_task(task as never, items as never)
+
+    expect(item_outcome('photo.png.good')).toEqual({ status: 'skipped', result: { reason: '附件缺少密钥，无法解密' } })
+    expect(mocks.get_object).not.toHaveBeenCalled()
+  })
+
+  it('commits items independently: a later failure keeps what already landed', async () => {
+    const plaintext = new Uint8Array([9, 8, 7, 6])
+    const { key, data } = encrypt_attachment(plaintext)
+    stub_scope([file_row('a.png.good', 10, key), file_row('b.png.good', 11, key)])
+    // The first object decrypts; the second is corrupt and fails authentication.
+    mocks.get_object
+      .mockResolvedValueOnce(data)
+      .mockResolvedValueOnce(new Uint8Array([0, 0, 0]))
+    const { task, items } = make_encryption_task('decrypt', ['a.png.good', 'b.png.good'])
+
+    const outcome = await execute_task(task as never, items as never)
+
+    expect(outcome.complete).toBe(true)
+    expect(item_outcome('a.png.good')).toEqual({ status: 'done', result: { new_path: 'a.png' } })
+    expect(item_outcome('b.png.good')).toEqual({ status: 'skipped', result: { reason: '附件解密失败：b.png.good' } })
+    // Only the committed item's old object is gone; the failed one keeps its.
+    expect(mocks.delete_object_best_effort).toHaveBeenCalledTimes(1)
+    expect(mocks.delete_object_best_effort).toHaveBeenCalledWith('content/att/10')
+  })
+
+  it('an aborted task skips what is left and fails as cancelled', async () => {
+    stub_scope([file_row('a.png'), file_row('b.png', 11)])
+    const { task, items } = make_encryption_task('encrypt', ['a.png', 'b.png'])
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(execute_task(task as never, items as never, controller.signal)).rejects.toMatchObject({ statusCode: 409, message: '任务已取消' })
+
+    expect(item_outcome('a.png')).toEqual({ status: 'skipped', result: { reason: '任务已取消' } })
+    expect(item_outcome('b.png')).toEqual({ status: 'skipped', result: { reason: '任务已取消' } })
+    expect(mocks.get_object).not.toHaveBeenCalled()
   })
 })

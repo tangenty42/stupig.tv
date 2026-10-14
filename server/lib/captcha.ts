@@ -12,7 +12,7 @@ interface CaptchaParams {
 }
 
 export async function verify_captcha(params: CaptchaParams | undefined) {
-  if (! config.aliyun.captcha.appId) {
+  if (process.env.NODE_ENV === 'development' && config.app.captcha.debug) {
     return
   }
 

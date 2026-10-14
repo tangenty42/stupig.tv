@@ -5,9 +5,13 @@ import type { Completion, CompletionContext, CompletionResult } from '@codemirro
 import type { EditorView } from '@codemirror/view'
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import { autocompletion } from '@codemirror/autocomplete'
-import { compare_attachment_names } from '@shared/content-markdown'
+import { syntaxTree } from '@codemirror/language'
+import { html_no_markdown_tags } from '@shared/content-html'
+import { attachment_folder_of, compare_attachment_names } from '@shared/content-markdown'
+import { attachment_ref_scheme, format_attachment_ref, format_story_ref, story_ref_scheme } from '@shared/content-reference'
 import { content_rating_tiers, pinned_label, rating_label, story_rating } from '@shared/types/content'
 import { alert_labels, alert_types } from '~/utils/content/alerts'
+import { content_attachment_markdown } from '~/utils/content/attachment-drag'
 
 export interface EditorCompletionSources {
   stories: () => ContentStorySummary[]
@@ -17,98 +21,98 @@ export interface EditorCompletionSources {
   folders: () => string[]
 }
 
-// `@` story completion: `[](@query` completes to `[](@title)`, a bare `@query`
-// to a wrapped `[](@title)`. The token charset mirrors the shared reference
-// regex (`[^)\s<>]`): titles may contain CJK punctuation like `，`, so the
-// token must not be restricted to word characters.
-const story_at_patterns = {
-  link: /\((@[^)\s<>]*)$/u,
-  bare: /(?:^|[\s(])(@[^)\s<>]*)$/u,
-}
-const story_at_valid = /^@[^)\s<>]*$/u
+const reference_destination_pattern = /!?\[[^\]]*\]\(\s*([^)\s<>]*)$/
+const bare_reference_pattern = /(?:^|[\s(])(@[^/)\s<>]*)$/u
+const at_reference_valid = /^@[^/)\s<>]*$/u
+const reference_query_valid = /^[^/)\s<>]*$/u
+const story_section = { name: '蠢猪档案', rank: 0 }
+const attachment_section = { name: '附件', rank: 1 }
 
-function story_completion_source(sources: EditorCompletionSources) {
+/** One source and one replacement range for the two reference sections. */
+export function reference_completion_source(sources: EditorCompletionSources) {
   return (context: CompletionContext): CompletionResult | null => {
+    for (let node = syntaxTree(context.state).resolveInner(context.pos, - 1); node; node = node.parent!) {
+      if (/^(?:CodeBlock|FencedCode|InlineCode|CodeText|HTMLTag|CommentBlock)$/.test(node.name))
+        return null
+      if (node.name === 'Element') {
+        const tag = /^<([a-z][\w-]*)\b/i.exec(context.state.sliceDoc(node.from, node.to))?.[1]
+        if (tag && html_no_markdown_tags.has(tag.toLowerCase()))
+          return null
+      }
+    }
     const before = context.state.sliceDoc(0, context.pos)
-    const link_match = story_at_patterns.link.exec(before)
-    const bare_match = link_match ? null : story_at_patterns.bare.exec(before)
-    const match = link_match ?? bare_match
-    if (! match) {
+    const destination_match = reference_destination_pattern.exec(before)
+    const bare_match = destination_match ? null : bare_reference_pattern.exec(before)
+    const token = destination_match?.[1] ?? bare_match?.[1]
+    if (token === undefined)
       return null
-    }
-    const in_link = Boolean(link_match)
-    const options: Completion[] = sources.stories()
-      .filter(story => story.id !== sources.story_id())
-      .map(story => ({
-        // The label carries the `@` prefix so CodeMirror's built-in filter can
-        // match the `@query` token; `displayLabel` keeps the `@` out of the list.
-        label: `@${story.title}`,
-        displayLabel: story.title,
-        detail: story_rating(story.labels),
-        type: 'story',
-        // Inside `[](@` the user already typed the parens (closeBrackets adds
-        // the closing `)`), so only the `@title` token is replaced; a bare `@`
-        // wraps into a full `[](@title)` link.
-        apply: in_link ? `@${story.title}` : `[](@${story.title})`,
-      }))
-    return {
-      // Replace the `@query` token (never the leading whitespace/`(`), so the
-      // surrounding `[](` / closeBrackets `)` stay put. The built-in filter
-      // scores prefix matches first; `validFor` keeps the result alive while
-      // the user types inside the `@token` so the list narrows in place.
-      from: match.index + match[0].indexOf('@'),
-      to: context.pos,
-      options,
-      validFor: story_at_valid,
-    }
-  }
-}
-
-// Attachment destination completion: offered inside a link destination `[](` /
-// `![](` while the destination still looks like a story-relative path. Folders
-// are offered in the same list — a folder enters the destination whole, which
-// the preview then renders as a card or expands into its images.
-//
-// Slashes are allowed so a folder can be drilled into once it is accepted:
-// `![](cards/` keeps the list alive and narrows to what is inside, which is what
-// makes picking a folder useful rather than a dead end. A leading slash is not
-// allowed, since that is an absolute path rather than a story-relative one.
-const attachment_dest_pattern = /!?\[[^\]]*\]\(\s*([^)\s<>]*)$/
-const attachment_dest_valid = /^(?!\/)[^@#:)\s<>]*$/
-
-// Exported for tests: the destination completion is the one piece with matching
-// rules worth pinning (folder shorthand, ordering, prefix narrowing).
-export function attachment_completion_source(sources: EditorCompletionSources) {
-  return (context: CompletionContext): CompletionResult | null => {
-    const before = context.state.sliceDoc(0, context.pos)
-    const match = attachment_dest_pattern.exec(before)
-    if (! match) {
+    const in_link = Boolean(destination_match)
+    const at = token.startsWith('@')
+    const attachment_only = in_link && token.startsWith(attachment_ref_scheme)
+    const story_only = in_link && token.startsWith(story_ref_scheme)
+    // Auto-paired parentheses leave the cursor in an empty destination. Offer
+    // references there too, while an unclosed bare destination stays explicit.
+    const empty_destination = in_link && token === ''
+      && (context.explicit || context.state.sliceDoc(context.pos, context.pos + 1) === ')')
+    if (! at && ! attachment_only && ! story_only && ! empty_destination)
       return null
+    let from = context.pos - token.length
+    let parent: string | null = null
+    if (attachment_only) {
+      const path = token.slice(attachment_ref_scheme.length)
+      const slash = path.lastIndexOf('/')
+      parent = slash === - 1 ? null : path.slice(0, slash)
+      if (parent === '' || parent?.split('/').some(segment => ! segment))
+        return null
+      from += attachment_ref_scheme.length + slash + 1
     }
-    const query = match[1] ?? ''
-    if (! attachment_dest_valid.test(query)) {
-      return null
+    else if (story_only) {
+      from += story_ref_scheme.length
     }
-    const folders: Completion[] = sources.folders().map(folder => ({
-      label: folder,
+    const apply_reference = (destination: string, markdown: string, folder = false) =>
+      (view: EditorView, _completion: Completion, start: number, end: number) => {
+        const insert = in_link ? `${destination})` : markdown
+        const trailing = in_link && view.state.doc.sliceString(end, end + 1) === ')'
+        view.dispatch({
+          changes: { from: start, to: trailing ? end + 1 : end, insert },
+          selection: { anchor: start + insert.length - (folder ? 1 : 0) },
+          userEvent: 'input.complete',
+        })
+      }
+    const display_name = (path: string) => parent ? path.slice(parent.length + 1) : path
+    const label = (name: string) => at ? `@${name}` : name
+    const attachment_destination = (path: string) => attachment_only ? display_name(path) : format_attachment_ref(path)
+    const folders: Completion[] = sources.folders().filter(folder => attachment_folder_of(folder) === parent).map(folder => ({
+      label: label(display_name(folder)),
+      displayLabel: display_name(folder),
       detail: '文件夹',
       type: 'folder',
-      apply: folder,
+      section: attachment_section,
+      apply: apply_reference(attachment_destination(folder), content_attachment_markdown({ file_name: folder, is_image: false, url: '' }), true),
     }))
-    const files: Completion[] = sources.attachments().map(attachment => ({
-      label: attachment.file_name,
+    const files: Completion[] = sources.attachments().filter(attachment => attachment_folder_of(attachment.file_name) === parent).map(attachment => ({
+      label: label(display_name(attachment.file_name)),
+      displayLabel: display_name(attachment.file_name),
       detail: attachment.is_encrypted ? '机密附件' : (attachment.is_image ? '图片' : '附件'),
       type: attachment.is_encrypted ? (attachment.encryption_key ? 'encrypted' : 'encrypted-denied') : (attachment.is_image ? 'image' : 'file'),
-      apply: attachment.file_name,
+      section: attachment_section,
+      apply: apply_reference(attachment_destination(attachment.file_name), content_attachment_markdown(attachment)),
     }))
-    // One list for both, in the same natural order the attachment list uses.
-    const options = [... folders, ... files]
+    const attachments = [... folders, ... files]
       .sort((left, right) => compare_attachment_names(left.label, right.label))
+    const stories: Completion[] = sources.stories().filter(story => story.id !== sources.story_id()).map(story => ({
+      label: label(story.title),
+      displayLabel: story.title,
+      detail: story_rating(story.labels),
+      type: 'story',
+      section: story_section,
+      apply: apply_reference(story_only ? story.title : format_story_ref(story.title), `[](${format_story_ref(story.title)})`),
+    }))
     return {
-      from: context.pos - query.length,
+      from,
       to: context.pos,
-      options,
-      validFor: attachment_dest_valid,
+      options: attachment_only ? attachments : story_only ? stories : [... stories, ... attachments],
+      validFor: at ? at_reference_valid : reference_query_valid,
     }
   }
 }
@@ -244,6 +248,16 @@ const completion_icon_by_type: Record<string, string> = {
   'encrypted-denied': 'lucide:lock',
 }
 export const completion_icon_names = [... new Set(Object.values(completion_icon_by_type))]
+completion_icon_names.push('lucide:chevron-right')
+
+function completion_folder_indicator(completion: Completion): Node | null {
+  if (completion.type !== 'folder')
+    return null
+  const span = document.createElement('span')
+  span.className = 'completion-folder-indicator iconify i-lucide:chevron-right'
+  span.setAttribute('aria-hidden', 'true')
+  return span
+}
 
 // Injects the type icon into an autocomplete option. The span keeps its width
 // for a type with no icon, so every label starts at the same x.
@@ -258,8 +272,7 @@ function completion_icon_renderer(completion: Completion): Node {
 export function create_completion_extensions(sources: EditorCompletionSources) {
   return autocompletion({
     override: [
-      story_completion_source(sources),
-      attachment_completion_source(sources),
+      reference_completion_source(sources),
       label_completion_source(sources),
       alert_marker_completion_source,
     ],
@@ -273,6 +286,6 @@ export function create_completion_extensions(sources: EditorCompletionSources) {
     addToOptions: [{
       render: completion_icon_renderer,
       position: 20,
-    }],
+    }, { render: completion_folder_indicator, position: 90 }],
   })
 }

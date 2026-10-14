@@ -121,6 +121,19 @@ export async function get_story_object_keys(story_id: number) {
   return rows.flatMap(row => row.object_key ? [row.object_key] : [])
 }
 
+/**
+ * Whether any attachment row points at this object key. The task staging
+ * sweeper checks before deleting an object an interrupted task produced: a key
+ * that already landed on a row is live data, not an orphan.
+ */
+export async function attachment_object_key_in_use(object_key: string) {
+  const [rows] = await db.execute<AttachmentRow[]>(
+    'SELECT id FROM content_story_attachments WHERE object_key = ? LIMIT 1',
+    [object_key],
+  )
+  return rows.length > 0
+}
+
 export interface AttachmentRowInput {
   story_id: number
   file_name: string

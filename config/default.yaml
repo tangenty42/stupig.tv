@@ -59,3 +59,5 @@ app:
       secret: ${JWT_SECRET}
   otp:
     debug: ${NUXT_OTP_DEBUG:-false}
+  captcha:
+    debug: ${NUXT_CAPTCHA_DEBUG:-false}

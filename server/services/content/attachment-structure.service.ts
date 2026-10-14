@@ -8,7 +8,7 @@ import { random_file_token } from '@server/lib/random'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { create_folder_rows, delete_folder_rows, delete_rows_by_ids, get_scope_attachment, list_folder_subtree_rows, list_scope_attachments, list_scope_folders, list_scope_paths, list_scope_rows, rename_attachment_row, rename_row_by_id } from '@server/services/content-attachments.service'
 import { get_story } from '@server/services/content/story.service'
-import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, is_encrypted_attachment, link_file_name_byte_length, normalized_attachment_extension, rename_attachment_references, sanitize_attachment_segment } from '@shared/content-markdown'
+import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_name_conflict_message, attachment_path_join, attachment_path_taken, attachment_path_violation, decrypted_attachment_name, encrypted_attachment_suffix, is_encrypted_attachment, link_file_name_byte_length, normalized_attachment_extension, rewrite_attachment_path, rewrite_content_refs, sanitize_attachment_segment } from '@shared/content-markdown'
 import { settings } from '@shared/settings'
 
 /** Attachment files and explicit folders of a story's scope. */
@@ -86,7 +86,7 @@ interface StoryMarkdownRow extends RowDataPacket {
  * leave the document pointing at a name that no longer exists. Bumping turns
  * it into the ordinary version conflict the editor already resolves.
  */
-export async function rewrite_story_attachment_refs(connection: Connection, story_id: number, renames: { old_file_name: string, new_file_name: string }[]) {
+export async function rewrite_story_attachment_refs(connection: Connection, story_id: number, renames: { old_file_name: string, new_file_name: string, is_folder?: boolean }[]) {
   if (! renames.length)
     return
   const [rows] = await connection.execute<StoryMarkdownRow[]>(
@@ -97,13 +97,9 @@ export async function rewrite_story_attachment_refs(connection: Connection, stor
   if (! story)
     return
 
-  let markdown = story.markdown
-  let cover = story.cover ?? ''
-  for (const rename of renames) {
-    markdown = rename_attachment_references(markdown, rename.old_file_name, rename.new_file_name)
-    if (cover === rename.old_file_name)
-      cover = rename.new_file_name
-  }
+  const step = { attachments: renames.map(rename => ({ from: rename.old_file_name, to: rename.new_file_name, is_folder: rename.is_folder })) }
+  const markdown = rewrite_content_refs(story.markdown, [step])
+  const cover = rewrite_attachment_path(story.cover ?? '', step)
   if (markdown !== story.markdown || cover !== (story.cover ?? '')) {
     await connection.execute(
       'UPDATE content_stories SET markdown = ?, cover = ?, revision = revision + 1 WHERE id = ?',
@@ -153,7 +149,6 @@ export async function apply_folder_rename(story_id: number, source_folder: strin
     const remaining_files = new Set(remaining.filter(row => ! row.is_folder).map(row => row.file_name.toLowerCase()))
     const remaining_paths = remaining.map(row => row.file_name)
 
-    const renames: { old_file_name: string, new_file_name: string }[] = []
     const moves: { id: number, new_file_name: string }[] = []
     const merged: number[] = []
     // The destination has to be a legal name in its own right (the `.good`
@@ -177,7 +172,6 @@ export async function apply_folder_rename(story_id: number, source_folder: strin
         // availability is checked, never its legality.
         assert_attachment_name_available(new_file_name, remaining_paths)
         moves.push({ id: row.id, new_file_name })
-        renames.push({ old_file_name: row.file_name, new_file_name })
       }
     }
 
@@ -196,7 +190,7 @@ export async function apply_folder_rename(story_id: number, source_folder: strin
     // as its last file moved away. Existing rows are kept, so a merge is free.
     if (moves.some(move => move.new_file_name.startsWith(`${destination}/`)))
       await create_folder_rows(story_id, [... attachment_ancestor_folders(destination), destination], connection)
-    await rewrite_story_attachment_refs(connection, story.id, renames)
+    await rewrite_story_attachment_refs(connection, story.id, [{ old_file_name: source_folder, new_file_name: destination, is_folder: true }])
     await connection.commit()
   }
   catch (error) {
