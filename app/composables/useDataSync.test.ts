@@ -114,6 +114,43 @@ describe('data sync transport', () => {
     expect(listener).toHaveBeenCalledTimes(2)
   })
 
+  it.each([false, true])('recovers a failed offline broadcast read when online, hidden=%s', async (hidden) => {
+    const { transport, client, channel } = await start()
+    let online = false
+    let snapshot = 'old'
+    const listener = vi.fn(() => {
+      // A failed resource fetch retains its previous data; receipt of the
+      // notification alone does not mean the browser read the new snapshot.
+      if (online) {
+        snapshot = 'new'
+      }
+    })
+    transport.subscribe('profile:1', listener)
+    browser_document.hidden = hidden
+    client.connected = false
+    client.emit('close')
+    channel.receive({ type: 'sync_event', payload: event('offline-change') })
+    expect(snapshot).toBe('old')
+    expect(listener).toHaveBeenCalledOnce()
+
+    online = true
+    if (! hidden) {
+      await vi.advanceTimersByTimeAsync(settings.app.client.sync.reconnectDelayMs)
+      const reconnected = clients.at(- 1)!
+      reconnected.connected = true
+      reconnected.emit('connect', { sessionPresent: true })
+      reconnected.emit('message', 'topic', Buffer.from(JSON.stringify(event('offline-change'))))
+      expect(listener).toHaveBeenCalledOnce()
+    }
+    window.dispatchEvent(new Event('online'))
+    expect(snapshot).toBe('new')
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ sync_all: true }))
+
+    transport.dispose()
+    window.dispatchEvent(new Event('online'))
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
   it('bounds event deduplication and allows evicted IDs again', async () => {
     const { transport, client } = await start()
     const listener = vi.fn()

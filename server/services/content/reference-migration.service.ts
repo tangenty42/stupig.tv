@@ -47,8 +47,8 @@ export async function migrate_content_references(apply = false, report: (item: R
         story_id: story.id,
         changed,
         applied: apply && changed,
-        attachment_targets: extract_attachment_names(markdown).length,
-        story_targets: extract_story_reference_titles(markdown).length,
+        attachment_targets: extract_attachment_names(rewritten).length,
+        story_targets: extract_story_reference_titles(rewritten).length,
       }
       results.push(item)
       report(item)

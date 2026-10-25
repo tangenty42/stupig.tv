@@ -19,6 +19,11 @@ export function upload_source_handle_key(story_id: number, item_id: number) {
   return `${story_id}:item:${item_id}`
 }
 
+/** New sessions never consume legacy task handles or another account's sources. */
+export function upload_session_handle_key(actor_id: number, scope_id: number, session_id: string) {
+  return `${actor_id}:${scope_id}:session:${session_id}`
+}
+
 function open_db(db_name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(db_name, 1)
@@ -38,10 +43,13 @@ async function with_store<T>(
 ): Promise<T> {
   const db = await open_db(db_name)
   try {
-    const store = db.transaction(OBJECT_STORE, mode).objectStore(OBJECT_STORE)
+    const transaction = db.transaction(OBJECT_STORE, mode)
+    const store = transaction.objectStore(OBJECT_STORE)
     return await new Promise<T>((resolve, reject) => {
       const request = run(store)
-      request.onsuccess = () => resolve(request.result)
+      transaction.oncomplete = () => resolve(request.result)
+      transaction.onabort = () => reject(transaction.error ?? new Error('文件句柄保存已中止'))
+      transaction.onerror = () => reject(transaction.error)
       request.onerror = () => reject(request.error)
     })
   }

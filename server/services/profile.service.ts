@@ -1,5 +1,6 @@
 import type { AuthUser } from '@server/types/auth'
 import type { RowDataPacket } from 'mysql2/promise'
+import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 import { runtime_config } from '@config/loader'
 
@@ -7,7 +8,7 @@ import { ApiError } from '@server/errors/ApiError'
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
 import { check_otp_sms } from '@server/lib/sms'
-import { delete_object_best_effort, put_object } from '@server/lib/storage'
+import { delete_avatar_best_effort, put_avatar } from '@server/lib/static-storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
 import { has_permission, normalize_permission_grants } from '@shared/permissions'
@@ -270,7 +271,7 @@ export async function delete_profile_avatar(user_id: number) {
     [user_id],
   )
 
-  await delete_object_best_effort(`avatar/${previous_file}`)
+  await delete_avatar_best_effort(`avatar/${previous_file}`)
   publish_profile_refresh(user_id)
 }
 
@@ -310,14 +311,13 @@ export async function upload_profile_avatar(user_id: number, input: FormData, ge
     throw new ApiError(415, '只支持 JPG / PNG / WebP')
   }
 
-  // Fixed object key per user; the stored ETag becomes the URL `?version=`
-  // cache-buster, replacing the random token previously baked into the name.
-  const avatar_file_name = `${user_id}${file_ext}`
-  // Put before the DB update so the (shared-key) object exists before its URL does.
-  const etag = await put_object(`avatar/${avatar_file_name}`, file_data, avatar.type || null)
+  // Immutable keys avoid reusing an ESA cache entry after an avatar replacement.
+  const avatar_file_name = `${user_id}-${randomUUID()}${file_ext}`
+  // Put before the DB update so the object exists before its URL does.
+  const etag = await put_avatar(`avatar/${avatar_file_name}`, file_data, avatar.type || null)
   const { previous_file } = await update_profile_avatar(user_id, avatar_file_name, etag)
   if (previous_file && previous_file !== avatar_file_name) {
-    await delete_object_best_effort(`avatar/${previous_file}`)
+    await delete_avatar_best_effort(`avatar/${previous_file}`)
   }
   publish_profile_refresh(user_id)
 }

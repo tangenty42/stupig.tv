@@ -142,7 +142,7 @@ export function useMarkdownSearch(get_view: () => EditorView | null) {
 
   function replace_current() {
     const view = get_view()
-    if (! view)
+    if (! view || view.state.readOnly)
       return
     const field_value = view.state.field(search_field)
     const spec = field_value.spec
@@ -167,7 +167,7 @@ export function useMarkdownSearch(get_view: () => EditorView | null) {
 
   function replace_all() {
     const view = get_view()
-    if (! view)
+    if (! view || view.state.readOnly)
       return
     const field_value = view.state.field(search_field)
     const spec = field_value.spec

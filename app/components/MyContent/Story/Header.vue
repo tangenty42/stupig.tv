@@ -43,7 +43,7 @@
           v-if="cover"
           type="button"
           class="mt-4 w-fit cursor-zoom-in transition-[filter] duration-300 hover:brightness-90"
-          :aria-label="`预览图片：${cover_alt_text}`"
+          :aria-label="`预览：${cover_alt_text}`"
           @click="preview_visible = true"
         >
           <img :src="cover_src" :alt="cover_alt_text" loading="lazy" class="max-h-60 w-auto rounded-sm">

@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   attachment_base_name,
   attachment_download_name,
+  attachment_inherits_private,
   attachment_name_segment_violation,
   attachment_path_conflicts,
+  attachment_path_is_private,
   attachment_path_violation,
   compare_attachment_names,
   decrypted_attachment_name,
@@ -130,6 +132,13 @@ describe('attachment folder helpers', () => {
   ])
 
   describe('is_attachment_folder', () => {
+    it('recognizes explicit empty directories while retaining real-file precedence', () => {
+      expect(is_attachment_folder([], 'this_is_a_folder', ['this_is_a_folder'])).toBe(true)
+      expect(is_attachment_folder([], 'parent/empty', ['parent', 'parent/empty'])).toBe(true)
+      expect(is_attachment_folder([], 'parent', ['parent/empty'])).toBe(true)
+      expect(is_attachment_folder([], 'missing', ['this_is_a_folder'])).toBe(false)
+      expect(is_attachment_folder([{ file_name: 'file.txt' }], 'file.txt', ['file.txt'])).toBe(false)
+    })
     it('recognises a folder by the files living under it', () => {
       expect(is_attachment_folder(scope, 'cards')).toBe(true)
       expect(is_attachment_folder(scope, 'cards/sub')).toBe(true)
@@ -217,105 +226,105 @@ describe('attachment folder helpers', () => {
 
 describe('extract_attachment_names', () => {
   it('extracts link and image destinations', () => {
-    expect(extract_attachment_names('[](a.zip) and ![](b.jpg)')).toEqual(['a.zip', 'b.jpg'])
+    expect(extract_attachment_names('[](att://a.zip) and ![](att://b.jpg)')).toEqual(['a.zip', 'b.jpg'])
   })
 
   it('catches both the nested link and the outer image destination', () => {
     // The regex this replaces consumed the nested link and orphaned the outer one.
-    expect(extract_attachment_names('![关公面前耍大刀😇[](高二1班_蠢猪组.zip)](蠢猪组提交.jpg)').sort())
+    expect(extract_attachment_names('![关公面前耍大刀😇[](att://高二1班_蠢猪组.zip)](att://蠢猪组提交.jpg)').sort())
       .toEqual(['蠢猪组提交.jpg', '高二1班_蠢猪组.zip'].sort())
   })
 
   it('walks arbitrarily deep nesting inside labels', () => {
-    expect(extract_attachment_names('![a [x [y](c.zip)](b.jpg)](a.png)').sort())
+    expect(extract_attachment_names('![a [x [y](att://c.zip)](att://b.jpg)](att://a.png)').sort())
       .toEqual(['a.png', 'b.jpg', 'c.zip'].sort())
   })
 
   it('ignores story references, anchors and external URLs', () => {
-    expect(extract_attachment_names('[](@档案标题) [](#anchor) [](https://example.com/x.jpg)')).toEqual([])
+    expect(extract_attachment_names('[](content://档案标题) [](#anchor) [](https://example.com/x.jpg)')).toEqual([])
   })
 
   it('accepts (possibly nested) folder paths', () => {
-    expect(extract_attachment_names('[](dir/a.jpg) [](dir/sub/b.jpg)').sort()).toEqual(['dir/a.jpg', 'dir/sub/b.jpg'].sort())
+    expect(extract_attachment_names('[](att://dir/a.jpg) [](att://dir/sub/b.jpg)').sort()).toEqual(['dir/a.jpg', 'dir/sub/b.jpg'].sort())
   })
 
   it('accepts angle destinations and title suffixes', () => {
-    expect(extract_attachment_names('[](<a.jpg>) ![](b.jpg "标题")').sort()).toEqual(['a.jpg', 'b.jpg'].sort())
+    expect(extract_attachment_names('[](<att://a.jpg>) ![](att://b.jpg "标题")').sort()).toEqual(['a.jpg', 'b.jpg'].sort())
   })
 
   it('ignores link lookalikes inside inline code spans', () => {
-    expect(extract_attachment_names('`[](a.jpg)` and `` `[](b.jpg)` ``')).toEqual([])
+    expect(extract_attachment_names('`[](att://a.jpg)` and `` `[](att://b.jpg)` ``')).toEqual([])
   })
 
   it('ignores link lookalikes inside fenced code blocks', () => {
-    expect(extract_attachment_names('```md\n[](fenced.jpg)\n```\n\n[](real.jpg)')).toEqual(['real.jpg'])
+    expect(extract_attachment_names('```md\n[](att://fenced.jpg)\n```\n\n[](att://real.jpg)')).toEqual(['real.jpg'])
   })
 
   it('ignores a `]` inside a code span within the label', () => {
-    expect(extract_attachment_names('![a `]` b](x.jpg)')).toEqual(['x.jpg'])
+    expect(extract_attachment_names('![a `]` b](att://x.jpg)')).toEqual(['x.jpg'])
   })
 
   it('ignores unterminated and unbalanced destinations', () => {
-    expect(extract_attachment_names('[](a.jpg and [](b(c)')).toEqual([])
+    expect(extract_attachment_names('[](att://a.jpg and [](att://b(c)')).toEqual([])
   })
 })
 
 describe('rename_attachment_references', () => {
   it('renames the destination and a default label, but keeps custom labels', () => {
-    expect(rename_attachment_references('[a.jpg](a.jpg) [自定义](a.jpg)', 'a.jpg', 'b.jpg'))
-      .toBe('[b.jpg](b.jpg) [自定义](b.jpg)')
+    expect(rename_attachment_references('[a.jpg](att://a.jpg) [自定义](att://a.jpg)', 'a.jpg', 'b.jpg'))
+      .toBe('[b.jpg](att://b.jpg) [自定义](att://b.jpg)')
   })
 
   it('renames a link nested inside an image label without breaking the outer image', () => {
-    expect(rename_attachment_references('![关公面前耍大刀😇[](高二1班_蠢猪组.zip)](蠢猪组提交.jpg)', '高二1班_蠢猪组.zip', '新压缩包.zip'))
-      .toBe('![关公面前耍大刀😇[](新压缩包.zip)](蠢猪组提交.jpg)')
+    expect(rename_attachment_references('![关公面前耍大刀😇[](att://高二1班_蠢猪组.zip)](att://蠢猪组提交.jpg)', '高二1班_蠢猪组.zip', '新压缩包.zip'))
+      .toBe('![关公面前耍大刀😇[](att://新压缩包.zip)](att://蠢猪组提交.jpg)')
   })
 
   it('renames the outer image destination without touching the nested link', () => {
-    expect(rename_attachment_references('![关公面前耍大刀😇[](高二1班_蠢猪组.zip)](蠢猪组提交.jpg)', '蠢猪组提交.jpg', '新图.jpg'))
-      .toBe('![关公面前耍大刀😇[](高二1班_蠢猪组.zip)](新图.jpg)')
+    expect(rename_attachment_references('![关公面前耍大刀😇[](att://高二1班_蠢猪组.zip)](att://蠢猪组提交.jpg)', '蠢猪组提交.jpg', '新图.jpg'))
+      .toBe('![关公面前耍大刀😇[](att://高二1班_蠢猪组.zip)](att://新图.jpg)')
   })
 
   it('preserves whitespace and title suffixes around the destination', () => {
-    expect(rename_attachment_references('![](  a.jpg  "标题")', 'a.jpg', 'b.jpg'))
-      .toBe('![](  b.jpg  "标题")')
+    expect(rename_attachment_references('![](  att://a.jpg  "标题")', 'a.jpg', 'b.jpg'))
+      .toBe('![](  att://b.jpg  "标题")')
   })
 
   it('leaves code spans and fenced blocks untouched', () => {
-    expect(rename_attachment_references('`[](a.jpg)`\n\n```\n[](a.jpg)\n```\n\n[](a.jpg)', 'a.jpg', 'b.jpg'))
-      .toBe('`[](a.jpg)`\n\n```\n[](a.jpg)\n```\n\n[](b.jpg)')
+    expect(rename_attachment_references('`[](att://a.jpg)`\n\n```\n[](att://a.jpg)\n```\n\n[](att://a.jpg)', 'a.jpg', 'b.jpg'))
+      .toBe('`[](att://a.jpg)`\n\n```\n[](att://a.jpg)\n```\n\n[](att://b.jpg)')
   })
 
   it('leaves unrelated links untouched', () => {
-    expect(rename_attachment_references('[](other.jpg) [](@档案) text', 'a.jpg', 'b.jpg'))
-      .toBe('[](other.jpg) [](@档案) text')
+    expect(rename_attachment_references('[](att://other.jpg) [](content://档案) text', 'a.jpg', 'b.jpg'))
+      .toBe('[](att://other.jpg) [](content://档案) text')
   })
 })
 
 describe('extract_story_reference_titles', () => {
   it('extracts link and image story references, deduplicated', () => {
-    expect(extract_story_reference_titles('[](@蠢猪，从何而来？) ![图](@另一档案) [](@蠢猪，从何而来？)').sort())
+    expect(extract_story_reference_titles('[](content://蠢猪，从何而来？) ![图](content://另一档案) [](content://蠢猪，从何而来？)').sort())
       .toEqual(['另一档案', '蠢猪，从何而来？'].sort())
   })
 
   it('extracts references nested inside image labels', () => {
-    expect(extract_story_reference_titles('![x[](@另一档案)](a.jpg)')).toEqual(['另一档案'])
+    expect(extract_story_reference_titles('![x[](content://另一档案)](att://a.jpg)')).toEqual(['另一档案'])
   })
 
   it('ignores bare prose lookalikes and code spans', () => {
-    expect(extract_story_reference_titles('正文 (@另一档案) 与 `[](@蠢猪，从何而来？)`')).toEqual([])
+    expect(extract_story_reference_titles('正文 (@另一档案) 与 `[](content://蠢猪，从何而来？)`')).toEqual([])
   })
 })
 
 describe('rename_story_references', () => {
   it('renames references and keeps labels and other text intact', () => {
-    expect(rename_story_references('[](@旧标题) [文本](@旧标题) 正文 (@旧标题)', '旧标题', '新标题'))
-      .toBe('[](@新标题) [文本](@新标题) 正文 (@旧标题)')
+    expect(rename_story_references('[](content://旧标题) [文本](content://旧标题) 正文 (@旧标题)', '旧标题', '新标题'))
+      .toBe('[](content://新标题) [文本](content://新标题) 正文 (@旧标题)')
   })
 
   it('renames references nested inside image labels', () => {
-    expect(rename_story_references('![x[](@旧标题)](a.jpg)', '旧标题', '新标题'))
-      .toBe('![x[](@新标题)](a.jpg)')
+    expect(rename_story_references('![x[](content://旧标题)](att://a.jpg)', '旧标题', '新标题'))
+      .toBe('![x[](content://新标题)](att://a.jpg)')
   })
 })
 
@@ -349,11 +358,20 @@ describe('extension normalization', () => {
     expect(lowercased_attachment_extension('README')).toBe('README')
     // A leading dot is the name itself (the `.good` marker), not a separator.
     expect(lowercased_attachment_extension('.good')).toBe('.good')
+    expect(lowercased_attachment_extension('Album.JPG/README')).toBe('Album.JPG/README')
+    expect(lowercased_attachment_extension('Album.JPG/.hidden')).toBe('Album.JPG/.hidden')
   })
 
   it('sanitizes uploads to a lowercase extension', () => {
     expect(sanitize_attachment_file_name('IMG_2026.JPG', 255)).toBe('IMG_2026.jpg')
     expect(sanitize_attachment_file_name('照片.PNG', 255)).toBe('照片.png')
+  })
+  it('replaces each illegal character with an underscore without collapsing adjacent replacements', () => {
+    expect(sanitize_attachment_file_name('a?b c##d.TXT', 255)).toBe('a_b_c__d.txt')
+    expect(sanitize_attachment_file_name('???', 255)).toBe('___')
+    expect(sanitize_attachment_segment('项目? #', 255)).toBe('项目___')
+    expect(sanitize_attachment_path('My Folder/报告?.PDF', 255)).toBe('My_Folder/报告_.pdf')
+    expect(sanitize_attachment_file_name('a\u0000b\tb.txt', 255)).toBe('a_b_b.txt')
   })
 
   // A folder's dots are part of its name, not an extension, so only the final
@@ -418,11 +436,9 @@ describe('attachment name rules', () => {
       expect(attachment_name_segment_violation('photo-1_final.png')).toBeNull()
     })
 
-    it('reserves the .good suffix, whichever kind of entry asks', () => {
-      // Encrypting is the only thing allowed to append it, and a hand-made one
-      // would occupy the very name a real decrypt (or 删减版) needs.
-      expect(attachment_name_segment_violation('photo.png.good')).toContain('.good')
-      expect(attachment_name_segment_violation('cards.good')).toContain('.good')
+    it('accepts the .good ACL declaration on both files and folders', () => {
+      expect(attachment_name_segment_violation('photo.png.good')).toBeNull()
+      expect(attachment_name_segment_violation('cards.good')).toBeNull()
     })
 
     it('rejects illegal characters', () => {
@@ -457,13 +473,30 @@ describe('attachment name rules', () => {
     })
 
     it('reports the offending level, not the whole path', () => {
-      expect(attachment_path_violation('cards/bad.good/photo.png')).toContain('.good')
+      expect(attachment_path_violation('cards/private.good/photo.png')).toBeNull()
       expect(attachment_path_violation('cards/sub/bad:name.png')).toContain('不支持的字符')
     })
 
-    it('catches a suffix on the file itself', () => {
-      expect(attachment_path_violation('cards/photo.png.good')).toContain('.good')
+    it('accepts a declaration on the file itself', () => {
+      expect(attachment_path_violation('cards/photo.png.good')).toBeNull()
     })
+  })
+})
+
+describe('path privacy declarations', () => {
+  it.each([
+    ['plain/a.png', false, false], ['plain/a.png.good', true, false],
+    ['secret.good/a.png', true, true], ['secret.GOOD/sub/a.png', true, true],
+    ['plain/nested.good/sub/a.png.good', true, true], ['secret.good.bak/a.png', false, false],
+  ])('resolves effective and inherited privacy for %s', (path, effective, inherited) => {
+    expect(attachment_path_is_private(path)).toBe(effective)
+    expect(attachment_inherits_private(path)).toBe(inherited)
+  })
+
+  it('retains the ACL when sanitizing or truncating either kind of name', () => {
+    expect(sanitize_attachment_file_name('photo?.PNG.GOOD', 40)).toBe('photo_.png.good')
+    expect(sanitize_attachment_segment(`${'a'.repeat(40)}.good`, 20)).toBe(`${'a'.repeat(15)}.good`)
+    expect(sanitize_attachment_path('secret?.good/sub/Photo.PNG.good', 40)).toBe('secret_.good/sub/Photo.png.good')
   })
 })
 
@@ -538,22 +571,22 @@ describe('redactable_attachment_mime', () => {
 
 describe('parse_story_markdown at-story lint', () => {
   it('flags dead references with the body line number', () => {
-    const { issues } = parse_story_markdown(story_doc('前言\n\n[](@不存在档案)'), config)
-    expect(issues).toEqual([{ line: 8, severity: 'error', source: 'at-story', message: '档案『不存在档案』不可引用' }])
+    const { issues } = parse_story_markdown(story_doc('前言\n\n[](content://不存在档案)'), config)
+    expect(issues).toEqual([{ line: 8, severity: 'warning', source: 'at-story', message: '档案『不存在档案』不可引用' }])
   })
 
   it('flags self references', () => {
-    const { issues } = parse_story_markdown(story_doc('[](@测试档案)'), config)
-    expect(issues).toEqual([{ line: 6, severity: 'error', source: 'at-story', message: '不允许自我引用' }])
+    const { issues } = parse_story_markdown(story_doc('[](content://测试档案)'), config)
+    expect(issues).toEqual([{ line: 6, severity: 'warning', source: 'at-story', message: '不允许自我引用' }])
   })
 
   it('accepts references to existing stories, including nested ones', () => {
-    const { issues } = parse_story_markdown(story_doc('[](@蠢猪，从何而来？)\n![x[](@另一档案)](a.jpg)'), config)
+    const { issues } = parse_story_markdown(story_doc('[](content://蠢猪，从何而来？)\n![x[](content://另一档案)](att://a.jpg)'), config)
     expect(issues.filter(issue => issue.source === 'at-story')).toEqual([])
   })
 
   it('ignores bare prose lookalikes and code spans', () => {
-    const { issues } = parse_story_markdown(story_doc('正文 (@不存在档案) 与 `[](@也不存在)`'), config)
+    const { issues } = parse_story_markdown(story_doc('正文 (@不存在档案) 与 `[](content://也不存在)`'), config)
     expect(issues.filter(issue => issue.source === 'at-story')).toEqual([])
   })
 })

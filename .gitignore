@@ -3,6 +3,8 @@
 .data
 .nuxt
 .nitro
+.dev
+.esa
 .cache
 dist
 
@@ -25,6 +27,7 @@ logs
 !.env.*.layer
 !.env.prod.gpg
 config/local.yaml
+/tmp.env
 
 # Lock files
 *-lock.yaml

@@ -12,9 +12,19 @@ const auth_mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@server/services/auth-guards.service', () => auth_mocks)
+const upload_mocks = vi.hoisted(() => ({ begin_upload_session: vi.fn(), operate_upload_session: vi.fn(), sign_upload_session_part: vi.fn(), list_upload_sessions: vi.fn(), adopt_upload_session: vi.fn() }))
+vi.mock('@server/services/content/upload-api.service', () => upload_mocks)
+const background_mocks = vi.hoisted(() => ({ get_background_status: vi.fn() }))
+vi.mock('@server/services/background/status.service', () => background_mocks)
+const audit_mocks = vi.hoisted(() => ({ get_storage_audit_findings: vi.fn() }))
+vi.mock('@server/services/storage-audit/service', () => audit_mocks)
+// Router contracts supply their own deployment fixture, never local credentials.
+vi.mock('../../config/lib/environment.mjs', () => ({ load_environment: () => ({ ... process.env }) }))
 
 for (const [key, value] of Object.entries({
-  NODE_ENV: 'test',
+  NODE_ENV: 'production',
+  NUXT_OTP_DEBUG: 'false',
+  NUXT_CAPTCHA_DEBUG: 'false',
   MYSQL_HOST: '127.0.0.1',
   MYSQL_PORT: '3306',
   MYSQL_USER: 'stupig_tv',
@@ -25,11 +35,15 @@ for (const [key, value] of Object.entries({
   MQTT_HOST: '127.0.0.1',
   MQTT_TCP_PORT: '1883',
   MQTT_WEB_URL: 'ws://localhost:8083/mqtt',
-  OSS_ACCESS_KEY_ID: 'placeholder',
-  OSS_ACCESS_KEY_SECRET: 'placeholder',
-  ALIYUN_ACCESS_KEY_ID: 'placeholder',
-  ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
-  ALIYUN_CAPTCHA_APP_KEY: 'placeholder',
+  OSS_PUBLIC_ACCESS_KEY_ID: 'public-id',
+  OSS_PUBLIC_ACCESS_KEY_SECRET: 'public-secret',
+  OSS_PRIVATE_ACCESS_KEY_ID: 'private-id',
+  OSS_PRIVATE_ACCESS_KEY_SECRET: 'private-secret',
+  ALIYUN_DYPNS_ACCESS_KEY_ID: 'placeholder',
+  ALIYUN_DYPNS_ACCESS_KEY_SECRET: 'placeholder',
+  ALIYUN_DYPNS_CAPTCHA_APP_KEY: 'placeholder',
+  ALIYUN_OSS_ACCESS_KEY_ID: 'placeholder',
+  ALIYUN_OSS_ACCESS_KEY_SECRET: 'placeholder',
   JWT_SECRET: 'x'.repeat(40),
 })) {
   vi.stubEnv(key, value)
@@ -55,10 +69,63 @@ function create_event() {
 }
 
 describe('tRPC router contracts', () => {
+  it('requires full admin permission for paginated object-key findings', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'admin_access', level: 'readonly' }] })
+    await expect(caller.admin.getStorageAuditFindings({})).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(audit_mocks.get_storage_audit_findings).not.toHaveBeenCalled()
+    auth_mocks.require_auth_user.mockResolvedValue(auth_user)
+    audit_mocks.get_storage_audit_findings.mockResolvedValue([])
+    expect(await caller.admin.getStorageAuditFindings({ after_id: 2, limit: 10 })).toEqual([])
+    expect(audit_mocks.get_storage_audit_findings).toHaveBeenCalledWith({ after_id: 2, limit: 10 })
+    await expect(caller.admin.getStorageAuditFindings({ limit: 1001 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+  it('allows background status only with admin read permission', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false })
+    await expect(caller.admin.getBackgroundStatus()).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(background_mocks.get_background_status).not.toHaveBeenCalled()
+    auth_mocks.require_auth_user.mockRejectedValue(new ApiError(401, '未登录'))
+    await expect(caller.admin.getBackgroundStatus()).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+    auth_mocks.require_auth_user.mockResolvedValue(auth_user)
+    background_mocks.get_background_status.mockResolvedValue({ mode: 'app', process: null, database: {} })
+    expect(await caller.admin.getBackgroundStatus()).toEqual({ mode: 'app', process: null, database: {} })
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     auth_mocks.require_auth_user.mockResolvedValue(auth_user)
     auth_mocks.require_admin_user.mockResolvedValue(auth_user)
+  })
+  it('binds upload discovery and publication to the current authenticated actor', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    await caller.content.listUploadSessions({ id: 24 })
+    await caller.content.adoptUploadSession({ session_id: 'a'.repeat(32) })
+    expect(upload_mocks.list_upload_sessions).toHaveBeenCalledWith(24, 7)
+    expect(upload_mocks.adopt_upload_session).toHaveBeenCalledWith('a'.repeat(32), 7)
+  })
+
+  it('binds upload operations to the authenticated actor and rejects identity injection', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    const session_id = 'a'.repeat(32)
+    upload_mocks.operate_upload_session.mockResolvedValue({ id: session_id })
+    await caller.content.resumeUploadSession({ session_id })
+    expect(upload_mocks.operate_upload_session).toHaveBeenCalledWith('resume', session_id, 7)
+    const forged = { session_id, actor_id: 99 }
+    await expect(caller.content.resumeUploadSession(forged)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(upload_mocks.operate_upload_session).toHaveBeenCalledOnce()
+  })
+  it('exposes a read-only session query separately from resume mutations', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    const session_id = 'a'.repeat(32)
+    await caller.content.getUploadSession({ session_id })
+    expect(upload_mocks.operate_upload_session).toHaveBeenCalledWith('get', session_id, 7)
+  })
+
+  it('rejects upload grants without content management permission', async () => {
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [] })
+    const caller = app_router.createCaller({ event: create_event() })
+    await expect(caller.content.signUploadSessionPart({ session_id: 'a'.repeat(32), part: 1, md5: '1B2M2Y8AsgTpgAmY7PhCfg==' })).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(upload_mocks.sign_upload_session_part).not.toHaveBeenCalled()
   })
 
   it('serves public procedures without authentication', async () => {
@@ -93,7 +160,7 @@ describe('tRPC router contracts', () => {
   it('rejects invalid Zod inputs before invoking a service', async () => {
     const caller = app_router.createCaller({ event: create_event() })
 
-    await expect(caller.content.getStory({ id: 0 })).rejects.toMatchObject({
+    await expect(caller.content.getStoryBody({ id: 0 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
   })
@@ -104,11 +171,12 @@ describe('tRPC router contracts', () => {
       error: new TRPCError({ code: 'BAD_REQUEST', message: 'error', cause }),
       type: 'mutation', path: 'content.updateStory', input: undefined, ctx: { event: create_event() },
     })
-    const public_data = { code: 'LEGACY_REF' as const, details: { lines: [5, 6] } }
-    expect(shape(new ApiError(400, '旧引用', public_data)).data.applicationError).toEqual(public_data)
+    const public_data = { code: 'REF_TARGET_REPLACED' as const, details: { namespace_revision: 2, title_revision: 3, references: [{ kind: 'attachment' as const, target: 'a.txt', from: 5, to: 10, line: 2, reason: 'replaced' as const }] } }
+    expect(shape(new ApiError(409, '引用目标已变更', public_data)).data.applicationError).toEqual(public_data)
+    expect(shape(new ApiError(409, '上传会话已过期', { code: 'UPLOAD_SESSION_EXPIRED' })).data.applicationError).toEqual({ code: 'UPLOAD_SESSION_EXPIRED' })
     // A lookalike internal error cannot smuggle its SQL/metadata through the formatter.
     expect(shape(Object.assign(new Error('internal'), { public_data })).data.applicationError).toBeUndefined()
-    const unsafe = Object.assign(new ApiError(400, 'expected'), { public_data: { ... public_data, details: { lines: [5], sql: 'private SQL' } } })
+    const unsafe = Object.assign(new ApiError(400, 'expected'), { public_data: { ... public_data, details: { ... public_data.details, sql: 'private SQL' } } })
     expect(shape(unsafe).data.applicationError).toBeUndefined()
   })
 

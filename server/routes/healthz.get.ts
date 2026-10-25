@@ -18,7 +18,7 @@ import { error_fields, log_error } from '@server/lib/log'
  */
 export default defineEventHandler(async (event) => {
   try {
-    const [rows] = await db.execute<RowDataPacket[]>('SELECT COUNT(*) AS applied FROM schema_migrations')
+    const [rows] = await db.execute<RowDataPacket[]>('SELECT COUNT(*) AS applied FROM migration_runs WHERE status = \'completed\'')
     const applied = Number((rows[0] as { applied: number } | undefined)?.applied ?? 0)
     return { status: 'ok', migrations: applied }
   }

@@ -12,7 +12,7 @@
               size="small"
               text
               severity="primary"
-              label="更换头像"
+              label="更换"
               :loading="avatar_upload_pending"
               :disabled="avatar_upload_pending"
               @click="avatar_crop_upload?.open_picker()"
@@ -26,7 +26,7 @@
               size="small"
               text
               severity="secondary"
-              label="删除头像"
+              label="删除"
               :loading="avatar_delete_pending"
               :disabled="avatar_delete_pending"
               @click="confirm_delete_avatar"
@@ -390,9 +390,9 @@ useHead({
 const static_url = useStaticUrl()
 
 useSeoMeta({
-  description: computed(() => profile.value ? `蠢猪小组成员「${profile.value.username}」的主页` : undefined),
+  description: computed(() => profile.value ? `蠢猪小组成员『${profile.value.username}』的主页` : undefined),
   ogTitle: computed(() => profile.value ? `用户主页 - ${profile.value.username}` : undefined),
-  ogDescription: computed(() => profile.value ? `蠢猪小组成员「${profile.value.username}」的主页` : undefined),
+  ogDescription: computed(() => profile.value ? `蠢猪小组成员『${profile.value.username}』的主页` : undefined),
   ogType: 'profile',
   ogImage: computed(() => (profile.value ? avatar_url(static_url, profile.value.avatar_file, profile.value.avatar_version) : null) ?? undefined),
 })

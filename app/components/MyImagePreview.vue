@@ -45,6 +45,7 @@ function create_viewer() {
 
   viewer = new Viewer(viewer_container.value, {
     inline: false,
+    loading: true,
     button: true,
     navbar: props.images.length > 1,
     title: false,
@@ -143,3 +144,16 @@ onUnmounted(() => {
   viewer = null
 })
 </script>
+
+<style>
+/* Viewer mounts under body. Keep its spinner, and cover progressive images
+   even after the library's one-second invisible-image timeout expires. */
+.viewer-canvas.viewer-loading::before {
+  content: '';
+  @apply pointer-events-none absolute inset-0 z-[1] bg-slate-950/80;
+}
+
+.viewer-canvas.viewer-loading > img {
+  visibility: hidden;
+}
+</style>

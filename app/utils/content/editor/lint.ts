@@ -11,7 +11,6 @@ import { forceLinting, linter } from '@codemirror/lint'
 import { StateEffect } from '@codemirror/state'
 import { parse_story_markdown } from '@shared/content-markdown'
 import { build_html_diagnostics } from '@shared/html-lint'
-import { settings } from '@shared/settings'
 import { lint as markdownlint } from 'markdownlint/sync'
 
 export interface LintListItem {
@@ -38,7 +37,6 @@ export function story_lint_config(limits: StoryLintLimits, stories: ContentStory
     cover_max_bytes: limits.coverMaxBytes,
     markdown_max_bytes: limits.markdownMaxBytes,
     attachment_paths: [... attachments.map(item => item.file_name), ... folders],
-    legacy_compat: settings.app.content.reference.legacyCompat,
     existing_titles: stories
       .filter(story => story.id !== story_id)
       .map(story => ({ id: story.id, title: story.title })),

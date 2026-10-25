@@ -1,33 +1,40 @@
 ---
-description: "Use when creating or editing Vue SFC components, composables, or frontend pages in this Nuxt project."
+description: "Use when creating or editing Vue components, composables, stores or frontend pages."
 name: "Vue Frontend Conventions"
 applyTo: "app/**/*.{vue,ts}"
 ---
 
-# Vue Frontend Guidelines
+# Frontend rules
 
-- Use Vue SFC with `<script setup lang="ts">`.
-- Use `withDefaults(defineProps<...>(), { ... })` when a component defines runtime defaults. Use bare `defineProps<...>()` when every prop is required or optional without a component-level default. Declare typed emits with `defineEmits<{ 'eventName': [value: Type] }>()`.
-- Rely on Nuxt auto-imports; do not explicitly import from `#imports`.
-- Custom components are prefixed with `My` (e.g., `MyAvatar`, `MyDialog`, `MyIcon`).
-- Render icons via `<MyIcon name="lucide:..." />`.
-- Use `useMyToast()` for toast notifications and `useApi()` for API calls.
-- `useMyToast()` calls PrimeVue `useToast()` eagerly, so it requires a Vue inject context — only call it synchronously inside component setup (directly, or via composables like `useAuth()` that are themselves only invoked from setup). In async contexts where inject is unavailable (fetch error handlers, BroadcastChannel/poll callbacks, MQTT listeners), do not call `useMyToast()`/`useAuth()`; use lower-level Nuxt-context APIs (`useCookie`, `useRuntimeConfig`, `navigateTo`) directly instead.
-- `useApi()` must be created synchronously in setup. Its internal `useTrpcClient()` handles 401 responses by clearing the session once per page load and throws a status-carrying error. `useSyncedData`'s default error handler suppresses toasts for 401s (checked via the exported `get_error_status`) so the logout feedback stays clean; don't re-toast 401s in callers either.
-- `useApi()` is the component-facing API facade. Pages and components call named methods on its domain groups (`auth`, `profile`, `admin`, `content`) rather than using the tRPC client directly. Extend the matching facade group and server router together when adding an operation. Transport and authentication infrastructure such as `useAuth()` and `useTrpcClient()` may use lower-level requests where routing through `useApi()` would create a dependency cycle; keep those exceptions out of pages and components.
-- Use Pinia for client-owned state with a shared lifecycle across components or navigation. Keep server-fetched synchronized resources in `useSyncedData`; do not move MQTT listeners, transport connections, or SSR cookie state into stores. The content draft store owns only serializable unsaved editor state and localStorage persistence, never pending `File` uploads.
-- Import stable localStorage keys, schema versions, delays, limits and timing directly from `@shared/settings`. Use `useRuntimeConfig().public` only for public deployment values (site, static URL, MQTT URL and CAPTCHA app ID). Shared settings must contain no secrets or private deployment information; do not mirror them into runtime config. Utilities remain pure and accept the relevant settings as arguments.
-- **Functions in `app/utils/` must never call composables (`useXxx()`).** Some call paths evaluate util-dependent getters with no active Nuxt/Vue instance (e.g. `useSeoMeta` head rendering), which crashes SSR; composables also hide configuration inside the util. Instead, capture `const xxx = useXxx()` once at the top of the page/component setup block and pass it into the util as a config-like argument — e.g. `story_front_cover_url(static_url, cover, id)` and `avatar_url(static_url, file)`. Keep utils pure functions of their parameters.
-- Forms use `@primevue/forms` with Zod resolvers. Frontend form schemas and defaults live in `server/shared/schemas.ts` and are importable via `@shared/schemas`; full tRPC input schemas stay server-only in `server/trpc/schemas.ts`.
-- When mutually exclusive component modes must preserve local state, wrap the keyed component roots directly in `<KeepAlive>` (for example, keyed `<Form v-if>` / `<Form v-else>` branches). Do not place plain `<div>` wrappers between `<KeepAlive>` and the components; DOM elements are not cached.
-- Public API response/payload types are shared through `@shared/types/*`. Prefer importing from `@shared/types` (e.g., `import type { User, Profile } from '@shared/types/user'`) instead of duplicating type definitions in `app/composables/useApi.ts` or components. Use `useApi.ts` only for the typed facade and compatibility re-exports, not as a home for API shapes.
-- Date handling: use `dayjs` with `dayjs.extend(utc)`; store UTC, display local. Use the existing `localize_date()`, `date_format()`, `time_format()`, `datetime_format()`, and duration helpers from `app/utils/time.ts` rather than page-local `Intl.DateTimeFormat`, `toLocaleString`, or duplicate formatting helpers.
-- SSR/hydration time safety: never store `Dayjs` objects in state that crosses the Nuxt payload boundary (they don't serialize); pass UTC ISO strings and call `localize_date()` at the point of use (pattern: `otp_cooldown_until` in `MyFormField.vue` → `MyOtpButton.vue`). Calendar-unit diffs (`day`, `hour`, ...) are timezone-sensitive — localize both operands with `localize_date()` before diffing.
-- When fetching client-visible state with `useSyncedData`, keep `universal: true` and be aware a proxy created with `immediate: false` is trigger-only: it has no fetched value, so never rely on it to populate data. Anything rendered identically on server and client (hydration-sensitive) must come from `useState` or an awaited immediate fetch.
-- **Never gate a fetcher on client-side identity state** (e.g. skipping a request because `user.value` says the viewer is unchanged). Each `useCookie(name)` call creates an independent ref synced over a BroadcastChannel, so when the login/logout `sync_all` refresh fires, the page's own `user` ref can still hold the pre-login value — a version-check short-circuit keyed on it keeps serving the old viewer's data (this bit `content/[id]/index.vue` with redacted private content). Ordinary fetchers are unaffected: request identity comes from the httpOnly token cookie, which is already fresh. If a fetch genuinely needs an incremental/version check on identity-scoped data, have the server issue and compare the viewer key (pattern: `viewer_key` in `ContentStoryDetail`, echoed back as `base_viewer_key`) — never derive identity on the client.
-- Styling: Tailwind CSS 3 + PrimeVue. Use `app/assets/css/global.css` and `app/assets/css/primevue-overrides.css` for app-wide styles. Scoped component styles use `<style scoped>` with `@apply`.
-- To restyle a PrimeVue component's internals, prefer its design tokens (`--p-*`, e.g. `--p-slider-track-size`, `--p-contextmenu-item-padding`) over overriding generated class names such as `.p-slider`: the tokens are the supported surface, they survive upgrades, and they change the component's own geometry correctly instead of fighting its derived values. Set app-wide tokens in `app/assets/css/primevue-overrides.css` (which loads after PrimeVue's core CSS); for a tweak that only one component needs, set the token on that component's root element in its scoped style.
-- For our own palette reference Tailwind's `theme()`: `theme('colors.primary')`, `theme('colors.primary-emphasis')` (hover), `theme('colors.primary-emphasis-alt')` (active), `theme('colors.primary-contrast')`, `theme('colors.primary-500')` etc. — tailwindcss-primeui maps these to the underlying PrimeVue tokens.
-- Run tests with `pnpm test`; the policy (layout, what to assert, verifying a guard can fail) is in `.github/copilot-instructions.md` → Testing & Build. Frontend behavior worth covering lives in composables, `app/utils/**`, `app/stores/**` and the markdown renderers — anything that is a pure function of its inputs or a serializable store transition. Browser-only behavior (canvas, layout, pointer events) is not testable here, so keep those code paths thin and push the logic they use into a util.
-- After significant frontend type refactors or import changes, run `npx nuxt typecheck` to type-check the whole workspace. Type errors must be resolved before considering the task complete.
-- Avoid adding new external dependencies unless there is a clear, justified need. The project already uses PrimeVue, Tailwind, and Nuxt icons.
+## Components and presentation
+
+- Use Vue SFCs with `<script setup lang="ts">`; block order is template, script, style. Use typed props/emits and `withDefaults` only where runtime defaults are needed.
+- Use Nuxt auto-imports rather than explicit `#imports`. Custom components use the `My` prefix; icons use `<MyIcon name="lucide:..." />`.
+- Use the existing shared input, dialog, confirmation, attachment-row and Markdown body components. Check their callers before creating parallel behavior.
+- Forms use `@primevue/forms` with Zod resolvers. Reuse `server/shared/schemas.ts` for form schemas/defaults; full procedure input schemas remain in `server/trpc/schemas.ts`.
+- For state-preserving exclusive modes, put the keyed component roots directly inside `<KeepAlive>`; plain DOM wrappers between them are not cached.
+- Use Tailwind 3 and PrimeVue. Global CSS belongs in `app/assets/css/global.css` and `primevue-overrides.css`; local styles use scoped `@apply` where appropriate. Prefer PrimeVue design tokens over generated internal selectors. Use `theme('colors.primary')` and the existing palette for semantic colors.
+
+## APIs, ownership and injection
+
+- Create `useApi()` synchronously in setup. Components/pages use its named domain methods, extending the matching facade and server router together. Only transport/auth infrastructure may bypass it to avoid dependency cycles.
+- `useMyToast()` and `useAuth()` require Vue injection context; never create them in asynchronous fetch handlers, MQTT callbacks or BroadcastChannel listeners. Capture needed actions in setup, or use the appropriate lower-level Nuxt-context APIs in those handlers.
+- The transport handles 401 logout once; `useSyncedData` suppresses duplicate 401 toasts. Do not re-toast authentication failures in callers.
+- Public API types come from `@shared/types/*`. `useApi.ts` is a facade, not a separate type/schema authority.
+- Pinia owns client state that needs a shared lifecycle. Server-fetched resources remain in `useSyncedData`; do not move transport listeners or SSR cookie state into stores. Draft persistence contains serializable unsaved text/state, never `File` uploads.
+- `app/utils/` functions must remain pure: no composable calls or hidden configuration reads. Capture configuration in setup and pass it to utilities.
+- Use `@shared/settings` for stable browser parameters and `runtimeConfig.public` only for the validated public deployment subset; see [configuration](../../docs/deployment/configuration.md).
+
+## Synchronization and hydration
+
+- Default to `useSyncedData` with `universal: true`. Use `universal: false` only for caller-specific behavior/side effects or an unkeyed `fetch_without_resource` query. Direct `useDataSync` listeners are for raw events that do not represent a shared fetched resource.
+- Keep server invalidations as the trigger for mutations; Content uses its transactional outbox. Preserve profile/session presence polling and admin quiet-time polling because derived time-dependent values produce no mutation event. See [realtime](../../docs/modules/realtime.md).
+- Server shared-proxy/listener maps are request-isolated; client maps share `useState`. An `immediate: false` proxy is trigger-only and must not supply initial rendered data. Immediate subscribers must await an existing in-flight fetch.
+- Hydration-visible state must be payload-backed or fetched identically on both sides. Use `useSyncedState()` for payload-backed refs, including writable computed wrappers. Fetchers return data rather than mutate render state; callbacks/data/loading remain staged until hydration finishes. Explicit ordinary refs are not staged.
+- Do not gate identity-sensitive fetches on client cookie/user refs. For incremental results use the server-issued `viewer_key` / `base_viewer_key`; HTTP identity comes from the current token cookie.
+- `useDisplayTimeContext` owns serialized time and timezone. SSR uses the timezone cookie with UTC fallback; the browser timezone and shared clock start only after `app:suspense:resolve`. No module-global mutable timezone or browser timezone reads during render.
+- Keep `Dayjs` objects out of Nuxt payload state. Serialize UTC strings; use existing `app/utils/time.ts` helpers with explicit display timezone. Localize both operands for calendar-unit differences.
+
+## Verification
+
+Follow [testing](../../docs/development/testing.md). Cover pure logic in utilities, composables, stores and renderers; verify canvas, pointer, layout and native permissions in a browser. Run typecheck after significant type/import changes. Test behavior and source invariants only where each is appropriate; do not substitute source-text checks for reachable runtime contracts.

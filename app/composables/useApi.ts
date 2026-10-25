@@ -1,6 +1,6 @@
 import type { AppRouter } from '@server/trpc/router'
 import type { PermissionGrant } from '@shared/permissions'
-import type { ContentStoryDetail, ContentTaskKind, ContentTaskUploadedPart } from '@shared/types/content'
+import type { ContentStoryBody } from '@shared/types/content'
 import type { inferRouterInputs } from '@trpc/server'
 
 type RouterInputs = inferRouterInputs<AppRouter>
@@ -30,10 +30,10 @@ export function is_client_error(error: unknown) {
 export function useApi() {
   const { call: trpc_call, client: trpc, upload: trpc_upload } = useTrpcClient()
 
-  async function get_story(id: number): Promise<ContentStoryDetail>
-  async function get_story(id: number, base_updated_at: string, base_viewer_key: string): Promise<ContentStoryDetail | null>
-  async function get_story(id: number, base_updated_at?: string, base_viewer_key?: string): Promise<ContentStoryDetail | null> {
-    return trpc_call(trpc.content.getStory.query(base_updated_at === undefined ? { id } : { id, base_updated_at, base_viewer_key }))
+  async function get_story_body(id: number): Promise<ContentStoryBody>
+  async function get_story_body(id: number, base_representation_version: string): Promise<ContentStoryBody | null>
+  async function get_story_body(id: number, base_representation_version?: string): Promise<ContentStoryBody | null> {
+    return trpc_call(trpc.content.getStoryBody.query({ id, base_representation_version }))
   }
 
   const auth = {
@@ -127,6 +127,12 @@ export function useApi() {
   }
 
   const admin = {
+    async get_background_status() {
+      return trpc_call(trpc.admin.getBackgroundStatus.query())
+    },
+    async get_storage_audit_findings(after_id = 0, limit = 50) {
+      return trpc_call(trpc.admin.getStorageAuditFindings.query({ after_id, limit }))
+    },
     async list_users(options: {
       page: number
       page_size: number
@@ -162,18 +168,58 @@ export function useApi() {
   }
 
   const content = {
+    async execute_workspace_command(payload: Parameters<typeof trpc.content.executeWorkspaceCommand.mutate>[0]) {
+      return trpc_call(trpc.content.executeWorkspaceCommand.mutate(payload))
+    },
+    async begin_upload_batch(payload: Parameters<typeof trpc.content.beginUploadBatch.mutate>[0]) {
+      return trpc_call(trpc.content.beginUploadBatch.mutate(payload))
+    },
     async list_stories() {
       return trpc_call(trpc.content.listStories.query())
     },
 
-    get_story,
+    get_story_body,
 
     async create_story(markdown: string) {
       return trpc_call(trpc.content.createStory.mutate({ markdown }))
     },
 
-    async update_story(id: number, payload: { markdown: string, base_revision: number, delete_files?: string[] }) {
+    async update_story(id: number, payload: { markdown: string, base_revision: number, base_namespace_revision?: number | null, base_title_revision?: number | null }) {
       return trpc_call(trpc.content.updateStory.mutate({ id, ... payload }))
+    },
+
+    async rewrite_draft_references(id: number, payload: { markdown: string, base_namespace_revision: number | null, base_title_revision: number | null }) {
+      return trpc_call(trpc.content.rewriteDraftReferences.mutate({ id, ... payload }))
+    },
+    async get_title_reference_version() {
+      return trpc_call(trpc.content.getTitleReferenceVersion.query())
+    },
+    async get_attachment_workspace(id: number) {
+      return trpc_call(trpc.content.getAttachmentWorkspace.query({ id }))
+    },
+    async list_upload_sessions(id: number) {
+      return trpc_call(trpc.content.listUploadSessions.query({ id }))
+    },
+    async adopt_upload_session(session_id: string) {
+      return trpc_call(trpc.content.adoptUploadSession.mutate({ session_id }))
+    },
+    async initialize_upload_session(session_id: string) {
+      return trpc_call(trpc.content.initializeUploadSession.mutate({ session_id }))
+    },
+    async get_upload_session(session_id: string) {
+      return trpc_call(trpc.content.getUploadSession.query({ session_id }))
+    },
+    async resume_upload_session(session_id: string) {
+      return trpc_call(trpc.content.resumeUploadSession.mutate({ session_id }))
+    },
+    async seal_upload_session(session_id: string) {
+      return trpc_call(trpc.content.sealUploadSession.mutate({ session_id }))
+    },
+    async cancel_upload_session(session_id: string) {
+      return trpc_call(trpc.content.cancelUploadSession.mutate({ session_id }))
+    },
+    async sign_upload_session_part(session_id: string, part: number, md5: string) {
+      return trpc_call(trpc.content.signUploadSessionPart.mutate({ session_id, part, md5 }))
     },
 
     async delete_story(id: number) {
@@ -185,87 +231,13 @@ export function useApi() {
     },
 
     /** Signs a short-lived object GET that saves the attachment under its row name. */
-    async sign_attachment_download(story_id: number, file_name: string) {
-      return trpc_call(trpc.content.signAttachmentDownload.mutate({ story_id, file_name }))
+    async sign_attachment_download(story_id: number, file_name: string, role: 'avif' | 'original' | 'redacted_avif' = 'avif') {
+      return trpc_call(trpc.content.signAttachmentDownload.mutate({ story_id, file_name, role }))
+    },
+    async image_editor_source(id: number, version: string, redacted = false) {
+      return trpc_call(trpc.content.imageEditorSource.query({ id, version, redacted }))
     },
 
-    async rename_attachment(id: number, old_file_name: string, file_name: string) {
-      return trpc_call(trpc.content.renameAttachment.mutate({ id, old_file_name, file_name }))
-    },
-
-    async delete_attachment(id: number, file_name: string, markdown: string, base_revision: number) {
-      await trpc_call(trpc.content.deleteAttachment.mutate({ id, file_name, markdown, base_revision }))
-    },
-
-    async move_attachment(id: number, file_name: string, target_folder: string | null) {
-      return trpc_call(trpc.content.moveAttachment.mutate({ id, file_name, target_folder }))
-    },
-
-    async move_attachments(id: number, moves: { file_name: string, target_folder: string | null }[]) {
-      return trpc_call(trpc.content.moveAttachments.mutate({ id, moves }))
-    },
-
-    async create_folder(id: number, folder: string) {
-      return trpc_call(trpc.content.createFolder.mutate({ id, folder }))
-    },
-
-    async delete_folder(id: number, folder: string) {
-      return trpc_call(trpc.content.deleteFolder.mutate({ id, folder }))
-    },
-
-    async move_folder(id: number, source_folder: string, new_folder: string) {
-      return trpc_call(trpc.content.moveFolder.mutate({ id, source_folder, new_folder }))
-    },
-
-    /* ---- 附件任务队列（docs/old/content-task-refactor.md §7）---- */
-
-    async preflight_task(story_id: number, kind: ContentTaskKind, payload: Record<string, unknown>) {
-      return trpc_call(trpc.content.preflightTask.query({ story_id, kind: kind as 'upload', payload }))
-    },
-
-    async create_task(story_id: number, kind: ContentTaskKind, payload: Record<string, unknown>, client_id: string | null = null) {
-      return trpc_call(trpc.content.createTask.mutate({ story_id, kind: kind as 'upload', payload, client_id }))
-    },
-
-    async cancel_task(task_id: number) {
-      return trpc_call(trpc.content.cancelTask.mutate({ task_id }))
-    },
-
-    async resume_task(task_id: number) {
-      return trpc_call(trpc.content.resumeTask.mutate({ task_id }))
-    },
-
-    async pause_task_item(task_id: number, item_id: number) {
-      return trpc_call(trpc.content.pauseTaskItem.mutate({ task_id, item_id }))
-    },
-
-    async continue_task_item(task_id: number, item_id: number) {
-      return trpc_call(trpc.content.continueTaskItem.mutate({ task_id, item_id }))
-    },
-
-    async retry_task_item(task_id: number, item_id: number, source_file_name: string, size: number, client_id: string | null) {
-      return trpc_call(trpc.content.retryTaskItem.mutate({ task_id, item_id, source_file_name, size, client_id }))
-    },
-
-    async resolve_task(task_id: number, resolutions: { item_id: number, choice: 'apply' | 'skip' }[]) {
-      return trpc_call(trpc.content.resolveTask.mutate({ task_id, resolutions }))
-    },
-
-    async list_scope_tasks(story_id: number) {
-      return trpc_call(trpc.content.listScopeTasks.query({ story_id }))
-    },
-
-    async sign_task_parts(task_id: number, item_id: number, part_numbers: number[]) {
-      return trpc_call(trpc.content.signTaskParts.mutate({ task_id, item_id, part_numbers }))
-    },
-
-    async report_task_item(payload: { task_id: number, item_id: number, status: 'progress' | 'completed', bytes_done?: number, parts?: ContentTaskUploadedPart[] }) {
-      return trpc_call(trpc.content.reportTaskItem.mutate(payload))
-    },
-
-    async resume_task_item(task_id: number, item_id: number) {
-      return trpc_call(trpc.content.resumeTaskItem.query({ task_id, item_id }))
-    },
   }
 
   return {

@@ -55,8 +55,8 @@
         @keydown.esc.prevent="search.close_search()"
       />
       <div class="flex items-center gap-1">
-        <Button size="small" severity="secondary" outlined label="替换" :disabled="! search.match_count" @click="search.replace_current()" />
-        <Button size="small" severity="secondary" outlined label="全部替换" :disabled="! search.match_count" @click="search.replace_all()" />
+        <Button size="small" severity="secondary" outlined label="替换" :disabled="readonly || ! search.match_count" @click="search.replace_current()" />
+        <Button size="small" severity="secondary" outlined label="全部替换" :disabled="readonly || ! search.match_count" @click="search.replace_all()" />
       </div>
     </div>
   </div>
@@ -67,6 +67,7 @@ import type { MarkdownSearch } from '~/composables/useMarkdownSearch'
 
 const props = defineProps<{
   search: MarkdownSearch
+  readonly?: boolean
 }>()
 
 // toRefs keeps v-model off the prop object; writes flow through the shared

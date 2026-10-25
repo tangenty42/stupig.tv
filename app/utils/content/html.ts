@@ -1,13 +1,6 @@
 import { html_no_markdown_tags } from '@shared/content-html'
 
-export { html_no_markdown_tags } from '@shared/content-html'
-
-// Table structure tags: re-rendering their inner markup as markdown mangles
-// rows/cells (the wrapper recursion spans sibling rows and strands closing
-// tags), so the preview passes them through as raw HTML.
-export const html_table_tags = new Set([
-  'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col',
-])
+export { html_no_markdown_tags, html_table_tags } from '@shared/content-html'
 
 // All standard HTML element names except the no-markdown blocklist, so
 // markdown inside any wrapper element is parsed both in the editor (nested

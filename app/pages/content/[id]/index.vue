@@ -8,7 +8,7 @@
       </MyDivider>
 
       <MyHeightSection tag="section" class="section-card-collapse mt-6">
-        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="story.attachments" :stories="stories ?? []" folder-openable @folder-open="open_attachment_folder" />
+        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="workspace_attachments" :folders="workspace_folders" :stories="stories ?? []" folder-openable @folder-open="open_attachment_folder" />
       </MyHeightSection>
 
       <MyDivider class="mt-12">
@@ -28,14 +28,7 @@
       </MyDivider>
 
       <MyHeightSection ref="attachment_section" tag="section" class="section-card-collapse mt-6">
-        <MyContentAttachmentList
-          :rows="attachment_rows"
-          :story_id="story.id"
-          :upload_busy="false"
-          readonly
-          layout="stack"
-          @row-click="on_attachment_row_click"
-        />
+        <MyContentAttachmentWorkspace :controller="attachment_panel" layout="stack" />
       </MyHeightSection>
     </template>
 
@@ -46,13 +39,13 @@
 </template>
 
 <script setup lang="ts">
-import type { ContentStoryAttachment, ContentStoryDetail, ContentStorySummary } from '@shared/types/content'
-import type { MyContentAttachmentRow } from '~/utils/content/attachment'
-import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, compare_attachment_names, decrypted_attachment_name } from '@shared/content-markdown'
+import type { ContentStoryBody, ContentStorySummary } from '@shared/types/content'
+import { attachment_ancestor_folders } from '@shared/content-markdown'
 import { has_permission } from '@shared/permissions'
 import { sync_resource } from '@shared/types/sync'
 import { story_front_cover_url } from '~/utils/content/attachment'
 import { format_event_range } from '~/utils/content/event'
+import { read_content_resource } from '~/utils/content/read-resource'
 
 const route = useRoute()
 const { content } = useApi()
@@ -60,30 +53,25 @@ const { user } = useAuth()
 const time_context = useDisplayTimeContext()
 
 const story_id = computed(() => Number(route.params.id))
+const attachment_panel = await useAttachmentPanel(story_id.value, () => '', true)
+const attachment_workspace = attachment_panel.catalog
+const workspace_attachments = computed(() => attachment_workspace.data.value?.attachments ?? [])
+const workspace_folders = computed(() => attachment_workspace.data.value?.folders ?? [])
 const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full'))
 
-const story = useSyncedState<ContentStoryDetail | null>(`content_story_view_${String(route.params.id)}`, () => null)
+const story = useSyncedState<ContentStoryBody | null>(`content_story_view_${String(route.params.id)}`, () => null)
 const loading = useState(`content_story_view_loading_${String(route.params.id)}`, () => false)
 
 useHead({
   title: computed(() => story.value ? `蠢猪档案 - ${story.value.title}` : undefined),
 })
 
-await useSyncedData<ContentStoryDetail>(
+await useSyncedData<ContentStoryBody | null>(
   computed(() => {
     const id = story_id.value
     return Number.isInteger(id) && id > 0 ? sync_resource('content_story', id) : null
   }),
-  async () => {
-    const current = story.value
-    if (! current) {
-      return content.get_story(story_id.value)
-    }
-    // The server skips the version check when the echoed viewer key no longer
-    // matches (login/logout/permission change), so a viewer change always
-    // forces a full refetch instead of keeping the old viewer's redacted copy.
-    return await content.get_story(story_id.value, current.updated_at, current.viewer_key) ?? current
-  },
+  () => read_content_resource(() => content.get_story_body(story_id.value)),
   story,
   loading,
 )
@@ -98,150 +86,17 @@ await useSyncedData<ContentStorySummary[]>(
   stories_loading,
 )
 
-// Folders start collapsed; the set tracks only the ones the user expanded.
-const expanded_attachment_folders = ref(new Set<string>())
-
-const attachment_folder_names = computed(() => {
-  const names = new Set(story.value?.folders ?? [])
-  for (const attachment of story.value?.attachments ?? []) {
-    let folder = attachment_folder_of(attachment.file_name)
-    while (folder) {
-      names.add(folder)
-      folder = attachment_folder_of(folder)
-    }
-  }
-  return [... names].sort(compare_attachment_names)
-})
-
-/** Plaintext names that are the 删减版 twin of an encrypted sibling. */
-const abridged_twin_names = computed(() => new Set(
-  (story.value?.attachments ?? []).filter(attachment => attachment.is_encrypted).map(attachment => decrypted_attachment_name(attachment.file_name)),
-))
-
-const attachment_groups = computed(() => {
-  const groups = new Map<string | null, ContentStoryAttachment[]>()
-  for (const attachment of story.value?.attachments ?? []) {
-    const folder = attachment_folder_of(attachment.file_name)
-    const parent = folder && attachment_folder_names.value.includes(folder) ? folder : null
-    const group = groups.get(parent)
-    if (group)
-      group.push(attachment)
-    else
-      groups.set(parent, [attachment])
-  }
-  return groups
-})
-
-function attachment_folder_count(folder: string) {
-  return (story.value?.attachments ?? []).filter(attachment => attachment.file_name.startsWith(`${folder}/`)).length
-}
-
-function toggle_attachment_folder(folder: string) {
-  const next = new Set(expanded_attachment_folders.value)
-  if (next.has(folder))
-    next.delete(folder)
-  else
-    next.add(folder)
-  expanded_attachment_folders.value = next
-}
-
 const attachment_section = ref<{ el: HTMLElement | null } | null>(null)
-
-/**
- * Open a folder card's target: reveal it in the attachment list (its ancestors
- * too, or it would still be hidden inside a collapsed parent) and bring the list
- * into view. `scroll_to` accounts for the fixed app header.
- */
 function open_attachment_folder(folder: string) {
-  const next = new Set(expanded_attachment_folders.value)
-  for (const path of [folder, ... attachment_ancestor_folders(folder)]) {
-    next.add(path)
+  const paths = new Set([folder, ... attachment_ancestor_folders(folder)])
+  const next = new Set(attachment_panel.expanded.value)
+  for (const node of attachment_workspace.data.value?.nodes ?? []) {
+    if (node.kind === 'folder' && paths.has(node.path))
+      next.add(node.id)
   }
-  expanded_attachment_folders.value = next
+  attachment_panel.expanded.value = next
   nextTick(() => scroll_to(attachment_section.value?.el))
 }
-
-const attachment_rows = computed<MyContentAttachmentRow[]>(() => {
-  const rows: MyContentAttachmentRow[] = []
-  const walk = (parent: string | null, depth: number) => {
-    for (const folder of attachment_folder_names.value.filter(name => attachment_folder_of(name) === parent)) {
-      rows.push({
-        key: `folder:${folder}`,
-        depth,
-        data: {
-          kind: 'folder',
-          path: folder,
-          name: attachment_base_name(folder),
-          collapsed: ! expanded_attachment_folders.value.has(folder),
-          count: attachment_folder_count(folder),
-          drop_target: false,
-          drop_disabled: false,
-          moving: false,
-          dimmed: false,
-          batch_pending: false,
-        },
-        state: {
-          selected: false,
-          selection_edges: null,
-          selection_count: 0,
-          delete_pending: false,
-          delete_disabled: false,
-          // The read-only view offers no encrypt/decrypt, 删减版 or replace actions.
-          delete_blocked_reasons: [],
-          encrypt_pending: false,
-          encrypt_blocked_reasons: [],
-          decrypt_blocked_reasons: [],
-          replace_blocked_reasons: [],
-          replace_disabled: true,
-          retry_disabled: true,
-          move_pending: false,
-          structure_locked: false,
-        },
-        item: null,
-      })
-      if (expanded_attachment_folders.value.has(folder))
-        walk(folder, depth + 1)
-    }
-    for (const attachment of attachment_groups.value.get(parent) ?? []) {
-      rows.push({
-        key: `stored:${attachment.file_name}`,
-        depth,
-        data: { ... attachment, kind: 'stored', referenced: true, is_abridged_twin: abridged_twin_names.value.has(attachment.file_name) },
-        state: {
-          selected: false,
-          selection_edges: null,
-          selection_count: 0,
-          delete_pending: false,
-          delete_disabled: true,
-          // The read-only view offers no encrypt/decrypt, 删减版 or replace actions.
-          delete_blocked_reasons: [],
-          encrypt_pending: false,
-          encrypt_blocked_reasons: [],
-          decrypt_blocked_reasons: [],
-          replace_blocked_reasons: [],
-          replace_disabled: true,
-          retry_disabled: true,
-          move_pending: false,
-          structure_locked: false,
-        },
-        item: {
-          key: `stored:${attachment.file_name}`,
-          kind: 'stored',
-          attachment,
-          card: { ... attachment, kind: 'stored', referenced: true, is_abridged_twin: abridged_twin_names.value.has(attachment.file_name) },
-        },
-      })
-    }
-  }
-  walk(null, 0)
-  return rows
-})
-
-function on_attachment_row_click(_event: MouseEvent, row: MyContentAttachmentRow) {
-  if (row.data.kind === 'folder')
-    toggle_attachment_folder(row.data.path)
-}
-
 // Seo getters are evaluated during head rendering (no Nuxt instance), so the
 // composable is captured here and passed in rather than called inside the util.
 const static_url = useStaticUrl()

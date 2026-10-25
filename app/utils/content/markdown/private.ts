@@ -1,6 +1,7 @@
 import type { StoryMarkdownPlugin } from './types'
 import { CONTENT_PRIVATE_INLINE_PLACEHOLDER, content_private_plugin } from '@shared/content-private'
 import { chip_gap_classes } from './chips'
+import { render_nested_markdown } from './source-anchor'
 
 // Private (机密) elements: the shared module tokenizes them (rules registered
 // before markdown-it's html rules so `good`-tagged elements win); here
@@ -15,14 +16,8 @@ export const private_blocks_plugin: StoryMarkdownPlugin = (md, ctx) => {
     const token = tokens[idx]!
     const line_attr = token.map ? ` data-line="${token.map[0]}"` : ''
     // Same env as html wrappers: nested images/cards feed the lightbox.
-    ctx.anchor_render_depth ++
-    try {
-      const inner = md.render(token.content, env)
-      return `<div class="private-block"${line_attr}><div class="private-block-brand"><span class="iconify i-lucide:lock-keyhole-open" aria-hidden="true"></span><span class="private-block-brand-text">机密内容</span></div><div class="private-block-body">${inner}</div></div>\n`
-    }
-    finally {
-      ctx.anchor_render_depth --
-    }
+    const inner = render_nested_markdown(md, ctx, token.content, env)
+    return `<div class="private-block"${line_attr}><div class="private-block-brand"><span class="iconify i-lucide:lock-keyhole-open" aria-hidden="true"></span><span class="private-block-brand-text">机密内容</span></div><div class="private-block-body">${inner}</div></div>\n`
   }
 
   md.renderer.rules.content_private_inline = (tokens, idx, _options, env) => {

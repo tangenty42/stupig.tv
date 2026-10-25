@@ -1,0 +1,183 @@
+# 所有环境共享的服务端配置。稳定且需在浏览器共享的业务参数仍以
+# config/app-settings.yaml 为准。密钥通过显式 ${VAR} 从环境变量注入。
+# 加载顺序：shared.yaml -> dev.yaml / prod.yaml -> development 下可选的 local.yaml。
+
+db:
+  host: ${MYSQL_HOST}
+  port: ${MYSQL_PORT}
+  user: ${MYSQL_USER}
+  password: ${MYSQL_PASSWORD}
+  name: ${MYSQL_DATABASE}
+
+redis:
+  host: ${REDIS_HOST}
+  port: ${REDIS_PORT}
+  password: ${REDIS_PASSWORD:-}
+
+mqtt:
+  host: ${MQTT_HOST}
+  port: ${MQTT_TCP_PORT}
+  username: ${MQTT_USERNAME:-}
+  password: ${MQTT_PASSWORD:-}
+  # 浏览器端 WebSocket 连接信息（会下发到客户端）。
+  # 完整 URL：生产经反代+SSL（wss://mqtt.example.com/mqtt，无需端口），
+  # 开发直连本机（ws://localhost:8083/mqtt）
+  web:
+    wsUrl: ${MQTT_WEB_URL}
+
+oss:
+  buckets:
+    public:
+      accessKeyId: ${ALIYUN_OSS_ACCESS_KEY_ID}
+      accessKeySecret: ${ALIYUN_OSS_ACCESS_KEY_SECRET}
+      forcePathStyle: false
+      connectionTimeoutMs: 30000
+      requestTimeoutMs: 120000
+      copyPartSizeMb: 64
+    private: null
+
+aliyun:
+  # ESA 配置仅供服务端使用；Content 浏览器读取通过边缘鉴权。
+  esa:
+    authKey: ${ALIYUN_ESA_AUTH_KEY:-}
+    # 必须与 ESA 函数中的 TTL_SECONDS 一致，不是边缘缓存 TTL。
+    urlTtlSeconds: 300
+  esaPurge:
+    accessKeyId: ${ALIYUN_ESA_ACCESS_KEY_ID:-}
+    accessKeySecret: ${ALIYUN_ESA_ACCESS_KEY_SECRET:-}
+    siteId: ${ALIYUN_ESA_SITE_ID:-}
+    regionId: cn-hangzhou
+    endpoint: esa.cn-hangzhou.aliyuncs.com
+    timeoutMs: 15000
+  oss:
+    accessKeyId: ${ALIYUN_OSS_ACCESS_KEY_ID}
+    accessKeySecret: ${ALIYUN_OSS_ACCESS_KEY_SECRET}
+    timeoutMs: 120000
+    copyPartSizeMb: 64
+  dypns:
+    regionId: cn-hongkong
+    endpoint: dypnsapi.aliyuncs.com
+    accessKeyId: ${ALIYUN_DYPNS_ACCESS_KEY_ID}
+    accessKeySecret: ${ALIYUN_DYPNS_ACCESS_KEY_SECRET}
+  sms:
+    signName: 速通互联验证服务
+    templateCode: '100001'
+    schemeName: 蠢猪小组官网
+  captcha:
+    # appId 会下发到浏览器；appKey 仅服务端验签使用
+    appId: 804af2e773219386ce8ff865dac64fbe
+    appKey: ${ALIYUN_DYPNS_CAPTCHA_APP_KEY}
+
+app:
+  storageAudit:
+    enabled: true
+    sweepIntervalSeconds: 30
+    cycleIntervalSeconds: 86400
+    retrySeconds: 300
+    leaseSeconds: 300
+    batchSize: 25
+    batchBudgetMs: 15000
+    orphanGraceSeconds: 604800
+    orphanCleanup:
+      enabled: false
+      minAgeSeconds: 604800
+      minObservations: 2
+    staticKeys:
+      - imgs/Stupig_fancy.svg
+      - imgs/Stupig_fancy_light.svg
+      - imgs/Stupig_icon.svg
+      - imgs/Stupig_regular.svg
+      - imgs/good!.svg
+      - imgs/whats_up.svg
+      - imgs/ratings/1.svg
+      - imgs/ratings/2.svg
+      - imgs/ratings/3.svg
+      - imgs/ratings/4.svg
+      - imgs/ratings/5.svg
+  backgroundRunner:
+    mode: app
+    shutdownTimeoutMs: 30000
+    # 每进程有界扫描的并发槽；不是 HTTP 请求数或集群总容量。
+    resources:
+      image: 1
+      oss: 2
+      esa: 1
+      notification: 1
+  contentPreload:
+    enabled: false
+    # 开发合成文件完成原生预热、同缓存键和鉴权验收后才设为 true。
+    deliveryVerified: false
+    sweepIntervalSeconds: 30
+    scanLimit: 5
+    leaseSeconds: 300
+    retrySeconds: 300
+    maxRetrySeconds: 3600
+    pollSeconds: 30
+    taskTimeoutSeconds: 3600
+    taskClockSkewSeconds: 60
+    dailyLimit: 500
+    quotaReserve: 1000
+    maxSubmissions: 3
+    maxObjectBytes: 20971520
+  contentSync:
+    enabled: true
+    sweepIntervalSeconds: 1
+    scanLimit: 50
+    leaseSeconds: 30
+    publishTimeoutMs: 10000
+    retrySeconds: 5
+    maxRetrySeconds: 300
+  contentUploads:
+    enabled: true
+    sweepIntervalSeconds: 5
+    scanLimit: 20
+  contentRetirement:
+    enabled: true
+    sweepIntervalSeconds: 5
+    scanLimit: 20
+    leaseSeconds: 300
+    retrySeconds: 30
+    maxRetrySeconds: 3600
+    pollSeconds: 5
+    taskTimeoutSeconds: 600
+  contentImages:
+    enabled: true
+    sweepIntervalSeconds: 5
+    concurrency: 1
+    scanLimit: 20
+    leaseSeconds: 120
+    heartbeatSeconds: 20
+    profileVersion: 1
+    profile:
+      maxInputBytes: 52428800
+      maxPixels: 24000000
+      avifQuality: 65
+      avifEffort: 4
+      jpegQuality: 85
+      jpegBackground: '#ffffff'
+      lqipMaxDimension: 24
+      lqipQuality: 40
+      timeoutSeconds: 60
+  contentMigration:
+    partSizeMb: 8
+  auth:
+    jwt:
+      secret: ${JWT_SECRET}
+  otp:
+    debug: ${NUXT_OTP_DEBUG:-false}
+  captcha:
+    debug: ${NUXT_CAPTCHA_DEBUG:-false}
+
+# ESA 发布工具配置，不进入应用运行配置或浏览器。
+esaFunction:
+  entry: config/esa/content-auth.mjs
+  # ESA 的线上槽位；dev/prod 通过不同函数名和域名隔离，均使用 production。
+  environment: production
+  siteId: ${ALIYUN_ESA_SITE_ID:-}
+  regionId: cn-hangzhou
+  endpoint: esa.cn-hangzhou.aliyuncs.com
+  accessKeyId: ${ALIYUN_ESA_PUBLISH_ACCESS_KEY_ID:-}
+  accessKeySecret: ${ALIYUN_ESA_PUBLISH_ACCESS_KEY_SECRET:-}
+  timeoutMs: 15000
+  readinessTimeoutMs: 300000
+  authTimeoutMs: 5000

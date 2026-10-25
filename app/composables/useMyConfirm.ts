@@ -1,4 +1,5 @@
 import type { ConfirmationOptions } from 'primevue/confirmationoptions'
+import type { ConfirmPopupPassThroughMethodOptions } from 'primevue/confirmpopup'
 import { useConfirm } from 'primevue/useconfirm'
 
 export function useMyConfirm() {
@@ -14,36 +15,26 @@ export function useMyConfirm() {
         target,
         ... options,
         message,
-        rejectProps: { severity: 'secondary', outlined: true, ... options.rejectProps },
+        rejectProps: { severity: 'secondary', text: true, ... options.rejectProps },
         acceptProps: { severity: 'contrast', ... options.acceptProps },
         accept,
       })
-      void nextTick(() => requestAnimationFrame(() => align_confirm_popup(target)))
     }, 0)
   }
 
   return { confirm_require }
 }
 
-// PrimeVue 4.5 ConfirmPopup never aligns itself on open (alignOverlay only runs
-// from its outside-click handler), leaving the popup at the document top-left.
-function align_confirm_popup(target: HTMLElement) {
-  const popup = document.querySelector<HTMLElement>('.p-confirmpopup')
-  if (! popup || ! target.isConnected)
-    return
-
-  const target_rect = target.getBoundingClientRect()
-  const viewport_width = document.documentElement.clientWidth
-  const viewport_height = window.innerHeight
-
-  let left = target_rect.left
-  if (left + popup.offsetWidth > viewport_width)
-    left = Math.max(0, viewport_width - popup.offsetWidth)
-
-  const below = target_rect.bottom + popup.offsetHeight <= viewport_height
-  const top = below ? target_rect.bottom : Math.max(0, target_rect.top - popup.offsetHeight)
-
-  popup.style.left = `${left + window.scrollX}px`
-  popup.style.top = `${top + window.scrollY}px`
-  popup.classList.toggle('p-confirmpopup-flipped', ! below)
+// PrimeVue 4.5 only calls alignOverlay from its document-click listener.
+// Use that same positioning on enter, after the content and focus have settled.
+export function confirm_popup_transition({ instance }: ConfirmPopupPassThroughMethodOptions) {
+  const align = () => {
+    if (! instance.visible || ! instance.container || ! instance.target?.isConnected)
+      return
+    instance.alignOverlay()
+  }
+  return {
+    onEnter: () => { void nextTick(align) },
+    onAfterEnter: () => { void nextTick(align) },
+  }
 }

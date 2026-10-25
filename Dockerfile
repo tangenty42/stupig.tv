@@ -9,8 +9,8 @@ COPY . .
 # 构建只声明 runtimeConfig 结构；YAML 配置与环境变量在容器启动时读取。
 ENV NODE_ENV=production
 RUN pnpm build
-# 运维脚本（迁移、OSS 对账清理）打成自包含单文件塞进 .output：运行时镜像里没有
-# 源码、没有 tsx、也不装 node_modules，靠 node 直接跑
+# 运维脚本打包进 .output，靠 node 直接运行，不需要 tsx 或工作区依赖。
+# 图片迁移的 Sharp 原生闭包单独随 maintenance/node_modules 和摘要清单交付。
 RUN pnpm maintenance:build
 
 FROM node:24-slim
@@ -20,12 +20,12 @@ ENV NODE_ENV=production \
 COPY --from=build /app/.output ./.output
 # 服务端配置在运行时读取；密钥仍通过环境变量注入，不烘焙进镜像
 COPY config ./config
-# 迁移以挂载/复制的文件为准（不进 .output），启动时自动应用
+# SQL 与 TS 入口随镜像复制；TS 的冻结自包含产物在 .output/server/maintenance/migration-scripts。
 COPY migrations ./migrations
 EXPOSE 3042
 # 容器级健康检查：探针跟着镜像走，所以不经 compose 的 `docker run` 也有（compose 里
 # 那份同名检查会覆盖它，两边都指向 /healthz，不会走岔）。必须用 shell 形式以便运行时
-# 读 PORT —— compose 会用 .env 的 APP_PORT 覆盖它，在这里写死 3042 意味着换端口部署
+# 读 PORT —— compose 会用 .env.prod 的 APP_PORT 覆盖它，在这里写死 3042 意味着换端口部署
 # 就永远 unhealthy。node 自带 fetch，基础镜像里没有 curl/wget 也不需要。
 # start-period 要涵盖启动前的迁移（ENTRYPOINT 先跑 migrate 再起服务）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
@@ -35,7 +35,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
 # Windows 检出没有可执行位。
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
-# 先迁移再起服务：迁移失败就让容器起不来（restart 策略下会重试），
+# 先迁移再起服务：维护迁移须先用独立一次性容器执行 --maintenance。
+# 失败 SQL 需要核对后 --retry-sql；启动不会自动重放有部分执行风险的新 SQL。
+# 迁移失败就让容器起不来（restart 策略下会重试），
 # 带上病结构继续跑只会更糟。exec 让 node 接管 PID 1，信号能正常送达。
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["sh", "-c", "node .output/server/maintenance/migrate.mjs && exec node .output/server/index.mjs"]

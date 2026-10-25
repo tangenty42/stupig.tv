@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_INLINE_PLACEHOLDER, has_private_content, redact_private_content } from './content-private'
+import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_INLINE_PLACEHOLDER, has_private_content, redact_private_content, redact_private_content_with_source_map } from './content-private'
 
 const B = CONTENT_PRIVATE_BLOCK_PLACEHOLDER
 const I = CONTENT_PRIVATE_INLINE_PLACEHOLDER
+
+it.each([
+  '<good>\nSECRET\n</good>\n\n# Heading',
+  'before <good>SECRET\nmore</good> after\n\n# Heading',
+  '<good>\nSECRET\n</good> tail\n\n# Heading',
+  '<center>\n<good>\nSECRET\n</good>\n</center>\n\n# Heading',
+])('preserves public output and maps its anchors to the original source: %s', (markdown) => {
+  const result = redact_private_content_with_source_map(markdown)
+  expect(result.markdown).toBe(redact_private_content(markdown))
+  expect(result.markdown).not.toContain('SECRET')
+  const preview_line = result.markdown.split('\n').findIndex(line => line === '# Heading')
+  const original_line = markdown.split('\n').findIndex(line => line === '# Heading')
+  expect(result.source_lines?.[preview_line]).toBe(original_line)
+  expect(result.source_lines?.[result.markdown.split('\n').length]).toBe(markdown.split('\n').length)
+})
 
 describe('has_private_content', () => {
   it('is false for plain markdown', () => {

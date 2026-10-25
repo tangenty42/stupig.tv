@@ -20,9 +20,8 @@
         <slot name="toolbar-start" />
         <div class="flex items-center gap-3">
           <SelectButton
-            v-if="! fullscreen"
-            v-model="editor_mode"
-            :options="editor_modes"
+            v-model="display_mode"
+            :options="visible_modes"
             option-label="label"
             option-value="value"
             :allow-empty="false"
@@ -60,7 +59,7 @@
                rounded corners (a scrollbar isn't clipped by border-radius).
                Side padding lives on the list root instead, so the gutter
                belongs to the list's marquee trigger area. -->
-          <div class="h-full overflow-y-auto py-2">
+          <div class="h-full overflow-y-auto">
             <slot name="attachments" />
           </div>
         </div>
@@ -75,32 +74,58 @@
 
         <div
           v-show="fullscreen || editor_mode === 'edit'"
-          ref="text_pane"
-          class="editor-text-pane overflow-hidden rounded-sm border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
-          :class="{
-            'border-dashed border-brand-400 dark:border-brand-600': drag_over,
-            'editor-mode-enter': ! fullscreen && mode_has_switched && editor_mode === 'edit',
-            'flex min-w-0 flex-col': fullscreen,
-            'border-x-0 rounded-l-none rounded-r-none': fullscreen,
-          }"
+          class="editor-column flex min-h-0 min-w-0 flex-col"
+          :class="fullscreen ? 'gap-0' : 'gap-2'"
           :style="fullscreen ? { flex: `${split_ratio} 1 0%` } : undefined"
-          @dragenter.capture.prevent="on_drag_over"
-          @dragover.prevent="on_drag_over"
-          @dragleave.prevent="drag_over = false"
-          @drop.prevent="on_drop"
         >
           <div
-            v-if="! editor_ready"
-            class="flex min-h-80 max-h-[60vh] items-center justify-center text-sm text-slate-400 dark:text-slate-500"
+            ref="text_pane"
+            class="editor-text-pane overflow-hidden rounded-sm border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
+            :class="{
+              'border-dashed border-brand-400 dark:border-brand-600': drag_over,
+              'editor-mode-enter': ! fullscreen && mode_has_switched && editor_mode === 'edit',
+              'flex min-h-0 min-w-0 flex-1 flex-col': fullscreen,
+              'border-x-0 rounded-l-none rounded-r-none': fullscreen,
+            }"
+            @dragenter.capture.prevent="on_drag_over"
+            @dragover.prevent="on_drag_over"
+            @dragleave.prevent="drag_over = false"
+            @drop.prevent="on_drop"
           >
-            代码编辑器加载中...
-          </div>
-          <div
-            ref="editor_host"
-            :class="[{ hidden: ! editor_ready }, { 'flex min-h-0 flex-1 flex-col': fullscreen }]"
-          />
+            <div
+              v-if="! editor_ready"
+              class="flex min-h-80 max-h-[60vh] items-center justify-center text-sm text-slate-400 dark:text-slate-500"
+            >
+              代码编辑器加载中...
+            </div>
+            <div
+              ref="editor_host"
+              :class="[{ hidden: ! editor_ready }, { 'flex min-h-0 flex-1 flex-col': fullscreen }]"
+            />
 
-          <MyContentMarkdownEditorSearchPanel v-if="search.open" :search="search" />
+            <MyContentMarkdownEditorSearchPanel v-if="search.open" :search="search" :readonly="readonly" />
+          </div>
+
+          <div
+            v-if="(fullscreen || editor_mode === 'edit') && issues.length"
+            class="editor-issues shrink-0 border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden"
+            :class="fullscreen ? 'rounded-none border-x-0 border-t-0' : 'rounded-sm'"
+          >
+            <div class="overflow-y-auto max-h-64 p-2">
+              <button
+                v-for="(issue, index) in issues"
+                :key="index"
+                type="button"
+                class="flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs transition-[background-color] hover:bg-slate-100 dark:hover:bg-slate-700/50"
+                @click="jump_to_line(issue.from)"
+              >
+                <span class="shrink-0 font-mono text-slate-400">第 {{ issue.line }} 行</span>
+                <span class="text-slate-600 dark:text-slate-300">{{ issue.message }}</span>
+                <span v-if="issue.source" class="ml-auto shrink-0 font-mono text-slate-400">{{ issue.source }}</span>
+              </button>
+            </div>
+          </div>
+          <slot name="diagnostics" />
         </div>
 
         <div
@@ -113,30 +138,15 @@
 
         <div
           v-show="fullscreen || editor_mode === 'preview'"
-          ref="preview_pane"
           :class="[
-            fullscreen ? 'min-w-0 overflow-y-auto rounded-r-sm border border-l-0 border-slate-200 px-3 pb-3 dark:border-slate-700' : 'section-card-collapse',
+            fullscreen ? 'min-h-0 min-w-0 overflow-hidden rounded-r-sm border border-l-0 border-slate-200 dark:border-slate-700' : 'section-card-collapse',
             { 'editor-mode-enter': ! fullscreen && mode_has_switched && editor_mode === 'preview' },
           ]"
           :style="fullscreen ? { flex: `${1 - split_ratio} 1 0%` } : undefined"
         >
-          <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" :stories="stories" empty-text="暂无可预览内容" @folder-open="emit('folder-open', $event)" />
-        </div>
-      </div>
-
-      <div v-if="editor_mode === 'edit' && issues.length" class="rounded-sm border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden">
-        <div class="overflow-y-auto max-h-64 p-2">
-          <button
-            v-for="(issue, index) in issues"
-            :key="index"
-            type="button"
-            class="flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs transition-[background-color] hover:bg-slate-100 dark:hover:bg-slate-700/50"
-            @click="jump_to_line(issue.from)"
-          >
-            <span class="shrink-0 font-mono text-slate-400">第 {{ issue.line }} 行</span>
-            <span class="text-slate-600 dark:text-slate-300">{{ issue.message }}</span>
-            <span v-if="issue.source" class="ml-auto shrink-0 font-mono text-slate-400">{{ issue.source }}</span>
-          </button>
+          <div ref="preview_pane" :class="fullscreen ? 'h-full overflow-y-auto px-3 pb-3' : undefined">
+            <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" :folders="folders" :stories="stories" :public-view="preview_audience === 'public'" empty-text="暂无可预览内容" @folder-open="emit('folder-open', $event)" />
+          </div>
         </div>
       </div>
     </div>
@@ -147,27 +157,15 @@
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import type { AttachmentUploadPick } from '~/utils/content/attachment'
 import type { LintListItem } from '~/utils/content/editor/lint'
-import { startCompletion } from '@codemirror/autocomplete'
-import { indentWithTab } from '@codemirror/commands'
-import { lintGutter } from '@codemirror/lint'
-import { Compartment, EditorState, Prec } from '@codemirror/state'
-import { EditorView, keymap, scrollPastEnd } from '@codemirror/view'
-import { front_matter_line_count } from '@shared/content-markdown'
-import { settings } from '@shared/settings'
-import { basicSetup } from 'codemirror'
-import { attachment_pick_from_file, attachment_picks_from_data_transfer } from '~/utils/content/attachment'
+import { attachment_picks_from_data_transfer } from '~/utils/content/attachment'
 import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/utils/content/attachment-drag'
-import { alert_marker_plugin } from '~/utils/content/editor/alert-marker'
-import { completion_icon_names, create_completion_extensions } from '~/utils/content/editor/completions'
-import { editor_close_brackets, editor_markdown_lang } from '~/utils/content/editor/language'
-import { build_diagnostics, create_markdown_lint, diagnostics_to_items, refresh_markdown_lint, story_lint_config } from '~/utils/content/editor/lint'
-import { search_field } from '~/utils/content/editor/search'
-import { theme_extensions } from '~/utils/content/editor/themes'
+import { completion_icon_names } from '~/utils/content/editor/completions'
 
 const props = withDefaults(defineProps<{
   storyId?: number | null
   attachments?: ContentStoryAttachment[]
   placeholder?: string
+  readonly?: boolean
   /** Known stories for `@story` completion, dead-reference linting and preview cards. */
   stories?: ContentStorySummary[]
   /** Folder paths in scope, offered alongside the attachments in the destination completion. */
@@ -176,6 +174,7 @@ const props = withDefaults(defineProps<{
   storyId: null,
   attachments: () => [],
   placeholder: '',
+  readonly: false,
   stories: () => [],
   folders: () => [],
 })
@@ -192,26 +191,34 @@ const emit = defineEmits<{
 
 const model = defineModel<string>({ default: '' })
 
-const color_mode = useMyColorMode()
-
-let view: EditorView | null = null
-const theme_compartment = new Compartment()
-const overscroll_compartment = new Compartment()
-
 const editor_host = ref<HTMLElement>()
-const editor_ready = ref(false)
 const drag_over = ref(false)
-const issues = ref<LintListItem[]>([])
 const editor_mode = ref<'edit' | 'preview'>('edit')
+const preview_audience = ref<'private' | 'public'>('private')
 const mode_has_switched = ref(false)
 
 const editor_modes = [
   { label: '编辑', value: 'edit', icon: 'lucide:pencil' },
-  { label: '预览', value: 'preview', icon: 'lucide:eye' },
+  { label: '天子上朝', value: 'private', icon: 'lucide:eye' },
+  { label: '微服私访', value: 'public', icon: 'lucide:eye-off' },
 ]
 
 // Fullscreen split view: attachments pane | editor | draggable divider | preview.
 const fullscreen = ref(false)
+const visible_modes = computed(() => fullscreen.value ? editor_modes.filter(mode => mode.value !== 'edit') : editor_modes)
+const display_mode = computed({
+  get: () => ! fullscreen.value && editor_mode.value === 'edit' ? 'edit' : preview_audience.value,
+  set: (value: 'edit' | 'private' | 'public') => {
+    if (value === 'edit') {
+      editor_mode.value = 'edit'
+    }
+    else {
+      preview_audience.value = value
+      if (! fullscreen.value)
+        editor_mode.value = 'preview'
+    }
+  },
+})
 const split_ratio = ref(0.5)
 const attachments_width = ref(256)
 const text_pane = ref<HTMLElement>()
@@ -267,223 +274,52 @@ function start_divider_drag(event: MouseEvent) {
   window.addEventListener('mouseup', on_up)
 }
 
-// VSCode-style editor <-> preview scroll sync lives in the composable;
-// attach/detach are driven by the fullscreen watcher below.
-const scroll_sync = useMarkdownEditorScrollSync(() => view, preview_pane, () => front_matter_line_count(model.value))
-
-watch(fullscreen, async (active) => {
-  document.documentElement.style.overflow = active ? 'hidden' : ''
-  // Overscroll (editor: past-end padding, preview: dynamic bottom padding set
-  // by the scroll sync) lets both sides reach the sync target near the end of
-  // the document.
-  view?.dispatch({ effects: overscroll_compartment.reconfigure(active ? scrollPastEnd() : []) })
-  if (active) {
-    await nextTick()
-    scroll_sync.attach()
-  }
-  else {
-    scroll_sync.detach()
-  }
-  // The editor's box changed shape; CodeMirror must re-measure.
-  view?.requestMeasure()
+const editor = useStoryEditor({
+  model, host: editor_host, preview_pane, fullscreen, mode: editor_mode,
+  readonly: () => props.readonly,
+  sources: { stories: () => props.stories, story_id: () => props.storyId, attachments: () => props.attachments, folders: () => props.folders },
+  on_lint: items => emit('lint', items),
+  on_files_pasted: (files, position) => emit('files-pasted', files, position),
 })
+const { editor_ready, issues, search, jump_to_line, insert_at_position, apply_reference_changes, validate } = editor
 
-const search = useMarkdownSearch(() => view)
-
-const get_lint_config = () => story_lint_config(settings.app.content.story, props.stories, props.storyId, props.attachments, props.folders)
-
-const lint_source = create_markdown_lint(get_lint_config, (items) => {
-  if (! view) {
-    return
-  }
-  issues.value = items
-  emit('lint', items)
-})
-
-const initial_doc = EditorState.create({ doc: model.value }).doc
-issues.value = diagnostics_to_items(build_diagnostics(model.value, initial_doc, get_lint_config()), initial_doc)
-
-const autocomplete_ext = create_completion_extensions({
-  stories: () => props.stories,
-  story_id: () => props.storyId,
-  attachments: () => props.attachments,
-  folders: () => props.folders,
-})
-
-watch(editor_mode, (mode) => {
+watch(editor_mode, () => {
   mode_has_switched.value = true
-  if (mode !== 'edit')
-    search.close_search()
 })
-
-onMounted(() => {
-  view = new EditorView({
-    parent: editor_host.value!,
-    state: EditorState.create({
-      doc: model.value,
-      extensions: [
-        basicSetup,
-        keymap.of([indentWithTab]),
-        Prec.highest(keymap.of([
-          {
-            key: 'Mod-f',
-            run: () => {
-              search.open_search()
-              return true
-            },
-          },
-          {
-            key: 'Escape',
-            run: () => {
-              if (! search.open)
-                return false
-              search.close_search()
-              return true
-            },
-          },
-        ])),
-        editor_markdown_lang,
-        editor_close_brackets,
-        lint_source,
-        lintGutter(),
-        autocomplete_ext,
-        search_field,
-        alert_marker_plugin,
-        theme_compartment.of(theme_extensions(color_mode.value)),
-        overscroll_compartment.of([]),
-        EditorView.lineWrapping,
-        // Ctrl+V of an image/file uploads it as an attachment (the parent
-        // handles the upload) and inserts the reference at the cursor.
-        EditorView.domEventHandlers({
-          paste: (event, editor_view) => {
-            const files = event.clipboardData?.files ? [... event.clipboardData.files] : []
-            if (! files.length) {
-              return false
-            }
-            event.preventDefault()
-            emit('files-pasted', files.map(attachment_pick_from_file), editor_view.state.selection.main.from)
-            return true
-          },
-        }),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            model.value = update.state.doc.toString()
-          }
-          search.on_editor_update(update)
-          // Backspacing alone never re-activates completion (CodeMirror only
-          // re-queries on typing), so after a backward delete reopen it — the
-          // source returns null when there's no `@` token, leaving the popup
-          // closed in unrelated edits.
-          if (update.transactions.some(tr => tr.isUserEvent('delete.backward'))) {
-            startCompletion(update.view)
-          }
-        }),
-        EditorView.contentAttributes.of({ 'aria-label': '档案内容 Markdown 编辑器' }),
-      ],
-    }),
-  })
-  editor_ready.value = true
-  void nextTick(() => view?.requestMeasure())
+watch(fullscreen, (active) => {
+  document.documentElement.style.overflow = active ? 'hidden' : ''
 })
-
 onBeforeUnmount(() => {
   document.documentElement.style.overflow = ''
-  view?.destroy()
-  view = null
 })
 
-watch(color_mode, (mode) => {
-  view?.dispatch({
-    effects: theme_compartment.reconfigure(theme_extensions(mode)),
-  })
-})
-
-watch(model, (value) => {
-  if (view && value !== view.state.doc.toString()) {
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
-    })
-  }
-})
-
-watch([() => props.stories, () => props.attachments, () => props.folders], () => {
-  // Re-run duplicate-title / dead-reference lints when the story list changes (e.g. after a sync refresh).
-  if (view) {
-    refresh_markdown_lint(view)
-  }
-})
-
-function jump_to_line(from: number) {
-  if (! view)
-    return
-  view.dispatch({ selection: { anchor: from }, scrollIntoView: true })
-  view.focus()
-}
-
-function insert_at_position(text: string, from: number, to = from) {
-  if (! view)
-    return
-
-  const doc = view.state.doc
-  const char_before = from > 0 ? doc.sliceString(from - 1, from) : ''
-  const char_after = from < doc.length ? doc.sliceString(from, from + 1) : ''
-
-  let prefix = ''
-  let suffix = ''
-
-  if (char_before && char_before !== '\n') {
-    prefix = '\n'
-  }
-  if (from >= doc.length || (char_after && char_after !== '\n')) {
-    suffix = '\n'
-  }
-
-  const insert_text = `${prefix}${text}${suffix}`
-
-  view.dispatch({
-    changes: { from, to, insert: insert_text },
-    selection: { anchor: from + insert_text.length },
-  })
-  view.focus()
-}
-
-defineExpose({
-  editor_mode,
-  insert_at_position,
-  // Synchronous copy of the full combined lint (front matter + HTML grammar +
-  // markdownlint) on the current doc, so save can block on the same errors the
-  // editor displays without waiting for the debounced lint pass.
-  validate() {
-    if (! view) {
-      return [] as LintListItem[]
-    }
-    const doc = view.state.doc
-    return diagnostics_to_items(build_diagnostics(doc.toString(), doc, get_lint_config()), doc)
-  },
-})
+defineExpose({ editor_mode, insert_at_position, apply_reference_changes, validate })
 
 async function on_drop(event: DragEvent) {
   drag_over.value = false
+  if (props.readonly)
+    return
   const picks = await attachment_picks_from_data_transfer(event.dataTransfer)
+  if (props.readonly)
+    return
   if (picks.length) {
-    const position = view ? (view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.from) : null
+    const position = editor.position_at_coords({ x: event.clientX, y: event.clientY })
     emit('files-dropped', picks, position)
     return
   }
 
+  const position = editor.position_at_coords({ x: event.clientX, y: event.clientY })
   const attachment = get_content_attachment_drag_data(event.dataTransfer)
-  if (attachment && view) {
-    const position = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.from
-    insert_at_position(content_attachment_markdown(attachment), position)
+  if (attachment && position !== null) {
+    insert_at_position(attachment.markdown ?? content_attachment_markdown(attachment), position)
     return
   }
 
   // A dragged folder inserts its link shorthand, the same form the folder card
   // copy action produces: the preview renders it as a card.
   const folder = get_content_folder_drag_data(event.dataTransfer)
-  if (folder && view) {
-    const position = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.from
-    insert_at_position(content_folder_markdown(folder.folder), position)
+  if (folder && position !== null) {
+    insert_at_position(folder.markdown ?? content_folder_markdown(folder.folder), position)
   }
 }
 
@@ -502,6 +338,12 @@ async function on_drop(event: DragEvent) {
 //   its drop-cursor plugin from running and the insertion line disappears.
 //   Bubbling means the deeper contentDOM handler runs first, then this one.
 function on_drag_over(event: DragEvent) {
+  if (props.readonly) {
+    drag_over.value = false
+    if (event.dataTransfer)
+      event.dataTransfer.dropEffect = 'none'
+    return
+  }
   drag_over.value = true
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
@@ -613,6 +455,8 @@ function on_overlay_drop(event: DragEvent) {
   display: flex;
   flex-direction: column;
   max-height: 20em;
+  max-width: min(32rem, calc(100vw - 2rem));
+  box-sizing: border-box;
   overflow: hidden;
   padding: 0;
 }
@@ -621,6 +465,8 @@ function on_overlay_drop(event: DragEvent) {
    to its rounded border, and its unpadded list owns the scroll area. */
 :deep(.cm-tooltip.cm-tooltip-autocomplete > ul) {
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
   max-height: inherit;
   height: auto;
   overflow: hidden auto;
@@ -628,11 +474,21 @@ function on_overlay_drop(event: DragEvent) {
 }
 
 :deep(.cm-tooltip-autocomplete > ul > li[role='option']) {
-  @apply flex items-center transition-colors;
-  gap: var(--p-contextmenu-item-gap);
+  @apply transition-colors;
+  /* The list scrolls and the title truncates; an item must not clip its content. */
+  overflow: visible;
   margin: var(--p-contextmenu-list-padding);
   padding: var(--p-contextmenu-item-padding);
   border-radius: var(--p-contextmenu-item-border-radius);
+}
+
+:deep(.cm-tooltip-autocomplete > ul > li[role='option']:not(.content-item)) {
+  @apply flex items-center;
+  gap: var(--p-contextmenu-item-gap);
+}
+
+:deep(.cm-tooltip-autocomplete > ul > li.content-item) {
+  @apply px-2 py-1;
 }
 
 :deep(.cm-tooltip-autocomplete > ul > li[role='option']:hover),
@@ -657,11 +513,19 @@ function on_overlay_drop(event: DragEvent) {
 }
 
 :deep(.cm-completionMatchedText) {
-  @apply font-bold text-slate-500 no-underline dark:text-slate-400;
+  @apply font-bold no-underline;
+}
+
+:deep(li:not(.content-item) > .cm-completionLabel) {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :deep(.cm-completionDetail) {
-  @apply ml-2 text-xs not-italic text-slate-400 dark:text-slate-500;
+  @apply ml-2 shrink-0 text-xs not-italic text-slate-400 dark:text-slate-500;
 }
 
 /* Every option carries the lucide icon our renderer injects (the library's own
@@ -670,12 +534,6 @@ function on_overlay_drop(event: DragEvent) {
 :deep(.completion-type-icon) {
   @apply h-4 w-4 shrink-0 transition;
   color: var(--p-contextmenu-item-icon-color);
-}
-
-:deep(.completion-folder-indicator) {
-  @apply h-3.5 w-3.5 shrink-0;
-  margin-left: auto;
-  color: var(--p-contextmenu-submenu-icon-color);
 }
 
 :deep(.cm-tooltip-autocomplete > ul > li[aria-selected='true']) .completion-type-icon {

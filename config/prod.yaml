@@ -1,0 +1,33 @@
+# 生产环境配置：在 shared.yaml 上按映射递归覆盖。
+
+esaFunction:
+  name: stupig-content-auth-bypass-prod
+  callbackUrl: https://www.stupig.tv/api/content/authorize
+
+oss:
+  buckets:
+    public:
+      endpoint: https://oss-cn-shenzhen.aliyuncs.com
+      region: oss-cn-shenzhen
+      bucket: stupig-static
+      publicBaseUrl: https://stupig-static.oss.tangenty.cn
+
+aliyun:
+  esa:
+    baseUrl: https://stupig-static.oss.tangenty.cn
+  oss:
+    region: oss-cn-shenzhen
+    endpoint: https://oss-cn-shenzhen.aliyuncs.com
+    bucket: stupig-static
+    publicBaseUrl: https://stupig-static.oss.tangenty.cn
+    uploadRoleArn: null
+
+site:
+  url: https://www.stupig.tv
+  indexable: true
+
+app:
+  otp:
+    debug: ${NUXT_OTP_DEBUG:-false}
+  captcha:
+    debug: ${NUXT_CAPTCHA_DEBUG:-false}

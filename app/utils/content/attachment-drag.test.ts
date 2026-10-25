@@ -1,6 +1,12 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
+import type { AttachmentMenuItem } from './attachment-list'
+import type { WorkspaceListRow } from './workspace'
+import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
-import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, get_content_attachment_drag_data, get_content_folder_drag_data, set_content_attachment_drag_data, set_content_folder_drag_data } from '~/utils/content/attachment-drag'
+import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, content_selection_markdown, get_content_attachment_drag_data, get_content_folder_drag_data, set_content_attachment_drag_data, set_content_folder_drag_data } from '~/utils/content/attachment-drag'
+import { attachment_action_item, attachment_batch_action, attachment_menu_context, attachment_privacy_actions } from './attachment-list'
 
 /** Minimal DataTransfer stand-in; the module only reads/writes these members. */
 function fake_data_transfer() {
@@ -121,6 +127,13 @@ describe('folder drag payload', () => {
 })
 
 describe('attachment drag payload', () => {
+  it('keeps a private file with a denied URL in the shared drag and reference flow', () => {
+    const file = attachment({ file_name: 'docs/secret.pdf.good', is_private: true, is_image: false, url: null })
+    const data = get_content_attachment_drag_data(start_attachment_drag(file) as unknown as DataTransfer)
+    expect(data).toMatchObject({ file_name: file.file_name, is_image: false, url: null })
+    expect(content_attachment_markdown(data!)).toBe('[](att://docs/secret.pdf.good)')
+  })
+
   it('round-trips the file identity and its image flag', () => {
     const file = attachment({ file_name: 'note.txt', is_image: false })
 
@@ -158,4 +171,60 @@ describe('markdown shorthand', () => {
   it('keeps nested paths intact', () => {
     expect(content_folder_markdown('a/b')).toBe('[](att://a/b)')
   })
+})
+
+it.each(['folder', 'image', 'file'])('inserts the same entire selection as the copy menu when dragging its %s row', async (origin) => {
+  const files = [attachment({ file_name: 'image.png' }), attachment({ file_name: 'note.txt', is_image: false }), attachment({ file_name: 'private.pdf.good', is_image: false, is_private: true, url: null })]
+  const rows: WorkspaceListRow[] = [
+    { key: 'folder', name: 'docs', path: 'docs', parent_id: 1, depth: 0, node: { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v1' } },
+    ... files.map((file, i) => ({ key: i === 0 ? 'image' : i === 1 ? 'file' : 'private', name: file.file_name, path: file.file_name, parent_id: 1, depth: 0, node: { id: i + 3, parent_id: 1, name: file.file_name, path: file.file_name, kind: 'file' as const, version: 'v1', attachment: file } })),
+  ]
+  // Execute both SFC entry points: this checks that drag, clipboard and editor
+  // actually use the shared generator, without needing a DOM or CodeMirror view.
+  const source = readFileSync(new URL('../../components/MyContent/Attachment/Workspace.vue', import.meta.url), 'utf8')
+  const drag = source.slice(source.indexOf('function drag('), source.indexOf('\nasync function drop('))
+  const menu = source.slice(source.indexOf('function menu_for('), source.indexOf('\nfunction replaced('))
+  const editor = readFileSync(new URL('../../components/MyContent/Markdown/Editor.vue', import.meta.url), 'utf8')
+  const drop = editor.slice(editor.indexOf('async function on_drop('), editor.indexOf('\n// Bound to dragenter'))
+  let copied = ''
+  const inserted: { markdown: string, position: number }[] = []
+  const model = {
+    selected: new Set(rows.map(row => row.key)),
+    get selected_rows() { return rows.filter(row => this.selected.has(row.key)) },
+    drag_ids: [] as number[],
+    readonly: false,
+    capabilities: () => ({ move: true, delete: true, private: true, reasons: { move: [], delete: [], private: [] } }),
+  }
+  const props = { readonly: false }
+  const context = runInNewContext(`${ts.transpile(`${drag}\n${menu}\n${drop}`)}; ({drag, menu_for, on_drop})`, {
+    props,
+    model, attachment_action_item, attachment_batch_action, attachment_menu_context, attachment_privacy_actions,
+    content_selection_markdown, content_attachment_markdown, content_folder_markdown,
+    set_content_attachment_drag_data, set_content_folder_drag_data, get_content_attachment_drag_data, get_content_folder_drag_data,
+    navigator: { clipboard: { writeText: (value: string) => { copied = value } } },
+    drag_over: { value: true },
+    attachment_picks_from_data_transfer: async () => [],
+    editor: { position_at_coords: () => 12 },
+    insert_at_position: (markdown: string, position: number) => inserted.push({ markdown, position }),
+  }) as { drag: (event: DragEvent, row: WorkspaceListRow) => void, menu_for: (row: WorkspaceListRow) => AttachmentMenuItem[], on_drop: (event: DragEvent) => Promise<void> }
+  const row = rows.find(row => row.key === origin)!
+  const copy = context.menu_for(row).find(item => item.icon_name === 'lucide:copy')!
+  copy.command!({ originalEvent: new Event('click'), item: copy })
+  expect(copied).toBe('[](att://docs)\n![](att://image.png)\n[](att://note.txt)\n[](att://private.pdf.good)')
+  const transfer = fake_data_transfer()
+  const event = { dataTransfer: transfer, clientX: 10, clientY: 20 } as unknown as DragEvent
+  context.drag(event, row)
+  await context.on_drop(event)
+  expect(inserted).toEqual([{ markdown: copied, position: 12 }])
+  expect(model.drag_ids).toEqual([2, 3, 4, 5])
+  expect(transfer.effectAllowed).toBe('copyMove')
+  model.selected = new Set(['folder'])
+  const single_event = { dataTransfer: fake_data_transfer(), clientX: 10, clientY: 20 } as unknown as DragEvent
+  context.drag(single_event, rows[1]!)
+  await context.on_drop(single_event)
+  expect([... model.selected]).toEqual(['image'])
+  expect(inserted[1]).toEqual({ markdown: '![](att://image.png)', position: 12 })
+  props.readonly = true
+  await context.on_drop(single_event)
+  expect(inserted).toHaveLength(2)
 })

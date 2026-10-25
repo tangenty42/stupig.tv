@@ -45,7 +45,7 @@ describe('delete_object_best_effort', () => {
     mocks.send.mockResolvedValue({})
     const error_spy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    await delete_object_best_effort('attachment/a.png')
+    await delete_object_best_effort('public', 'attachment/a.png')
 
     expect(mocks.send).toHaveBeenCalledOnce()
     expect(error_spy).not.toHaveBeenCalled()
@@ -58,7 +58,7 @@ describe('delete_object_best_effort', () => {
     mocks.send.mockRejectedValue(failure)
     const error_spy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    await expect(delete_object_best_effort('attachment/a.png')).resolves.toBeUndefined()
+    await expect(delete_object_best_effort('public', 'attachment/a.png')).resolves.toBeUndefined()
     const line = JSON.parse(error_spy.mock.calls[0]![0] as string)
     expect(line).toMatchObject({
       level: 'error',

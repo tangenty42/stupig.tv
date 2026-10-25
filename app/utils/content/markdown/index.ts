@@ -1,6 +1,5 @@
 import type { StoryMarkdownContext, StoryMarkdownOptions } from './types'
-import MarkdownIt from 'markdown-it'
-import multimd_table from 'markdown-it-multimd-table'
+import { create_content_markdown_parser } from '@shared/content-markdown-syntax'
 import { alerts_plugin } from './alerts'
 import { carousel_plugin } from './carousel'
 import { chips_plugin } from './chips'
@@ -19,10 +18,7 @@ import { source_anchor_plugin } from './source-anchor'
  * to the caller's refs.
  */
 export function create_story_markdown(options: StoryMarkdownOptions) {
-  const md = new MarkdownIt({ html: true, linkify: false })
-    // autolabel adds an id derived from the caption text, which comes out
-    // empty for CJK captions.
-    .use(multimd_table, { rowspan: true, autolabel: false })
+  const md = create_content_markdown_parser()
 
   const ctx: StoryMarkdownContext = { options, anchor_render_depth: 0 }
   source_anchor_plugin(md, ctx)

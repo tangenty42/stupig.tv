@@ -1,83 +1,59 @@
 # Project Guidelines
 
-## Environment & Runtime
+## Entry points
 
-- This project runs inside a Docker container; the Copilot session is in a Dev Container, so `pnpm` commands can run directly in the shell.
-- The app is usually started with `pnpm dev` (`nuxt dev --host 0.0.0.0`; the port comes from `APP_PORT` in `.env`, 3042 in the shipped `.env.dev.layer`) and is normally already running in the background. It watches files, rebuilds, and provides HMR. Before launching another `pnpm dev` instance, check whether the dev server is already active (e.g., `curl -s http://localhost:3042` or check the running terminal). If it is running, do not start a second one. Avoid `nuxt build`, `nuxt prepare`, or `nuxt generate` during development unless explicitly requested.
-- Package manager is **pnpm**; do not introduce `npm` or `yarn` lock files.
-- Node is configured for ESM (`"type": "module"`).
+- Read the applicable files in [instructions/](instructions/) before editing. They define frontend, backend, code-style and migration constraints.
+- [Documentation](../docs/README.md) describes the current system. Start with [architecture](../docs/architecture.md), then the relevant module. Operational procedures belong in docs, not additional instruction copies.
+- Keep documentation synchronized with observable behavior. Source, validated configuration and executable policies take precedence over historical notes. Label unverified deployment assumptions explicitly.
 
-## External Services
+## Workflow and runtime
 
-- Stable browser-safe application parameters live in `config/app-settings.yaml`, validated by `config/lib/schema.ts` and generated into `server/shared/settings.generated.ts`; consumers import `@shared/settings`. Run `pnpm settings:generate` after changes and commit its output; `pnpm settings:check` checks freshness. Nuxt and Vitest generate automatically. The unified server-only entry is `@config/lib/loader`, which layers `config/default.yaml`, `{NODE_ENV}.yaml`, and optional development-only `config/local.yaml`, resolves explicit `${VAR}` references, and validates with Zod. The `.env.*.layer` templates (shared, dev and prod layers merged by `pnpm env:build`) document referenced variables and secrets. `runtime_config()` is the cached server snapshot; database-only tools validate only the YAML `db` subtree. `public_config_schema` in `config/lib/schema.ts` defines the browser-visible subset (built from the deployment schemas); Nitro injects it into `runtimeConfig.public` at startup.
-- Aliyun services are used (DYPNS, SMS, CAPTCHA). Refer to `config/*.yaml`, the `.env.*.layer` templates and `config/lib/schema.ts` for parameters and credentials.
-- MQTT/EMQX is used for real-time synchronization. The server publishes events via `server/lib/mqtt.ts` (topics are prefixed with `MQTT_TOPIC_PREFIX`), and the browser client receives those events through `app/composables/useDataSync.ts`. Only one active tab per browser maintains a unique WebSocket connection; background tabs disconnect via `visibilitychange` to save resources. When server-side state changes (e.g., profile updates, role changes, session invalidation), emit the appropriate refresh event via `server/lib/sync.ts` using `publish_refresh({ resource: sync_resource('<type>', <id>) })` so connected clients can reload the affected data.
-- The same browser uses a `BroadcastChannel` for cross-tab transport. When `useDataSync` receives an MQTT event on the active tab, it posts the event to the BroadcastChannel so other tabs (including background tabs) are notified. `BroadcastChannel` is also the dedicated channel for cross-tab login/logout broadcasts. When implementing features that mutate shared user or admin state, emit the appropriate refresh event via `server/lib/sync.ts` so both MQTT clients and same-browser tabs stay in sync.
-- If `.env` is not accessible, ask the user before proceeding with any task that requires secrets.
+- Use **pnpm** and the existing lockfile; Node runs ESM. Do not introduce npm/yarn lockfiles or unnecessary dependencies.
+- Inspect the actual host/container environment and running processes. Check for an existing development server before starting another instance. `pnpm dev` owns Nuxt, the development authorization proxy and frpc; Docker dependencies stay running after Ctrl+C. See [development](../docs/development/README.md).
+- Avoid `nuxt build`, `nuxt prepare` and `nuxt generate` during development unless explicitly requested. Normal installation lifecycle hooks and the documented CI build are separate workflows.
+- Plan structural/environmental changes first and obtain authorization (dependencies, schema, deployment configuration, major refactors). Existing authorization in the conversation applies; do not ask again for the approved work.
+- Preserve unrelated working-tree changes. Prefer focused edits. File deletion/recreation requires user authorization; a request to replace or reorganize the relevant files supplies that authorization.
+- Resolve routine implementation details from the code and conversation. Ask about material ambiguity before dependent changes. In Autopilot, put required unanswered questions at the end of the reply and wait for a later prompt; do not use interactive prompts that will be skipped.
+- Reuse project utilities and components before adding another implementation. Stable shared limits and deployment values belong in their owning configuration, not duplicated constants.
 
-## Database & Migrations
+## Configuration and secrets
 
-- The migration chain in `migrations/` is the single source of truth for the schema; there is no reference dump to keep in sync. Read the migrations (filename order) to understand the current structure.
-- Change SQL structure by adding a new timestamped migration; never edit an applied one, whose checksum is pinned.
-- Table names are snake_case. Timestamps are `TIMESTAMP` stored in UTC. Boolean fields are `tinyint(1)` and must be converted with `Boolean()` before returning to the client.
+- Browser-safe application parameters: `config/app-settings.yaml` → `config/lib/schema.ts` → generated `server/shared/settings.generated.ts`. Consumers import `@shared/settings`; never hand-edit generated output. Run `pnpm settings:generate` after changes and `pnpm settings:check` to verify freshness.
+- Deployment configuration: `config/shared.yaml` → `dev.yaml` or `prod.yaml` → optional development-only `local.yaml`. The server loads it through `@config/loader`; environment interpolation is explicit. Tracked `.env.*.layer` templates define variable names, safe defaults and placeholders; real credentials belong in local `.env.dev` / `.env.prod` or the runtime environment. See [configuration](../docs/deployment/configuration.md).
+- `server/shared/` must remain browser-safe. Never import the configuration loader there at runtime, expose private configuration in Nuxt public config, or put secrets in application settings. Only the validated public subset may reach the browser.
+- If necessary secrets are unavailable, ask for their local setup; do not fabricate credentials or print their values. Database-only tools must not require unrelated service secrets.
 
-## Workflow Standards
+## Data integrity and synchronization
 
-- Put stable browser-shared limits, intervals and identifiers in `config/app-settings.yaml`; define their shape and relationships in `config/lib/schema.ts`. Import the generated `@shared/settings` directly rather than mapping it through Nuxt public config. Do not manually edit generated settings. Server deployment configuration belongs in the YAML layers; secrets and explicitly referenced deployment values belong in the `.env.*.layer` templates. Keep `server/shared/` imports browser-safe; never import `config/lib/loader` at runtime from client code. Do not put secrets in app settings or expose private configuration through Nuxt public config. Keep static relationship and protocol/database bound checks in the colocated settings tests.
-- Plan first, then wait for user approval before executing **structural or environmental changes** (e.g., new dependencies, schema changes, config/env changes, major refactors). For small, safe code edits, you may proceed directly.
-- Ask follow-up questions when something is unclear; the user is welcome to clarify.
-- Do not make changes without approval when approval is required.
-- Do not hardcode values; make items configurable.
-- Ask for clarification when there is any doubt. The user may be in Autopilot mode and cannot respond mid-round. Ask questions at the end of the conversation and wait for the next prompt. **In Autopilot mode, never use interactive question prompts/tools — they get auto-skipped and the questions are lost. Put open questions as plain text at the end of the reply, then end the turn without implementing the parts in doubt.**
-- **Never delete or recreate files during code editing**, even if Autopilot would approve. Ask the user first using the "wait for my next prompt" approach.
-- Favor minimal replacement or modification over rewriting the whole file or module.
-- When updating shared server-side state that needs to be reflected in the UI (e.g., profile changes, admin role changes, user bans), do not proactively fetch from the client side. Instead, emit the appropriate refresh event via `server/lib/sync.ts` and rely on the existing data sync module to reload the affected data in all connected clients/tabs. On the client, prefer `useSyncedData` for subscribing to and reloading data. In most cases, leave `universal` at its default `true` so multiple subscribers to the same resource share one proxy and one fetch. Set `universal: false` when the `fetcher` has caller-specific side effects or different behavior across callers, or when an unkeyed query uses `fetch_without_resource: true`. Use `useDataSync` directly only in rare cases where a component needs to react to a raw sync event without fetching a shared resource.
-- Polling vs MQTT events: sync events are emitted only for explicit mutations. Derived values that change without any mutation — e.g. `last_seen_at` / online presence — never produce an event, so the affected resources need a polling fallback. `profile` and `profile_sessions` on `app/pages/u/[id].vue` must keep their `polling_interval` (`settings.app.online.pollIntervalSeconds`) for this reason; `useSyncedData`'s poll only fires after that much quiet time with no fetch, and only while the tab is visible. The admin user list (`app/pages/admin/index.vue`) uses the same quiet-time polling fallback with `settings.app.admin.pollIntervalSeconds`. Do not remove these intervals when touching the sync module; new resources with silently-changing derived data should follow the same pattern rather than relying on events.
-- SSR/client sync boundary (source of a past hydration mismatch): `get_shared_proxies()` in `useSyncedData` and `get_listeners()` in `useDataSync` return a fresh Map per call on the server but a shared `useState` Map on the client, so "existing shared proxy" paths only ever run client-side. A universal proxy created with `immediate: false` is trigger-only and carries no fetched state; subscribers must not adopt an unfetched proxy's value, and `useSyncedData` itself joins in-flight shared fetches and awaits them when `immediate` is true. Values that must match between SSR render and hydration must either be `useState` (payload-serialized) or fetched identically on both sides — plain refs reset during hydration and are only refilled by awaited immediate fetches.
-- Hydration time and timezone are one serialized app context (`useDisplayTimeContext`: `now_ms` + `timezone`). SSR seeds timezone from the cookie (UTC fallback); the client must not replace it with `Intl` before hydration. The timezone plugin switches to the browser timezone, writes the cookie, and starts the shared clock only after `app:suspense:resolve`. Date utilities stay pure: pass the context timezone explicitly; never restore module-global mutable timezone state or call browser timezone APIs from render paths.
-- For payload-backed data passed to `useSyncedData`, create the data ref with `useSyncedState()` (including writable computed wrappers over payload state). The initial client request still starts, but data/loading, `on_data`, and `on_error` effects are staged until hydration resolves, preserving the SSR snapshot during hydration. The options-only overload (no data ref) also stages callbacks during hydration by default. Explicit ordinary refs are never staged. Fetchers must return data instead of mutating shared render state as a side effect.
+- `migrations/` in filename order is the schema source of truth. Never alter an applied SQL migration, including whitespace/comments, or a started TypeScript migration and its frozen dependency closure. Add a new version and preserve digest checks in `scripts/migration/frozen.test.ts`.
+- `migration_runs` is the sole current ledger. Do not recreate `schema_migrations`, invent receipts or bypass failed migration checks. Follow [migration rules](instructions/migrations.instructions.md) and [recovery procedures](../docs/operations/migrations.md).
+- Store timestamps in UTC; MySQL connections force UTC. Convert `tinyint(1)` booleans before returning API data.
+- Mutations publish appropriate invalidations through the existing synchronization system. Content writes enqueue their outbox events on the business transaction connection; other domains use `server/lib/sync.ts`. Do not replace this with page-local refetches. See [realtime](../docs/modules/realtime.md).
+- Background work uses the shared runner and existing domain leases/checkpoints. Preserve cooperative shutdown and receipts for in-flight external effects. See [background jobs](../docs/modules/background-jobs.md).
 
-## Code Conventions
+## Testing
 
-- Custom components are prefixed with `My` (e.g., `MyAvatar`, `MyDialog`, `MyIcon`).
-- Icons are rendered via `<MyIcon name="lucide:..." />`.
-- Use `useMyToast()` for toast notifications and `useApi()` for API calls.
-- `useMyToast()` and `useAuth()` require a Vue inject context (they call PrimeVue `useToast()` eagerly) — call them synchronously in component setup only. In async paths without inject (fetch error handlers, BroadcastChannel/poll callbacks), use Nuxt-context APIs (`useCookie`, `useRuntimeConfig`, `navigateTo`) directly. `useApi()` is created in setup and captures `logout()` for its 401 handling, so it never needs inject in its async error path.
-- Forms use `@primevue/forms` with Zod resolvers. Frontend form schemas and defaults live in `server/shared/schemas.ts`; full procedure input schemas live in `server/trpc/schemas.ts` and reuse those form contracts where applicable.
-- Back-end: expose application operations through domain routers in `server/trpc/`; the Nitro catch-all route only adapts HTTP to `app_router`. Procedures validate with Zod, delegate business operations to `server/services/`, and return their data directly. Throw `ApiError` for expected failures; the tRPC middleware maps it to the matching transport status.
-- Server code should use the `@server` alias.
-- `server/lib/` holds low-level, stateless infrastructure and external integrations (e.g., `db.ts`, `mqtt.ts`, `session.ts`, `sms.ts`, `captcha.ts`, `sync.ts`). tRPC procedures should not call `lib` directly for business operations; instead they call `server/services/`, which orchestrate `lib` and other services. `lib` should not depend on `services`.
-- Define server-side public/API-facing types in `server/types/` (e.g., `api.ts`, `auth.ts`, `sync.ts`). Keep internal service-specific types (e.g., row mappers, input shapes) near the service that owns them.
-- Validate input with Zod. Map error messages to user-facing Chinese text where appropriate.
-- Date handling: use `dayjs` with `dayjs.extend(utc)`; store UTC, display local. MySQL timezone is forced to UTC on every connection.
-- Styling: Tailwind CSS 3 + PrimeVue. Use `global.css` and `primevue-overrides.css` for app-wide styles. Scoped component styles use `<style scoped>` with `@apply`. To restyle a PrimeVue component's internals, prefer its design tokens (`--p-*`) over overriding generated class names; app-wide tokens go in `primevue-overrides.css`. For our own palette use Tailwind `theme('colors.primary')`, `theme('colors.primary-emphasis')` (hover), `theme('colors.primary-contrast')`, `theme('colors.primary-500')`, etc.
+- Tests are part of behavior changes. Add/update relevant tests and fix the cause of failures. For documentation-only or similarly low-impact changes, explain the focused validation used.
+- Tests live beside their modules as `<module>.test.ts`. Vitest uses Node without a DOM. Browser geometry/canvas/pointer behavior requires browser verification; do not claim unit tests cover it.
+- Assert observable contracts. Mock infrastructure boundaries, never the unit under test. Use the real entry point when wiring is the risk. Follow [testing](../docs/development/testing.md) for aliases, mocks and hydration constraints.
+- A new guard must fail when its protected behavior is broken: verify that temporarily, restore the implementation, then rerun. Never hollow out assertions, skip tests or broaden expectations just to pass.
+- Run `pnpm test` for relevant behavior and `pnpm lint` for changes. After type/import refactors run `pnpm exec nuxt typecheck`; include the scripts TypeScript check when that scope changes. Resolve failures before reporting completion.
 
-## Testing & Build
+## Development test accounts
 
-- Run tests with `pnpm test` (`vitest run`). There is no watch task; run the command and read the output.
+Use existing authenticated sessions or these development-only fixtures; do not create duplicates unnecessarily.
 
-**Tests are part of the change, not a follow-up.** Add them for new behavior, update them when a change makes their expectations outdated, and fix the cause of a failure rather than the assertion. If a change genuinely needs no test, say why in the reply rather than staying silent about it.
+| Username | Phone | Password |
+| --- | --- | --- |
+| admin | 19999999999 | AaAaAaAa888 |
+| user | 19000000000 | AaAaAaAa888 |
 
-- Layout: a test lives beside the module it covers, named `<module>.test.ts` (e.g. `app/utils/content/redact.ts` → `app/utils/content/redact.test.ts`). There is no separate test directory, no shared test utilities module, and no `setupFiles`; add one only when several suites genuinely share the helper.
-- Environment: Node, no DOM — there is no jsdom/happy-dom. `import.meta.client` is forced `true` and `import.meta.server` `false` by `vitest.config.ts`; the `~`, `@server` and `@shared` aliases resolve. Anything needing a real browser (canvas, layout, pointer events) is out of scope for tests.
-- Assert the contract, not the implementation: the observable behavior, the returned shape, the thrown status and message, the side effect. Prefer the smallest unit that expresses the rule, but go through a real entry point when the risk being guarded is the wiring (that a guard is actually called, that a caller passes the right argument).
-- Mocking: declare mocks with `vi.hoisted` and register them with `vi.mock`, then `await import()` the module under test — `vi.mock` is hoisted above imports, so a plain top-level mock would be initialized too late. Mock at the boundary (db, storage, sync, locks, clock), never the module under test. The mock's shape has to match what the code actually calls (`db.execute`, not `db.query`; a transaction connection needs its own `execute`).
-- **A new guard must be able to fail.** Before trusting one, temporarily break the fix it guards and confirm the test goes red, then restore. A guard that cannot fail when the behavior breaks is worse than no guard: it advertises protection that is not there. The same applies to a guard whose fixture never reaches the branch it claims to cover.
-- Never weaken a test to make it pass: no hollowed-out assertions, no `.skip`, no widening an expectation to whatever the code happens to do. If an expectation turns out to be wrong, first decide which one is right — the code or the test — and fix that one.
-- A test may read project source files when the invariant is about the source itself (for example "every icon this renderer can emit is registered in the bundling list"). Say why in a comment, assert a real minimum, and prefer a runtime check when one can reach the same coverage.
-- Lint applies to tests like any other code: run `pnpm lint`, and fix a test's lint error as code rather than exempting the file.
+- Keep `NUXT_OTP_DEBUG=true` during development whenever possible. It skips real SMS; `false` enables the real sending path.
+- Never send real SMS/OTP to these test numbers. Before any code-sending flow, verify the running server's debug mode; otherwise use password login or an existing session.
 
-- After type refactors or import changes on either the frontend or the backend, run `npx nuxt typecheck` to type-check the whole workspace. Type errors must be resolved before considering the task complete.
-- Avoid adding new external dependencies unless there is a clear, justified need. The project already uses PrimeVue, Tailwind, and Nuxt icons.
+## Git and review
 
-## Commit, branch & PR conventions
-
-- All commit messages follow **`type(scope): description`** — one English line, imperative mood, lowercase description, no trailing period. Example: `feat(content): move attachment uploads onto the task queue`.
-- `type` is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`; `scope` is the area touched (`content`, `db`, `auth`, `profile`, `ui`, `sync`, `storage`, `config`, `deploy`, `ci`, `process`, `deps`, …).
-- History on `main` was rewritten to this format, so it is the only style to match (`git log --oneline`).
-- Branch names are `type/scope/description`, all lowercase, hyphenated: `feat/content/task-staging-cleanup`, `fix/content/discard-staged-objects`, `docs/content/phase-3-plan`, `chore/db/drop-reference-schema`.
-- PR titles use the same English format: `type(scope): description`.
-- PR descriptions are in English and contain these five sections, in order: `Background`, `Changes`, `Impact`, `Verification`, and `Materials (Documentation)`. Use concise bullets under each heading; write `None` when a section has nothing to report.
-- Merge commit messages use **`type(scope): description (#<PR id>)`**, e.g. `fix(deploy): roll back config and image on failures (#123)`.
-- Branch auto-delete on merge is enabled repository-wide: a merged PR's branch is removed automatically, so do not reuse it and do not delete it by hand.
-- Never append additional trailers unless the user explicitly asks for them in that conversation.
+- Commit and PR titles: `type(scope): description`, one English imperative line, lowercase description, no trailing period. Types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`.
+- Branches: lowercase `type/scope/hyphenated-description`. Do not reuse or manually delete branches already covered by automatic deletion on merge.
+- PR descriptions are English, with `Background`, `Changes`, `Impact`, `Verification`, `Materials (Documentation)` in that order. Use concise bullets and `None` where appropriate.
+- Merge messages: `type(scope): description (#<PR id>)`. Do not append trailers unless the user requests them in this conversation.

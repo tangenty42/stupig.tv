@@ -218,9 +218,18 @@ export function has_private_content(markdown: string): boolean {
  * permission gets: the private source never leaves the server.
  */
 export function redact_private_content(markdown: string): string {
+  return private_representation(markdown, false).markdown
+}
+
+/** Editor previews retain source anchors while showing exactly the public body. */
+export function redact_private_content_with_source_map(markdown: string) {
+  return private_representation(markdown, true)
+}
+
+function private_representation(markdown: string, map_source: boolean): { markdown: string, source_lines?: number[] } {
   const tokens = collect_private_tokens(markdown)
   if (! tokens) {
-    return markdown
+    return { markdown }
   }
   const lines = markdown.split('\n')
   const line_starts: number[] = []
@@ -270,27 +279,46 @@ export function redact_private_content(markdown: string): string {
     }
   }
   if (! ranges.length) {
-    return markdown
+    return { markdown }
   }
 
   ranges.sort((a, b) => a.from - b.from)
   let out = ''
   let pos = 0
+  let original_line = 0
+  const source_lines = map_source ? [0] : undefined
+  const append = (text: string) => {
+    out += text
+    if (source_lines) {
+      for (const character of text) {
+        if (character === '\n')
+          source_lines.push(++ original_line)
+      }
+    }
+  }
   for (const range of ranges) {
     // Nested private elements fall inside an already-handled outer range.
     if (range.from < pos) {
       continue
     }
-    out += markdown.slice(pos, range.from)
+    append(markdown.slice(pos, range.from))
     out += range.block ? CONTENT_PRIVATE_BLOCK_PLACEHOLDER : CONTENT_PRIVATE_INLINE_PLACEHOLDER
+    if (source_lines) {
+      for (let index = range.from; index < range.to; index ++) {
+        if (markdown[index] === '\n')
+          original_line ++
+      }
+    }
     pos = range.to
     // The placeholder must own its line: if the close tag was followed by
     // trailing text rather than a newline, hand the line break over so the
     // remainder is not merged into the placeholder's html block.
     if (range.block && pos < markdown.length && markdown[pos] !== '\n') {
       out += '\n'
+      source_lines?.push(original_line)
     }
   }
-  out += markdown.slice(pos)
-  return out
+  append(markdown.slice(pos))
+  source_lines?.push(original_line + 1)
+  return { markdown: out, ... (source_lines ? { source_lines } : {}) }
 }

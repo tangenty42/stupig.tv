@@ -186,6 +186,19 @@ describe('content draft store: per-page draft ownership', () => {
     expect(stored(STORY_KEY)?.markdown).toContain('最后一行没保存')
   })
 
+  it('persists accepted reference baselines and does not advance them on an unrelated body refresh', async () => {
+    const page = useContentDraftStore(STORY_ID)
+    page.initialize(STORY_24_MARKDOWN, 6, 10, 20)
+    page.markdown += '草稿'
+    page.advance_base(STORY_24_MARKDOWN, 7)
+    page.persist_now()
+    expect(JSON.parse(mocks.storage.get(STORY_KEY)!)).toMatchObject({ base_revision: 7, base_namespace_revision: 10, base_title_revision: 20 })
+    page.mark_saved(STORY_24_MARKDOWN, 8, 11, 21)
+    expect(page.base_namespace_revision).toBe(11)
+    expect(page.base_title_revision).toBe(21)
+    expect(mocks.storage.has(STORY_KEY)).toBe(false)
+  })
+
   it('edit -> create: a late mark_saved() from the outgoing page stays on the outgoing page', async () => {
     const edit_page = open_page(STORY_ID)
     edit_page.initialize(STORY_24_MARKDOWN, 6)
@@ -266,6 +279,27 @@ describe('content draft store: per-page draft ownership', () => {
 
     expect(stored(STORY_KEY)?.markdown).toContain('24 的未保存修改')
     expect(stored(`${DRAFT_PREFIX}25`)?.markdown).toBe('25 的未保存修改')
+  })
+
+  it('preserves a persisted private draft while a denied editor is suspended', async () => {
+    const page = open_page(STORY_ID)
+    page.initialize(STORY_24_MARKDOWN, 6, 2, 4)
+    page.markdown = `${STORY_24_MARKDOWN}\nprivate unsaved edit`
+    page.persist_now()
+    const original = mocks.storage.get(STORY_KEY)
+    page.initialize('redacted body', 6, 2, 4)
+    page.suspend()
+    await nextTick()
+    vi.advanceTimersByTime(AUTOSAVE_DELAY_MS + 1)
+    page.persist_now()
+    expect(mocks.storage.get(STORY_KEY)).toBe(original)
+    expect(page.initialized).toBe(false)
+    const draft = page.read_persisted()!
+    page.initialize(STORY_24_MARKDOWN, 6, 2, 4)
+    page.restore(draft, STORY_24_MARKDOWN)
+    expect(page.markdown).toContain('private unsaved edit')
+    expect(page.base_namespace_revision).toBe(2)
+    expect(page.dirty).toBe(true)
   })
 
   it('an instance only ever writes its own key', async () => {

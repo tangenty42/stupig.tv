@@ -1,3 +1,22 @@
 # 本地开发覆盖模板：复制为 config/local.yaml 后按需修改。
 # local.yaml 仅在 NODE_ENV=development 时加载，不进仓库。
-# 覆盖顺序：default.yaml -> development.yaml -> local.yaml。
+# 覆盖顺序：shared.yaml -> dev.yaml -> local.yaml。
+
+# 默认随 pnpm dev 启动 runner。独立 worker 请先停应用，再覆盖为 worker：
+# app:
+#   backgroundRunner:
+#     mode: worker
+# 然后分别启动 pnpm dev 和 pnpm background:worker。
+
+# 静态资源与 Content 使用同一个阿里云桶，地址、地域和桶名由 dev.yaml 提供。
+# 凭证使用 .env.dev 中的 ALIYUN_OSS_*，无需在此重写。
+# 历史私有源默认禁用，恢复旧数据时使用受保护的迁移配置备份。
+
+# 开发授权通道也可在此局部覆盖；其余字段继承 dev.yaml 的 devAuthTunnel。
+# devAuthTunnel:
+#   frp:
+#     executable: /path/to/frpc
+
+# 回调地址由隧道检查与 ESA 发布工具共用，不放在 devAuthTunnel 下。
+# esaFunction:
+#   callbackUrl: https://auth.example.com/api/content/authorize

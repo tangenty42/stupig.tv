@@ -156,6 +156,7 @@ export async function require_auth_user(event: H3Event) {
   const auth_user: AuthUser = {
     id: record.id,
     session_id: record.session_id,
+    token_generation_id: record.generation_id,
     username: record.username,
     phone: record.phone,
     avatar_file: record.avatar_file,

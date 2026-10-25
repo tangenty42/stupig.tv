@@ -5,6 +5,7 @@ export type { ContentRating, ContentRatingInput, ContentRatingTier } from '../co
 export { content_rating_tiers, pinned_label, rating_label, story_pinned, story_rating, story_rating_rank, unrated_content_rating } from '../content-markdown'
 
 export interface ContentStorySummary {
+  title_revision?: number
   id: number
   title: string
   /** Space-separated front matter labels; `#`-prefixed ones are hidden rating tiers. */
@@ -27,6 +28,15 @@ export interface ContentStorySummary {
 }
 
 export interface ContentStoryAttachment {
+  /** Authorized, version-bound presentation; absent for unreadable private files. */
+  image?: { revision: number, width: number, height: number, lqip: string | null, has_original: boolean }
+  has_redacted?: boolean
+  is_redacted_view?: boolean
+  redacted_url?: string | null
+  redacted_image?: ContentStoryAttachment['image']
+  node_version?: string
+  /** Stable database identity; optional only for cached pre-journal payloads. */
+  id?: number
   file_name: string
   /** Derived from the file extension; null when unknown. */
   mime_type: string | null
@@ -35,7 +45,9 @@ export interface ContentStoryAttachment {
   /** Object ETag — changes with the object's content; rendered as `?version=` to bust the immutable cache. */
   version: string
   /** Root-relative path; prefix with the static base URL before rendering. */
-  url: string
+  url: string | null
+  /** Release A: private plaintext in its own bucket; legacy encrypted rows stay separate. */
+  is_private?: boolean
   /** Server-side encrypted (`.good` suffix); the object at `url` is AES-256-GCM ciphertext. */
   is_encrypted: boolean
   /** base64 AES-256-GCM key, present only for viewers holding content_private:read. */
@@ -78,275 +90,41 @@ export interface ContentUploadSignResponse {
   key?: string
 }
 
-/** Structural attachment operations that take a scope lock. */
-export type ContentOperationKind = 'move' | 'rename' | 'folder_create' | 'folder_delete' | 'delete' | 'encrypt' | 'decrypt' | 'redact'
-
-/**
- * Attachment task kinds: one per user-level operation (see
- * docs/old/content-task-refactor.md). A superset of ContentOperationKind — the
- * structural kinds keep their lock names, upload/replace are new (they stay
- * outside the scope lock today) and folder_rename splits off from 'move'.
- */
-export type ContentTaskKind = 'upload' | 'replace' | 'move' | 'rename' | 'delete' | 'encrypt' | 'decrypt' | 'redact' | 'folder_create' | 'folder_delete' | 'folder_rename'
-
-/** Item actions that wait on the client's bytes; the rest are server-only. */
-export const content_task_transfer_actions = ['upload', 'replace', 'redact'] as const
-
-/** Task lifecycle: queued → running → done/failed/cancelled; running ↔ paused only for transfer tasks. */
-export type ContentTaskStatus = 'queued' | 'running' | 'paused' | 'cancelling' | 'done' | 'failed' | 'cancelled'
-
-export type ContentTaskItemStatus = 'pending' | 'active' | 'done' | 'skipped' | 'failed'
-
-export type ContentTaskResolutionKind = 'rename' | 'merge' | 'sanitize'
-
-export interface ContentTaskResolution {
-  kind: ContentTaskResolutionKind
-  from: string
-  to: string
-  reason: string
-  /** Upload payload index, needed when a batch contains the same raw path twice. */
-  entry_index?: number
-}
-
-export interface ContentTask {
-  id: number
-  scope_id: number
-  kind: ContentTaskKind
-  status: ContentTaskStatus
-  /** Kind-specific task fields (moves[], file_names[], markdown…); validated on creation. */
-  payload: Record<string, unknown>
-  actor_id: number | null
-  /** Issuer instance id: powers the "resumable on this machine" hint, never an authorization boundary. */
-  client_id: string | null
-  error: string | null
-  heartbeat_at: string | null
-  created_at: string
-  updated_at: string
-}
-
-export interface ContentTaskItem {
-  paused_at?: string | null
-  control_version?: number
-  /** Optional for snapshots from clients started before the retry migration. */
-  retry_of_item_id?: number | null
-  superseded_at?: string | null
-  id: number
-  task_id: number
-  path: string
-  action: string
-  status: ContentTaskItemStatus
-  bytes_done: number
-  bytes_total: number
-  /** Server-assigned staging object key for upload items. */
-  staging_key: string | null
-  /** Multipart upload id — the resume anchor. */
-  upload_id: string | null
-  part_size: number | null
-  /** Per-item outcome: { new_path, reason, ... }. */
-  result: Record<string, unknown> | null
-}
-
-/** A task with its items, the unit every task API and event carries. */
-export interface ContentTaskState {
-  task: ContentTask
-  items: ContentTaskItem[]
-}
-
-export interface ContentTaskRetryResult {
-  previous: ContentTaskState
-  current: ContentTaskState
-}
-
-/**
- * Live task state pushed over the sync channel.
- *
- * Progress ticks are too frequent for "notify then refetch", so the event
- * carries the state itself: subscribers apply it directly, and the periodic
- * refresh stays for membership changes (a task appearing or finishing).
- */
-export interface ContentTaskProgressSnapshot {
-  task_id: number
-  scope_id: number
-  status: ContentTaskStatus
-  items: {
-    paused_at?: string | null
-    control_version?: number
-    retry_of_item_id?: number | null
-    superseded_at?: string | null
-    id: number
-    path: string
-    status: ContentTaskItemStatus
-    bytes_done: number
-    bytes_total: number
-    resolution: ContentTaskResolution | null
-    reason: string | null
-  }[]
-}
-
-/** A live lock row as listed for preflight and the editor's disabled states. */
-export interface ContentPathLock {
-  /** '' is the scope-level lock (contends with every path). */
-  path: string
-  kind: string
-  /** null for legacy scope-level operation locks. */
-  task_id: number | null
-  expires_at: string
-}
-
-/* ---- Task payloads (one per kind; persisted in content_tasks.payload) ---- */
-
-export interface ContentTaskMovePayload {
-  moves: { file_name: string, target_folder: string | null }[]
-}
-
-export interface ContentTaskRenamePayload {
-  old_file_name: string
-  new_file_name: string
-}
-
-/**
- * Delete is a compound: the files go through the revision-checked save (the
- * markdown with their references removed), the folders must be empty by then.
- * `can_private` is captured at creation from the actor's permissions.
- */
-export interface ContentTaskDeletePayload {
-  file_names: string[]
-  folders: string[]
+/** Body projection carries no attachment/task arrays or decryption material. */
+export interface ContentStoryBody extends ContentStorySummary {
+  title_revision: number
   markdown: string
-  base_revision: number
-  can_private: boolean
-}
-
-export interface ContentTaskFolderCreatePayload {
-  folder: string
-}
-
-export interface ContentTaskFolderDeletePayload {
-  folder: string
-}
-
-export interface ContentTaskFolderRenamePayload {
-  source_folder: string
-  new_folder: string
-}
-
-/* ---- Transfer payloads (upload / replace) ---- */
-
-export interface ContentTaskUploadEntry {
-  /** The planned path; built-in name changes require an explicit resolve before transfer. */
-  path: string
-  /** Original local file name, retained when the destination is renamed for cross-device resume. */
-  source_file_name?: string
-  size: number
-  mime_type: string | null
-  /** Editor caret offset to insert the reference at once the item lands. */
-  insert_position?: number | null
-}
-
-export interface ContentTaskUploadPayload {
-  uploads: ContentTaskUploadEntry[]
-}
-
-export interface ContentTaskReplacePayload {
-  old_file_name: string
-  mode: 'keep-name' | 'new-name'
-  size: number
-  mime_type: string | null
-  /** The incoming file name, which decides the result in `new-name` mode. */
-  file_name: string
-  source_file_name?: string
-  content_type: string | null
-}
-
-/** Encrypt/decrypt: one item per file; the rename (± `.good`) is derived server-side. */
-export interface ContentTaskEncryptionPayload {
-  file_names: string[]
-}
-
-/**
- * Redact: the client exports the censored bitmap and uploads it through the
- * transfer pipeline; the server lands it as the source's plaintext twin.
- */
-export interface ContentTaskRedactPayload {
-  source_file_name: string
-  content_type: string | null
-  size: number
-}
-
-/** One part the client still has to PUT, with its signed URL. */
-export interface ContentTaskPart {
-  part_number: number
-  url: string
-}
-
-export interface ContentTaskPartPlan {
-  parts: ContentTaskPart[]
-  /** Bytes per part; null for single-PUT items. */
-  part_size: number | null
-  /** Multipart upload id; null for single-PUT items. */
-  upload_id: string | null
-  /** How many parts the client may ask to sign in one call (the server's cap). */
-  sign_batch_size: number
-}
-
-export interface ContentTaskUploadedPart {
-  part_number: number
-  etag: string
-  size: number
-}
-
-/** What a resuming client needs to continue an interrupted transfer. */
-export interface ContentTaskResumeState {
-  staging_key: string
-  upload_id: string | null
-  part_size: number | null
-  uploaded_parts: ContentTaskUploadedPart[]
-  /** The server's per-call signing cap, so the client can batch without probing. */
-  sign_batch_size: number
-}
-
-/**
- * A live attachment-operation lock on a scope, published so peers disable the
- * controls the operation would collide with. The lease is stealable after
- * `expires_at`, so consumers must treat it as advisory and still handle a 409.
- */
-export interface ContentOperationLock {
-  kind: ContentOperationKind
-  /** UTC ISO timestamp of the lease expiry. */
-  expires_at: string
-}
-
-export interface ContentStoryDetail extends ContentStorySummary {
-  markdown: string
-  /** Whether the stored markdown holds private elements (before any viewer stripping). */
   has_private: boolean
-  attachments: ContentStoryAttachment[]
-  /** Explicitly created folder paths (empty folders persist as rows). */
-  folders: string[]
-  /** Editor optimistic-concurrency token; bumps on each confirmed submit. */
+  private_readable: boolean
   revision: number
-  /**
-   * Server-issued key of the viewer this payload was rendered for; echo it
-   * back as `base_viewer_key` so the version check can detect a viewer change.
-   */
+  namespace_revision: number
   viewer_key: string
-  /** In-flight attachment structure change by any client; null when idle. */
-  operation_lock: ContentOperationLock | null
-  /**
-   * Live tasks of the scope, present only for viewers who may manage content
-   * (they are the only ones who can see or act on them).
-   */
-  tasks?: ContentTaskState[]
-  /** Live path locks of the scope, same audience as `tasks`. */
-  locks?: ContentPathLock[]
+  representation_version: string
 }
 
 /** Attachment files and explicit folders of one story's scope. */
 export interface ContentAttachmentScope {
+  namespace_revision?: number
+  viewer_key?: string
   attachments: ContentStoryAttachment[]
   folders: string[]
-  /** In-flight attachment structure change by any client; null when idle. */
-  operation_lock: ContentOperationLock | null
+}
+
+export interface ContentWorkspaceNode {
+  id: number
+  parent_id: number
+  name: string
+  path: string
+  kind: 'file' | 'folder'
+  version: string
+  attachment?: ContentStoryAttachment
+}
+
+export interface ContentAttachmentWorkspace extends ContentAttachmentScope {
+  nodes?: ContentWorkspaceNode[]
+  root_id?: number
+  namespace_revision: number
+  viewer_key: string
 }
 
 export interface ContentStoryCreated {
