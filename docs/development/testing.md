@@ -1,40 +1,42 @@
 # 测试与验证
 
-测试应证明可观察的业务合同，尤其是权限、数据提交、重试、取消及同步边界。布局、Canvas、触摸和浏览器文件权限必须通过真实浏览器验证，不能仅凭 Node 测试宣布通过。
+测试优先证明用户可观察的行为和数据合同。按风险选择验证；文案、格式和简单接线无需为了数量增加单测。已有源码断言应在行为覆盖建立后删除，而不是继续约束变量名、标签写法或文件排布。
 
-## 检查层次
+## 命令与环境
 
-| 层次 | 入口 | 能证明什么 |
-| --- | --- | --- |
-| 配置生成 | `pnpm settings:check` | 提交的共享 settings 与 YAML 一致 |
-| 风格 | `pnpm lint` | 源码、测试和文档符合仓库 ESLint 规则 |
-| 类型 | `pnpm exec nuxt typecheck` | Nuxt、Vue、服务端与共享类型契约 |
-| 工具类型 | `pnpm exec tsc --project scripts/tsconfig.json --noEmit` | 维护工具和 TS 迁移类型 |
-| 单元／服务测试 | `pnpm test` | 领域状态、校验、对象操作与持久化调用合同 |
-| 数据库与生产产物 | `scripts/verify/` | 真实 MySQL、执行恢复、原生图片编码和打包入口 |
-| 浏览器及云端 | 真实页面与开发资源 | 交互、授权、上传、缓存交付和外部回执 |
+| 命令 | 环境与范围 |
+| --- | --- |
+| `pnpm test:unit` | Node；app 与 server 分组，客户端标志仅用于 app 测试 |
+| `pnpm test:tools` | Node；迁移、打包和 CLI 测试串行运行，避免抢占构建及子进程资源 |
+| `pnpm test:component` | Nuxt + happy-dom；真实挂载 Vue 组件及依赖组件生命周期的 composable |
+| `pnpm test` | 依次执行以上三组 |
+| `pnpm test:e2e` | Playwright Chromium；实际 Nuxt、API、MySQL 和同步传输 |
+| `pnpm test:all` | 执行单元、工具、组件和浏览器测试 |
+| `pnpm lint` | 代码、测试和文档规范 |
+| `pnpm exec nuxt typecheck` | 应用类型 |
+| `pnpm exec tsc --project scripts/tsconfig.json --noEmit` | 工具类型 |
+| `pnpm exec tsc --project tests/tsconfig.json --noEmit` | 浏览器测试与测试边界类型 |
 
-按改动选择必要检查。纯文档编辑通常只需要文档 lint、链接和命令核对；不会为了文档重排重跑云端迁移或应用构建。
+纯逻辑和服务测试继续与模块同目录，命名 `*.test.ts`。挂载测试使用 `*.nuxt.test.ts`，由独立组件配置运行；不把 Nuxt runtime 加进每个纯单测。浏览器工作流放在 `tests/e2e/*.spec.ts`。共享基础夹具可以复用，场景中的身份、版本、失败条件应在测试中清楚可见。
 
-## Vitest 约定
+## 应该断言什么
 
-[vitest.config.ts](../../vitest.config.ts) 使用 Node 环境，没有 jsdom、happy-dom、共享 setupFiles 或通用浏览器夹具。`~`、`@config`、`@server`、`@shared` 别名由该文件配置。`import.meta.client` 固定为 true、`import.meta.server` 为 false；SSR 独有路径要明确构造对应入口，不能把客户端替换环境当成真实 SSR。
+- 单元测试检查返回值、状态转换、错误、事务写入和外部操作；模拟数据库、网络、时钟等基础设施边界。
+- 组件测试通过真实 SFC 编译和挂载，检查 DOM、模型事件、输入、点击与生命周期。替换浏览器不支持的 Canvas 边界时，明确剩余验证范围。
+- 浏览器测试操作真实页面，按条件等待而不是固定 sleep；失败保留 trace 和截图。
+- 迁移 digest、部署入口和产物依赖确实以源码或文件为合同，可以保留相应断言。一般 UI 不应依赖源码切片、VM 执行、私有变量名或模板字符串。
+- 安全、并发和数据丢失回归需要证明能检出原先的错误；不要求每个普通 guard 都进行临时破坏操作。
+- 不因测试失败而弱化业务约束。替换旧测试时保留有价值的场景，合并重复的内部实现断言。
 
-- 测试与模块同目录，命名 `<module>.test.ts`；只在确有多个调用者时提取测试辅助逻辑。
-- `describe` 围绕被测功能，`it` 说明触发条件和可观察结果；延续文件已有语言，不为统一语言批量改写。回归测试应能看出原先哪里会出错。
-- 夹具保留与场景有关的关键差异，公共准备只提取稳定重复部分。避免用过长的通用工厂、隐式默认值或层层 helper 隐藏权限、版本、时序和失败条件；有意反常的数据旁说明原因。
-- 优先断言返回值、错误状态／文案、事务内写入、对象影响和同步资源。涉及接线风险时通过真实调用入口断言，不只测试被调用的 helper。
-- 用 `vi.hoisted` 定义边界 mocks，再 `vi.mock`，随后 `await import()` 被测模块；`vi.mock` 会提升，普通顶层变量可能尚未初始化。边界形状必须符合实现，例如 `db.execute` 和事务连接各自的 `execute`。
-- Mock 数据库、对象存储、时钟、网络等边界，不 mock 被测服务来证明它自己正确。
-- 新增守卫测试要临时破坏对应行为，确认测试会变红，再恢复实现；不要留下故意破坏的源码。
-- 失败先判断合同还是实现错误，不使用 `.skip`、空断言或放宽期望掩盖问题。
-- 源码读取型测试仅适合源码本身就是合同的情况，例如打包图标清单、入口命令、部署脚本约束；注释说明原因，断言真实的最小覆盖范围，防止空集合也通过。优先使用可达到同等覆盖的运行时断言。
+## 浏览器测试的隔离
 
-可用 `pnpm exec vitest run <测试文件>` 定向执行。类型、import 或共享协议变更还应执行完整类型检查；跨域修改再扩大到全量测试。
+首次执行 `pnpm exec playwright install chromium`。运行前需要本地开发 MySQL、Redis、支持 TCP 发布及 WebSocket 订阅的 MQTT broker，以及 `MYSQL_DEV_ROOT_PASSWORD`。CI 在独立服务中提供它们，不需要真实云端密钥。
 
-测试文件同样接受 lint 检查。修复测试代码自身的错误，不掏空断言；确实无法适用的规则才使用说明原因的局部豁免。测试中的配置、时钟和边界数据必须明确，避免依赖当前机器的时间、时区或云端状态。
+测试启动器创建随机命名的 `stupig_e2e_*` 数据库，执行完整迁移并创建开发测试账号；复制应用源码到临时目录，构建后在 3142 端口启动独立 Nuxt。已有端口被占用时拒绝运行，不接管未知服务。结束时停止自己的进程树、删除本轮数据库并清理临时运行凭据。
 
-测试注释用于解释反例、时序及回归背景，不逐句复述断言。既有的个人吐槽、POV 和排障故事按[作者表达保留规则](../../.github/copilot-instructions.md#workflow-and-runtime)维护，不因测试整理而删除。
+OSS 和 CAPTCHA 在测试专用 Nuxt 配置中替换边界。浏览器保留真实 HTTPS 上传授权校验，测试将分片请求转发到本地字节接收器；真实 API、事务、发布和取消确认照常执行。密码登录和会话验证使用真实服务实现，不调用短信供应商。该流程不证明真实 OSS、ESA 缓存交付、短信或原生文件权限正常。MQTT 主题按本轮标识隔离。日志和 Playwright 产物位于被 Git 忽略的 `.dev/`；CI 只上传服务器日志、trace、截图和报告，不上传临时运行配置。
+
+当前五个浏览器场景覆盖密码登录及刷新、档案创建和编辑持久化、普通附件上传、在途上传取消并收到服务端确认、两个隔离浏览器上下文间的正文同步（排除 BroadcastChannel 旁路）。夹具只面向 Chromium，禁用 legacy 构建；服务器复用已安装的 SDK，不验证独立部署镜像依赖收集。真实云端与操作系统行为继续按下面矩阵验收。
 
 ## SSR、身份与时间
 
@@ -61,7 +63,7 @@ pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.
 - 云端参数只在需要真实存储演练时使用。不要把这些脚本指向生产；程序也要求 development 和开发目标桶。
 - 生产数据副本演练与生产维护切换另见 [Content 切换](../operations/content-cutover.md)。空库或合成数据成功不代替真实数据兼容验收。
 
-CI 的 [Check 工作流](../../.github/workflows/check.yml) 包含 lint、生成检查、两套类型检查、单测、MySQL 8.4 空库完整链和隔离演练。当前 CI 的 Content 存储边界为内存，不会自动验证真实 OSS、ESA、短信或浏览器操作。
+CI 的 [Check 工作流](../../.github/workflows/check.yml) 包含 lint、生成检查、应用／工具／浏览器测试类型检查、三组 Vitest、MySQL 8.4 空库完整链和隔离演练，以及独立的 Chromium 工作流测试。Content 云存储边界为内存，不会自动验证真实 OSS、ESA 或短信。
 
 ## 浏览器验收矩阵
 

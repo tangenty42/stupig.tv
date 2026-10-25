@@ -1,8 +1,5 @@
 import type { DraftReferenceSnapshot } from '~/utils/content/draft-reference-bridge'
-import { readFileSync } from 'node:fs'
-import { runInNewContext } from 'node:vm'
 import { createPinia, setActivePinia } from 'pinia'
-import ts from 'typescript'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { computed, effectScope, isRef, nextTick, reactive, ref, watch } from 'vue'
 import { get_error_status } from '~/composables/useApi'
@@ -11,11 +8,7 @@ import { useSyncedData } from '~/composables/useSyncedData'
 import { useSyncedState } from '~/composables/useSyncedState'
 import { useContentDraftStore } from '~/stores/contentDraft'
 
-// Run the actual setup and sync setter with the real draft store and query.
-// This guards their wiring without adding a DOM dependency or duplicating the
-// page's merge/deletion logic in a test-only component.
-const source = readFileSync(new URL('./edit.vue', import.meta.url), 'utf8')
-const setup = source.slice(source.indexOf('const title_reference_version ='), source.indexOf('\nasync function upload_picks(')).replaceAll('import.meta.client', 'true')
+// The session owns draft safety; actual page wiring is covered by browser workflows.
 const saved = { id: 7, markdown: 'saved', revision: 2, namespace_revision: 3, title_revision: 1, viewer_key: '1:true', has_private: false, private_readable: true }
 const fetcher = vi.fn<() => Promise<typeof saved>>()
 const listeners = new Map<string, () => Promise<void>>()
@@ -25,7 +18,7 @@ const drafts: ReturnType<typeof useContentDraftStore>[] = []
 const update = vi.fn()
 const remove = vi.fn()
 const rewrite = vi.fn()
-let confirmed: () => Promise<void>
+let confirmed: () => void
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -70,17 +63,28 @@ async function open() {
   const draft = useContentDraftStore(7)
   drafts.push(draft)
   const context = {
-    computed, ref, useSyncedState, useSyncedData, useStoryEditSession,
-    is_edit: ref(true), story_id: ref(7), draft_story_id: 7,
     content: { get_story_body: fetcher, get_title_reference_version: async () => ({ title_revision: 1 }), update_story: update, delete_story: remove, rewrite_draft_references: rewrite },
     error: vi.fn(), ok: vi.fn(), attachment_workspace: { data: ref(null), loading: ref(false) }, user: ref({ id: 1 }),
     attachment_panel: { uploads: { finalizing: reactive(new Set<string>()) } },
-    draft_store: draft, markdown_editor: ref({ validate: () => [], apply_reference_changes: vi.fn(() => true) }), content_markdown_config: ref({}),
-    story_markdown_template: () => '', datetime_build_string: () => '', time_context: ref({ now_ms: 0, timezone: 'UTC' }),
-    confirm_require: (_event: unknown, _message: string, action: () => Promise<void>) => { confirmed = action },
-    sync_resource: (type: string, id: string | number) => `${type}:${id}`,
+    markdown_editor: ref({ validate: () => [], apply_reference_changes: vi.fn(() => true) }), content_markdown_config: ref({}),
+    confirm_require: (_event: unknown, _message: string, action: () => void) => { confirmed = action },
   }
-  const editing = await runInNewContext(ts.transpile(`(async () => {${setup}; return editing})()`), context) as ReturnType<typeof useStoryEditSession>
+  const title_reference_version = ref<{ title_revision: number } | null>(null)
+  const editing = useStoryEditSession({
+    story_id: 7, draft_store: draft,
+    content: context.content as unknown as Parameters<typeof useStoryEditSession>[0]['content'],
+    user: context.user as Parameters<typeof useStoryEditSession>[0]['user'],
+    workspace: context.attachment_workspace.data, title_reference_version,
+    markdown_editor: context.markdown_editor as unknown as Parameters<typeof useStoryEditSession>[0]['markdown_editor'],
+    reference_sync_pending: () => context.attachment_panel.uploads.finalizing.size > 0 || context.attachment_workspace.loading.value,
+    markdown_config: () => context.content_markdown_config.value as ReturnType<Parameters<typeof useStoryEditSession>[0]['markdown_config']>,
+    new_markdown: () => '', toast: { ok: context.ok, error: context.error }, confirm_require: context.confirm_require,
+  })
+  await editing.load()
+  await useSyncedData('content_titles:all', context.content.get_title_reference_version, title_reference_version)
+  editing.initialize()
+  await useSyncedData('content_story:7', editing.fetch_story, editing.synced_story, editing.story_sync_pending,
+    { immediate: false, server: false, universal: false, on_error: () => {} })
   return { ... editing, draft, editor: context.markdown_editor, upload_finalizing: context.attachment_panel.uploads.finalizing, workspace_loading: context.attachment_workspace.loading }
 }
 
@@ -291,8 +295,6 @@ it.each(['success', 'failure'])('locks the body throughout a delayed reference r
   }
   await vi.waitFor(() => expect(f.reference_rewrite_pending.value).toBe(false))
   expect(f.draft.markdown).toBe(outcome === 'success' ? 'updated local' : 'saved local')
-  // Verify the actual page carries the session lock to the editor component.
-  expect(source).toContain(':readonly="reference_rewrite_pending"')
 })
 
 it('locks before a delayed body refresh and hands off continuously to reference rewriting', async () => {

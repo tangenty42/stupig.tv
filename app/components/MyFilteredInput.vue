@@ -42,7 +42,12 @@ function emit_filtered(raw: string) {
   // Vue re-patches el.value when the model changes, which moves the cursor
   // to the end; put it back where the edit happened.
   if (filtered !== raw && el) {
-    nextTick(() => el.setSelectionRange(sanitize(raw.slice(0, start)).length, sanitize(raw.slice(0, end)).length))
+    nextTick(() => {
+      // PrimeVue patches its internal raw value after emitting the update.
+      // Repair after that patch too, even if the parent model did not change.
+      el.value = filtered
+      el.setSelectionRange(sanitize(raw.slice(0, start)).length, sanitize(raw.slice(0, end)).length)
+    })
   }
 }
 

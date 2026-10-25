@@ -206,9 +206,8 @@
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { RedactionStroke } from '~/utils/content/redact'
-import { split_attachment_editable_name } from '@shared/content-markdown'
 import { settings } from '@shared/settings'
-import { normalize_editor_crop, suggested_image_name } from '~/utils/content/image-edit'
+import { normalize_editor_crop } from '~/utils/content/image-edit'
 import { paint_redaction_stroke } from '~/utils/content/redact'
 
 interface Props {
@@ -231,96 +230,13 @@ const emit = defineEmits<{
 const { error: toast_error } = useMyToast()
 const { confirm_require } = useMyConfirm()
 const { content } = useApi()
-const mode = ref<ImageSaveMode>(props.redacted ? 'redacted' : 'overwrite')
-const input_basis = ref<'avif' | 'original'>('avif')
-const base_ready = ref(false)
-const output_name = ref('')
-const original_name = computed(() => split_attachment_editable_name(props.attachment?.file_name ?? ''))
-const display_name = computed({
-  get: () => mode.value !== 'copy' ? original_name.value.editable : output_name.value,
-  set: (value: string) => {
-    if (mode.value === 'copy')
-      output_name.value = value
-  },
+const { mode, base_ready, original_name, display_name, save_confirmation,
+  source_url, source_error, source_loading, modes,
+  save, request_reset, save_disabled } = useImageEditorDialog(props, {
+  load: content.image_editor_source,
+  confirm: confirm_require,
+  save: (file, mode, name, basis) => emit('save', file, mode, name, basis),
 })
-const save_name = computed(() => mode.value !== 'copy' ? props.attachment?.file_name ?? '' : `${output_name.value}.avif`)
-const save_confirmation = computed(() => mode.value === 'overwrite'
-  ? `将覆盖原图，确认保存？`
-  : mode.value === 'copy'
-    ? `将另存为新图，确认保存？`
-    : `将另存为删减版，确认保存？`)
-const source_url = ref<string | null>(null)
-const source_error = ref('')
-const source_loading = ref(false)
-const original_url = ref<string | null>(null)
-const original_reason = ref('正在检查原图')
-let generation = 0
-const modes = [{ label: '另存为', value: 'copy' }, { label: '覆盖', value: 'overwrite' }]
-let name_mode: ImageSaveMode = 'copy'
-watch(mode, () => {
-  if (mode.value !== 'overwrite' && mode.value !== name_mode)
-    reset_output_name()
-})
-watch(() => [props.visible, props.attachment, props.redacted] as const, async ([open, attachment]) => {
-  const epoch = ++ generation
-  mode.value = props.redacted ? 'redacted' : 'overwrite'
-  input_basis.value = 'avif'
-  base_ready.value = false
-  source_url.value = original_url.value = null
-  source_error.value = ''
-  source_loading.value = false
-  original_reason.value = '正在检查原图'
-  reset_output_name()
-  if (! open || ! attachment?.id || ! attachment.url)
-    return
-  source_loading.value = true
-  try {
-    const version = new URL(attachment.url, window.location.origin).searchParams.get('version')!
-    const source = await content.image_editor_source(attachment.id, version, props.redacted)
-    if (epoch !== generation)
-      return
-    source_url.value = source.avif_url
-    original_url.value = source.original_url
-    original_reason.value = source.original_reason
-  }
-  catch (error) {
-    if (epoch === generation) {
-      source_error.value = error instanceof Error ? error.message : '无法读取图片'
-      original_reason.value = source_error.value
-    }
-  }
-  finally {
-    if (epoch === generation)
-      source_loading.value = false
-  }
-}, { immediate: true })
-function reset_output_name() {
-  name_mode = mode.value
-  const suggested = suggested_image_name(props.attachment?.file_name ?? 'image', mode.value === 'redacted' ? 'redacted' : 'copy')
-  output_name.value = split_attachment_editable_name(suggested).editable
-}
-function save(file: File) {
-  if (mode.value !== 'overwrite' && ! output_name.value.trim())
-    return
-  emit('save', file, mode.value, save_name.value, input_basis.value)
-}
-function request_reset(event: Event) {
-  if (! base_ready.value || ! original_url.value || props.pending)
-    return
-  const epoch = generation
-  confirm_require(event, '将丢弃未保存的编辑及操作记录，确认回退？', () => {
-    if (! props.visible || generation !== epoch || props.pending)
-      return
-    reset_source()
-  }, { acceptLabel: '确认回退' })
-}
-function reset_source() {
-  if (! base_ready.value || ! original_url.value)
-    return
-  source_url.value = `${original_url.value}&editor_reset=${++ generation}`
-  input_basis.value = 'original'
-}
-const save_disabled = computed(() => ! source_url.value || (mode.value !== 'overwrite' && ! output_name.value.trim()))
 
 const limits = settings.app.content.imageEditor
 const active_pointer = ref<number | null>(null)
@@ -769,7 +685,6 @@ function release_space() {
 }
 
 onBeforeUnmount(() => {
-  generation ++
   stop_key_listeners()
   hide_brush_preview()
   release_source()

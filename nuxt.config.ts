@@ -112,6 +112,7 @@ const app_loading_mask_script = `
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-06-22',
+  ignore: ['**/*.test.ts', '**/*.spec.ts'],
   alias,
 
   devServer: {
