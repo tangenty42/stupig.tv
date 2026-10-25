@@ -15,8 +15,8 @@ describe('content reference dialect', () => {
     ['att://%E5%9B%BE%E7%89%87/a.png', { kind: 'attachment', path: '图片/a.png' }],
     ['att://cards/', { kind: 'attachment', path: 'cards' }],
     ['content://其他档案', { kind: 'story', title: '其他档案' }],
-    ['@其他档案', { kind: 'legacy_story', title: '其他档案' }],
-    ['图片/a.png', { kind: 'legacy_attachment', path: '图片/a.png' }],
+    ['@其他档案', null],
+    ['图片/a.png', null],
   ])('parses %s without treating a path segment as a host', (destination, expected) => {
     expect(parse_content_ref(destination)).toEqual(expected)
   })
@@ -49,7 +49,8 @@ describe('content reference dialect', () => {
   it('keeps indented Markdown inside supported HTML wrappers and resumes after void HTML elements', () => {
     const source = '<div>\n    [](inside.png)\n</div>\n\n<embed src="external">\n\n[](outside.png)'
     expect(upgrade_legacy_refs(source)).toBe('<div>\n    [](att://inside.png)\n</div>\n\n<embed src="external">\n\n[](att://outside.png)')
-    expect(extract_attachment_names(source)).toEqual(['inside.png', 'outside.png'])
+    expect(extract_attachment_names(source)).toEqual([])
+    expect(extract_attachment_names(upgrade_legacy_refs(source))).toEqual(['inside.png', 'outside.png'])
   })
   it('rewrites a batch simultaneously, including folder roots, descendants, cover and default labels', () => {
     const markdown = '---\ncover: ![](att://X/n)\n---\n[X/n](att://X/n) [](att://Y/n) [](att://X) ![alt [](att://X/n)](att://X/img.png)'
@@ -69,18 +70,25 @@ describe('content reference dialect', () => {
     expect(parsed.meta?.cover).toBe('cover.jpg')
     expect(parsed.issues).toEqual([])
   })
-  it('reports missing attachments as warnings and bad/self/dead story references as errors', () => {
+  it('reports invalid attachment and story references as non-blocking warnings', () => {
+    expect(parse_story_markdown(document('[](att://a//b) [](content://a/b) [](content://本篇) [](content://不存在)'), config).meta).not.toBeNull()
     const issues = parse_story_markdown(document('[](att://gone) [](content://其他档案) [](content://本篇) [](content://不存在) [](content://a/b)'), config).issues
     expect(issues.map(item => [item.severity, item.message])).toEqual([
-      ['warning', '附件『gone』不存在'], ['error', '不允许自我引用'], ['error', '档案『不存在』不可引用'], ['error', '档案引用标题不合法，不能包含 /'],
+      ['warning', '附件『gone』不存在'], ['warning', '不允许自我引用'], ['warning', '档案『不存在』不可引用'], ['warning', '档案引用标题不合法，不能包含 /'],
     ])
   })
-  it('provides exact quick fix ranges, and lists legacy line numbers after compatibility is disabled', () => {
+  it('fixes explicit scheme casing without flagging ordinary Markdown targets', () => {
     const markdown = document('[](ATT://cards)\n[](cards) [](content://其他档案)\n[](@其他档案)')
-    const issues = lint_content_refs(markdown, { ... config, legacy_compat: false })
+    const issues = lint_content_refs(markdown, { ... config })
     const uppercase = issues.find(item => item.fix?.insert === 'att://cards')!
     expect(markdown.slice(uppercase.fix!.from, uppercase.fix!.to)).toBe('ATT://cards')
-    expect(issues.filter(item => item.source === 'legacy-ref').map(item => item.line)).toEqual([6, 7])
-    expect(issues.filter(item => item.source === 'legacy-ref').every(item => item.fix)).toBe(true)
+    expect(issues).toEqual([uppercase])
+    expect(uppercase).toMatchObject({ severity: 'warning', source: 'content-ref' })
+  })
+  it.each(['[](old.png)', '[](@其他档案)', '[文字][id]\n\n[id]: docs/file.pdf', '![图片](cards/missing.gif)'])('does not issue migration diagnostics or infer business references from %s', (body) => {
+    expect(lint_content_refs(document(body), config)).toEqual([])
+    expect(parse_story_markdown(document(body), config).meta).not.toBeNull()
+    expect(extract_attachment_names(body)).toEqual([])
+    expect(extract_story_reference_titles(body)).toEqual([])
   })
 })

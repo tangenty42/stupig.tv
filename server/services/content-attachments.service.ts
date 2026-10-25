@@ -1,8 +1,17 @@
+import type { StorageBucket } from '@server/lib/storage'
+
 import type { ContentStoryAttachment } from '@shared/types/content'
+
 import type { Connection, RowDataPacket } from 'mysql2/promise'
-import { ApiError } from '@server/errors/ApiError'
+
+import { createHash } from 'node:crypto'
+
 import { db } from '@server/lib/db'
-import { attachment_mime_type, attachment_name_conflict_message, compare_attachment_names } from '@shared/content-markdown'
+
+import { attachment_mime_type, compare_attachment_names, decrypted_attachment_name } from '@shared/content-markdown'
+import { attachment_owned_object_keys } from './content/attachment-objects'
+import { image_presentation } from './content/image-presentation'
+import { has_redacted_variant, redacted_presentation_row } from './content/redacted-variant'
 
 /**
  * The pool or a transaction connection. Structure changes run their
@@ -17,6 +26,17 @@ export type DbExecutor = Connection
 // uploads), so rename/move are pure row updates.
 
 interface AttachmentRow extends RowDataPacket {
+  redacted_avif_key?: string | null
+  redacted_jpeg_key?: string | null
+  redacted_revision?: number
+  redacted_metadata?: unknown
+  redacted_lqip_jpeg?: Buffer | null
+  original_key?: string | null
+  avif_key?: string | null
+  jpeg_key?: string | null
+  image_revision?: number
+  image_metadata?: unknown
+  lqip_jpeg?: Buffer | null
   id: number
   story_id: number | null
   is_folder: number
@@ -26,151 +46,72 @@ interface AttachmentRow extends RowDataPacket {
   file_size: number
   version: string
   encryption_key: string | null
+  is_private: number
+  storage_bucket: StorageBucket
+  storage_provider?: 'legacy' | 'aliyun'
+  oss_version_id?: string | null
 }
 
-/** Root-relative object URL (the static host prefixes it at render time). */
-export function attachment_object_url(object_key: string, version: string) {
-  const encoded = object_key.split('/').map(encodeURIComponent).join('/')
-  return `/${encoded}?version=${version}`
+/** Bind reads to object identity even when a replacement has the same ETag. */
+export function attachment_access_version(row: Pick<AttachmentRow, 'version' | 'object_key' | 'storage_bucket' | 'is_private' | 'storage_provider' | 'oss_version_id'> & { redacted_revision?: number }) {
+  const identity = [row.version, row.object_key, row.storage_bucket, Number(row.is_private)]
+  // Keep existing legacy URLs valid; new provider identity must invalidate them.
+  if (row.storage_provider === 'aliyun')
+    identity.push(row.storage_provider, row.oss_version_id ?? '')
+  if (Number(row.redacted_revision) > 0)
+    identity.push(String(row.redacted_revision))
+  return createHash('sha256').update(JSON.stringify(identity)).digest('hex')
 }
 
-function format_row(row: AttachmentRow): ContentStoryAttachment {
+/** Stable same-origin entry; no expiring credentials in payloads or Markdown. */
+export function attachment_object_url(row: Pick<AttachmentRow, 'id' | 'version' | 'object_key' | 'storage_bucket' | 'is_private' | 'storage_provider' | 'oss_version_id'>) {
+  return `/api/content/attachments/${Number(row.id)}?version=${attachment_access_version(row)}`
+}
+
+function format_row(row: AttachmentRow, private_readable = false): ContentStoryAttachment {
   const mime_type = row.mime_type ?? attachment_mime_type(row.file_name)
+  const redacted = Boolean(row.is_private && ! private_readable && has_redacted_variant(row))
+  const image = image_presentation(row, private_readable)
+  const redacted_image = has_redacted_variant(row) ? image_presentation({ ... redacted_presentation_row(row), is_private: false }, true) : undefined
   return {
+    ... (image ? { image } : {}),
+    has_redacted: has_redacted_variant(row),
+    is_redacted_view: redacted,
+    ... (redacted_image ? { redacted_image, redacted_url: `${attachment_object_url(row)}&role=redacted` } : {}),
+    id: Number(row.id),
     file_name: row.file_name,
     mime_type,
     file_size: Number(row.file_size),
     version: row.version,
     is_image: (mime_type ?? '').startsWith('image/'),
-    url: attachment_object_url(row.object_key ?? '', row.version),
+    url: row.is_private && ! private_readable ? null : attachment_object_url(row),
+    is_private: Boolean(row.is_private),
     is_encrypted: row.encryption_key !== null,
   }
 }
 
-const duplicate_entry_errno = 1062
-
-export async function list_scope_attachments(story_id: number) {
-  const [rows] = await db.execute<AttachmentRow[]>(
+export async function list_scope_attachments(story_id: number, executor: DbExecutor = db, private_readable = false) {
+  const [rows] = await executor.execute<AttachmentRow[]>(
     'SELECT * FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
     [story_id],
   )
   return rows
-    .map(format_row)
+    .map(row => format_row(row, private_readable))
     .sort((a, b) => compare_attachment_names(a.file_name, b.file_name))
 }
 
-/** Explicit folder paths of a scope, sorted (folders implied by file paths are derived client-side). */
-export async function list_scope_folders(story_id: number) {
-  const [rows] = await db.execute<AttachmentRow[]>(
-    'SELECT file_name FROM content_story_attachments WHERE story_id = ? AND is_folder = 1',
-    [story_id],
-  )
-  return rows
-    .map(row => row.file_name)
-    .sort(compare_attachment_names)
-}
-
-/**
- * Every path a scope holds, files and folders in one list, for the shared
- * collision rule (`attachment_path_taken`, which expands the implied folders
- * itself). Both kinds are rows of this table, so one query answers for both.
- */
-export async function list_scope_paths(story_id: number, executor: DbExecutor = db) {
-  const [rows] = await executor.execute<AttachmentRow[]>(
-    'SELECT file_name FROM content_story_attachments WHERE story_id = ?',
-    [story_id],
-  )
-  return rows.map(row => row.file_name)
-}
-
-export async function get_scope_attachment(story_id: number, file_name: string) {
-  const [rows] = await db.execute<AttachmentRow[]>(
-    'SELECT * FROM content_story_attachments WHERE story_id = ? AND file_name = ? AND is_folder = 0',
-    [story_id, file_name],
-  )
+export async function get_scope_attachment_by_id(story_id: number, id: number) {
+  const [rows] = await db.execute<AttachmentRow[]>('SELECT * FROM content_story_attachments WHERE story_id = ? AND id = ? AND is_folder = 0', [story_id, id])
   return rows[0] ? format_row(rows[0]) : null
 }
 
-/** Object keys of the given files (for object deletion after the rows go). */
-export async function get_scope_object_keys(story_id: number, file_names: string[]) {
-  if (! file_names.length)
-    return []
-  const placeholders = file_names.map(() => '?').join(',')
-  const [rows] = await db.execute<AttachmentRow[]>(
-    `SELECT object_key FROM content_story_attachments WHERE story_id = ? AND file_name IN (${placeholders}) AND is_folder = 0`,
-    [story_id, ... file_names],
-  )
-  return rows.flatMap(row => row.object_key ? [row.object_key] : [])
-}
-
-/** Per-file encryption keys of a scope (encrypted files only), for permitted story-detail viewers. */
-export async function list_scope_encryption_keys(story_id: number) {
-  const [rows] = await db.execute<AttachmentRow[]>(
-    'SELECT file_name, encryption_key FROM content_story_attachments WHERE story_id = ? AND is_folder = 0 AND encryption_key IS NOT NULL',
-    [story_id],
-  )
-  return new Map(rows.map(row => [row.file_name, row.encryption_key!]))
-}
-
 /** Every object key owned by a story (delete_story collects before removing rows). */
-export async function get_story_object_keys(story_id: number) {
-  const [rows] = await db.execute<AttachmentRow[]>(
-    'SELECT object_key FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
+export async function get_story_object_keys(story_id: number, executor: DbExecutor = db) {
+  const [rows] = await executor.execute<AttachmentRow[]>(
+    'SELECT object_key, original_key, avif_key, jpeg_key, redacted_avif_key, redacted_jpeg_key, storage_bucket, storage_provider FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
     [story_id],
   )
-  return rows.flatMap(row => row.object_key ? [row.object_key] : [])
-}
-
-/**
- * Whether any attachment row points at this object key. The task staging
- * sweeper checks before deleting an object an interrupted task produced: a key
- * that already landed on a row is live data, not an orphan.
- */
-export async function attachment_object_key_in_use(object_key: string) {
-  const [rows] = await db.execute<AttachmentRow[]>(
-    'SELECT id FROM content_story_attachments WHERE object_key = ? LIMIT 1',
-    [object_key],
-  )
-  return rows.length > 0
-}
-
-export interface AttachmentRowInput {
-  story_id: number
-  file_name: string
-  object_key: string
-  mime_type: string | null
-  file_size: number
-  version: string
-}
-
-export async function insert_attachment_row(row: AttachmentRowInput) {
-  await db.execute(
-    'INSERT INTO content_story_attachments (story_id, file_name, object_key, mime_type, file_size, version) VALUES (?, ?, ?, ?, ?, ?)',
-    [row.story_id, row.file_name, row.object_key, row.mime_type, row.file_size, row.version],
-  )
-}
-
-/** Rename/move: the display path changes, the object key stays. */
-export async function rename_attachment_row(story_id: number, old_file_name: string, new_file_name: string, executor: DbExecutor = db) {
-  try {
-    await executor.execute(
-      'UPDATE content_story_attachments SET file_name = ? WHERE story_id = ? AND file_name = ? AND is_folder = 0',
-      [new_file_name, story_id, old_file_name],
-    )
-  }
-  catch (ex) {
-    if ((ex as { errno?: unknown }).errno === duplicate_entry_errno)
-      throw new ApiError(409, attachment_name_conflict_message)
-    throw ex
-  }
-}
-
-/** In-place replace: fresh object metadata (and possibly a new display path). */
-export async function update_attachment_row_object(story_id: number, old_file_name: string, object: { file_name: string, object_key: string, mime_type: string | null, file_size: number, version: string }) {
-  await db.execute(
-    'UPDATE content_story_attachments SET file_name = ?, object_key = ?, mime_type = ?, file_size = ?, version = ? WHERE story_id = ? AND file_name = ? AND is_folder = 0',
-    [object.file_name, object.object_key, object.mime_type, object.file_size, object.version, story_id, old_file_name],
-  )
+  return rows.flatMap(row => attachment_owned_object_keys(row).map(key => ({ bucket: row.storage_bucket, key, ... (row.storage_provider === 'aliyun' ? { provider: 'aliyun' as const } : {}) })))
 }
 
 /** Raw file rows by name (encrypt/decrypt need object_key and encryption_key, which format_row drops). */
@@ -185,127 +126,46 @@ export async function list_scope_file_rows(story_id: number, file_names: string[
   return rows
 }
 
-/** Encrypt/decrypt: new name, new ciphertext/plaintext object, key set or cleared. */
-export async function update_attachment_row_encryption(id: number, fields: { file_name: string, object_key: string, file_size: number, version: string, encryption_key: string | null }, executor: DbExecutor = db) {
-  try {
-    await executor.execute(
-      'UPDATE content_story_attachments SET file_name = ?, object_key = ?, file_size = ?, version = ?, encryption_key = ? WHERE id = ?',
-      [fields.file_name, fields.object_key, fields.file_size, fields.version, fields.encryption_key, id],
-    )
-  }
-  catch (ex) {
-    if ((ex as { errno?: unknown }).errno === duplicate_entry_errno)
-      throw new ApiError(409, attachment_name_conflict_message)
-    throw ex
-  }
-}
-
-export async function delete_attachment_rows(story_id: number, file_names: string[]) {
-  if (! file_names.length)
-    return
-  const placeholders = file_names.map(() => '?').join(',')
-  await db.execute(
-    `DELETE FROM content_story_attachments WHERE story_id = ? AND file_name IN (${placeholders})`,
-    [story_id, ... file_names],
-  )
-}
-
 /** Removes every row of a story; the story row is already gone (no FK cascade). */
-export async function delete_story_attachment_rows(story_id: number) {
-  await db.execute(
+export async function delete_story_attachment_rows(story_id: number, executor: DbExecutor = db) {
+  await executor.execute(
     'DELETE FROM content_story_attachments WHERE story_id = ?',
     [story_id],
   )
 }
 
+/** Shared by cover reads and transactional change detection, including public redacted twins. */
+export function attachment_cover_url(file_name: string, rows: (Pick<AttachmentRow, 'id' | 'file_name' | 'object_key' | 'version' | 'storage_bucket' | 'storage_provider' | 'oss_version_id' | 'is_private'> & { is_folder?: number, encryption_key?: string | null, redacted_avif_key?: string | null, redacted_jpeg_key?: string | null, redacted_revision?: number })[]) {
+  const public_file = (name: string) => rows.find(row => row.file_name === name && ! row.is_folder && ! row.is_private && ! row.encryption_key && row.object_key)
+  const redacted = rows.find(row => row.file_name === file_name && row.is_private && ! row.is_folder && ! row.encryption_key && has_redacted_variant(row))
+  if (redacted)
+    return `${attachment_object_url(redacted)}&role=redacted`
+  const row = public_file(file_name) ?? (file_name.endsWith('.good') ? public_file(decrypted_attachment_name(file_name)) : undefined)
+  return row ? attachment_object_url(row) : null
+}
+
 /** Cover URLs for story list cards, keyed `story_id:file_name`. */
-export async function list_cover_urls(covers: { story_id: number, file_name: string }[]) {
+export async function list_cover_urls(covers: { story_id: number, file_name: string }[], executor: DbExecutor = db) {
   const urls = new Map<string, string>()
   if (! covers.length)
     return urls
-  const tuples = covers.map(() => '(?, ?)').join(',')
-  const [rows] = await db.execute<AttachmentRow[]>(
-    `SELECT story_id, file_name, object_key, version FROM content_story_attachments WHERE is_folder = 0 AND (story_id, file_name) IN (${tuples})`,
-    covers.flatMap(cover => [cover.story_id, cover.file_name]),
+  const candidates = covers.flatMap(cover => cover.file_name.endsWith('.good') ? [cover, { ... cover, file_name: decrypted_attachment_name(cover.file_name) }] : [cover])
+  const tuples = candidates.map(() => '(?, ?)').join(',')
+  const [rows] = await executor.execute<AttachmentRow[]>(
+    `SELECT id, story_id, file_name, object_key, version, storage_bucket, storage_provider, oss_version_id, is_private, redacted_avif_key, redacted_jpeg_key, redacted_revision FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND (story_id, file_name) IN (${tuples})`,
+    candidates.flatMap(cover => [cover.story_id, cover.file_name]),
   )
+  const by_story = new Map<number, AttachmentRow[]>()
   for (const row of rows) {
-    if (row.object_key)
-      urls.set(`${row.story_id}:${row.file_name}`, attachment_object_url(row.object_key, row.version))
+    const scope = Number(row.story_id)
+    const group = by_story.get(scope) ?? []
+    group.push(row)
+    by_story.set(scope, group)
+  }
+  for (const cover of covers) {
+    const url = attachment_cover_url(cover.file_name, by_story.get(cover.story_id) ?? [])
+    if (url)
+      urls.set(`${cover.story_id}:${cover.file_name}`, url)
   }
   return urls
-}
-
-/** Persists a folder (and any missing ancestors); existing paths are kept. */
-export async function create_folder_rows(story_id: number, folders: string[], executor: DbExecutor = db) {
-  for (const folder of folders) {
-    try {
-      // Folder rows are placeholders without an object; version is '' there.
-      await executor.execute(
-        'INSERT INTO content_story_attachments (story_id, is_folder, file_name, version) VALUES (?, 1, ?, \'\')',
-        [story_id, folder],
-      )
-    }
-    catch (ex) {
-      if ((ex as { errno?: unknown }).errno !== duplicate_entry_errno)
-        throw ex
-    }
-  }
-}
-
-/** Removes a folder row and its subfolder rows; refuses while files live beneath. */
-export async function delete_folder_rows(story_id: number, folder: string) {
-  const [files] = await db.execute<AttachmentRow[]>(
-    'SELECT id FROM content_story_attachments WHERE story_id = ? AND is_folder = 0 AND SUBSTRING(file_name, 1, ?) = ? LIMIT 1',
-    [story_id, folder.length + 1, `${folder}/`],
-  )
-  if (files.length)
-    throw new ApiError(409, '文件夹内仍有附件，无法删除')
-  await db.execute(
-    'DELETE FROM content_story_attachments WHERE story_id = ? AND is_folder = 1 AND (file_name = ? OR SUBSTRING(file_name, 1, ?) = ?)',
-    [story_id, folder, folder.length + 1, `${folder}/`],
-  )
-}
-
-/** Every row of a folder subtree (files and folders, the source row included), matched with the rows' own collation. */
-export async function list_folder_subtree_rows(story_id: number, source: string, executor: DbExecutor = db) {
-  const [rows] = await executor.execute<AttachmentRow[]>(
-    'SELECT * FROM content_story_attachments WHERE story_id = ? AND (file_name = ? OR SUBSTRING(file_name, 1, ?) = ?)',
-    [story_id, source, source.length + 1, `${source}/`],
-  )
-  return rows
-}
-
-/** Every row of a scope; move_folder derives the paths outside the subtree from this one listing. */
-export async function list_scope_rows(story_id: number, executor: DbExecutor = db) {
-  const [rows] = await executor.execute<AttachmentRow[]>(
-    'SELECT * FROM content_story_attachments WHERE story_id = ?',
-    [story_id],
-  )
-  return rows
-}
-
-/** Two-phase folder moves address rows by id: temp names first, final names once the contested namespace is vacated. */
-export async function rename_row_by_id(id: number, new_file_name: string, executor: DbExecutor = db) {
-  try {
-    await executor.execute(
-      'UPDATE content_story_attachments SET file_name = ? WHERE id = ?',
-      [new_file_name, id],
-    )
-  }
-  catch (ex) {
-    if ((ex as { errno?: unknown }).errno === duplicate_entry_errno)
-      throw new ApiError(409, attachment_name_conflict_message)
-    throw ex
-  }
-}
-
-/** Folder rows absorbed by a merge disappear; the target folder row already answers to the name. */
-export async function delete_rows_by_ids(ids: number[], executor: DbExecutor = db) {
-  if (! ids.length)
-    return
-  const placeholders = ids.map(() => '?').join(',')
-  await executor.execute(
-    `DELETE FROM content_story_attachments WHERE id IN (${placeholders})`,
-    ids,
-  )
 }

@@ -151,6 +151,7 @@ describe('require_auth_user credential checks', () => {
     await expect(require_auth_user(create_event())).resolves.toEqual({
       id: 7,
       session_id: 11,
+      token_generation_id: 21,
       username: 'tester',
       phone: '13800138000',
       avatar_file: null,

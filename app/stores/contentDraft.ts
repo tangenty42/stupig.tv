@@ -55,6 +55,7 @@ function create_draft_state(target_story_id: number | null) {
   const initialized = ref(false)
   const autosave_pending = ref(false)
   const storage_error = ref(false)
+  const edit_version = ref(0)
 
   let autosave_timer: ReturnType<typeof setTimeout> | null = null
 
@@ -175,13 +176,13 @@ function create_draft_state(target_story_id: number | null) {
     autosave_timer = setTimeout(persist_now, autosave_delay_ms)
   }
 
-  function initialize(current_markdown: string, current_revision: number | null) {
+  function initialize(current_markdown: string, current_revision: number | null, namespace_revision: number | null = null, title_revision: number | null = null) {
     clear_timer()
     markdown.value = upgrade_legacy_refs(current_markdown)
     database_markdown.value = markdown.value
     base_revision.value = current_revision
-    base_namespace_revision.value = null
-    base_title_revision.value = null
+    base_namespace_revision.value = namespace_revision
+    base_title_revision.value = title_revision
     draft_saved_at.value = null
     storage_error.value = false
     initialized.value = true
@@ -205,11 +206,13 @@ function create_draft_state(target_story_id: number | null) {
     schedule_persist()
   }
 
-  function mark_saved(current_markdown: string, current_revision: number) {
+  function mark_saved(current_markdown: string, current_revision: number, namespace_revision: number | null = null, title_revision: number | null = null) {
     clear_timer()
     markdown.value = upgrade_legacy_refs(current_markdown)
     database_markdown.value = markdown.value
     base_revision.value = current_revision
+    base_namespace_revision.value = namespace_revision
+    base_title_revision.value = title_revision
     remove_persisted()
   }
 
@@ -219,13 +222,23 @@ function create_draft_state(target_story_id: number | null) {
     initialized.value = false
   }
 
-  watch(markdown, schedule_persist)
+  /** Stop persistence while the editor's base is missing or inaccessible. */
+  function suspend() {
+    clear_timer()
+    initialized.value = false
+  }
+
+  watch([markdown, base_namespace_revision, base_title_revision], schedule_persist)
+  watch([markdown, base_revision, base_namespace_revision, base_title_revision], () => {
+    edit_version.value ++
+  }, { flush: 'sync' })
 
   return {
     markdown,
     base_revision,
     base_namespace_revision,
     base_title_revision,
+    edit_version,
     draft_saved_at,
     initialized,
     autosave_pending,
@@ -238,5 +251,6 @@ function create_draft_state(target_story_id: number | null) {
     mark_saved,
     persist_now,
     discard,
+    suspend,
   }
 }

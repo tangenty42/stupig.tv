@@ -1,0 +1,17 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "esa:PurgeCaches",
+        "esa:DescribePurgeTasks",
+        "esa:PreloadCaches",
+        "esa:DescribePreloadTasks",
+        "esa:GetPurgeQuota",
+        "esa:GetTieredCache"
+      ],
+      "Resource": "acs:esa:cn-hangzhou:1225000469589595:site/181553031729356"
+    }
+  ]
+}

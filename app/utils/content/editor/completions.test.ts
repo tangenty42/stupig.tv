@@ -3,8 +3,10 @@ import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/
 import { closeBrackets, CompletionContext, insertBracket } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
-import { reference_completion_source } from '~/utils/content/editor/completions'
+import { compare_reference_completions, reference_completion_source } from '~/utils/content/editor/completions'
 import { editor_close_brackets, editor_markdown_lang } from '~/utils/content/editor/language'
+import { attachment_item_presentation, folder_item_presentation } from '~/utils/content/item-presentation'
+import { project_workspace_rows } from '~/utils/content/workspace'
 
 function attachment(file_name: string, is_image: boolean): ContentStoryAttachment {
   return {
@@ -51,6 +53,25 @@ function labels(doc: string) {
 }
 
 describe('attachment destination completion', () => {
+  it('uses the workspace directory order in both source options and CodeMirror comparisons', () => {
+    const files = ['10.txt', '2.txt', '1.txt'].map(name => attachment(name, false))
+    const directories = ['z10', 'z2']
+    const source = reference_completion_source({ stories: () => [], story_id: () => 1, attachments: () => files, folders: () => directories })
+    const nodes = [
+      ... directories.map((name, index) => ({ id: index + 2, parent_id: 1, name, path: name, kind: 'folder' as const, version: 'v1' })),
+      ... files.map((file, index) => ({ id: index + 4, parent_id: 1, name: file.file_name, path: file.file_name, kind: 'file' as const, version: 'v1', attachment: file })),
+    ]
+    const expected = project_workspace_rows(nodes, [], 1, new Set()).map(row => row.name)
+    expect(expected).toEqual(['z2', 'z10', '1.txt', '2.txt', '10.txt'])
+    for (const doc of ['[](att://', '@']) {
+      const options = source(new CompletionContext(EditorState.create({ doc, extensions: [editor_markdown_lang] }), doc.length, false))!.options
+      expect(options.map(option => option.displayLabel)).toEqual(expected)
+      // CodeMirror applies its own comparator after source sorting; verify that
+      // step cannot restore lexicographic order (1, 10, 2) or put files first.
+      expect([... options].reverse().sort(compare_reference_completions).map(option => option.displayLabel)).toEqual(expected)
+    }
+  })
+
   it('offers files and folders together inside an image destination', () => {
     const result = labels('![](att://')
 
@@ -67,9 +88,45 @@ describe('attachment destination completion', () => {
     const options = complete('![](att://')!.options
     const by_label = (label: string) => options.find(option => option.label === label)
 
-    expect(by_label('cards')).toMatchObject({ type: 'folder', detail: '文件夹' })
-    expect(by_label('solo.png')).toMatchObject({ type: 'image', detail: '图片' })
-    expect(by_label('note.txt')).toMatchObject({ type: 'file', detail: '附件' })
+    expect(by_label('cards')).toMatchObject({ type: 'folder', presentation: folder_item_presentation() })
+    expect(by_label('solo.png')).toMatchObject({ type: 'image', presentation: attachment_item_presentation(attachments[3]!) })
+    expect(by_label('note.txt')).toMatchObject({ type: 'file', presentation: attachment_item_presentation(attachments[4]!) })
+    expect(options.every(option => option.detail === undefined)).toBe(true)
+  })
+
+  it('mixes private files into the attachment section and inserts logical att references', () => {
+    const private_source = reference_completion_source({
+      stories: () => [],
+      story_id: () => 1,
+      folders: () => [],
+      attachments: () => [
+        attachment('b-public.txt', false),
+        { ... attachment('c-private.png.good', true), is_private: true, url: '/api/content/private-attachments/11?version=v1' },
+        { ... attachment('a-denied.pdf.good', false), is_private: true, url: null },
+      ],
+    })
+    const state = EditorState.create({ doc: '@', extensions: [editor_markdown_lang] })
+    const result = private_source(new CompletionContext(state, 1, false))!
+    expect(result.options.map(option => option.label)).toEqual(['@a-denied.pdf.good', '@b-public.txt', '@c-private.png.good'])
+    expect(result.options.every(option => option.section === result.options[0]?.section)).toBe(true)
+    expect(result.options[0]).toMatchObject({ type: 'encrypted-denied', presentation: { icon: 'lucide:lock', tone: 'private' } })
+    expect(result.options[2]).toMatchObject({ type: 'encrypted', presentation: { icon: 'lucide:lock', tone: 'private' } })
+    expect(apply('@', '@c-private.png.good', '', private_source).doc).toBe('![](att://c-private.png.good)')
+    expect(apply('@', '@a-denied.pdf.good', '', private_source).doc).toBe('[](att://a-denied.pdf.good)')
+    expect(apply('[](att://', 'c-private.png.good', ')', private_source).doc).toBe('[](att://c-private.png.good)')
+  })
+
+  it('does not pair ordinary files with same-name private attachments in reference completion', () => {
+    const public_file = attachment('报告.pdf', false)
+    const private_file = { ... attachment('报告.pdf.good', false), is_private: true }
+    const reference_source = reference_completion_source({ stories: () => stories, story_id: () => 1, folders: () => [], attachments: () => [public_file, private_file] })
+    const state = EditorState.create({ doc: '@', extensions: [editor_markdown_lang] })
+    const options = reference_source(new CompletionContext(state, 1, false))!.options
+    expect(options.find(option => option.label === '@档案2')).toMatchObject({ displayLabel: '档案2', presentation: { icon: 'lucide:book-open', tone: 'muted' } })
+    expect(options.find(option => option.label === '@报告.pdf')).toMatchObject({ displayLabel: '报告.pdf', presentation: attachment_item_presentation(public_file) })
+    expect(options.every(option => option.detail === undefined)).toBe(true)
+    expect(apply('@', '@报告.pdf', '', reference_source).doc).toBe('[](att://报告.pdf)')
+    expect(apply('@', '@档案2', '', reference_source).doc).toBe('[](content://档案2)')
   })
 
   it('inserts a folder without a trailing slash, so the shorthand stays canonical', () => {
@@ -79,12 +136,12 @@ describe('attachment destination completion', () => {
   it('orders folders and files naturally, matching the attachment list', () => {
     const result = complete('![](att://cards/')!.options.map(option => option.label)
 
-    // 10.png after 2.png, and the folders before their own children.
+    // Folders first, then numeric file names in natural order.
     expect(result).toEqual([
+      'sub',
       '1.png',
       '2.png',
       '10.png',
-      'sub',
     ])
   })
 
@@ -152,7 +209,7 @@ describe('attachment destination completion', () => {
   it.each([
     ['[](@)', ['@档案2', '@cards', '@note.txt', '@solo.png']],
     ['![](att://)', ['cards', 'note.txt', 'solo.png']],
-    ['[](att://cards/)', ['1.png', '2.png', '10.png', 'sub']],
+    ['[](att://cards/)', ['sub', '1.png', '2.png', '10.png']],
     ['[](content://)', ['档案2']],
   ])('completes inside an already closed destination: %s', (doc, expected) => {
     expect(complete(doc, false, doc.length - 1)?.options.map(item => item.label)).toEqual(expected)
@@ -177,10 +234,10 @@ describe('attachment destination completion', () => {
 })
 
 /** Drive the real completion callback with CodeMirror state, without requiring a DOM. */
-function apply(before: string, label: string, after = '') {
-  const result = complete(before + after, false, before.length)!
+function apply(before: string, label: string, after = '', completion_source = source) {
+  let state = EditorState.create({ doc: before + after, extensions: [editor_markdown_lang] })
+  const result = completion_source(new CompletionContext(state, before.length, false))!
   const option = result.options.find(item => item.label === label)!
-  let state = EditorState.create({ doc: before + after })
   const view = {
     get state() { return state },
     dispatch(spec: Parameters<EditorState['update']>[0]) { state = state.update(spec).state },

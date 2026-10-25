@@ -1,0 +1,12 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cr:PullRepository"
+      ],
+      "Resource": "acs:cr:cn-guangzhou:1225000469589595:repository/tangenty42/stupig-tv"
+    }
+  ]
+}

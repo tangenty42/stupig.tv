@@ -5,15 +5,12 @@
     <MyIcon v-for="icon in compiled_icons" :key="icon" :name="icon" />
   </div>
 
-  <!-- v-html is safe here: markdown-it runs with html disabled. -->
-  <!-- eslint-disable-next-line vue/no-v-html -->
-  <div
+  <MyContentMarkdownBody
     v-if="body_markdown.trim()"
-    ref="story_body"
-    class="story-body"
+    ref="body_component"
+    :html="render_result.html"
     @click="on_preview_click"
     @keydown="on_preview_keydown"
-    v-html="render_result.html"
   />
   <p v-else-if="emptyText" class="py-10 text-center text-sm text-slate-400 dark:text-slate-500">
     {{ emptyText }}
@@ -23,29 +20,22 @@
     <MyImagePreview
       v-if="render_result.images.length"
       v-model:visible="preview_visible"
-      :images="lightbox_images"
+      :images="preview_images"
       :initial-index="preview_index"
     />
   </ClientOnly>
 </template>
 
 <script setup lang="ts">
-import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
-import type { RenderEnvironment } from '~/utils/content/markdown/types'
-import { strip_front_matter } from '@shared/content-markdown'
-import { attachment_is_media, open_decrypted_attachment, save_url_as } from '~/utils/content/attachment'
-import { decrypted_blob_url, decrypting_urls } from '~/utils/content/attachment-crypto'
-import { setup_carousels } from '~/utils/content/carousel'
-import { observe_cropped_images } from '~/utils/content/cropped-images'
-import { create_story_markdown } from '~/utils/content/markdown'
+import { attachment_for_link, attachment_is_media, save_url_as } from '~/utils/content/attachment'
 import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
-import { compensate_section_push, layout_heading_offsets, observe_heading_layout, wrap_heading_sections } from '~/utils/content/sticky-headings'
 
 const props = withDefaults(defineProps<{
   markdown: string
   storyId?: number | null
   attachments?: ContentStoryAttachment[]
+  folders?: string[]
   emptyText?: string
   /** Known stories so `[](@title)` references render as story cards. */
   stories?: ContentStorySummary[]
@@ -54,12 +44,16 @@ const props = withDefaults(defineProps<{
    * attachment list). Left off, the card renders inert.
    */
   folderOpenable?: boolean
+  /** Simulate a reader without secret access while retaining the author's editing data. */
+  publicView?: boolean
 }>(), {
   storyId: null,
   attachments: () => [],
+  folders: () => [],
   emptyText: '',
   stories: () => [],
   folderOpenable: false,
+  publicView: false,
 })
 
 const emit = defineEmits<{
@@ -74,65 +68,20 @@ const compiled_icons = story_compiled_icons
 
 const static_url = useStaticUrl()
 const api = useApi()
-const { error: toast_error, info: toast_info } = useMyToast()
-const body_markdown = computed(() => strip_front_matter(props.markdown))
+const { error: toast_error } = useMyToast()
 const preview_visible = ref(false)
 const preview_index = ref(0)
+const preview_images = ref<string[]>([])
 
-// href -> card metadata; undefined = not fetched yet, null = fetch failed.
-// useState so SSR-fetched cards cross the payload boundary and hydrate
-// identically, and so instances across pages share one cache.
-const video_cards = useState<Record<string, BilibiliVideoCard | null>>('content_bilibili_video_cards', () => ({}))
-
-// The renderer preset (source anchors, alerts, carousels, link/file/video/
-// story cards, code scroll wrappers, html wrappers) lives in
-// app/utils/content/markdown as markdown-it plugins; the getters below keep
-// renders reactive to the props and the video card cache.
-const md = create_story_markdown({
+const { body_markdown, render_result, preview_attachments } = useStoryPreview(() => props.markdown, {
   story_id: () => props.storyId,
   attachments: () => props.attachments,
+  folders: () => props.folders,
   stories: () => props.stories,
   static_url,
-  video_card: href => video_cards.value[href],
   folder_card_openable: () => props.folderOpenable,
+  public_view: () => props.publicView,
 })
-
-const render_result = computed(() => {
-  const environment: RenderEnvironment = { images: [], bilibili_hrefs: [] }
-  return {
-    html: md.render(body_markdown.value, environment),
-    images: environment.images,
-    bilibili_hrefs: environment.bilibili_hrefs,
-  }
-})
-
-async function fetch_missing_video_cards(hrefs: string[]) {
-  const missing = [... new Set(hrefs)].filter(href => ! (href in video_cards.value))
-  if (! missing.length) {
-    return
-  }
-  try {
-    const cards = await api.content.get_bilibili_video_cards(missing)
-    video_cards.value = { ... video_cards.value, ... cards }
-  }
-  catch {
-    // The request itself failed (offline, server down): keep the
-    // placeholder cards; the next render change retries the fetch.
-  }
-}
-
-// SSR: Vue awaits onServerPrefetch hooks before rendering, so the first
-// paint carries real cards; upstream responses are Redis-cached server-side,
-// so warm previews add no upstream latency.
-onServerPrefetch(() => fetch_missing_video_cards(render_result.value.bilibili_hrefs))
-
-// Client: hydration finds the hrefs already in the serialized state and
-// skips; later link-set changes (editor typing, SPA navigation) refetch.
-watch(() => render_result.value.bilibili_hrefs, (hrefs) => {
-  if (import.meta.client) {
-    void fetch_missing_video_cards(hrefs)
-  }
-}, { immediate: true })
 
 /** The folder a click/keypress targets, or null when it is not a folder card. */
 function folder_from_event(event: Event) {
@@ -142,146 +91,16 @@ function folder_from_event(event: Event) {
   return event.target.closest<HTMLElement>('[data-folder-card]')?.dataset.folderCard ?? null
 }
 
-const story_body = useTemplateRef<HTMLElement>('story_body')
+const body_component = useTemplateRef<{ el: HTMLElement | null }>('body_component')
+const story_body = computed(() => body_component.value?.el ?? null)
 
-// Encrypted attachments whose key shipped with the payload, keyed by their
-// (static) ciphertext URL as rendered into img src / link href.
-const encrypted_by_url = computed(() => {
-  const map = new Map<string, ContentStoryAttachment>()
-  for (const attachment of props.attachments) {
-    if (attachment.is_encrypted && attachment.encryption_key)
-      map.set(static_url(attachment.url), attachment)
-  }
-  return map
+/** All readable attachments use the same authenticated resolver. */
+const plain_attachments_by_url = computed(() => new Map(preview_attachments.value.filter(file => file.url).map(file => [static_url(file.url), file])))
+watch(() => props.publicView, () => {
+  preview_visible.value = false
+  preview_images.value = []
+  preview_index.value = 0
 })
-
-/** Plaintext attachments, keyed by their (static) object URL; media open inline, the rest download. */
-const plain_attachments_by_url = computed(() => {
-  const map = new Map<string, ContentStoryAttachment>()
-  for (const attachment of props.attachments) {
-    if (! attachment.is_encrypted)
-      map.set(static_url(attachment.url), attachment)
-  }
-  return map
-})
-
-/** Ciphertext URL → decrypted blob URL, filled as decryptions land. */
-const decrypted_urls = reactive(new Map<string, string>())
-
-/** The lightbox shows decrypted blob URLs where available. */
-const lightbox_images = computed(() => render_result.value.images.map(url => decrypted_urls.get(url) ?? url))
-
-/** Swaps every encrypted image's ciphertext src for its decrypted blob URL. */
-function setup_encrypted_images(body: HTMLElement) {
-  for (const image of body.querySelectorAll<HTMLImageElement>('img[data-encrypted]')) {
-    const src = image.getAttribute('src') ?? ''
-    const attachment = encrypted_by_url.value.get(src)
-    if (! attachment?.encryption_key)
-      continue
-    // Remember the ciphertext URL for the full/abridged toggle. The lookup
-    // must gate this: on an in-place refresh the src may already be the
-    // decrypted blob (or the twin), which is NOT a valid cache key.
-    image.dataset.cipherUrl = src
-    void decrypted_blob_url(src, attachment.encryption_key, attachment.mime_type)
-      .then((blob_url) => {
-        decrypted_urls.set(src, blob_url)
-        if (! image.isConnected)
-          return
-        // A viewer who toggled to the abridged twin mid-decrypt keeps it.
-        const scope = image.closest('.encrypted-block, .carousel-item')
-        if (scope instanceof HTMLElement && scope.dataset.abridged === '1')
-          return
-        image.src = blob_url
-        image.removeAttribute('hidden')
-        // Swap the 解密中 chrome for the decrypted picture: the brand strip is
-        // a sibling (carousel item) or under the block wrapper (inline image),
-        // and the loader sits in the frame (carousel) or beside it (block).
-        const brand = scope?.querySelector('.encrypted-block-brand-text')
-        if (brand)
-          brand.textContent = '机密附件'
-        scope?.querySelector('.encrypted-image-loading')?.remove()
-      })
-      .catch(() => toast_error('加密图片解密失败'))
-  }
-}
-
-/** Toggles an encrypted card/image between the full version and its plaintext 删减版 twin. */
-function on_encrypted_toggle(toggle: HTMLElement) {
-  const host = toggle.closest<HTMLElement>('.encrypted-block[data-twin-url], a[data-twin-url]')
-  const twin_url = host?.dataset.twinUrl
-  if (! host || ! twin_url)
-    return
-  const to_abridged = host.dataset.abridged !== '1'
-  host.dataset.abridged = to_abridged ? '1' : ''
-  toggle.textContent = to_abridged ? '查看完整版' : '查看删减版'
-  const image = host.querySelector<HTMLImageElement>('img[data-encrypted]')
-  if (! image)
-    return
-  const loader = host.querySelector<HTMLElement>('.encrypted-image-loading')
-  if (to_abridged) {
-    if (loader)
-      loader.style.display = 'none'
-    image.src = twin_url
-    image.removeAttribute('hidden')
-    return
-  }
-  const cipher = image.dataset.cipherUrl ?? ''
-  const blob_url = decrypted_urls.get(cipher)
-  if (blob_url) {
-    // The decryption landed while viewing the twin.
-    image.src = blob_url
-    image.removeAttribute('hidden')
-    loader?.remove()
-    const brand = host.querySelector('.encrypted-block-brand-text')
-    if (brand)
-      brand.textContent = '机密附件'
-    return
-  }
-  // Still decrypting: back to the loader.
-  if (loader)
-    loader.style.display = ''
-  image.setAttribute('hidden', '')
-}
-
-/** Marks an encrypted file card as decrypting (loader icon, tag suffix); returns the restore fn. */
-function mark_card_decrypting(link: HTMLAnchorElement) {
-  const tag = link.querySelector('.file-card-encrypted-tag')
-  const icon = link.querySelector('.file-card-icon')
-  const tag_text = tag?.textContent
-  const icon_class = icon?.getAttribute('class') ?? null
-  if (tag)
-    tag.textContent = '机密附件·解密中'
-  icon?.setAttribute('class', 'file-card-icon iconify i-lucide:loader-circle animate-spin')
-  return () => {
-    if (tag && tag_text)
-      tag.textContent = tag_text
-    if (icon && icon_class)
-      icon.setAttribute('class', icon_class)
-  }
-}
-
-/** Opens an encrypted file card's plaintext, saving it when it is not viewable media. */
-async function open_encrypted(link: HTMLAnchorElement) {
-  const attachment = encrypted_by_url.value.get(link.href)
-  if (! attachment?.encryption_key)
-    return
-  if (decrypting_urls.has(link.href)) {
-    toast_info('解密中，请稍候')
-    return
-  }
-  const restore = mark_card_decrypting(link)
-  try {
-    // Called, not awaited-then-called: the helper opens the tab for media as its
-    // first statement, which has to happen inside this click's gesture.
-    await open_decrypted_attachment(link.href, attachment)
-  }
-  catch {
-    toast_error('加密附件解密失败')
-  }
-  finally {
-    restore()
-  }
-}
 
 /** Saves a plaintext attachment under its row name instead of opening the nameless object URL. */
 async function download_plain(attachment: ContentStoryAttachment) {
@@ -297,53 +116,6 @@ async function download_plain(attachment: ContentStoryAttachment) {
   }
 }
 
-// Post-render DOM behaviors (carousel wiring, sticky heading sections,
-// cropped-image markers) live in app/utils/content/*; here we only
-// orchestrate them after each render and keep their cleanup handles.
-let cleanup_crop_observer: (() => void) | null = null
-let cleanup_body_observer: (() => void) | null = null
-
-function refresh_story_body() {
-  cleanup_crop_observer?.()
-  cleanup_crop_observer = null
-  cleanup_body_observer?.()
-  cleanup_body_observer = null
-  const body = story_body.value
-  if (! body) {
-    return
-  }
-  wrap_heading_sections(body)
-  compensate_section_push(body)
-  layout_heading_offsets(body)
-  setup_carousels(body)
-  setup_encrypted_images(body)
-  cleanup_crop_observer = observe_cropped_images(body)
-  cleanup_body_observer = observe_heading_layout(body)
-}
-
-// Re-run the DOM behaviors once the rendered HTML is in the DOM, and
-// whenever it re-renders.
-watch(render_result, () => {
-  nextTick(refresh_story_body)
-}, { flush: 'post' })
-
-function on_window_resize() {
-  if (story_body.value) {
-    layout_heading_offsets(story_body.value)
-  }
-}
-
-onMounted(() => {
-  nextTick(refresh_story_body)
-  window.addEventListener('resize', on_window_resize)
-})
-
-onUnmounted(() => {
-  cleanup_body_observer?.()
-  cleanup_crop_observer?.()
-  window.removeEventListener('resize', on_window_resize)
-})
-
 function preview_image_from_event(event: Event) {
   if (! (event.target instanceof HTMLElement)) {
     return null
@@ -357,44 +129,26 @@ function open_image_preview(image: HTMLImageElement) {
     return
   }
   preview_index.value = index
+  preview_images.value = [... render_result.value.images]
+  story_body.value?.querySelectorAll<HTMLImageElement>('img[data-preview-index]').forEach((item) => {
+    const item_index = Number(item.dataset.previewIndex)
+    if (Number.isInteger(item_index) && item_index >= 0 && item_index < preview_images.value.length)
+      preview_images.value[item_index] = item.src
+  })
   preview_visible.value = true
 }
 
 function on_preview_click(event: MouseEvent) {
-  if (event.target instanceof HTMLElement) {
-    const toggle = event.target.closest<HTMLElement>('.encrypted-toggle')
-    if (toggle) {
-      event.preventDefault()
-      on_encrypted_toggle(toggle)
-      return
-    }
-    const encrypted_link = event.target.closest<HTMLAnchorElement>('a[data-encrypted]')
-    if (encrypted_link) {
-      event.preventDefault()
-      // Abridged mode hands over the plaintext twin; media stay viewable.
-      if (encrypted_link.dataset.abridged === '1' && encrypted_link.dataset.twinUrl) {
-        const twin = plain_attachments_by_url.value.get(encrypted_link.dataset.twinUrl)
-        if (twin && ! attachment_is_media(twin)) {
-          void download_plain(twin)
-          return
-        }
-        window.open(encrypted_link.dataset.twinUrl, '_blank', 'noopener,noreferrer')
-        return
-      }
-      void open_encrypted(encrypted_link)
-      return
-    }
-  }
   const image = preview_image_from_event(event)
   if (image) {
     open_image_preview(image)
     return
   }
   // A plain attachment link saves under its row name; media stay viewable and
-  // keep their native tab navigation, and encrypted cards were handled before.
+  // keep their native tab navigation.
   if (event.target instanceof HTMLElement) {
     const link = event.target.closest<HTMLAnchorElement>('a[href]')
-    const attachment = link ? plain_attachments_by_url.value.get(link.href) : undefined
+    const attachment = link ? attachment_for_link(plain_attachments_by_url.value, link) : undefined
     if (attachment && ! attachment_is_media(attachment)) {
       event.preventDefault()
       void download_plain(attachment)
@@ -410,14 +164,6 @@ function on_preview_click(event: MouseEvent) {
 function on_preview_keydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' && event.key !== ' ') {
     return
-  }
-  if (event.target instanceof HTMLElement) {
-    const toggle = event.target.closest<HTMLElement>('.encrypted-toggle')
-    if (toggle) {
-      event.preventDefault()
-      on_encrypted_toggle(toggle)
-      return
-    }
   }
   const image = preview_image_from_event(event)
   if (image) {
@@ -590,7 +336,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 .story-body :deep(.link-chip) .link-card-tag {
-  @apply mr-[0.25em];
+  @apply mr-[0.4em];
 }
 
 .story-body :deep(.link-chip) .link-card-label {
@@ -598,7 +344,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 .story-body :deep(.link-chip) .link-card-open {
-  @apply ml-[0.25em];
+  @apply ml-[0.4em];
 }
 
 /* Private (机密) content chrome, in the same dashed family as the link cards
@@ -714,20 +460,6 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply block rounded-t-none;
 }
 
-/* A toggle bar below takes over the bottom edge, so the caption squares off. */
-.story-body :deep(.encrypted-block .carousel-caption:has(+ .encrypted-toggle-bar)) {
-  @apply rounded-b-none;
-}
-
-/* The same for the frame itself: with a toggle bar closing the card below, the
-   image's rounded bottom corners would leave the amber background showing
-   through at each corner — a notch no part of the card's silhouette explains.
-   Only a captioned carousel item squared this before (its own rule), which
-   left it looking wrong for a plain encrypted image. */
-.story-body :deep(.encrypted-block .img-frame:has(+ .encrypted-toggle-bar)) {
-  @apply rounded-b-none;
-}
-
 /* The frame shrink-wraps its image (inline-block w-fit); with the img hidden
    during decryption it would collapse around the loader — stretch it instead. */
 .story-body :deep(.img-frame:has(> .encrypted-image-loading)) {
@@ -786,30 +518,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 .story-body :deep(.file-card-encrypted-tag) {
-  @apply mr-1 font-medium text-amber-600 dark:text-amber-400;
-}
-
-/* The full/abridged toggle bar closes an encrypted card at the bottom. On the
-   image card it mirrors the brand cap: dashed frame on left/right/bottom only.
-   Inside a file card (which has its own frame) it stays a plain divider. */
-.story-body :deep(.file-card-toggleable) {
-  @apply flex-wrap;
-}
-
-.story-body :deep(.encrypted-toggle-bar) {
-  @apply flex w-full basis-full justify-end;
-}
-
-.story-body :deep(.file-card .encrypted-toggle-bar) {
-  @apply mt-1 border-t border-dashed border-amber-400 pt-1 dark:border-amber-600;
-}
-
-.story-body :deep(.encrypted-block .encrypted-toggle-bar) {
-  @apply rounded-b-sm border border-t-0 border-dashed border-amber-400 bg-amber-50/40 px-2 py-1 dark:border-amber-600 dark:bg-amber-950/20;
-}
-
-.story-body :deep(.encrypted-toggle) {
-  @apply cursor-pointer select-none text-xs font-medium leading-4 text-amber-600 transition-colors duration-300 hover:text-amber-500 dark:text-amber-400 dark:hover:text-amber-300;
+  @apply ml-1 font-medium text-amber-600 dark:text-amber-400;
 }
 
 /* Video card and story reference card: vertical blocks like Bilibili's own
@@ -993,7 +702,8 @@ function on_preview_keydown(event: KeyboardEvent) {
    story covers, rating badges) carry .built-in-img and opt out — e.g. the
    rating badge's h-6 would otherwise lose to the min-h floor. */
 .story-body :deep(img:not(.built-in-img)) {
-  @apply max-w-full max-h-64 min-w-32 min-h-32 cursor-zoom-in rounded-sm object-cover object-top transition-[filter] duration-300;
+  /* LQIP width/height attributes reserve the aspect ratio, not a fixed size. */
+  @apply w-auto h-auto max-w-full max-h-64 min-w-32 min-h-32 cursor-zoom-in rounded-sm object-cover object-top transition-[filter] duration-300;
 }
 
 /* The frame owns the image's corner shape and clips to it, so every layer
@@ -1011,6 +721,60 @@ function on_preview_keydown(event: KeyboardEvent) {
 /* Clipped by the frame, so the image carries no radius of its own here. */
 .story-body :deep(.img-frame > img) {
   @apply block rounded-none;
+  opacity: 0;
+  transition: opacity 200ms ease, filter 300ms ease;
+}
+
+.story-body :deep(.image-loading-mask) {
+  @apply pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-100/70 text-xl text-slate-500 dark:bg-slate-900/70 dark:text-slate-400;
+}
+
+.story-body :deep(.image-loading-mask .iconify) {
+  @apply animate-spin motion-reduce:animate-none;
+}
+
+.story-body :deep(.img-frame:is([data-image-loaded], [data-image-error]) .image-loading-mask) {
+  @apply hidden;
+}
+
+.story-body :deep(.img-frame[data-lqip]::before) {
+  content: '';
+  @apply pointer-events-none absolute inset-0;
+  background: var(--content-lqip) center / cover no-repeat;
+  filter: blur(0.5rem);
+  transform: scale(1.05);
+  transition: opacity 200ms ease;
+}
+
+.story-body :deep(.img-frame[data-lqip]:is([data-image-loaded], [data-image-error])::before) {
+  opacity: 0;
+}
+
+.story-body :deep(.img-frame:is([data-image-loaded], [data-image-error]) > img) {
+  opacity: 1;
+}
+
+.story-body :deep(.image-unavailable) {
+  @apply hidden aspect-video w-64 max-w-full items-center justify-center bg-slate-200 text-3xl text-slate-400 dark:bg-slate-800 dark:text-slate-500;
+}
+
+.story-body :deep(.img-frame[data-image-error]) {
+  @apply max-w-full;
+}
+
+.story-body :deep(.img-frame[data-image-error] > img) {
+  @apply hidden;
+}
+
+.story-body :deep(.img-frame[data-image-error] > .image-unavailable) {
+  @apply flex;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-body :deep(.img-frame[data-lqip]::before),
+  .story-body :deep(.img-frame > img) {
+    transition: none;
+  }
 }
 
 /* Bottom-anchored gradient cover, shown only when JS confirms the image is
@@ -1020,7 +784,7 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply pointer-events-none absolute inset-x-0 bottom-0 hidden items-end justify-center bg-gradient-to-t from-slate-950/90 via-slate-900/50 to-transparent px-2 pb-2 pt-16 text-center text-xs font-medium text-white;
 }
 
-.story-body :deep(.img-frame[data-cropped] .long-img-cover) {
+.story-body :deep(.img-frame[data-cropped][data-image-loaded] .long-img-cover) {
   @apply flex;
 }
 

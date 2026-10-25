@@ -10,6 +10,7 @@ export interface RedactionPoint {
 
 /** One continuous drag: the brush width is captured when it starts. */
 export interface RedactionStroke {
+  erase?: boolean
   width: number
   points: RedactionPoint[]
 }
@@ -35,6 +36,7 @@ export function paint_redaction_stroke(ctx: CanvasRenderingContext2D, stroke: Re
   if (! points.length)
     return
   ctx.save()
+  ctx.globalCompositeOperation = stroke.erase ? 'destination-out' : 'source-over'
   ctx.fillStyle = redaction_ink
   ctx.strokeStyle = redaction_ink
   ctx.lineCap = 'round'

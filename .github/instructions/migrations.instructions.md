@@ -1,30 +1,20 @@
 ---
-description: "Use when creating or modifying SQL migrations, schema changes, or database structure in this Nuxt project."
+description: "Use when changing SQL/TypeScript migrations, their frozen helpers, migration tooling or schema."
 name: "Database Migrations"
-applyTo: "**/*.sql"
+applyTo: "**/*.sql,migrations/**/*.ts,scripts/migration/**/*.ts"
 ---
 
-# Database Migration Guidelines
+# Migration rules
 
-- The `migrations/` chain is the only schema source: read the files in filename order to understand the current structure (the init migration is the baseline, later ones are deltas). There is no reference dump.
-- Add a new file with a clear timestamp prefix, e.g. `20261008160000_content_tasks.sql`. Never edit an applied migration — its checksum is pinned and a mismatch aborts the run. **This includes comments and whitespace**: the checksum is a sha256 of the whole file, and a comment-only edit already took production down once (2026-10-09). Add the new file's sha256 to `scripts/frozen-migrations.test.ts` in the same commit; that list is what makes an edit visible in review, since CI replays on a fresh database and therefore cannot notice.
-- The baseline's comment names `stupig_tv.sql` (the historical hand-exported dump, since deleted). That reference is frozen along with the rest of the file — do not "clean it up"; the note lives here instead.
-- Table names are `snake_case`.
-- Boolean fields are `tinyint(1)` and must be converted with `Boolean()` before returning to the client.
-- Timestamps are `TIMESTAMP` stored in UTC (`created_at`, `updated_at` with `DEFAULT CURRENT_TIMESTAMP` / `ON UPDATE CURRENT_TIMESTAMP`).
-- MySQL timezone is forced to UTC on every connection (`SET time_zone = "+00:00"`).
-- Always include safe rollbacks or reversibility where possible. Avoid destructive changes without explicit user approval.
-- If a migration requires deployment changes, update the relevant YAML layer, the `.env.*.layer` templates, and `config/lib/schema.ts`/loader tests together. Migrations load and validate only the `db` subtree via `@config/lib/loader`; do not require unrelated application secrets.
-- A database that already has business tables but no `schema_migrations` records is auto-baselined on `pnpm migrate` (registered as applied, not replayed) — this keeps container startup self-healing. A genuinely empty database always executes migrations normally, so never rely on auto-baseline to skip a new migration: every migration file must be written to execute cleanly on a schema that matches all previously applied migrations.
-
-## Recovering from `已应用的迁移文件被改动或删除了`
-
-The runner found a recorded file whose bytes no longer match. Decide which of the two cases it is, then fix *that* one — they need opposite repairs:
-
-1. **Line-ending artifact.** Recompute the sha256 of the file with CRLF endings and compare it against the recorded value. If they match, the record came from a Windows checkout from before `.gitattributes` (`* text=auto eol=lf`) normalized the tree: the content never changed, only its line endings did. Update that row to the canonical (LF) sha256:
-   `UPDATE schema_migrations SET checksum = '<sha256 of the file as committed>' WHERE filename = '<file>';`
-
-   Then **normalize the working copy as well** (`rm <file> && git checkout -- <file>` — a plain `git checkout --` will not rewrite a file git already considers clean, but deleting it first forces a fresh, correctly-ended materialization). Leave this step out and the next Windows-side `pnpm migrate` records the CRLF hash again. Any migration applied from Windows can be in this state, not just the baseline.
-2. **A real edit.** Restore the file to its pinned bytes (`git show <commit>:migrations/<file> > <file>`) and **do not** touch the record. Updating the record instead would erase the only evidence that a database's schema may no longer match the chain that claims to describe it.
-
-`scripts/frozen-migrations.test.ts` holds the canonical hashes, so `pnpm test` answers the question "was it edited?" without a database. It hashes the LF form of each file, because that — not a possibly stale working copy — is what a Linux deployment reads.
+- `migrations/` in filename order is the only schema source. There is no separate reference dump. SQL and TypeScript entries share one version chain.
+- Add timestamped migrations after all applied/started entries. Never edit applied SQL, including whitespace/comments. Never change a started TS entry or its bundled dependency implementations. The historical baseline comment naming the deleted dump is frozen too.
+- Pin SQL hashes and complete TS bundle digests in `scripts/migration/frozen.test.ts`. Test fresh replay, resumability and frozen artifacts; a fresh DB alone cannot detect historical edits.
+- TS entries follow `20261024020000_migration_runs.sql` and use `define_migration` from `scripts/migration/contract.ts`. Keep imports side-effect free and plan/verify read-only. Maintenance is the default execution mode. Use `ctx.transaction` for atomic effects/checkpoints; reconcile uncertain external outcomes instead of blindly repeating writes.
+- `migration_runs` is the single current ledger; completed status and `finished_at` constitute a receipt. The legacy table is adopted/verified/dropped during upgrade and must not be recreated.
+- Automatic adoption of historical business DBs without receipts is limited through `20261024010000_content_preload.sql`. Later SQL and all TS scripts must execute. Explicit baseline requires a `--through` boundary within the allowed historical range. Empty databases execute the chain.
+- A failed SQL step may have committed partially: inspect before using explicit retry. Do not fabricate completion, delete failed receipts, or edit checksums to hide a real source change.
+- Checksum repair is permitted only after proving a line-ending-only difference against canonical bytes and recorded hashes; repair the actual ledger and normalize the working copy. For real edits, restore canonical bytes and preserve the receipt. Follow the detailed [recovery procedure](../../docs/operations/migrations.md).
+- Use snake_case table names, UTC timestamps and `tinyint(1)` booleans. DB connections force UTC; convert booleans at API boundaries.
+- Maintain reversibility/backup procedures where possible. Destructive operations require explicit user authorization. A code rollback alone is not a data rollback; do not promise a generic `down` that does not exist.
+- Keep configuration/schema/template changes consistent when needed. Core migration tooling validates DB configuration only; scripts may load their explicitly required OSS/image subtrees, without unrelated JWT/MQTT/SMS credentials.
+- Packaging, maintenance windows, baseline limits and recovery commands: [migration operations](../../docs/operations/migrations.md). Existing Content data conversion: [Content cutover](../../docs/operations/content-cutover.md).

@@ -17,6 +17,54 @@
   color-scheme: dark;
 }
 
+/* Animate controls in both directions without affecting modal/overlay lifecycles. */
+html :is(button, input, select, textarea, .p-inputwrapper, .p-component[data-p-disabled], .p-slider, .p-listbox, [role='button'], [role='menuitem'], [role='option']) {
+  transition-property: color, background-color, border-color, outline-color, box-shadow, opacity;
+  transition-duration: var(--p-transition-duration, 150ms);
+  transition-timing-function: ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html :is(button, input, select, textarea, .p-inputwrapper, .p-component[data-p-disabled], .p-slider, .p-listbox, [role='button'], [role='menuitem'], [role='option']) {
+    transition-duration: 0s;
+  }
+}
+
+/* Shared icon/title layout for attachment rows and CodeMirror references. */
+.content-item {
+  @apply flex min-w-0 items-center gap-2 font-sans text-sm;
+}
+
+.content-item > .content-item-icon {
+  @apply h-4 w-4 shrink-0 text-base;
+}
+
+.content-item > .content-item-title,
+.content-item > .cm-completionLabel {
+  /* Keep font metrics independent of CodeMirror's tighter option line-height. */
+  @apply min-w-0 flex-1 truncate leading-5;
+}
+
+.content-item-muted > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+  @apply text-slate-400 dark:text-slate-500;
+}
+
+.content-item-private > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+  @apply text-amber-600 dark:text-amber-400;
+}
+
+.content-item-redacted > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+  @apply text-sky-600 dark:text-sky-400;
+}
+
+.content-item-active > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+  @apply text-primary;
+}
+
+.content-item-error > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+  @apply text-red-500 dark:text-red-400;
+}
+
 /* ----- Aliyun captcha ----- */
 .captcha4_captcha, .captcha4_captcha * {
   pointer-events: auto !important;

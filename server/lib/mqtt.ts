@@ -8,13 +8,6 @@ function server_client_id() {
   return `${config.integrations.mqtt.clientIdPrefixServer}_${process.pid}_${Date.now()}`
 }
 
-function broker_url() {
-  const auth = config.mqtt.username && config.mqtt.password
-    ? `${encodeURIComponent(config.mqtt.username)}:${encodeURIComponent(config.mqtt.password)}@`
-    : ''
-  return `mqtt://${auth}${config.mqtt.host}:${config.mqtt.port}`
-}
-
 let client: mqtt.MqttClient | null = null
 
 interface PendingPublish {
@@ -43,7 +36,15 @@ export function get_mqtt_client() {
   }
 
   try {
-    client = mqtt.connect(broker_url(), {
+    // MQTT.js parses string addresses with legacy url.parse(). The deployment
+    // config already has structured fields, including unencoded credentials.
+    client = mqtt.connect({
+      protocol: 'mqtt',
+      host: config.mqtt.host,
+      port: config.mqtt.port,
+      ... (config.mqtt.username && config.mqtt.password
+        ? { username: config.mqtt.username, password: config.mqtt.password }
+        : {}),
       clientId: server_client_id(),
       clean: true,
       reconnectPeriod: 5000,
@@ -55,8 +56,7 @@ export function get_mqtt_client() {
     })
 
     client.on('close', () => {
-      client = null
-      log_info('mqtt server client disconnected — will reconnect on next publish')
+      log_info('mqtt server client disconnected — awaiting automatic reconnect')
     })
 
     client.on('connect', () => {
@@ -72,6 +72,14 @@ export function get_mqtt_client() {
     log_error('mqtt failed to create server client', error_fields(error))
     return null
   }
+}
+
+/** Close an existing worker client without creating a connection during shutdown. */
+export async function stop_mqtt_client() {
+  const active = client
+  client = null
+  if (active)
+    await new Promise<void>(resolve => active.end(true, {}, () => resolve()))
 }
 
 export function sync_topic(resource: string) {
@@ -100,4 +108,27 @@ export function publish_sync(resource: string, payload: string) {
     })
   }
   pending.push({ resource, payload })
+}
+
+/** Durable callers retain their own work until a QoS 1 broker acknowledgement. */
+export async function publish_sync_confirmed(resource: string, payload: string, timeout_ms: number) {
+  const mqtt = get_mqtt_client()
+  if (! mqtt?.connected)
+    throw new Error('MQTT disconnected')
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('MQTT acknowledgement timeout')), timeout_ms)
+    try {
+      mqtt.publish(sync_topic(resource), payload, { qos: 1 }, (error, packet) => {
+        clearTimeout(timer)
+        if (error || (packet && 'reasonCode' in packet && Number(packet.reasonCode) >= 128))
+          reject(new Error('MQTT publish rejected'))
+        else
+          resolve()
+      })
+    }
+    catch (error) {
+      clearTimeout(timer)
+      reject(error)
+    }
+  })
 }

@@ -1,7 +1,10 @@
 <template>
   <div class="min-h-screen overflow-x-clip" :style="header_height_var">
     <Toast position="center" />
-    <ConfirmPopup>
+    <ConfirmPopup :pt="{ transition: confirm_popup_transition }">
+      <template #accepticon>
+        <MyIcon name="lucide:check" />
+      </template>
       <template #message="{ message }">
         <div class="p-confirmpopup-content">
           <MyIcon name="lucide:triangle-alert" class="shrink-0 text-xl text-amber-500" />
@@ -253,6 +256,7 @@ import { Form } from '@primevue/forms'
 import { zodResolver } from '@primevue/forms/resolvers/zod'
 import { form_default, form_schema } from '@shared/schemas'
 import { sync_resource } from '@shared/types/sync'
+import { confirm_popup_transition } from '~/composables/useMyConfirm'
 
 const static_url = useStaticUrl()
 const { error, ok, info, clear: clear_toasts } = useMyToast()
@@ -316,7 +320,7 @@ const public_config = useRuntimeConfig().public
 const site_url = public_config.site.url
 
 useSeoMeta({
-  description: '蠢猪小组（Stupig）官方网站：蠢猪档案与成员主页。',
+  description: '我们是来自广州市西关外国语学校的 Stupig 蠢猪小组！！！',
   ogSiteName: 'Stupig 蠢猪小组',
   ogType: 'website',
   ogUrl: computed(() => `${site_url}${route.path}`),
@@ -325,7 +329,7 @@ useSeoMeta({
 useHead({
   link: computed(() => [
     { rel: 'canonical', href: `${site_url}${route.path}` },
-    { rel: 'icon', href: `${public_config.site.staticBaseUrl}/imgs/Stupig_icon.svg` },
+    { rel: 'icon', href: static_url('/imgs/Stupig_icon.svg') },
   ]),
 })
 

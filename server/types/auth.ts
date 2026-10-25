@@ -10,6 +10,8 @@ export interface JwtPayload {
 export interface AuthUser {
   id: number
   session_id: number
+  /** Immutable token row; a revived device session must not revive old reads. */
+  token_generation_id?: number
   username: string
   phone: string
   avatar_file: string | null

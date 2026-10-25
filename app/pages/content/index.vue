@@ -9,7 +9,7 @@
         <Button
           v-if="can_manage_content"
           size="small"
-          label="新建档案"
+          label="新建"
           @click="navigateTo('/content/new/edit')"
         >
           <template #icon>

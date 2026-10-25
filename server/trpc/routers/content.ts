@@ -1,27 +1,54 @@
+import { ApiError } from '@server/errors/ApiError'
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { get_bilibili_video_cards } from '@server/services/bilibili.service'
 import {
   create_story,
   delete_story,
-  get_story,
+  get_story_body,
   list_stories,
   sign_attachment_download,
   update_story,
 } from '@server/services/content.service'
-import { cancel_content_task, continue_content_task_item, create_content_task, create_folder, delete_attachment, delete_folder, move_attachment, move_attachments, move_folder, pause_content_task_item, rename_attachment, report_task_item, resolve_content_task, resume_content_task, resume_task_item, retry_content_task_item, sign_task_parts } from '@server/services/content/task-api.service'
-import { preflight_task } from '@server/services/content/task-operations.service'
-import { list_scope_tasks } from '@server/services/content/task.service'
+import { image_editor_source } from '@server/services/content/attachment-access.service'
+import { get_attachment_workspace } from '@server/services/content/attachment-workspace.service'
+import { get_title_reference_version, rewrite_draft_references } from '@server/services/content/reference-history.service'
+import { adopt_upload_session, begin_upload_batch, list_upload_sessions, operate_upload_session, sign_upload_session_part } from '@server/services/content/upload-api.service'
+import { execute_workspace_command } from '@server/services/content/workspace-command.service'
 import { permission_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
+import { upload_batch_schema } from '@shared/content-upload'
+import { workspace_command_schema } from '@shared/content-workspace'
 import { has_permission } from '@shared/permissions'
 
 const content_admin_procedure = permission_procedure('content_manage', 'full')
 
 export const content_router = router({
+  imageEditorSource: content_admin_procedure.input(api_schema.content.image_editor_source)
+    .query(({ ctx, input }) => image_editor_source(input.id, input.version, ctx.auth_user, input.redacted)),
+  executeWorkspaceCommand: content_admin_procedure.input(workspace_command_schema)
+    .mutation(({ ctx, input }) => execute_workspace_command(ctx.auth_user.id, input)),
+  beginUploadBatch: content_admin_procedure.input(upload_batch_schema)
+    .mutation(({ ctx, input }) => begin_upload_batch(ctx.auth_user.id, input)),
+  listUploadSessions: content_admin_procedure.input(api_schema.content.get_attachment_workspace)
+    .query(({ ctx, input }) => list_upload_sessions(input.id, ctx.auth_user.id)),
+  adoptUploadSession: content_admin_procedure.input(api_schema.content.upload_session)
+    .mutation(({ ctx, input }) => adopt_upload_session(input.session_id, ctx.auth_user.id)),
+  getUploadSession: content_admin_procedure.input(api_schema.content.upload_session)
+    .query(({ ctx, input }) => operate_upload_session('get', input.session_id, ctx.auth_user.id)),
+  initializeUploadSession: content_admin_procedure.input(api_schema.content.upload_session)
+    .mutation(({ ctx, input }) => operate_upload_session('initialize', input.session_id, ctx.auth_user.id)),
+  resumeUploadSession: content_admin_procedure.input(api_schema.content.upload_session)
+    .mutation(({ ctx, input }) => operate_upload_session('resume', input.session_id, ctx.auth_user.id)),
+  sealUploadSession: content_admin_procedure.input(api_schema.content.upload_session)
+    .mutation(({ ctx, input }) => operate_upload_session('seal', input.session_id, ctx.auth_user.id)),
+  cancelUploadSession: content_admin_procedure.input(api_schema.content.upload_session)
+    .mutation(({ ctx, input }) => operate_upload_session('cancel', input.session_id, ctx.auth_user.id)),
+  signUploadSessionPart: content_admin_procedure.input(api_schema.content.upload_session_part)
+    .mutation(({ ctx, input }) => sign_upload_session_part(input.session_id, ctx.auth_user.id, input.part, input.md5)),
   listStories: public_procedure.query(() => list_stories()),
-
-  getStory: public_procedure
-    .input(api_schema.content.get_story)
+  getTitleReferenceVersion: public_procedure.query(() => get_title_reference_version()),
+  getStoryBody: public_procedure
+    .input(api_schema.content.get_story_body)
     .query(async ({ ctx, input }) => {
       let viewer = null
       try {
@@ -30,9 +57,19 @@ export const content_router = router({
       catch {
         viewer = null
       }
-      return input.base_updated_at === undefined || input.base_viewer_key === undefined
-        ? get_story(input.id, undefined, viewer)
-        : get_story(input.id, { updated_at: input.base_updated_at, viewer_key: input.base_viewer_key }, viewer)
+      return get_story_body(input.id, viewer, input.base_representation_version)
+    }),
+  getAttachmentWorkspace: public_procedure
+    .input(api_schema.content.get_attachment_workspace)
+    .query(async ({ ctx, input }) => {
+      let viewer = null
+      try {
+        viewer = await require_auth_user(ctx.event)
+      }
+      catch {
+        viewer = null
+      }
+      return get_attachment_workspace(input.id, viewer)
     }),
 
   createStory: content_admin_procedure
@@ -47,135 +84,38 @@ export const content_router = router({
       return update_story(
         input.id,
         input.markdown,
-        input.delete_files,
         input.base_revision,
         has_permission(ctx.auth_user, 'content_private', 'read'),
+        { base_namespace_revision: input.base_namespace_revision, base_title_revision: input.base_title_revision },
       )
     }),
 
   deleteStory: content_admin_procedure
     .input(api_schema.content.delete_story)
-    .mutation(({ input }) => delete_story(input.id)),
+    .mutation(({ ctx, input }) => delete_story(input.id, ctx.auth_user.id)),
 
-  // Signing grants nothing the nameless object URL doesn't already grant — the
-  // signature only names the download — so viewers sign directly.
+  rewriteDraftReferences: content_admin_procedure
+    .input(api_schema.content.rewrite_draft_references)
+    .mutation(({ ctx, input }) => rewrite_draft_references(input.id, input.markdown, input, has_permission(ctx.auth_user, 'content_private', 'read'))),
+
+  // Ordinary downloads are public at the application layer; confidential rows
+  // and every ancestor archive are authorized by the download service.
   signAttachmentDownload: public_procedure
     .input(api_schema.content.sign_attachment_download)
-    .mutation(({ input }) => sign_attachment_download(input.story_id, input.file_name)),
-
-  renameAttachment: content_admin_procedure
-    .input(api_schema.content.rename_attachment)
-    .mutation(({ ctx, input }) => rename_attachment(
-      input.id,
-      input.old_file_name,
-      input.file_name,
-      ctx.auth_user.id,
-    )),
-
-  deleteAttachment: content_admin_procedure
-    .input(api_schema.content.delete_attachment)
-    .mutation(({ ctx, input }) => delete_attachment(
-      input.id,
-      input.file_name,
-      input.markdown,
-      input.base_revision,
-      has_permission(ctx.auth_user, 'content_private', 'read'),
-      ctx.auth_user.id,
-    )),
-
-  moveAttachment: content_admin_procedure
-    .input(api_schema.content.move_attachment)
-    .mutation(({ ctx, input }) => move_attachment(
-      input.id,
-      input.file_name,
-      input.target_folder,
-      ctx.auth_user.id,
-    )),
-
-  moveAttachments: content_admin_procedure
-    .input(api_schema.content.move_attachments)
-    .mutation(({ ctx, input }) => move_attachments(
-      input.id,
-      input.moves,
-      ctx.auth_user.id,
-    )),
-
-  createFolder: content_admin_procedure
-    .input(api_schema.content.create_folder)
-    .mutation(({ ctx, input }) => create_folder(input.id, input.folder, ctx.auth_user.id)),
-
-  deleteFolder: content_admin_procedure
-    .input(api_schema.content.delete_folder)
-    .mutation(({ ctx, input }) => delete_folder(input.id, input.folder, ctx.auth_user.id)),
-
-  moveFolder: content_admin_procedure
-    .input(api_schema.content.move_folder)
-    .mutation(({ ctx, input }) => move_folder(
-      input.id,
-      input.source_folder,
-      input.new_folder,
-      ctx.auth_user.id,
-    )),
+    .mutation(async ({ ctx, input }) => {
+      let viewer = null
+      try {
+        viewer = await require_auth_user(ctx.event)
+      }
+      catch (error) {
+        if (! (error instanceof ApiError) || error.statusCode !== 401)
+          throw error
+      }
+      return sign_attachment_download(input.story_id, input.file_name, viewer, input.role)
+    }),
 
   getBilibiliVideoCards: public_procedure
     .input(api_schema.content.get_bilibili_video_cards)
     .query(({ input }) => get_bilibili_video_cards(input.hrefs)),
 
-  /* ---- 附件任务队列（docs/old/content-task-refactor.md §7）---- */
-
-  preflightTask: content_admin_procedure
-    .input(api_schema.content.preflight_task)
-    .query(({ input }) => preflight_task(input.story_id, input.kind, input.payload)),
-
-  createTask: content_admin_procedure
-    .input(api_schema.content.create_task)
-    .mutation(({ ctx, input }) => create_content_task({
-      scope_id: input.story_id,
-      kind: input.kind,
-      payload: input.payload,
-      actor_id: ctx.auth_user.id,
-      client_id: input.client_id ?? null,
-    })),
-
-  cancelTask: content_admin_procedure
-    .input(api_schema.content.cancel_task)
-    .mutation(({ input }) => cancel_content_task(input.task_id)),
-
-  resumeTask: content_admin_procedure
-    .input(api_schema.content.resume_task)
-    .mutation(({ input }) => resume_content_task(input.task_id)),
-
-  pauseTaskItem: content_admin_procedure
-    .input(api_schema.content.pause_task_item)
-    .mutation(({ input }) => pause_content_task_item(input.task_id, input.item_id)),
-
-  continueTaskItem: content_admin_procedure
-    .input(api_schema.content.continue_task_item)
-    .mutation(({ input }) => continue_content_task_item(input.task_id, input.item_id)),
-
-  retryTaskItem: content_admin_procedure
-    .input(api_schema.content.retry_task_item)
-    .mutation(({ ctx, input }) => retry_content_task_item({ ... input, actor_id: ctx.auth_user.id, client_id: input.client_id ?? null })),
-
-  resolveTask: content_admin_procedure
-    .input(api_schema.content.resolve_task)
-    .mutation(({ input }) => resolve_content_task(input)),
-
-  listScopeTasks: content_admin_procedure
-    .input(api_schema.content.list_scope_tasks)
-    .query(({ input }) => list_scope_tasks(input.story_id)),
-
-  /* ---- 传输段（上传 / 替换 / 删减版任务）---- */
-
-  signTaskParts: content_admin_procedure
-    .input(api_schema.content.sign_task_parts)
-    .mutation(({ input }) => sign_task_parts(input)),
-
-  reportTaskItem: content_admin_procedure
-    .input(api_schema.content.report_task_item)
-    .mutation(({ input }) => report_task_item(input)),
-
-  resumeTaskItem: content_admin_procedure
-    .input(api_schema.content.resume_task_item)
-    .query(({ input }) => resume_task_item(input)),
 })

@@ -1,0 +1,76 @@
+# 开发环境配置：在 shared.yaml 上按映射递归覆盖。
+
+# MySQL 密码与 docker-compose.dev.yml 创建容器时注入的 ${MYSQL_PASSWORD}
+# 是同一变量，两边天然一致；Redis 容器无密码。
+redis:
+  password: ''
+
+mqtt:
+  web:
+    wsUrl: ws://localhost:${MQTT_WS_PORT}/mqtt
+
+oss:
+  buckets:
+    public:
+      endpoint: https://oss-cn-shenzhen.aliyuncs.com
+      region: oss-cn-shenzhen
+      bucket: stupig-static-dev
+      publicBaseUrl: https://stupig-static-dev.oss.tangenty.cn
+
+aliyun:
+  esa:
+    baseUrl: https://stupig-static-dev.oss.tangenty.cn
+  oss:
+    region: oss-cn-shenzhen
+    endpoint: https://oss-cn-shenzhen.aliyuncs.com
+    bucket: stupig-static-dev
+    publicBaseUrl: https://stupig-static-dev.oss.tangenty.cn
+    uploadRoleArn: null
+
+site:
+  url: http://localhost:${APP_PORT}
+  indexable: false
+
+app:
+  contentPreload:
+    enabled: true
+    deliveryVerified: true
+  otp:
+    debug: ${NUXT_OTP_DEBUG:-true}
+  captcha:
+    debug: ${NUXT_CAPTCHA_DEBUG:-true}
+
+esaFunction:
+  name: stupig-content-auth-bypass-dev
+  # 同时供开发隧道校验和 ESA 发布使用。
+  callbackUrl: https://stupig-content-auth-dev.cina.cs.tangenty.com/api/content/authorize
+
+# 开发授权通道：仅由开发启动脚本读取，不进入应用运行配置或浏览器。
+devAuthTunnel:
+  # 开发授权隧道的项目配置；启动脚本生成 frpc 原生配置，不直接传给 frpc -c。
+  # ${...} 按项目 config/lib/loader.ts 的插值规则解析；token 只填本地 .env.dev。
+
+  frp:
+    # 当前开发机的官方发行版；其他平台可改为已安装的 frpc 路径。
+    executable: .dev/tools/frp_0.71.0_windows_amd64/frpc.exe
+    serverAddr: frps-service.cina.cs.tangenty.com
+    # 公网 HTTPS 反代端口；服务器内部 bindPort=7000，不是客户端连接端口。
+    serverPort: 443
+    protocol: wss
+    token: ${DEV_FRP_TOKEN}
+    version: 0.71.0
+    proxy:
+      name: stupig-content-auth-dev
+      type: tcp
+      # frps 为本代理监听的端口，须与服务器回调 HTTPS 反代目标一致。
+      # 这是第三种端口：既不是公网 443，也不是 frps 的 bindPort=7000。
+      # 服务器 Docker 和 HTTPS 反代已按此端口接入；修改时须同步服务器。
+      remotePort: 15550
+
+  proxy:
+    listenHost: 127.0.0.1
+    listenPort: 55500
+    targetHost: 127.0.0.1
+    targetPort: ${APP_PORT}
+    allowedMethod: POST
+    allowedPath: /api/content/authorize

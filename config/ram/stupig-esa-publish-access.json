@@ -1,0 +1,20 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "esa:GetErService",
+        "esa:GetRoutine",
+        "esa:ListRoutineEnvironmentVariables",
+        "esa:SetRoutineEnvironmentVariables",
+        "esa:CreateRoutineWithAssetsCodeVersion",
+        "esa:GetRoutineCodeVersionInfo",
+        "esa:ListRoutineCodeVersions",
+        "esa:CreateRoutineCodeDeployment",
+        "esa:ListRoutineRoutes"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

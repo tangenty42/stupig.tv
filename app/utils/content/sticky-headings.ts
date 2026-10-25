@@ -8,7 +8,7 @@
    section inside the nearest lower-level heading's section (h2 under h1,
    ...).
  */
-export function wrap_heading_sections(body: HTMLElement) {
+export function wrap_heading_sections(body: HTMLElement | DocumentFragment) {
   const open: { level: number, section: HTMLElement }[] = []
   for (const child of [... body.children]) {
     const match = /^H([1-6])$/.exec(child.tagName)
@@ -20,7 +20,9 @@ export function wrap_heading_sections(body: HTMLElement) {
     while (open.length && open.at(- 1)!.level >= level) {
       open.pop()
     }
-    const section = document.createElement('section')
+    // Template fragments belong to an inert document. Keep them inert until
+    // the patcher inserts a genuinely new block, avoiding speculative loads.
+    const section = body.ownerDocument.createElement('section')
     section.className = 'story-section'
     const parent = open.at(- 1)?.section
     if (parent) {
@@ -46,7 +48,16 @@ export function wrap_heading_sections(body: HTMLElement) {
    first: once a leaf's edge is extended, ancestors sharing the boundary
    measure a negative gap and skip.
  */
+export function reset_heading_compensation(body: HTMLElement) {
+  for (const spacer of body.querySelectorAll<HTMLElement>('[data-story-heading-spacer]')) {
+    if (spacer.parentElement)
+      spacer.parentElement.style.marginBottom = ''
+    spacer.remove()
+  }
+}
+
 export function compensate_section_push(body: HTMLElement) {
+  reset_heading_compensation(body)
   // Both offsetTop and getBoundingClientRect report a pinned sticky
   // heading's displaced visual position, which explodes the gap whenever
   // this runs while scrolled deep (observer refire, editor re-render,
@@ -78,6 +89,7 @@ export function compensate_section_push(body: HTMLElement) {
       const next_mt = Number.parseFloat(getComputedStyle(next_heading).marginTop) || 0
       const before = section.offsetTop + section.offsetHeight
       const spacer = document.createElement('div')
+      spacer.dataset.storyHeadingSpacer = ''
       section.append(spacer)
       spacer.style.marginTop = `${before - spacer.offsetTop}px`
       spacer.style.height = `${gap + heading_mb}px`
@@ -119,10 +131,16 @@ export function layout_heading_offsets(body: HTMLElement) {
    observer.
  */
 export function observe_heading_layout(body: HTMLElement) {
+  let active = true
   const observer = new ResizeObserver(() => {
+    if (! active)
+      return
     compensate_section_push(body)
     layout_heading_offsets(body)
   })
   observer.observe(body)
-  return () => observer.disconnect()
+  return () => {
+    active = false
+    observer.disconnect()
+  }
 }

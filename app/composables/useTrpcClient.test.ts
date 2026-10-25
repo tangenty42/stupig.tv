@@ -34,17 +34,17 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('tRPC application error transport', () => {
-  const applicationError = { code: 'LEGACY_REF' as const, details: { lines: [5, 7] } }
+  const applicationError = { code: 'REF_TARGET_REPLACED' as const, details: { namespace_revision: 2, title_revision: 3, references: [{ kind: 'attachment' as const, target: 'a.txt', from: 5, to: 10, line: 2, reason: 'replaced' as const }] } }
   it('keeps typed details through ordinary API error normalization', async () => {
-    const error = Object.assign(new Error('旧引用'), { data: { httpStatus: 400, applicationError } })
+    const error = Object.assign(new Error('引用目标已变更'), { data: { httpStatus: 400, applicationError } })
     await expect(useTrpcClient().call(Promise.reject(error))).rejects.toMatchObject({ status: 400, ... applicationError })
   })
   it('keeps the same typed details through the XHR path and its second normalization', async () => {
-    mocks.response = { error: { message: '旧引用', data: { httpStatus: 400, applicationError } } }
+    mocks.response = { error: { message: '引用目标已变更', data: { httpStatus: 400, applicationError } } }
     await expect(useTrpcClient().upload('profile.uploadAvatar', new FormData())).rejects.toMatchObject({ status: 400, ... applicationError })
   })
   it('rejects unknown or unsafe error detail shapes', () => {
-    const error = new TrpcApiError('expected', 400, Object.assign({}, applicationError, { details: { lines: [5], sql: 'private' } }))
+    const error = new TrpcApiError('expected', 400, Object.assign({}, applicationError, { details: { ... applicationError.details, sql: 'private' } }))
     expect(error.code).toBeUndefined()
     expect(error.details).toBeUndefined()
   })

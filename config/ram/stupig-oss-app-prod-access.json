@@ -1,0 +1,89 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Sid": "AuditBucketInventory",
+      "Effect": "Allow",
+      "Action": "oss:ListObjects",
+      "Resource": "acs:oss:*:1225000469589595:stupig-static"
+    },
+    {
+      "Sid": "StaticAssets",
+      "Effect": "Allow",
+      "Action": [
+        "oss:GetObject",
+        "oss:PutObject",
+        "oss:GetObjectAcl",
+        "oss:PutObjectAcl",
+        "oss:DeleteObject"
+      ],
+      "Resource": [
+        "acs:oss:*:1225000469589595:stupig-static/imgs/*",
+        "acs:oss:*:1225000469589595:stupig-static/avatar/*"
+      ]
+    },
+    {
+      "Sid": "ContentObjectOperations",
+      "Effect": "Allow",
+      "Action": [
+        "oss:GetObject",
+        "oss:PutObject",
+        "oss:GetObjectAcl",
+        "oss:PutObjectAcl",
+        "oss:DeleteObject",
+        "oss:ListParts",
+        "oss:AbortMultipartUpload"
+      ],
+      "Resource": "acs:oss:*:1225000469589595:stupig-static/content/att/*"
+    },
+    {
+      "Sid": "RecoverIncompleteUploads",
+      "Effect": "Allow",
+      "Action": "oss:ListMultipartUploads",
+      "Resource": "acs:oss:*:1225000469589595:stupig-static"
+    },
+    {
+      "Sid": "VerifyRecoverableDeletion",
+      "Effect": "Allow",
+      "Action": "oss:GetBucketVersioning",
+      "Resource": "acs:oss:*:1225000469589595:stupig-static"
+    },
+    {
+      "Sid": "ForceTLS",
+      "Effect": "Deny",
+      "Action": "oss:*",
+      "Resource": [
+        "acs:oss:*:1225000469589595:stupig-static",
+        "acs:oss:*:1225000469589595:stupig-static/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "acs:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "RejectPublicContentACL",
+      "Effect": "Deny",
+      "Action": [
+        "oss:PutObject",
+        "oss:PutObjectAcl"
+      ],
+      "Resource": "acs:oss:*:1225000469589595:stupig-static/content/att/*",
+      "Condition": {
+        "StringEquals": {
+          "oss:x-oss-object-acl": [
+            "public-read",
+            "public-read-write"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "PreserveContentVersions",
+      "Effect": "Deny",
+      "Action": "oss:DeleteObjectVersion",
+      "Resource": "acs:oss:*:1225000469589595:stupig-static/content/att/*"
+    }
+  ]
+}

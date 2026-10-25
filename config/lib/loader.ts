@@ -1,15 +1,14 @@
 import type * as z from 'zod'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { config as load_dotenv } from 'dotenv'
 import { parse as parse_yaml } from 'yaml'
-import { database_config_schema, deployment_config_schema, public_config_schema, settings_schema } from './schema'
+import { load_environment } from './environment.mjs'
+import { aliyun_oss_config_schema, database_config_schema, deployment_config_schema, image_processing_options_schema, oss_bucket_config_schema, public_config_schema, settings_schema } from './schema'
 
 export type { Settings } from './schema'
 
-function environment() {
-  load_dotenv({ path: resolve(process.cwd(), '.env'), quiet: true })
-  return process.env
+function environment(): NodeJS.ProcessEnv {
+  return load_environment()
 }
 
 function parse_config<Output>(schema: z.ZodType<Output>, input: unknown, path_prefix = ''): Output {
@@ -95,15 +94,10 @@ function node_env_of(env: NodeJS.ProcessEnv) {
   return env.NODE_ENV ?? process.env.NODE_ENV
 }
 
-// Names that are not environment layers: the base layer and the development-only override.
-const reserved_layer_names = new Set(['default', 'local'])
-
 function read_yaml_config(node_env: string | undefined) {
-  const file_names = ['default.yaml']
-  const is_environment_layer = !! node_env && /^[a-z]+$/.test(node_env) && ! reserved_layer_names.has(node_env)
-  if (is_environment_layer && existsSync(config_path(`${node_env}.yaml`))) {
-    file_names.push(`${node_env}.yaml`)
-  }
+  if (node_env !== 'development' && node_env !== 'production')
+    throw new Error('Invalid NODE_ENV: expected development or production to select dev.yaml or prod.yaml')
+  const file_names = ['shared.yaml', node_env === 'development' ? 'dev.yaml' : 'prod.yaml']
   if (node_env === 'development' && existsSync(config_path('local.yaml'))) {
     file_names.push('local.yaml')
   }
@@ -117,10 +111,70 @@ export function load_database_config(env = environment()) {
   return parse_config(database_config_schema, db, 'db')
 }
 
+// Migration scripts load OSS only when requested, without JWT/MQTT/SMS secrets.
+export function load_aliyun_oss_config(env = environment()) {
+  const merged = read_yaml_config(node_env_of(env))
+  const aliyun = is_config_object(merged) ? merged.aliyun : undefined
+  const oss = is_config_object(aliyun) ? aliyun.oss : undefined
+  return parse_config(aliyun_oss_config_schema.nullable(), interpolate_config(oss, env, 'aliyun.oss'), 'aliyun.oss')
+}
+
+export function load_migration_source_config(bucket: 'public' | 'private', env = environment()) {
+  const merged = read_yaml_config(node_env_of(env))
+  const oss = is_config_object(merged) && is_config_object(merged.oss) ? merged.oss : undefined
+  const buckets = oss && is_config_object(oss.buckets) ? oss.buckets : undefined
+  return parse_config(oss_bucket_config_schema, interpolate_config(buckets?.[bucket], env, `oss.buckets.${bucket}`), `oss.buckets.${bucket}`)
+}
+
+export function load_migration_image_profile(env = environment()) {
+  const merged = read_yaml_config(node_env_of(env))
+  const app = is_config_object(merged) && is_config_object(merged.app) ? merged.app : undefined
+  const images = app && is_config_object(app.contentImages) ? app.contentImages : undefined
+  return {
+    profile: parse_config(image_processing_options_schema, interpolate_config(images?.profile, env, 'app.contentImages.profile'), 'app.contentImages.profile'),
+    profile_version: parse_config(deployment_config_schema.shape.app.shape.contentImages.shape.profileVersion, interpolate_config(images?.profileVersion, env, 'app.contentImages.profileVersion'), 'app.contentImages.profileVersion'),
+  }
+}
+
+export function load_content_migration_options(env = environment()) {
+  const merged = read_yaml_config(node_env_of(env))
+  const app = is_config_object(merged) && is_config_object(merged.app) ? merged.app : undefined
+  return parse_config(deployment_config_schema.shape.app.shape.contentMigration, interpolate_config(app?.contentMigration, env, 'app.contentMigration'), 'app.contentMigration')
+}
+
+// Read only this raw subtree: development tools must not require application secrets.
+export function load_development_tunnel_layer() {
+  const merged_config = read_yaml_config('development')
+  if (! is_config_object(merged_config) || ! is_config_object(merged_config.devAuthTunnel))
+    return undefined
+  const esa = merged_config.esaFunction
+  return { ... merged_config.devAuthTunnel, callbackUrl: is_config_object(esa) ? esa.callbackUrl : undefined }
+}
+
+// Publish tools do not need database, JWT, OSS or tunnel credentials.
+export function load_esa_function_layer(node_env: string): Record<string, unknown> | undefined {
+  const merged = read_yaml_config(node_env)
+  if (! is_config_object(merged))
+    return undefined
+  const aliyun = merged.aliyun
+  const delivery = is_config_object(aliyun) && is_config_object(aliyun.esa) ? aliyun.esa : {}
+  return {
+    ... (is_config_object(merged.esaFunction) ? merged.esaFunction : {}),
+    deliveryUrl: delivery.baseUrl,
+    authKey: delivery.authKey,
+  }
+}
+
 export function load_config(env = environment()) {
   const node_env = node_env_of(env)
   const settings = load_settings()
-  const value = parse_config(deployment_config_schema, interpolate_config(read_yaml_config(node_env), env))
+  const deployment = read_yaml_config(node_env)
+  // Tool credentials are validated by their launchers, not by app startup.
+  if (is_config_object(deployment)) {
+    delete deployment.devAuthTunnel
+    delete deployment.esaFunction
+  }
+  const value = parse_config(deployment_config_schema, interpolate_config(deployment, env))
   if (node_env === 'production' && value.app.otp.debug) {
     throw new Error('Invalid configuration: app.otp.debug: OTP debug mode must be disabled in production')
   }

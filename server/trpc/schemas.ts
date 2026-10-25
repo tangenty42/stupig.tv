@@ -1,4 +1,5 @@
-import { attachment_name_segment_violation, link_file_name_byte_length } from '@shared/content-markdown'
+import { link_file_name_byte_length } from '@shared/content-markdown'
+import { upload_part_schema, upload_session_schema } from '@shared/content-upload'
 import { is_valid_permission_grant, normalize_permission_grants } from '@shared/permissions'
 import { form_schema, phone_schema } from '@shared/schemas'
 import { settings } from '@shared/settings'
@@ -30,134 +31,8 @@ const permission_grant_input = z.object({
 
 const content_story_update = z.object({
   markdown: markdown_input,
-  delete_files: z.array(z.string().min(1).max(255)).max(500).optional().default([]),
   base_revision: z.number().int().positive(),
 })
-
-/** Content scope id: the story whose attachments the operation targets. */
-const content_scope_input = z.object({
-  id: z.coerce.number().int().positive(),
-})
-
-/**
- * One path segment (file base name or folder name) drawn from the shared name
- * rules, so the request schema and the service's name guard cannot drift apart.
- * The message is the shared one, which is also what the editor shows inline.
- */
-function assert_valid_name_segment(name: string, ctx: z.RefinementCtx) {
-  const violation = attachment_name_segment_violation(name)
-  if (violation)
-    ctx.addIssue({ code: 'custom', message: violation })
-}
-
-/** A bare file name or a (possibly nested) `folder/name` path. */
-const attachment_path_input = z.string()
-  .trim()
-  .min(1, '文件名不能为空')
-  .superRefine((name, ctx) => name.split('/').forEach(segment => assert_valid_name_segment(segment, ctx)))
-  .refine(name => link_file_name_byte_length(name) <= settings.app.content.link.fileNameMaxBytes, '文件名太长')
-
-/**
- * A (possibly nested) folder path being CREATED or RENAMED, which is therefore
- * a new name and has to satisfy the name rules. Null targets the root.
- */
-const folder_path_input = z.string()
-  .trim()
-  .min(1)
-  .max(255)
-  .superRefine((name, ctx) => name.split('/').forEach(segment => assert_valid_name_segment(segment, ctx)))
-  .nullable()
-
-/**
- * A path addressing something the scope already holds: the folder being renamed
- * or removed, a folder a file is moved into, a file being replaced.
- *
- * Deliberately NOT run through the name rules. Those exist to stop a NEW name
- * from faking the encryption marker, and an existing row's name is not new — it
- * is whatever earlier requests (or history) put there. Validating it makes such
- * a row impossible to operate on at all, which is how a folder that had acquired
- * a `.good` name became impossible to rename: the request was refused for its
- * SOURCE argument, before the service could even look at the new name.
- * Existence is the service's business (a missing folder is a 404).
- */
-const existing_path_input = z.string().trim().min(1).max(255)
-
-/** Per-kind payload schemas for the task endpoints; the source of truth for what a task carries. */
-const task_payload_schemas = {
-  upload: z.object({
-    uploads: z.array(z.object({
-      // Raw filesystem paths must reach preflight so sanitize becomes explicit.
-      path: z.string().min(1, '文件名不能为空').max(255),
-      source_file_name: z.string().min(1).max(255).optional(),
-      size: z.number().int().min(0).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
-      mime_type: z.string().max(127).nullable(),
-      insert_position: z.number().int().min(0).nullish(),
-    })).min(1).max(200),
-    // A batch legitimately plans two files onto the same path (identical names,
-    // or names that sanitize to the same stored name): preflight answers the
-    // dupe with a `suggested_name` instead of refusing the whole request. The
-    // distinct-path requirement only binds at creation — see create_task.
-  }),
-  replace: z.object({
-    old_file_name: z.string().min(1).max(255),
-    mode: z.enum(['keep-name', 'new-name']),
-    size: z.number().int().min(0).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
-    mime_type: z.string().max(127).nullable(),
-    file_name: z.string().min(1, '文件名不能为空').max(255),
-    source_file_name: z.string().min(1).max(255).optional(),
-    content_type: z.string().max(255).nullable(),
-  }),
-  move: z.object({
-    moves: z.array(z.object({
-      file_name: z.string().min(1).max(255),
-      target_folder: existing_path_input.nullable(),
-    })).min(1).max(500),
-  }),
-  rename: z.object({
-    old_file_name: z.string().min(1).max(255),
-    new_file_name: attachment_path_input,
-  }),
-  delete: z.object({
-    file_names: z.array(z.string().min(1).max(255)).max(500),
-    folders: z.array(existing_path_input).max(500),
-    markdown: markdown_input,
-    base_revision: z.number().int().positive(),
-    can_private: z.boolean(),
-  }),
-  folder_create: z.object({
-    folder: folder_path_input.unwrap(),
-  }),
-  folder_delete: z.object({
-    folder: existing_path_input,
-  }),
-  folder_rename: z.object({
-    source_folder: existing_path_input,
-    new_folder: folder_path_input.unwrap(),
-  }),
-  encrypt: z.object({
-    file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
-  }),
-  decrypt: z.object({
-    file_names: z.array(z.string().min(1).max(255)).min(1).max(500),
-  }),
-  redact: z.object({
-    source_file_name: z.string().min(1).max(255),
-    content_type: z.string().max(127).nullable(),
-    size: z.number().int().min(1).max(settings.app.content.upload.maxSizeMb * 1024 * 1024, '文件太大'),
-  }),
-} as const
-
-/** Every task kind, derived from the payload table so the enum cannot drift from it. */
-const task_kind_input = z.enum(Object.keys(task_payload_schemas) as [keyof typeof task_payload_schemas])
-
-function refine_task_payload(value: { kind: keyof typeof task_payload_schemas, payload: Record<string, unknown> }, ctx: z.RefinementCtx) {
-  const result = task_payload_schemas[value.kind].safeParse(value.payload)
-  if (result.success)
-    return
-  for (const issue of result.error.issues) {
-    ctx.addIssue({ code: 'custom', message: issue.message, path: ['payload', ... issue.path] })
-  }
-}
 
 export const api_schema = {
   auth: {
@@ -194,6 +69,7 @@ export const api_schema = {
   },
 
   admin: {
+    storage_audit_findings: z.object({ after_id: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }),
     list_users: z.object({
       page: z.coerce.number().int().positive().default(1),
       page_size: z.coerce.number().int().positive().default(10),
@@ -214,115 +90,28 @@ export const api_schema = {
   },
 
   content: {
-    get_story: public_id_input.extend({
-      base_updated_at: z.string().min(1).optional(),
-      base_viewer_key: z.string().min(1).optional(),
-    }),
+    upload_session: upload_session_schema,
+    upload_session_part: upload_part_schema,
+    get_attachment_workspace: public_id_input,
+    get_story_body: public_id_input.extend({ base_representation_version: z.string().regex(/^[\da-f]{64}$/).optional() }),
     create_story: z.object({
       markdown: markdown_input,
     }),
-    update_story: public_id_input.extend(content_story_update.shape),
+    update_story: public_id_input.extend(content_story_update.shape).extend({
+      base_namespace_revision: z.number().int().nonnegative().nullable().default(null),
+      base_title_revision: z.number().int().nonnegative().nullable().default(null),
+    }),
+    rewrite_draft_references: public_id_input.extend({
+      markdown: markdown_input.or(z.literal('')),
+      base_namespace_revision: z.number().int().nonnegative().nullable(),
+      base_title_revision: z.number().int().nonnegative().nullable(),
+    }),
     delete_story: public_id_input,
+    image_editor_source: z.object({ id: z.number().int().positive(), version: z.string().regex(/^[\da-f]{64}$/), redacted: z.boolean().default(false) }),
     sign_attachment_download: z.object({
       story_id: z.coerce.number().int().positive(),
       file_name: z.string().min(1).max(255),
-    }),
-    rename_attachment: content_scope_input.extend({
-      old_file_name: z.string().min(1).max(255),
-      file_name: attachment_path_input,
-    }),
-    delete_attachment: public_id_input.extend({
-      file_name: z.string().min(1).max(255),
-      markdown: markdown_input,
-      base_revision: z.number().int().positive(),
-    }),
-    move_attachment: content_scope_input.extend({
-      file_name: z.string().min(1).max(255),
-      // Empty folders are editor-local, so the target folder is an existing
-      // path the caller already knows: the move creates the prefix implicitly.
-      target_folder: existing_path_input.nullable(),
-    }),
-    move_attachments: content_scope_input.extend({
-      moves: z.array(z.object({
-        file_name: z.string().min(1).max(255),
-        target_folder: existing_path_input.nullable(),
-      })).min(1).max(500),
-    }),
-    create_folder: content_scope_input.extend({
-      folder: folder_path_input.unwrap(),
-    }),
-    delete_folder: content_scope_input.extend({
-      folder: existing_path_input,
-    }),
-    move_folder: content_scope_input.extend({
-      // The source is where the folder IS, the destination is the new name it
-      // takes: only the destination answers to the name rules.
-      source_folder: existing_path_input,
-      new_folder: folder_path_input.unwrap(),
-    }),
-    // 任务队列（docs/old/content-task-refactor.md §7）。payload 按 kind 分别校验，
-    // 复用各操作的字段规则，避免请求层与服务层漂移。
-    preflight_task: z.object({
-      story_id: z.coerce.number().int().positive(),
-      kind: task_kind_input,
-      payload: z.record(z.string(), z.unknown()),
-    }).superRefine(refine_task_payload),
-    create_task: z.object({
-      story_id: z.coerce.number().int().positive(),
-      kind: task_kind_input,
-      payload: z.record(z.string(), z.unknown()),
-      client_id: z.string().max(64).nullish(),
-    }).superRefine(refine_task_payload),
-    cancel_task: z.object({
-      task_id: z.coerce.number().int().positive(),
-    }),
-    resume_task: z.object({
-      task_id: z.coerce.number().int().positive(),
-    }),
-    pause_task_item: z.object({
-      task_id: z.coerce.number().int().positive(),
-      item_id: z.coerce.number().int().positive(),
-    }),
-    continue_task_item: z.object({
-      task_id: z.coerce.number().int().positive(),
-      item_id: z.coerce.number().int().positive(),
-    }),
-    retry_task_item: z.object({
-      task_id: z.coerce.number().int().positive(),
-      item_id: z.coerce.number().int().positive(),
-      source_file_name: z.string().min(1).max(255),
-      size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-      client_id: z.string().max(64).nullish(),
-    }),
-    resolve_task: z.object({
-      task_id: z.coerce.number().int().positive(),
-      resolutions: z.array(z.object({
-        item_id: z.coerce.number().int().positive(),
-        choice: z.enum(['apply', 'skip']),
-      })).min(1).max(500),
-    }),
-    list_scope_tasks: z.object({
-      story_id: z.coerce.number().int().positive(),
-    }),
-    sign_task_parts: z.object({
-      task_id: z.coerce.number().int().positive(),
-      item_id: z.coerce.number().int().positive(),
-      part_numbers: z.array(z.coerce.number().int().min(1)).min(1),
-    }),
-    report_task_item: z.object({
-      task_id: z.coerce.number().int().positive(),
-      item_id: z.coerce.number().int().positive(),
-      status: z.enum(['progress', 'completed']),
-      bytes_done: z.coerce.number().int().min(0).optional(),
-      parts: z.array(z.object({
-        part_number: z.coerce.number().int().min(1),
-        etag: z.string().min(1).max(128),
-        size: z.coerce.number().int().min(0),
-      })).max(10_000).optional(),
-    }),
-    resume_task_item: z.object({
-      task_id: z.coerce.number().int().positive(),
-      item_id: z.coerce.number().int().positive(),
+      role: z.enum(['avif', 'original', 'redacted_avif']).default('avif'),
     }),
     get_bilibili_video_cards: z.object({
       hrefs: z.array(z.string().max(2048)).min(1).max(20),

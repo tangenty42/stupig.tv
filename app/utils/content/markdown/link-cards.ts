@@ -8,10 +8,21 @@ import { parse_content_ref } from '@shared/content-reference'
 import { story_rating, story_rating_rank } from '@shared/types/content'
 import { format_bilibili_count, format_bilibili_duration } from '~/utils/bilibili'
 import { bilibili_logo_svg } from '~/utils/bilibili-logo'
-import { abridged_twin_of, cover_alt, file_icon, story_front_cover_url } from '~/utils/content/attachment'
+import { attachment_can_read, attachment_display_url, attachment_is_restricted, cover_alt, file_icon, redacted_version_of, story_front_cover_url } from '~/utils/content/attachment'
 import { format_bytes } from '~/utils/size'
 import { apply_chip_gaps } from './chips'
 import { find_story_by_title, local_file_name, resolve_content_url } from './links'
+
+/** Shared two-line body for files, folders and unavailable private files. */
+function file_card_body_open(md: MarkdownIt, card: FileCardData) {
+  return `<span class="file-card-icon iconify i-${card.icon}" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">${card.name ? md.utils.escapeHtml(card.name) : ''}`
+}
+
+function file_card_body_close(card: FileCardData) {
+  const tag = card.encrypted ? `<span class="file-card-encrypted-tag">${card.abridged ? '机密附件·删减版' : '机密附件'}</span>` : ''
+  const size = card.size ? `<span class="file-card-size">${card.size}${tag}</span>` : ''
+  return `</span>${size}</span>`
+}
 
 /**
  * Inner HTML of a video card link, laid out like Bilibili's own card: a
@@ -73,11 +84,10 @@ function story_card_inner(md: MarkdownIt, ctx: StoryMarkdownContext, story: Cont
  */
 function folder_card_inner(md: MarkdownIt, ctx: StoryMarkdownContext, folder_path: string) {
   const name = attachment_base_name(folder_path)
-  // Always at least one: a folder only counts as one because a file lives under
-  // it, so there is no empty case to render.
+  // Empty workspace directories are real targets and report zero files.
   const summary = `${folder_file_count(ctx.options.attachments(), folder_path)} 个文件`
-  const escaped_name = md.utils.escapeHtml(name)
-  return `<span class="file-card-icon iconify i-lucide:folder" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">${escaped_name}</span><span class="file-card-size">${summary}</span></span>`
+  const card = { icon: 'lucide:folder', name, size: summary }
+  return file_card_body_open(md, card) + file_card_body_close(card)
 }
 
 /** The folder card's opening tag, with the path and the button semantics the preview wires up. */
@@ -115,7 +125,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
       if (reference?.kind === 'story' || reference?.kind === 'legacy_story') {
         const story_title = reference.title
         const story = find_story_by_title(ctx.options, story_title)
-        if (has_text_label) {
+        if (tokens[idx + 1]?.type !== 'link_close') {
           if (story) {
             href = `/content/${story.id}`
           }
@@ -154,34 +164,35 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
       token!.attrSet('target', '_blank')
       token!.attrSet('rel', 'noopener noreferrer')
       token!.attrJoin('class', 'link link-card')
-      // Encrypted attachments: a permitted viewer gets the normal card marked
-      // for client-side decryption on click. Everyone else gets the plaintext
-      // 删减版 twin when the author uploaded one (amber card, tag 删减版), or a
+      // Private attachments: permitted viewers get the normal version. Others
+      // get a redacted version when available (amber card, tag 删减版), or a
       // gray nameless card when there is none — whatever shape the link had.
       const link_attachment = file_name ? ctx.options.attachments().find(item => item.file_name === file_name) : undefined
-      const link_twin = link_attachment?.is_encrypted ? abridged_twin_of(ctx.options.attachments(), link_attachment.file_name) : null
-      if (link_attachment?.is_encrypted) {
-        if (! link_attachment.encryption_key && ! link_twin) {
+      const link_twin = (link_attachment && attachment_is_restricted(link_attachment)) ? redacted_version_of(ctx.options.attachments(), link_attachment.file_name) : null
+      if ((link_attachment && attachment_is_restricted(link_attachment))) {
+        if (! attachment_can_read(link_attachment) && ! link_twin) {
           apply_chip_gaps(token!, tokens, idx, close_index, 'card')
           token!.meta = { ... token?.meta, encrypted_denied: true }
           const closing_denied = close_index !== - 1 ? tokens[close_index] : undefined
           if (closing_denied?.type === 'link_close') {
             closing_denied.meta = { ... closing_denied.meta, encrypted_denied: true }
           }
-          return `<span class="link-card file-card encrypted-card-denied"><span class="file-card-icon iconify i-lucide:ban" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">${CONTENT_ATTACHMENT_DENIED_TEXT}</span></span>`
+          const denied = { icon: 'lucide:ban', name: CONTENT_ATTACHMENT_DENIED_TEXT, size: '' }
+          return `<span class="link-card file-card encrypted-card-denied">${file_card_body_open(md, denied)}${file_card_body_close(denied)}`
         }
-        if (! link_attachment.encryption_key && link_twin) {
+        if (! attachment_can_read(link_attachment) && link_twin) {
           // Abridged substitution: the link points at the plaintext twin.
-          token!.attrSet('href', ctx.options.static_url(link_twin.url))
+          token!.attrSet('href', attachment_display_url(ctx.options.static_url, link_twin))
           token!.attrJoin('class', 'file-card-encrypted')
           if (visible_label === null && close_index !== - 1) {
+            token!.attrJoin('class', 'file-card')
             apply_chip_gaps(token!, tokens, idx, close_index, 'card')
             token!.meta = {
               ... token?.meta,
               file_card: {
                 icon: 'lucide:lock-keyhole',
                 size: format_bytes(link_twin.file_size),
-                name: attachment_base_name(link_twin.file_name),
+                name: label === null ? decrypted_attachment_name(attachment_base_name(link_twin.file_name)) : null,
                 encrypted: true,
                 abridged: true,
               } satisfies FileCardData,
@@ -190,17 +201,11 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
             if (closing_abridged?.type === 'link_close') {
               closing_abridged.meta = { ... closing_abridged.meta, file_card: token?.meta.file_card }
             }
-            const rendered_abridged = default_link_rule(tokens, idx, options, env, self)
-            return `${rendered_abridged}<span class="file-card-icon iconify i-lucide:lock-keyhole" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">${md.utils.escapeHtml(attachment_base_name(link_twin.file_name))}</span>`
           }
         }
         else {
-          token!.attrSet('data-encrypted', '')
+          token!.attrSet('data-private', '')
           token!.attrJoin('class', 'file-card-encrypted')
-          // The full/abridged toggle rides on the card for permitted viewers.
-          if (link_twin) {
-            token!.attrSet('data-twin-url', ctx.options.static_url(link_twin.url))
-          }
         }
       }
       if (file_name && close_index !== - 1 && visible_label === null && ! token?.meta?.file_card) {
@@ -209,7 +214,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
           // A label-off link to a folder. Without this it would fall into the
           // silent dead-link branch below and vanish, since a folder has no
           // attachment row of its own.
-          if (is_attachment_folder(ctx.options.attachments(), file_name)) {
+          if (is_attachment_folder(ctx.options.attachments(), file_name, ctx.options.folders?.())) {
             token!.meta = { ... token?.meta, folder_card: true }
             const closing_folder = tokens[close_index]
             if (closing_folder?.type === 'link_close') {
@@ -229,16 +234,13 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
         // The card is the whole link (link_open, optional text label,
         // link_close), so the right edge check looks past link_close.
         apply_chip_gaps(token!, tokens, idx, close_index, 'card')
-        if (link_twin && attachment.is_encrypted)
-          token!.attrJoin('class', 'file-card-toggleable')
         token!.meta = {
           ... token?.meta,
           file_card: {
-            icon: attachment.is_encrypted ? 'lucide:lock-keyhole-open' : file_icon(attachment),
+            icon: attachment_is_restricted(attachment) ? 'lucide:lock-keyhole-open' : file_icon(attachment),
             size: attachment ? format_bytes(attachment.file_size) : '未知大小',
             name: label === null ? decrypted_attachment_name(attachment_base_name(file_name)) : null,
-            encrypted: attachment.is_encrypted || undefined,
-            twin_url: link_twin ? ctx.options.static_url(link_twin.url) : undefined,
+            encrypted: attachment_is_restricted(attachment) || undefined,
           } satisfies FileCardData,
         }
         const closing = tokens[close_index]
@@ -289,7 +291,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
       // out icon at the END of the label.
       return `${rendered_link}<span class="link-card-icon iconify i-lucide:link" aria-hidden="true"></span><span class="link-card-tag">链接</span><span class="link-card-label">`
     }
-    return `${rendered_link}<span class="file-card-icon iconify i-${file_card.icon}" aria-hidden="true"></span><span class="file-card-content"><span class="file-card-name">${file_card.name ? md.utils.escapeHtml(file_card.name) : ''}`
+    return rendered_link + file_card_body_open(md, file_card)
   }
 
   const default_link_close_rule = md.renderer.rules.link_close
@@ -322,9 +324,6 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
     if (! file_card) {
       return `</span><span class="link-card-open iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
     }
-    const encrypted_tag = file_card.encrypted ? `<span class="file-card-encrypted-tag">${file_card.abridged ? '机密附件·删减版' : '机密附件'}</span>` : ''
-    // Permitted viewer with a plaintext twin: bottom bar toggles full/abridged.
-    const toggle_bar = file_card.twin_url ? '<span class="encrypted-toggle-bar"><span class="encrypted-toggle" role="button" tabindex="0">查看删减版</span></span>' : ''
-    return `</span><span class="file-card-size">${encrypted_tag}${file_card.size}</span></span><span class="link-card-open iconify i-lucide:external-link" aria-hidden="true"></span>${toggle_bar}${default_link_close_rule(tokens, idx, options, env, self)}`
+    return `${file_card_body_close(file_card)}<span class="link-card-open iconify i-lucide:external-link" aria-hidden="true"></span>${default_link_close_rule(tokens, idx, options, env, self)}`
   }
 }

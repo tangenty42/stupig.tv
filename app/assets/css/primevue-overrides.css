@@ -78,11 +78,15 @@ html:root {
   max-width: 100vw;
 }
 
-.p-dialog-enter-active {
-  animation: card-in 0.2s ease-out;
+/* Beat runtime-injected theme rules in production, and keep the final frame
+   until Vue removes the node. Modal animations must not wait on control transitions. */
+.p-dialog.p-dialog-enter-active {
+  transition: none;
+  animation: card-in 0.2s ease-out both;
 }
-.p-dialog-leave-active {
-  animation: card-out 0.15s ease-in;
+.p-dialog.p-dialog-leave-active {
+  transition: none;
+  animation: card-out 0.15s ease-in both;
 }
 
 /* Another PrimeVue bug: */

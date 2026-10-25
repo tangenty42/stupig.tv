@@ -16,8 +16,9 @@ export function observe_cropped_images(body: HTMLElement) {
   if (! images.length) {
     return null
   }
+  let active = true
   const update = (image: HTMLImageElement) => {
-    if (! image.naturalWidth) {
+    if (! active || ! image.naturalWidth) {
       return
     }
     const frame = image.parentElement
@@ -32,9 +33,15 @@ export function observe_cropped_images(body: HTMLElement) {
   }
   const observer = new ResizeObserver(entries =>
     entries.forEach(entry => update(entry.target as HTMLImageElement)))
-  for (const image of images) {
-    image.addEventListener('load', () => update(image), { once: true })
+  const cleanups = [... images].map((image) => {
+    const on_load = () => update(image)
+    image.addEventListener('load', on_load, { once: true })
     observer.observe(image)
+    return () => image.removeEventListener('load', on_load)
+  })
+  return () => {
+    active = false
+    observer.disconnect()
+    cleanups.forEach(cleanup => cleanup())
   }
-  return () => observer.disconnect()
 }

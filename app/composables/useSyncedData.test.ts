@@ -3,7 +3,7 @@ import { effectScope, isRef, ref, watch } from 'vue'
 import { useSyncedState } from './useSyncedState'
 
 describe('useSyncedData hydration updates', () => {
-  it('refreshes task membership and reconnect sync, but does not fetch for inline progress snapshots', async () => {
+  it('refreshes upload membership on mutation and reconnect sync', async () => {
     vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     let listener: ((event?: { type: string, sync_all?: boolean }) => Promise<void> | void) | undefined
@@ -14,16 +14,15 @@ describe('useSyncedData hydration updates', () => {
       },
     }))
     const { useSyncedData } = await import('./useSyncedData')
-    const fetcher = vi.fn(async () => ['task-1'])
+    const fetcher = vi.fn(async () => ['upload-1'])
     const data = ref<string[] | null>(null)
-    await useSyncedData('content_story_tasks:42', fetcher, data)
+    await useSyncedData('content_uploads:42', fetcher, data)
 
-    await listener!({ type: 'task_progress' })
     expect(fetcher).toHaveBeenCalledOnce()
     await listener!({ type: 'refresh' })
     await listener!({ type: 'sync', sync_all: true })
     expect(fetcher).toHaveBeenCalledTimes(3)
-    expect(data.value).toEqual(['task-1'])
+    expect(data.value).toEqual(['upload-1'])
   })
 
   it('refreshes one cooldown query for phone and identity events and switches phone subscriptions', async () => {

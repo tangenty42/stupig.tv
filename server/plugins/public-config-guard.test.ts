@@ -1,21 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// 不加载真实 .env：本测试明确提供 YAML 插值所需值，验证 request runtime config 注入。
-vi.mock('dotenv', () => ({ config: () => ({ parsed: {} }) }))
+// 不加载本机环境文件：使用显式夹具验证 request runtime config 注入。
+vi.mock('../../config/lib/environment.mjs', () => ({ load_environment: () => ({ ... process.env }) }))
 
 const injected_url = 'wss://mqtt.example.com/mqtt'
 
 // 让 load_config() 跑得通：密钥与连接信息全给占位值
 const config_env = {
-  NODE_ENV: 'test',
+  NODE_ENV: 'production',
   APP_PORT: '3042',
   MYSQL_PASSWORD: 'placeholder',
   JWT_SECRET: 'y'.repeat(40),
-  ALIYUN_ACCESS_KEY_ID: 'placeholder',
-  ALIYUN_ACCESS_KEY_SECRET: 'placeholder',
-  ALIYUN_CAPTCHA_APP_KEY: 'placeholder',
-  OSS_ACCESS_KEY_ID: 'placeholder',
-  OSS_ACCESS_KEY_SECRET: 'placeholder',
+  ALIYUN_DYPNS_ACCESS_KEY_ID: 'placeholder',
+  ALIYUN_DYPNS_ACCESS_KEY_SECRET: 'placeholder',
+  ALIYUN_DYPNS_CAPTCHA_APP_KEY: 'placeholder',
+  ALIYUN_OSS_ACCESS_KEY_ID: 'aliyun-oss-id',
+  ALIYUN_OSS_ACCESS_KEY_SECRET: 'aliyun-oss-secret',
+  OSS_PUBLIC_ACCESS_KEY_ID: 'public-id',
+  OSS_PUBLIC_ACCESS_KEY_SECRET: 'public-secret',
+  OSS_PRIVATE_ACCESS_KEY_ID: 'private-id',
+  OSS_PRIVATE_ACCESS_KEY_SECRET: 'private-secret',
   MYSQL_HOST: '127.0.0.1',
   MYSQL_PORT: '3306',
   MYSQL_USER: 'stupig_tv',
@@ -31,7 +35,8 @@ const config_env = {
 
 // Nuxt build declares this shape; Nitro fills its validated values from YAML at startup.
 const empty_public = {
-  site: { url: '', indexable: false, staticBaseUrl: '' },
+  site: { url: '', indexable: false },
+  oss: { buckets: { public: { publicBaseUrl: '' } } },
   mqtt: { web: { wsUrl: '' } },
   aliyun: { captcha: { appId: '' } },
   app: { captcha: { debug: false } },
@@ -39,6 +44,7 @@ const empty_public = {
 
 const frozen_public = Object.freeze({
   site: Object.freeze({ ... empty_public.site }),
+  oss: Object.freeze({ buckets: Object.freeze({ public: Object.freeze({ ... empty_public.oss.buckets.public }) }) }),
   mqtt: Object.freeze({ web: Object.freeze({ ... empty_public.mqtt.web }) }),
   aliyun: Object.freeze({ captcha: Object.freeze({ ... empty_public.aliyun.captcha }) }),
   app: Object.freeze({ captcha: Object.freeze({ ... empty_public.app.captcha }) }),
@@ -92,7 +98,8 @@ describe('public 配置的运行期注入守卫', () => {
     const event = run_guard()
     const request_config = useRuntimeConfig(event)
     expect(request_config.public).toEqual({
-      site: { url: 'https://www.stupig.tv', indexable: false, staticBaseUrl: 'https://stupig.oss.tangenty.cn' },
+      site: { url: 'https://www.stupig.tv', indexable: true },
+      oss: { buckets: { public: { publicBaseUrl: 'https://stupig-static.oss.tangenty.cn' } } },
       mqtt: { web: { wsUrl: injected_url } },
       aliyun: { captcha: { appId: '804af2e773219386ce8ff865dac64fbe' } },
       app: { captcha: { debug: false } },
