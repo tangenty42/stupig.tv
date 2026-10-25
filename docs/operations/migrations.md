@@ -29,7 +29,7 @@ pnpm migrate --dry-run
 
 本地检查生产目标可执行 `pnpm migrate --env=prod --status`；它加载 `.env.prod`，仍需核对有效主机与库名，进程中显式注入的同名值优先。SQL-only 路径只校验 `db` 子树；脚本按需读取存储配置，不要求短信等无关密钥。
 
-已冻结的 Content v1 产物使用 `migrations/lib/content-v1/config-loader.ts.snapshot` 和 `config-schema.ts.snapshot` 保留旧配置实现，构建器在原模块身份下加载快照，确保既有摘要不变。当前迁移入口先加载所选环境再运行这些产物；不得修改快照或冻结清单来适配新环境。
+已冻结的 Content v1 产物使用 `migrations/lib/content-v1/config-loader.ts.snapshot`、`config-schema.ts.snapshot` 和 `settings.generated.ts.snapshot` 保留旧配置实现及生成设置，构建器在原模块身份下加载快照，确保既有摘要不变。当前迁移入口先加载所选环境再运行这些产物；不得修改快照或冻结清单来适配新环境。运行时公共设置可以继续由当前 YAML 生成，不改变历史迁移的依赖产物。
 
 开发源码入口将脚本产物放在 `.nuxt/migration-scripts/`；生产源码入口使用 `.nuxt/migration-runtime/`，同时打包 Sharp 原生依赖及 `native-manifest.json`，执行与生产镜像相同的版本/文件摘要校验。仅设置 `NODE_ENV=production` 而缺少该清单会被拒绝。CI 空库重放使用专用假 OSS 身份满足历史脚本的目标配置校验，不使用真实云密钥或复制对象。
 

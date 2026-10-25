@@ -1,21 +1,22 @@
-import type { WorkspaceReport } from '@shared/content-workspace'
-import type { ContentWorkspaceNode } from '@shared/types/content'
+import type { ContentAttachmentWorkspace, ContentWorkspaceCommandResult, ContentWorkspaceNode } from '@shared/types/content'
 import type { ContentUploadReservation, ContentUploadSession } from '@shared/types/content-upload'
 import type { WorkspaceListRow } from '~/utils/content/workspace'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { computed, effectScope, onScopeDispose, reactive, ref, watch } from 'vue'
+import { accept_attachment_snapshot } from '~/utils/content/attachment-snapshot'
 
 const mocks = vi.hoisted(() => ({ execute: vi.fn(), toast: vi.fn(), uploads: {} as { sessions: ContentUploadSession[], reservations: ContentUploadReservation[], identity_key: string, start: ReturnType<typeof vi.fn> } }))
 vi.mock('~/stores/contentUploads', () => ({ useContentUploadsStore: () => mocks.uploads }))
 const { useAttachmentPanel } = await import('./useAttachmentPanel')
 let scope: ReturnType<typeof effectScope>
-const success: WorkspaceReport = { succeeded: ['qa.txt'], skipped: [], renamed: [] }
 const action = { operation: 'delete' as const, targets: [{ id: 3, version: 'v1' }], draft_references: [] }
 const nodes: ContentWorkspaceNode[] = [
   { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v1' },
   { id: 3, parent_id: 2, name: 'qa.txt', path: 'docs/qa.txt', kind: 'file', version: 'v1' },
   { id: 4, parent_id: 2, name: 'other.txt', path: 'docs/other.txt', kind: 'file', version: 'v1' },
 ]
+const workspace: ContentAttachmentWorkspace = { nodes, root_id: 1, attachments: [], folders: ['docs'], namespace_revision: 1, viewer_key: '7:true' }
+const success: ContentWorkspaceCommandResult = { succeeded: ['qa.txt'], skipped: [], renamed: [], workspace }
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -29,7 +30,12 @@ beforeEach(() => {
   vi.stubGlobal('useApi', () => ({ content: { execute_workspace_command: mocks.execute } }))
   vi.stubGlobal('useAuth', () => ({ user: ref({ id: 7, is_admin: true }) }))
   vi.stubGlobal('useMyToast', () => ({ error: mocks.toast }))
-  vi.stubGlobal('createAttachmentWorkspace', () => ({ data: ref({ nodes, root_id: 1 }), ready: Promise.resolve() }))
+  vi.stubGlobal('createAttachmentWorkspace', () => {
+    const data = ref(workspace)
+    return { data, ready: Promise.resolve(), accept: (incoming: ContentAttachmentWorkspace) => {
+      data.value = accept_attachment_snapshot(data.value, incoming)
+    } }
+  })
   vi.stubGlobal('useContentUploadSync', () => Promise.resolve())
   mocks.execute.mockResolvedValue(success)
 })
@@ -38,6 +44,34 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 const mount = () => scope.run(() => useAttachmentPanel(25, () => ''))!
+
+it.each(['delete', 'rename'] as const)('applies the committed %s snapshot before ending pending without waiting for notifications', async (operation) => {
+  let finish!: (value: typeof success) => void
+  mocks.execute.mockImplementationOnce(() => new Promise((resolve) => {
+    finish = resolve
+  }))
+  const panel = await mount()
+  panel.expanded.value.add(2)
+  const completed = panel.execute(operation === 'delete' ? action : { operation, target: { id: 3, version: 'v1' }, name: 'next.txt' })
+  expect(panel.pending.value).toBe(true)
+  expect(panel.rows.value.some(row => row.name === 'qa.txt')).toBe(true)
+  const next_nodes = operation === 'delete' ? nodes.filter(node => node.id !== 3) : nodes.map(node => node.id === 3 ? { ... node, name: 'next.txt', path: 'docs/next.txt', version: 'v2' } : node)
+  const states: string[][] = []
+  watch(panel.pending, (pending) => {
+    if (! pending)
+      states.push(panel.rows.value.map(row => row.name))
+  }, { flush: 'sync' })
+  finish({ ... success, workspace: { ... workspace, nodes: next_nodes, namespace_revision: 2 } })
+  await completed
+  expect(states).toHaveLength(1)
+  expect(states[0]).not.toContain('qa.txt')
+  if (operation === 'rename')
+    expect(states[0]).toContain('next.txt')
+  expect(panel.catalog.data.value?.namespace_revision).toBe(2)
+  // A delayed pre-command invalidation fetch cannot put the old row back.
+  panel.catalog.accept(workspace)
+  expect(panel.catalog.data.value?.namespace_revision).toBe(2)
+})
 
 it('previews and downloads only the redacted pixels for a guest of a private owner', async () => {
   const sign = vi.fn().mockResolvedValue({ url: '/signed-redacted-download' })
@@ -228,10 +262,11 @@ it('discards all old identity command responses, errors and busy fences', async 
   mocks.uploads.identity_key = '8:25'
   expect(panel.pending.value).toBe(false)
   await panel.execute(action)
-  finish({ ... success, renamed: [{ target: 'old', from: 'old', to: 'next', via: 'suffix' }] })
+  finish({ ... success, workspace: { ... workspace, namespace_revision: 99 }, renamed: [{ target: 'old', from: 'old', to: 'next', via: 'suffix' }] })
   await first
   expect(panel.request_error.value).toBe('')
   expect(panel.report.value).toBeNull()
+  expect(panel.catalog.data.value?.namespace_revision).toBe(1)
 })
 
 it('retries a lost conflict resubmission with the same receipt instead of offering another new command', async () => {

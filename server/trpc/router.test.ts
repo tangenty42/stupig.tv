@@ -14,6 +14,9 @@ const auth_mocks = vi.hoisted(() => ({
 vi.mock('@server/services/auth-guards.service', () => auth_mocks)
 const upload_mocks = vi.hoisted(() => ({ begin_upload_session: vi.fn(), operate_upload_session: vi.fn(), sign_upload_session_part: vi.fn(), list_upload_sessions: vi.fn(), adopt_upload_session: vi.fn() }))
 vi.mock('@server/services/content/upload-api.service', () => upload_mocks)
+const workspace_mocks = vi.hoisted(() => ({ execute_workspace_command: vi.fn(), get_attachment_workspace: vi.fn() }))
+vi.mock('@server/services/content/workspace-command.service', () => workspace_mocks)
+vi.mock('@server/services/content/attachment-workspace.service', () => workspace_mocks)
 const background_mocks = vi.hoisted(() => ({ get_background_status: vi.fn() }))
 vi.mock('@server/services/background/status.service', () => background_mocks)
 const audit_mocks = vi.hoisted(() => ({ get_storage_audit_findings: vi.fn() }))
@@ -69,6 +72,46 @@ function create_event() {
 }
 
 describe('tRPC router contracts', () => {
+  it('waits for commit and the current viewer workspace before acknowledging a command, including receipt replay', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    const command = { request_id: crypto.randomUUID(), scope_id: 24, operation: 'rename' as const, target: { id: 3, version: 'v1' }, name: 'next.txt' }
+    const report = { succeeded: ['next.txt'], skipped: [], renamed: [] }
+    const snapshot = { nodes: [], attachments: [], folders: [], namespace_revision: 2, viewer_key: '7:true' }
+    let commit!: (value: typeof report) => void
+    let read!: (value: typeof snapshot) => void
+    workspace_mocks.execute_workspace_command.mockImplementationOnce(() => new Promise((resolve) => {
+      commit = resolve
+    }))
+      .mockResolvedValue(report)
+    workspace_mocks.get_attachment_workspace.mockImplementationOnce(() => new Promise((resolve) => {
+      read = resolve
+    }))
+      .mockResolvedValue({ ... snapshot, namespace_revision: 3 })
+    let acknowledged = false
+    const pending = caller.content.executeWorkspaceCommand(command).then((result) => {
+      acknowledged = true
+      return result
+    })
+    await vi.waitFor(() => expect(workspace_mocks.execute_workspace_command).toHaveBeenCalledOnce())
+    expect(workspace_mocks.get_attachment_workspace).not.toHaveBeenCalled()
+    commit(report)
+    await vi.waitFor(() => expect(workspace_mocks.get_attachment_workspace).toHaveBeenCalledWith(24, auth_user))
+    expect(acknowledged).toBe(false)
+    read(snapshot)
+    expect(await pending).toEqual({ ... report, workspace: snapshot })
+    // Replaying the same receipt reads a fresh projection rather than replaying URLs.
+    expect(await caller.content.executeWorkspaceCommand(command)).toEqual({ ... report, workspace: { ... snapshot, namespace_revision: 3 } })
+    expect(workspace_mocks.execute_workspace_command.mock.calls[1]![0]).toBe(7)
+    expect(workspace_mocks.execute_workspace_command.mock.calls[1]![1].request_id).toBe(command.request_id)
+  })
+
+  it('does not acknowledge success when the committed workspace cannot be read', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    workspace_mocks.execute_workspace_command.mockResolvedValue({ succeeded: [], skipped: [], renamed: [] })
+    workspace_mocks.get_attachment_workspace.mockRejectedValueOnce(new Error('read unavailable'))
+    await expect(caller.content.executeWorkspaceCommand({ request_id: crypto.randomUUID(), scope_id: 24, operation: 'create_folder', parent_id: 1, name: 'docs' })).rejects.toThrow('read unavailable')
+  })
+
   it('requires full admin permission for paginated object-key findings', async () => {
     const caller = app_router.createCaller({ event: create_event() })
     auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'admin_access', level: 'readonly' }] })

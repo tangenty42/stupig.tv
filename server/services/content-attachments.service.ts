@@ -135,24 +135,34 @@ export async function delete_story_attachment_rows(story_id: number, executor: D
 }
 
 /** Shared by cover reads and transactional change detection, including public redacted twins. */
-export function attachment_cover_url(file_name: string, rows: (Pick<AttachmentRow, 'id' | 'file_name' | 'object_key' | 'version' | 'storage_bucket' | 'storage_provider' | 'oss_version_id' | 'is_private'> & { is_folder?: number, encryption_key?: string | null, redacted_avif_key?: string | null, redacted_jpeg_key?: string | null, redacted_revision?: number })[]) {
+type CoverRow = Pick<AttachmentRow, 'id' | 'file_name' | 'object_key' | 'version' | 'storage_bucket' | 'storage_provider' | 'oss_version_id' | 'is_private'> & Partial<AttachmentRow>
+
+function cover_attachment(file_name: string, rows: CoverRow[]) {
   const public_file = (name: string) => rows.find(row => row.file_name === name && ! row.is_folder && ! row.is_private && ! row.encryption_key && row.object_key)
   const redacted = rows.find(row => row.file_name === file_name && row.is_private && ! row.is_folder && ! row.encryption_key && has_redacted_variant(row))
   if (redacted)
-    return `${attachment_object_url(redacted)}&role=redacted`
+    return { row: redacted, redacted: true }
   const row = public_file(file_name) ?? (file_name.endsWith('.good') ? public_file(decrypted_attachment_name(file_name)) : undefined)
-  return row ? attachment_object_url(row) : null
+  return row ? { row, redacted: false } : null
 }
 
-/** Cover URLs for story list cards, keyed `story_id:file_name`. */
-export async function list_cover_urls(covers: { story_id: number, file_name: string }[], executor: DbExecutor = db) {
-  const urls = new Map<string, string>()
+export function attachment_cover_url(file_name: string, rows: CoverRow[]) {
+  const selected = cover_attachment(file_name, rows)
+  return selected ? `${attachment_object_url(selected.row)}${selected.redacted ? '&role=redacted' : ''}` : null
+}
+
+/** Public cover projections, keyed `story_id:file_name`; never expose normal private metadata. */
+export async function list_cover_presentations(covers: { story_id: number, file_name: string }[], executor: DbExecutor = db) {
+  const urls = new Map<string, { url: string, image: ContentStoryAttachment['image'] }>()
   if (! covers.length)
     return urls
   const candidates = covers.flatMap(cover => cover.file_name.endsWith('.good') ? [cover, { ... cover, file_name: decrypted_attachment_name(cover.file_name) }] : [cover])
   const tuples = candidates.map(() => '(?, ?)').join(',')
   const [rows] = await executor.execute<AttachmentRow[]>(
-    `SELECT id, story_id, file_name, object_key, version, storage_bucket, storage_provider, oss_version_id, is_private, redacted_avif_key, redacted_jpeg_key, redacted_revision FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND (story_id, file_name) IN (${tuples})`,
+    `SELECT id, story_id, file_name, object_key, version, storage_bucket, storage_provider, oss_version_id, is_private,
+      avif_key, jpeg_key, image_revision, image_metadata, lqip_jpeg,
+      redacted_avif_key, redacted_jpeg_key, redacted_revision, redacted_metadata, redacted_lqip_jpeg
+      FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND (story_id, file_name) IN (${tuples})`,
     candidates.flatMap(cover => [cover.story_id, cover.file_name]),
   )
   const by_story = new Map<number, AttachmentRow[]>()
@@ -163,9 +173,14 @@ export async function list_cover_urls(covers: { story_id: number, file_name: str
     by_story.set(scope, group)
   }
   for (const cover of covers) {
-    const url = attachment_cover_url(cover.file_name, by_story.get(cover.story_id) ?? [])
-    if (url)
-      urls.set(`${cover.story_id}:${cover.file_name}`, url)
+    const selected = cover_attachment(cover.file_name, by_story.get(cover.story_id) ?? [])
+    if (selected) {
+      const { row, redacted } = selected
+      urls.set(`${cover.story_id}:${cover.file_name}`, {
+        url: `${attachment_object_url(row)}${redacted ? '&role=redacted' : ''}`,
+        image: image_presentation(redacted ? redacted_presentation_row(row) : row, redacted),
+      })
+    }
   }
   return urls
 }

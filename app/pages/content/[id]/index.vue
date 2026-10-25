@@ -1,7 +1,7 @@
 <template>
   <div class="pb-12 pt-8">
     <template v-if="story">
-      <MyContentStoryHeader back :editable="can_manage_content" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-url="story.cover_url" :date="format_event_range(story.event_precision, story.event_dates, time_context.timezone)" :story-id="story.id" />
+      <MyContentStoryHeader back :editable="can_manage_content" :title="story.title" :labels="story.labels" :desc="story.desc" :cover="story.cover" :cover-label="story.cover_label" :cover-url="story.cover_url" :cover-image="story.cover_image" :date="format_event_range(story.event_precision, story.event_dates, time_context.timezone)" :story-id="story.id" />
 
       <MyDivider class="mt-12">
         正文
