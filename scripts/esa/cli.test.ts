@@ -36,30 +36,29 @@ function run(target: string, args: string[]) {
 }
 
 describe('eSA command entry point', () => {
-  it('loads the pinned official CLI directly without a second launcher process', async () => {
+  it('loads the pinned official CLI commit options with an isolated home', async () => {
     // Match commit_source's asynchronous child lifecycle, including closing
     // stdin. The official CLI must not wait for an interactive input stream.
     const result = await new Promise<{ status: string | number, stdout: string, stderr: string }>((accept) => {
       const child = execFile(process.execPath, [resolve('node_modules/esa-cli/dist/index.js'), '--skip-update-check', 'commit', '--help'], {
-        cwd: directory, encoding: 'utf8', timeout: 20000,
-        // Match the non-secret host environment forwarded by commit_source. On
-        // Windows, omitting the user profile makes CLI home discovery very slow.
+        cwd: directory, encoding: 'utf8', timeout: 60000,
+        // Isolate CLI home discovery from personal credentials and settings.
         env: {
           PATH: process.env.PATH, Path: process.env.Path, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
-          USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME,
+          USERPROFILE: directory, HOME: directory,
           TEMP: process.env.TEMP, TMP: process.env.TMP,
           CI: 'true', NO_COLOR: '1', LANG: 'en_US.UTF-8',
           NODE_PATH: resolve('node_modules/.pnpm/node_modules'),
         },
-      }, (error, stdout, stderr) => accept({ status: error?.code ?? 0, stdout, stderr }))
+      }, (error, stdout, stderr) => accept({ status: error ? error.code ?? error.signal ?? 'failed' : 0, stdout, stderr }))
       child.stdin?.end()
     })
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain('--environment')
     expect(result.stdout).toContain('--bundle')
-  // The real CLI has a 20 s process deadline; let its assertion report an exit
-  // failure before Vitest's shorter default deadline interrupts this test.
-  }, 25000)
+  // Allow the installed CLI to cold-load its SDK dependencies on slower disks.
+  // Keep the process deadline shorter than the test so its exit is reported.
+  }, 70000)
   it.each([['dev', '111'], ['prod', '222']])('plans %s with its selected YAML/env and no cloud writes', (target, siteId) => {
     const output = run(target, ['--plan'])
     expect(output.status, output.stderr).toBe(0)

@@ -1,16 +1,7 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
-import { generate_settings } from './config/lib/generate'
-
-await generate_settings()
 
 export default defineConfig({
-  // Nuxt replaces these flags at build time; tests run in Node, so define them
-  // for app-side modules (e.g. the draft store) that branch on `import.meta.client`.
-  define: {
-    'import.meta.client': 'true',
-    'import.meta.server': 'false',
-  },
   resolve: {
     alias: {
       // Matches Nuxt's srcDir alias, so app-side modules (the markdown renderer)
@@ -20,5 +11,24 @@ export default defineConfig({
       '@server': resolve(import.meta.dirname, './server'),
       '@shared': resolve(import.meta.dirname, './server/shared'),
     },
+  },
+  test: {
+    maxWorkers: 4,
+    projects: [
+      {
+        extends: true,
+        define: { 'import.meta.client': 'true', 'import.meta.server': 'false' },
+        test: { name: 'app', include: ['app/**/*.test.ts'], exclude: ['**/*.nuxt.test.ts'] },
+      },
+      {
+        extends: true,
+        define: { 'import.meta.client': 'false', 'import.meta.server': 'true' },
+        test: { name: 'server', include: ['server/**/*.test.ts', 'config/**/*.test.ts'] },
+      },
+      {
+        extends: true,
+        test: { name: 'tools', include: ['scripts/**/*.test.ts', 'eslint.local-rules.test.ts'], fileParallelism: false, testTimeout: 15_000 },
+      },
+    ],
   },
 })

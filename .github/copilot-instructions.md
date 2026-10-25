@@ -40,10 +40,11 @@
 
 ## Testing
 
-- Tests are part of behavior changes. Add/update relevant tests and fix the cause of failures. For documentation-only or similarly low-impact changes, explain the focused validation used.
-- Tests live beside their modules as `<module>.test.ts`. Vitest uses Node without a DOM. Browser geometry/canvas/pointer behavior requires browser verification; do not claim unit tests cover it.
+- Choose verification according to the behavior and risk. Add regression coverage for defects and meaningful behavior changes; documentation, formatting and trivial plumbing do not require ceremonial tests.
+- Keep unit tests beside modules as `<module>.test.ts`, mounted Vue/Nuxt tests as `<module>.nuxt.test.ts`, and browser workflows in `tests/e2e/*.spec.ts`. Shared fixtures and setup are appropriate when they remove repeated infrastructure without hiding the scenario.
 - Assert observable contracts. Mock infrastructure boundaries, never the unit under test. Use the real entry point when wiring is the risk. Follow [testing](../docs/development/testing.md) for aliases, mocks and hydration constraints.
-- A new guard must fail when its protected behavior is broken: verify that temporarily, restore the implementation, then rerun. Never hollow out assertions, skip tests or broaden expectations just to pass.
+- Test observable behavior instead of source layout, private variable names or exact template strings. Replace redundant source assertions when runtime coverage exists. Preserve migration digests and other contracts whose actual subject is an artifact.
+- For security, concurrency and data-loss regressions, verify that the test detects the broken behavior when practical. This is not a mandatory mutation ritual for every guard. Do not weaken a business assertion merely to get a green run.
 - Run `pnpm test` for relevant behavior and `pnpm lint` for changes. After type/import refactors run `pnpm exec nuxt typecheck`; include the scripts TypeScript check when that scope changes. Resolve failures before reporting completion.
 
 ## Development test accounts
