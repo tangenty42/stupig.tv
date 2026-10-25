@@ -62,7 +62,64 @@ jobs:
 
       - run: pnpm exec tsc --project scripts/tsconfig.json --noEmit
 
+      - run: pnpm exec tsc --project tests/tsconfig.json --noEmit
+
       - run: pnpm test
+
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NODE_ENV: development
+      MYSQL_DEV_ROOT_PASSWORD: ci-root-password
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '6379'
+      MQTT_HOST: 127.0.0.1
+      MQTT_TCP_PORT: '1883'
+      MQTT_WS_PORT: '8083'
+      MQTT_WEB_URL: ws://localhost:8083/mqtt
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_ROOT_HOST: '%'
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      mqtt:
+        image: emqx/emqx:6.2.2
+        ports:
+          - 1883:1883
+          - 8083:8083
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.10.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-diagnostics
+          include-hidden-files: true
+          path: |
+            .dev/playwright/
+            .dev/e2e/**/server.log
 
   migrations:
     runs-on: ubuntu-24.04

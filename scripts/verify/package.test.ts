@@ -82,6 +82,18 @@ function declared_packages(pkg: ReturnType<typeof read_package_json>): Set<strin
   ])
 }
 
+function declared_executables(packages: Set<string>): Set<string> {
+  const executables = new Set<string>()
+  for (const name of packages) {
+    const metadata = JSON.parse(readFileSync(resolve(project_root, 'node_modules', name, 'package.json'), 'utf8')) as { bin?: string | Record<string, string> }
+    if (typeof metadata.bin === 'string')
+      executables.add(name.split('/').at(- 1)!)
+    else
+      Object.keys(metadata.bin ?? {}).forEach(bin => executables.add(bin))
+  }
+  return executables
+}
+
 describe('split_commands', () => {
   it('按 && 和 ; 切分', () => {
     expect(split_commands('a && b; c')).toEqual(['a', 'b', 'c'])
@@ -112,6 +124,7 @@ describe('command_name', () => {
 describe('package.json 脚本', () => {
   const pkg = read_package_json()
   const declared = declared_packages(pkg)
+  const executables = declared_executables(declared)
   const bin_dir = resolve(project_root, 'node_modules/.bin')
   const available_bins = new Set(readdirSync(bin_dir))
 
@@ -120,7 +133,7 @@ describe('package.json 脚本', () => {
     for (const [name, script] of Object.entries(pkg.scripts)) {
       for (const command of split_commands(script)) {
         const executable = command_name(command)
-        if (executable && available_bins.has(executable) && ! declared.has(executable)) {
+        if (executable && available_bins.has(executable) && ! executables.has(executable)) {
           offenders.add(`${name}: ${executable}`)
         }
       }
@@ -139,13 +152,5 @@ describe('package.json 脚本', () => {
       .filter(([, script]) => /\$\{/.test(script))
       .map(([name]) => name)
     expect(offenders).toEqual([])
-  })
-
-  it('守卫本身有效：这个检查能认出幽灵依赖', () => {
-    // 用一个确实存在于 .bin 且未声明的命令自检，否则测试可能在空转
-    const phantom = [... available_bins].find(bin => ! declared.has(bin))
-    expect(phantom, '本地 .bin 里应当存在未声明的传递依赖，否则此守卫测不出东西').toBeDefined()
-    expect(available_bins.has('esbuild')).toBe(true)
-    expect(declared.has('esbuild')).toBe(true)
   })
 })

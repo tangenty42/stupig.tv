@@ -6,6 +6,8 @@
 .dev
 .esa
 .cache
+playwright-report
+test-results
 dist
 
 # Node dependencies

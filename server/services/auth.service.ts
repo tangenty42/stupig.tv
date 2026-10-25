@@ -7,6 +7,7 @@ import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
+import { error_fields, log_error } from '@server/lib/log'
 import { clear_auth_token_cookie, make_token_hash, set_auth_token_cookie, sign_auth_token } from '@server/lib/session'
 import { check_otp_sms, send_otp_sms } from '@server/lib/sms'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
@@ -49,6 +50,7 @@ interface OtpCooldownRecord extends RowDataPacket {
 
 interface OtpSendCountRow extends RowDataPacket {
   send_count: number
+  cooling_down: number | null
 }
 
 interface CaptchaInput {
@@ -173,7 +175,7 @@ export async function get_otp_cooldown(input: AuthOtpCooldownInput) {
     : [input.identity_token]
 
   const [rows] = await db.execute<OtpCooldownRecord[]>(
-    `SELECT cooldown_until FROM otp_send_logs WHERE ${where_clause} ORDER BY id DESC LIMIT 1`,
+    `SELECT cooldown_until FROM otp_send_logs WHERE ${where_clause} ORDER BY cooldown_until DESC LIMIT 1`,
     params,
   )
   const record = rows[0]
@@ -203,44 +205,77 @@ function calc_otp_send_tier(sent_count: number) {
   }
 }
 
+async function reserve_otp_send(payload: AuthSendOtpInput, identity_token: string) {
+  const connection = await db.getConnection()
+  let reusable = false
+  try {
+    // One database-scoped lock covers both overlapping identity/phone quotas,
+    // including first use with no rows to lock. Never hold it during SMS I/O.
+    // Fail fast under contention instead of filling the connection pool.
+    const [locks] = await connection.execute<RowDataPacket[]>(
+      'SELECT GET_LOCK(CONCAT(\'stupig:otp:\', LEFT(SHA2(DATABASE(), 256), 53)), 0) AS acquired',
+    )
+    reusable = locks[0]?.acquired === 0
+    if (locks[0]?.acquired !== 1)
+      throw new ApiError(reusable ? 429 : 503, reusable ? '验证码请求正在处理中，请稍后重试' : '验证码服务暂时不可用，请稍后重试')
+
+    try {
+      // Keep yesterday's active cooldown across UTC midnight, but count only
+      // today's reservations. Use the DB clock for checks and writes alike.
+      const [rows] = await connection.execute<OtpSendCountRow[]>(
+        `SELECT COUNT(CASE WHEN requested_at >= UTC_DATE() THEN 1 END) AS send_count,
+          MAX(cooldown_until) > UTC_TIMESTAMP() AS cooling_down
+        FROM otp_send_logs WHERE (identity_token = ? OR phone = ?)
+          AND (requested_at >= UTC_DATE() OR cooldown_until > UTC_TIMESTAMP())`,
+        [identity_token, payload.phone],
+      )
+      const sent_count = Number(rows[0]?.send_count ?? 0)
+      if (calc_otp_send_tier(sent_count) === 0)
+        throw new ApiError(429, '已达到发送上限')
+      if (rows[0]?.cooling_down)
+        throw new ApiError(429, '验证码发送过于频繁，请稍后重试')
+
+      const cooldown_ms = calc_otp_send_tier(sent_count - 1) === 1 ? config.app.otp.tier1.cooldownMs : config.app.otp.tier2.cooldownMs
+      await connection.execute(
+        `INSERT INTO otp_send_logs (identity_token, phone, purpose, requested_at, cooldown_until)
+        VALUES (?, ?, ?, UTC_TIMESTAMP(), CASE WHEN ? THEN TIMESTAMPADD(DAY, 1, UTC_DATE())
+          ELSE TIMESTAMPADD(MICROSECOND, ?, UTC_TIMESTAMP()) END)`,
+        [identity_token, payload.phone, payload.purpose, calc_otp_send_tier(sent_count + 1) === 0, cooldown_ms * 1000],
+      )
+    }
+    finally {
+      try {
+        const [released] = await connection.execute<RowDataPacket[]>(
+          'SELECT RELEASE_LOCK(CONCAT(\'stupig:otp:\', LEFT(SHA2(DATABASE(), 256), 53))) AS released',
+        )
+        reusable = released[0]?.released === 1
+        if (! reusable)
+          log_error('otp reservation lock release was not confirmed')
+      }
+      catch (error) {
+        log_error('otp reservation lock release failed', error_fields(error))
+      }
+    }
+  }
+  finally {
+    // A failed/ambiguous lock command must not leave a named lock on a pooled
+    // session: COMMIT/ROLLBACK do not release MySQL advisory locks.
+    if (reusable)
+      connection.release()
+    else
+      connection.destroy()
+  }
+}
+
 export async function send_otp(payload: AuthSendOtpInput, meta: { identity_token: string }) {
-  const today_start = dayjs().utc()
-    .startOf('day')
-
-  const [count_rows] = await db.execute<OtpSendCountRow[]>(
-    'SELECT COUNT(*) AS send_count FROM otp_send_logs WHERE (identity_token = ? OR phone = ?) AND requested_at >= ?',
-    [meta.identity_token, payload.phone, today_start.toDate()],
-  )
-  const sent_count = count_rows[0]?.send_count ?? 0
-
-  const tier_last = calc_otp_send_tier(sent_count - 1)
-  const tier_current = calc_otp_send_tier(sent_count)
-  const tier_next = calc_otp_send_tier(sent_count + 1)
-
-  let cooldown_until: Date
-  if (tier_current !== 0) {
-    const cooldown_ms = tier_last === 1 ? config.app.otp.tier1.cooldownMs : config.app.otp.tier2.cooldownMs
-    const out_id = `${meta.identity_token}-${Date.now()}`
-
-    await send_otp_sms({ phone: payload.phone, out_id })
-
-    if (tier_next !== 0) {
-      cooldown_until = dayjs().utc()
-        .add(cooldown_ms, 'millisecond')
-        .toDate()
-    }
-    else {
-      cooldown_until = today_start.add(1, 'day').toDate()
-    }
-  }
-  else {
-    throw new ApiError(429, '已达到发送上限')
-  }
-
-  await db.execute(
-    'INSERT INTO otp_send_logs (identity_token, phone, purpose, requested_at, cooldown_until) VALUES (?, ?, ?, NOW(), ?)',
-    [meta.identity_token, payload.phone, payload.purpose, cooldown_until],
-  )
+  await reserve_otp_send(payload, meta.identity_token)
+  // Notify only after a reservation exists, including when SMS later fails.
+  // Rejected requests must not cause cross-tab refresh traffic.
+  publish_refresh({ resource: sync_resource('otp_cooldown', payload.phone) })
+  publish_refresh({ resource: sync_resource('otp_cooldown_by_identity', meta.identity_token) })
+  // Once reserved, even a timeout/provider error consumes quota: delivery may
+  // have happened remotely. Never remove the reservation and allow a resend.
+  await send_otp_sms({ phone: payload.phone, out_id: crypto.randomUUID() })
 }
 
 export async function logout_user(event: H3Event, auth_user: AuthUser) {
@@ -261,6 +296,4 @@ export async function send_otp_for_request(event: H3Event, input: SendOtpRequest
   const payload = { phone: phone_schema.parse(phone), purpose: input.purpose }
 
   await send_otp(payload, { identity_token })
-  publish_refresh({ resource: sync_resource('otp_cooldown', payload.phone) })
-  publish_refresh({ resource: sync_resource('otp_cooldown_by_identity', identity_token) })
 }

@@ -27,12 +27,14 @@ const mocks = vi.hoisted(() => ({
   sessions: { create_login_session: vi.fn(), logout_session: vi.fn() },
   guards: { require_auth_user: vi.fn() },
   sync: { publish_refresh: vi.fn() },
+  log: { log_error: vi.fn(), error_fields: vi.fn(() => ({})) },
 }))
 
 vi.mock('@config/loader', () => ({ runtime_config: () => mocks.config }))
 vi.mock('@server/lib/db', () => ({ db: mocks.db }))
 vi.mock('@server/lib/captcha', () => mocks.captcha)
 vi.mock('@server/lib/sms', () => mocks.sms)
+vi.mock('@server/lib/log', () => mocks.log)
 vi.mock('@server/lib/session', () => mocks.session_lib)
 vi.mock('@server/services/session.service', () => mocks.sessions)
 vi.mock('@server/services/auth-guards.service', () => mocks.guards)
@@ -63,16 +65,21 @@ function create_device_context() {
 }
 
 /** Sequel between "how many codes has this sender already used today" and the log row. */
-function use_otp_log(sent_count: number) {
+function use_otp_log(sent_count: number, cooling_down = false) {
   mocks.db.execute.mockImplementation(async (sql: string) => {
-    if (sql.includes('COUNT(*)')) {
-      return [[{ send_count: sent_count }], []]
-    }
+    if (sql.includes('GET_LOCK'))
+      return [[{ acquired: 1 }], []]
+    if (sql.includes('RELEASE_LOCK'))
+      return [[{ released: 1 }], []]
+    if (sql.includes('AS send_count'))
+      return [[{ send_count: sent_count, cooling_down: cooling_down ? 1 : 0 }], []]
     return [{ affectedRows: 1 }, []]
   })
 }
 
-const start_of_day = new Date('2026-09-11T00:00:00Z')
+function create_otp_connection(execute = mocks.db.execute) {
+  return { execute, release: vi.fn(), destroy: vi.fn() }
+}
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -94,6 +101,7 @@ beforeEach(() => {
     is_admin: false,
   })
   use_otp_log(0)
+  mocks.db.getConnection.mockImplementation(async () => create_otp_connection())
 })
 
 afterEach(() => {
@@ -110,13 +118,14 @@ describe('send_otp rate limiting', () => {
 
     expect(mocks.sms.send_otp_sms).toHaveBeenCalledWith({
       phone: PHONE,
-      out_id: expect.stringMatching(/^device-a-\d+$/),
+      out_id: expect.stringMatching(/^[a-f\d-]{36}$/),
     })
     expect(insert_call()?.[1]).toEqual([
       DEVICE,
       PHONE,
       'login',
-      new Date(Date.now() + mocks.config.app.otp.tier1.cooldownMs),
+      false,
+      mocks.config.app.otp.tier1.cooldownMs * 1000,
     ])
   })
 
@@ -125,7 +134,7 @@ describe('send_otp rate limiting', () => {
 
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
-    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.config.app.otp.tier1.cooldownMs))
+    expect(insert_call()?.[1]?.[4]).toBe(mocks.config.app.otp.tier1.cooldownMs * 1000)
   })
 
   it('uses the long cooldown once the sender has already sent from the second tier', async () => {
@@ -133,7 +142,7 @@ describe('send_otp rate limiting', () => {
 
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
-    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.config.app.otp.tier2.cooldownMs))
+    expect(insert_call()?.[1]?.[4]).toBe(mocks.config.app.otp.tier2.cooldownMs * 1000)
   })
 
   it('still uses the short cooldown for the send that crosses into the second tier', async () => {
@@ -144,7 +153,7 @@ describe('send_otp rate limiting', () => {
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
     expect(mocks.sms.send_otp_sms).toHaveBeenCalledTimes(1)
-    expect(insert_call()?.[1]?.[3]).toEqual(new Date(Date.now() + mocks.config.app.otp.tier1.cooldownMs))
+    expect(insert_call()?.[1]?.[4]).toBe(mocks.config.app.otp.tier1.cooldownMs * 1000)
   })
 
   it('closes the window for the rest of the UTC day on the last allowed send', async () => {
@@ -153,7 +162,8 @@ describe('send_otp rate limiting', () => {
     await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
 
     expect(mocks.sms.send_otp_sms).toHaveBeenCalledTimes(1)
-    expect(insert_call()?.[1]?.[3]).toEqual(new Date('2026-09-12T00:00:00.000Z'))
+    expect(insert_call()?.[1]?.[3]).toBe(true)
+    expect(insert_call()?.[0]).toContain('TIMESTAMPADD(DAY, 1, UTC_DATE())')
   })
 
   it('refuses to send once the daily cap is reached, without calling the provider', async () => {
@@ -171,17 +181,166 @@ describe('send_otp rate limiting', () => {
 
     await send_otp({ phone: PHONE, purpose: 'register' }, { identity_token: DEVICE })
 
-    const count_call = mocks.db.execute.mock.calls.find(call => String(call[0]).includes('COUNT(*)'))
+    const count_call = mocks.db.execute.mock.calls.find(call => String(call[0]).includes('AS send_count'))
     expect(String(count_call?.[0])).toContain('(identity_token = ? OR phone = ?)')
-    expect(count_call?.[1]).toEqual([DEVICE, PHONE, start_of_day])
+    expect(count_call?.[1]).toEqual([DEVICE, PHONE])
+    expect(String(count_call?.[0])).toContain('requested_at >= UTC_DATE() OR cooldown_until > UTC_TIMESTAMP()')
   })
 
-  it('does not log a send when the provider fails', async () => {
+  it('keeps the reservation when the provider fails after it may have sent', async () => {
     mocks.sms.send_otp_sms.mockRejectedValue(new Error('provider down'))
 
     await expect(send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })).rejects.toThrow('provider down')
 
+    expect(insert_call()).toBeDefined()
+  })
+
+  it('rejects a send during cooldown before calling the provider or inserting another reservation', async () => {
+    use_otp_log(1, true)
+
+    await expect(send_otp_for_request(create_event(), { phone: PHONE, purpose: 'login' }, DEVICE))
+      .rejects.toMatchObject({ statusCode: 429, message: '验证码发送过于频繁，请稍后重试' })
+
+    expect(mocks.sms.send_otp_sms).not.toHaveBeenCalled()
     expect(insert_call()).toBeUndefined()
+    expect(mocks.sync.publish_refresh).not.toHaveBeenCalled()
+  })
+
+  it('honors a previous-day cooldown even with no reservations today', async () => {
+    use_otp_log(0, true)
+
+    await expect(send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE }))
+      .rejects.toMatchObject({ statusCode: 429 })
+
+    expect(mocks.sms.send_otp_sms).not.toHaveBeenCalled()
+  })
+
+  it('releases the lock and connection before calling the SMS provider', async () => {
+    const connection = create_otp_connection()
+    mocks.db.getConnection.mockResolvedValue(connection)
+    mocks.sms.send_otp_sms.mockImplementation(async () => {
+      expect(insert_call()).toBeDefined()
+      expect(connection.release).toHaveBeenCalledOnce()
+      expect(mocks.db.execute.mock.calls.at(- 1)?.[0]).toContain('RELEASE_LOCK')
+    })
+
+    await send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })
+  })
+
+  it('does not send when the durable reservation fails', async () => {
+    const execute = mocks.db.execute.getMockImplementation()!
+    mocks.db.execute.mockImplementation(async (sql: string, ... params: unknown[]) => {
+      if (sql.includes('INSERT INTO otp_send_logs'))
+        throw new Error('write failed')
+      return execute(sql, ... params)
+    })
+    const connection = create_otp_connection()
+    mocks.db.getConnection.mockResolvedValue(connection)
+
+    await expect(send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })).rejects.toThrow('write failed')
+
+    expect(mocks.sms.send_otp_sms).not.toHaveBeenCalled()
+    expect(connection.release).toHaveBeenCalledOnce()
+    expect(mocks.db.execute.mock.calls.at(- 1)?.[0]).toContain('RELEASE_LOCK')
+  })
+
+  it.each([0, null])('does not send when lock acquisition returns %s', async (acquired) => {
+    mocks.db.execute.mockResolvedValue([[{ acquired }], []])
+    const connection = create_otp_connection()
+    mocks.db.getConnection.mockResolvedValue(connection)
+
+    await expect(send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE }))
+      .rejects.toMatchObject({ statusCode: acquired === 0 ? 429 : 503 })
+
+    expect(mocks.sms.send_otp_sms).not.toHaveBeenCalled()
+    expect(mocks.db.execute).toHaveBeenCalledOnce()
+    expect(connection.release).toHaveBeenCalledTimes(acquired === 0 ? 1 : 0)
+    expect(connection.destroy).toHaveBeenCalledTimes(acquired === 0 ? 0 : 1)
+  })
+
+  it('destroys a connection when acquisition fails with an unknown lock outcome', async () => {
+    mocks.db.execute.mockRejectedValue(new Error('connection lost'))
+    const connection = create_otp_connection()
+    mocks.db.getConnection.mockResolvedValue(connection)
+
+    await expect(send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })).rejects.toThrow('connection lost')
+
+    expect(mocks.sms.send_otp_sms).not.toHaveBeenCalled()
+    expect(connection.destroy).toHaveBeenCalledOnce()
+    expect(connection.release).not.toHaveBeenCalled()
+  })
+
+  it('destroys a connection when lock release fails without hiding the original reservation error', async () => {
+    const execute = mocks.db.execute.getMockImplementation()!
+    mocks.db.execute.mockImplementation(async (sql: string, ... params: unknown[]) => {
+      if (sql.includes('AS send_count'))
+        throw new Error('query failed')
+      if (sql.includes('RELEASE_LOCK'))
+        throw new Error('release failed')
+      return execute(sql, ... params)
+    })
+    const connection = create_otp_connection()
+    mocks.db.getConnection.mockResolvedValue(connection)
+
+    await expect(send_otp({ phone: PHONE, purpose: 'login' }, { identity_token: DEVICE })).rejects.toThrow('query failed')
+
+    expect(mocks.sms.send_otp_sms).not.toHaveBeenCalled()
+    expect(connection.destroy).toHaveBeenCalledOnce()
+    expect(connection.release).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['same phone across devices', DEVICE, PHONE, 'device-b', PHONE, 0],
+    ['same device across phones', DEVICE, PHONE, DEVICE, '13900139000', 0],
+    ['last daily quota', DEVICE, PHONE, 'device-b', PHONE, 9],
+  ] as const)('admits only one overlapping request: %s', async (_label, first_device, first_phone, second_device, second_phone, initial_count) => {
+    let locked = false
+    let reserved = false
+    let reservation_count = initial_count
+    const connections: ReturnType<typeof create_otp_connection>[] = []
+    // Model only MySQL's session lock and durable log boundary. Exercise the
+    // real request/service entry, including two independently acquired sessions.
+    mocks.db.getConnection.mockImplementation(async () => {
+      const execute = vi.fn(async (sql: string) => {
+        if (sql.includes('GET_LOCK')) {
+          if (locked)
+            return [[{ acquired: 0 }], []]
+          locked = true
+          return [[{ acquired: 1 }], []]
+        }
+        if (sql.includes('RELEASE_LOCK')) {
+          locked = false
+          return [[{ released: 1 }], []]
+        }
+        if (sql.includes('AS send_count'))
+          return [[{ send_count: reservation_count, cooling_down: reserved ? 1 : 0 }], []]
+        if (sql.includes('INSERT INTO otp_send_logs')) {
+          reservation_count ++
+          reserved = true
+          return [{ affectedRows: 1 }, []]
+        }
+        throw new Error(`Unexpected SQL: ${sql}`)
+      })
+      const connection = create_otp_connection(execute)
+      connections.push(connection)
+      return connection
+    })
+    const results = await Promise.allSettled([
+      send_otp_for_request(create_event(), { phone: first_phone, purpose: 'login' }, first_device),
+      send_otp_for_request(create_event(), { phone: second_phone, purpose: 'register' }, second_device),
+    ])
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({ reason: { statusCode: 429 } })
+    expect(mocks.sms.send_otp_sms).toHaveBeenCalledOnce()
+    expect(reservation_count).toBe(initial_count + 1)
+    expect(connections).toHaveLength(2)
+    expect(connections.every(connection => connection.release.mock.calls.length === 1)).toBe(true)
+
+    // After the lock is free, the durable record still blocks a fresh request.
+    await expect(send_otp_for_request(create_event(), { phone: second_phone, purpose: 'login' }, second_device))
+      .rejects.toMatchObject({ statusCode: 429 })
+    expect(mocks.sms.send_otp_sms).toHaveBeenCalledOnce()
   })
 })
 
@@ -267,6 +426,15 @@ describe('send_otp_for_request', () => {
 
   it('broadcasts both cooldown resources so every tab settles its timer', async () => {
     await send_otp_for_request(create_event(), { ... captcha, phone: PHONE, purpose: 'login' }, DEVICE)
+
+    expect(mocks.sync.publish_refresh).toHaveBeenCalledWith({ resource: `otp_cooldown:${PHONE}` })
+    expect(mocks.sync.publish_refresh).toHaveBeenCalledWith({ resource: `otp_cooldown_by_identity:${DEVICE}` })
+  })
+
+  it('broadcasts reserved cooldown even when the SMS provider fails', async () => {
+    mocks.sms.send_otp_sms.mockRejectedValue(new Error('provider timeout'))
+
+    await expect(send_otp_for_request(create_event(), { phone: PHONE, purpose: 'login' }, DEVICE)).rejects.toThrow('provider timeout')
 
     expect(mocks.sync.publish_refresh).toHaveBeenCalledWith({ resource: `otp_cooldown:${PHONE}` })
     expect(mocks.sync.publish_refresh).toHaveBeenCalledWith({ resource: `otp_cooldown_by_identity:${DEVICE}` })
