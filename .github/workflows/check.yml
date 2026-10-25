@@ -101,6 +101,10 @@ jobs:
       - name: Apply migrations on a fresh database
         env:
           NODE_ENV: production
+          # Frozen Content scripts validate their destination even on an empty
+          # database. No objects exist here; these are schema-only identities.
+          ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
+          ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
         run: |
           pnpm migrate --maintenance
           # 第二遍：全部已记录，应直接判 up to date（执行器幂等路径）
@@ -111,7 +115,7 @@ jobs:
         run: |
           # 关键结构断言（数量断言太脆，每次迁移都要改）：
           # 任务队列三表已就位、旧 scope 锁表已移除
-          for TABLE in content_locks content_tasks content_task_items migration_runs; do
+          for TABLE in content_locks content_tasks content_task_items migration_runs storage_audit_targets storage_audit_findings; do
             FOUND=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
               -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = '$TABLE'")
             if [ "$FOUND" != "1" ]; then
