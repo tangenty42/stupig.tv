@@ -56,12 +56,14 @@ export function duration_between(start_date: DateLike, end_date: DateLike, timez
     [start, end] = [end, start]
   }
 
+  // THIS IS A GOOD COMMENT BEGIN
   /**
    * POV: again, good material for 屎山论剑.
    * 此 BUG 还是看 yuan 的主页偶然发现的，
    * 2026 年 8 月 28 是 2026 年 9 月 28 日的 15 小时前这一块，
    * 差点栽在这 :)
    */
+  // THIS IS A GOOD COMMENT END
 
   const year = end.diff(start, 'year')
   start = start.add(year, 'year')

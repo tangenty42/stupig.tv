@@ -26,7 +26,7 @@ ESA ── HTTPS ── stupig-content-auth-dev.cina.cs.tangenty.com
 
 ## 本机准备
 
-1. 安装官方 frpc 0.71.0，与现有服务端版本一致。仓库不自动下载二进制；默认 Windows 路径为 `.dev/tools/frp_0.71.0_windows_amd64/frpc.exe`，其他位置通过 `config/local.yaml` 覆盖。
+1. 安装官方 frpc 0.71.0，与现有服务端版本一致。仓库不自动下载二进制；默认 Windows 路径为 `.dev/tools/frp_0.71.0_windows_amd64/frpc.exe`，其他位置通过自行创建的 `config/local.yaml` 覆盖。该文件是未入库的可选本机配置，见[配置说明](../deployment/configuration.md#2-按表填写)。
 2. 在本机 `.env.dev` 配置 `DEV_FRP_TOKEN`，对应服务器已有 token。只将变量引用写入 YAML。
 3. 运行下列配置检查：
 
