@@ -176,6 +176,7 @@ async function on_otp_send() {
 }
 
 if (props.otpSend) {
+  // THIS IS A GOOD COMMENT BEGIN
   // POV: Great material for testing AI's coding capability in fixing such weird bugs.
   /**
    * [Possible prompt]
@@ -185,6 +186,7 @@ if (props.otpSend) {
    * 3. click "发送" in the newly showed "手机验证码" field.
    * 4. observe the "发送" button in "旧手机号验证码" field is NOT disabled and NOT counting down as expected.
    */
+  // THIS IS A GOOD COMMENT END
 
   const otp_target_phone = computed(() => {
     const phone = props.otpSend!.targetPhone

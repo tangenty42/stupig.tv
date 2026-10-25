@@ -13,8 +13,15 @@
 - Avoid `nuxt build`, `nuxt prepare` and `nuxt generate` during development unless explicitly requested. Normal installation lifecycle hooks and the documented CI build are separate workflows.
 - Plan structural/environmental changes first and obtain authorization (dependencies, schema, deployment configuration, major refactors). Existing authorization in the conversation applies; do not ask again for the approved work.
 - Preserve unrelated working-tree changes. Prefer focused edits. File deletion/recreation requires user authorization; a request to replace or reorganize the relevant files supplies that authorization.
+- Preserve the author's voice in comments and README prose, including `POV`, jokes, anecdotes and accompanying images. A documentation rewrite, cleanup, translation or refactor is not permission to erase or normalize these passages. Check Git history when moving/replacing their surrounding content and restore accidentally removed material. Follow the protected-content markers below; if retirement makes relocation necessary, ask the user before moving the material rather than silently discarding it or restoring obsolete behavior.
 - Resolve routine implementation details from the code and conversation. Ask about material ambiguity before dependent changes. In Autopilot, put required unanswered questions at the end of the reply and wait for a later prompt; do not use interactive prompts that will be skipped.
 - Reuse project utilities and components before adding another implementation. Stable shared limits and deployment values belong in their owning configuration, not duplicated constants.
+
+## Protected author content
+
+- `THIS IS A GOOD COMMENT`, `THIS IS A GOOD SECTION` and `THIS IS A GOOD DOCUMENT` mark intentionally preserved author content. Their exact syntax and scope are defined in the [comment rules](instructions/code-style.instructions.md#protected-content-markers).
+- Preserve marked text, markers and associated images/assets. Before deleting, rewriting, translating, formatting, moving or otherwise changing protected content, explain the proposed change and reason, then obtain explicit user approval for that content and action. General permission to refactor, rewrite documentation, retire a module, commit or deploy does not authorize changing protected content. Silence is not approval.
+- If surrounding code or documentation becomes obsolete, propose a concrete correction or relocation and wait for approval before applying the protected portion; continue independent work where possible. Do not delete a containing file or referenced asset to bypass protection. Unmarked personal expressions still follow the author-voice rule above.
 
 ## Configuration and secrets
 
