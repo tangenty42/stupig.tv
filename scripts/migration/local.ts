@@ -16,8 +16,15 @@ export async function prepare_migration_scripts(dir = resolve(process.cwd(), 'mi
   if (! existsSync(dir) || ! migration_script_names(readdirSync(dir)).length)
     return undefined
   const { build_migration_scripts } = await import('./build')
-  const output = dir === resolve(process.cwd(), 'migrations') ? resolve(process.cwd(), '.nuxt/migration-scripts') : resolve(dir, '.compiled')
-  return build_migration_scripts(dir, output)
+  const production = process.env.NODE_ENV === 'production'
+  const runtime = dir === resolve(process.cwd(), 'migrations') ? resolve(process.cwd(), '.nuxt/migration-runtime') : resolve(dir, '.compiled-runtime')
+  const output = production ? resolve(runtime, 'migration-scripts') : dir === resolve(process.cwd(), 'migrations') ? resolve(process.cwd(), '.nuxt/migration-scripts') : resolve(dir, '.compiled')
+  const manifest = await build_migration_scripts(dir, output)
+  if (production) {
+    const { package_native_runtime } = await import('./native')
+    await package_native_runtime(runtime)
+  }
+  return manifest
 }
 
 export async function run_migrations(options: MigrationOptions = {}) {
