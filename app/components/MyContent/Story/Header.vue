@@ -46,7 +46,7 @@
           :aria-label="`预览：${cover_alt_text}`"
           @click="preview_visible = true"
         >
-          <img :src="cover_src" :alt="cover_alt_text" loading="lazy" class="max-h-60 w-auto rounded-sm">
+          <MyContentStoryCover :src="cover_src" :alt="cover_alt_text" :image="coverImage" constrained />
         </button>
 
         <p v-if="desc" class="min-w-0 break-words text-sm text-center text-slate-500 dark:text-slate-400">
@@ -73,6 +73,7 @@
 </template>
 
 <script setup lang="ts">
+import type { ContentStoryAttachment } from '@shared/types/content'
 import { story_rating_rank } from '@shared/types/content'
 import { cover_alt, story_front_cover_url } from '~/utils/content/attachment'
 
@@ -86,6 +87,7 @@ const props = withDefaults(defineProps<{
   coverLabel?: string | null
   /** Root-relative object URL of a local-attachment cover, from the server payload. */
   coverUrl?: string | null
+  coverImage?: ContentStoryAttachment['image']
   /** Pre-formatted event date text shown at the right of the labels row. */
   date?: string | null
   /** Story owning the cover attachment; null for a new story. */

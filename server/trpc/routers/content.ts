@@ -1,3 +1,4 @@
+import type { ContentWorkspaceCommandResult } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { get_bilibili_video_cards } from '@server/services/bilibili.service'
@@ -26,7 +27,13 @@ export const content_router = router({
   imageEditorSource: content_admin_procedure.input(api_schema.content.image_editor_source)
     .query(({ ctx, input }) => image_editor_source(input.id, input.version, ctx.auth_user, input.redacted)),
   executeWorkspaceCommand: content_admin_procedure.input(workspace_command_schema)
-    .mutation(({ ctx, input }) => execute_workspace_command(ctx.auth_user.id, input)),
+    .mutation(async ({ ctx, input }): Promise<ContentWorkspaceCommandResult> => {
+      const report = await execute_workspace_command(ctx.auth_user.id, input)
+      // Read after commit (including receipt replay), never cache a viewer's
+      // projection in the command receipt or wait for outbox delivery here.
+      const workspace = await get_attachment_workspace(input.scope_id, ctx.auth_user)
+      return { ... report, workspace }
+    }),
   beginUploadBatch: content_admin_procedure.input(upload_batch_schema)
     .mutation(({ ctx, input }) => begin_upload_batch(ctx.auth_user.id, input)),
   listUploadSessions: content_admin_procedure.input(api_schema.content.get_attachment_workspace)

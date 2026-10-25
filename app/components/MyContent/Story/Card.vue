@@ -1,14 +1,11 @@
 <template>
   <NuxtLink :to="`/content/${story.id}`" class="story-card watermark" :style="watermark_style">
     <span v-if="story.cover" class="story-card-cover">
-      <!-- No loading="lazy": Chromium strands a pending lazy load when Vue
-           re-parents the keyed card (filter/sort reorders), leaving the cover
-           permanently blank until a remount. The list is this page's primary
-           content, so eager loads are acceptable. -->
-      <img
+      <MyContentStoryCover
         :src="story_front_cover_url(static_url, story.cover, story.cover_url)"
         :alt="cover_alt(story.cover, story.cover_label, story.title)"
-      >
+        :image="story.cover_image"
+      />
     </span>
     <div class="story-card-body">
       <span class="story-card-title">

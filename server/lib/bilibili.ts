@@ -4,8 +4,10 @@ import { runtime_config } from '@config/loader'
 import { error_fields, log_warn } from '@server/lib/log'
 import { redis } from '@server/lib/redis'
 import { bilibili_target_key, parse_bilibili_href } from '@shared/bilibili'
+import { create_bilibili_throttle } from './bilibili-throttle'
 
 const config = runtime_config()
+const throttle = create_bilibili_throttle(redis, config.integrations.bilibili)
 
 interface ViewApiResponse {
   code: number
@@ -33,8 +35,9 @@ class RiskControlError extends Error {}
 // succeeds. Failures also arm a cooldown (failed_at) so an upstream outage or
 // risk-control ban isn't hammered by a retry per request. Negative results
 // (video gone/private) keep a short TTL so a video made public right after
-// posting still resolves soon; network errors aren't cached at all. A Redis
-// outage only means extra upstream fetches.
+// posting still resolves soon. Failures without a prior card get a short
+// placeholder cooldown too. The shared upstream gate also pauses new fetches
+// when Redis cannot coordinate probes, rather than amplifying an outage.
 const in_flight = new Map<string, Promise<BilibiliVideoCard | null>>()
 
 interface CacheEntry {
@@ -44,7 +47,7 @@ interface CacheEntry {
 }
 
 const request_headers = {
-  // A browser UA keeps Bilibili's risk control (-412) off anonymous fetches.
+  // Browser headers reduce risk-control responses but cannot prevent bans.
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Accept': 'application/json',
 }
@@ -108,6 +111,11 @@ async function remember_failure(key: string, entry: CacheEntry | undefined) {
 }
 
 function to_card(metadata: VideoMetadata) {
+  if (! metadata || typeof metadata.bvid !== 'string' || ! /^BV[0-9A-Z]{10}$/i.test(metadata.bvid)
+    || typeof metadata.title !== 'string' || ! metadata.title.trim() || typeof metadata.pic !== 'string' || ! /^https?:\/\//i.test(metadata.pic)
+    || ! Number.isFinite(metadata.duration) || metadata.duration < 0) {
+    throw new Error('Bilibili metadata missing required video fields')
+  }
   const { bvid, title, pic, duration, owner, stat } = metadata
   return {
     bvid,
@@ -142,13 +150,17 @@ async function fetch_view_api(target: { kind: 'bvid', id: string } | { kind: 'ai
     // An HTML body here is the risk-control challenge page.
     throw new RiskControlError('Bilibili view API returned HTML')
   }
-  if (result.code === - 412) {
+  if (typeof result?.code !== 'number' || ! Number.isInteger(result.code))
+    throw new Error('Bilibili view API returned an invalid result envelope')
+  if (result?.code === - 412) {
     throw new RiskControlError('Bilibili view API banned this IP (-412)')
   }
-  if (result.code !== 0 || ! result.data) {
-    // -404 and friends: the video is gone, private, or the id is bad.
+  if (result?.code === - 404) {
+    // Only an explicit unavailable response may replace a successful cache.
     return null
   }
+  if (result?.code !== 0 || ! result.data)
+    throw new Error(`Bilibili view API unexpected result (${result?.code ?? 'missing code'})`)
   return to_card(result.data)
 }
 
@@ -164,11 +176,22 @@ async function fetch_watch_page_card(target: { kind: 'bvid', id: string } | { ki
     throw new Error(`Bilibili watch page HTTP ${response.status}`)
   }
   const match = initial_state_pattern.exec(await response.text())
-  const metadata = match
-    ? (JSON.parse(match[1]!) as { videoData?: VideoMetadata }).videoData
-    : undefined
-  // No videoData means the watch page rendered its gone/private error view.
-  return metadata ? to_card(metadata) : null
+  // HTTP 200 may be a risk-control challenge. Missing/changed markup is not
+  // evidence that a video is gone: preserve stale metadata and log the failure.
+  if (! match)
+    throw new Error('Bilibili watch page missing video state (challenge or changed markup)')
+  let state: { videoData?: VideoMetadata, error?: { code?: number, trueCode?: number } } | null
+  try {
+    state = JSON.parse(match[1]!)
+  }
+  catch {
+    throw new Error('Bilibili watch page returned invalid video state')
+  }
+  if (state?.error?.trueCode === - 404 || (state?.error?.trueCode === undefined && state?.error?.code === 404))
+    return null
+  if (! state?.videoData)
+    throw new Error('Bilibili watch page missing video metadata')
+  return to_card(state.videoData)
 }
 
 // b23.tv short links only reveal the target through their 302 redirect.
@@ -179,10 +202,15 @@ async function resolve_short_link(code: string): Promise<BilibiliLinkTarget | nu
     signal: AbortSignal.timeout(config.integrations.bilibili.fetchTimeoutMs),
   })
   const location = response.headers.get('location')
-  return location ? parse_bilibili_href(location) : null
+  if (response.status === 404)
+    return null
+  const target = location ? parse_bilibili_href(location) : null
+  if (response.status < 300 || response.status >= 400 || ! target || target.kind === 'short')
+    throw new Error(`Bilibili short link did not resolve to a video (HTTP ${response.status})`)
+  return target
 }
 
-async function fetch_video_card(target: BilibiliLinkTarget): Promise<BilibiliVideoCard | null> {
+async function fetch_video_card(target: BilibiliLinkTarget, mark_risk: () => void): Promise<BilibiliVideoCard | null> {
   const resolved = target.kind === 'short' ? await resolve_short_link(target.code) : target
   if (! resolved || resolved.kind === 'short') {
     return null
@@ -194,6 +222,7 @@ async function fetch_video_card(target: BilibiliLinkTarget): Promise<BilibiliVid
     if (! (error instanceof RiskControlError)) {
       throw error
     }
+    mark_risk()
     return fetch_watch_page_card(resolved)
   }
 }
@@ -216,17 +245,19 @@ export async function get_bilibili_video_card(target: BilibiliLinkTarget) {
   if (pending) {
     return pending
   }
-  const request = fetch_video_card(target)
-    .then((card) => {
-      void remember(key, card)
+  const request = throttle.run(async (mark_risk) => {
+    try {
+      const card = await fetch_video_card(target, mark_risk)
+      await remember(key, card)
       return card
-    })
-    .catch((error) => {
+    }
+    catch (error) {
       log_warn('bilibili metadata fetch failed', { key, ... error_fields(error) })
-      void remember_failure(key, entry)
-      // The stale entry stays servable until the first refresh succeeds.
-      return entry?.card ?? null
-    })
+      await remember_failure(key, entry)
+      throw error
+    }
+  }, () => entry?.card ?? null)
+    .catch(() => entry?.card ?? null)
     .finally(() => in_flight.delete(key))
   in_flight.set(key, request)
   return request

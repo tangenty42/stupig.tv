@@ -718,6 +718,10 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply rounded-b-none;
 }
 
+.story-body :deep(.img-frame.content-cover) {
+  @apply block w-full rounded-none;
+}
+
 /* Clipped by the frame, so the image carries no radius of its own here. */
 .story-body :deep(.img-frame > img) {
   @apply block rounded-none;

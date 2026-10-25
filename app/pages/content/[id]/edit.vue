@@ -5,7 +5,7 @@
     </div>
 
     <div v-else-if="! is_edit || story">
-      <MyContentStoryHeader back :invalid="! header_meta" :title="header_title" :labels="header_labels" :desc="header_desc" :cover="header_cover" :cover-label="header_cover_label" :cover-url="header_cover_url" :date="header_date" :story-id="is_edit ? story_id : null">
+      <MyContentStoryHeader back :invalid="! header_meta" :title="header_title" :labels="header_labels" :desc="header_desc" :cover="header_cover" :cover-label="header_cover_label" :cover-url="header_cover_url" :cover-image="header_cover_image" :date="header_date" :story-id="is_edit ? story_id : null">
         <template #actions>
           <Button
             v-if="is_edit"
@@ -262,6 +262,8 @@ const header_cover_url = computed(() => {
     ? (stored_attachments.value.find(item => item.file_name === cover)?.url ?? null)
     : null
 })
+
+const header_cover_image = computed(() => stored_attachments.value.find(item => item.file_name === header_cover.value && item.url === header_cover_url.value)?.image)
 
 const title_reference_version = useSyncedState<{ title_revision: number } | null>('content_title_reference_version', () => null)
 const editing = useStoryEditSession({
