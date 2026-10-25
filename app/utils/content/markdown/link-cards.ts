@@ -9,6 +9,7 @@ import { story_rating, story_rating_rank } from '@shared/types/content'
 import { format_bilibili_count, format_bilibili_duration } from '~/utils/bilibili'
 import { bilibili_logo_svg } from '~/utils/bilibili-logo'
 import { attachment_can_read, attachment_display_url, attachment_is_restricted, cover_alt, file_icon, redacted_version_of, story_front_cover_url } from '~/utils/content/attachment'
+import { render_story_cover } from '~/utils/content/story-cover'
 import { format_bytes } from '~/utils/size'
 import { apply_chip_gaps } from './chips'
 import { find_story_by_title, local_file_name, resolve_content_url } from './links'
@@ -65,7 +66,7 @@ function story_card_inner(md: MarkdownIt, ctx: StoryMarkdownContext, story: Cont
     ? story_front_cover_url(ctx.options.static_url, story.cover, story.cover_url)
     : undefined
   const cover = cover_src
-    ? `<span class="story-card-cover"><img class="built-in-img" src="${md.utils.escapeHtml(cover_src)}" alt="${md.utils.escapeHtml(cover_alt(story.cover, story.cover_label, story.title))}" loading="lazy" referrerpolicy="no-referrer"></span>`
+    ? `<span class="story-card-cover">${render_story_cover(cover_src, cover_alt(story.cover, story.cover_label, story.title), story.cover_image)}</span>`
     : ''
   const desc = story.desc ? `<span class="story-card-desc">${md.utils.escapeHtml(story.desc)}</span>` : ''
   return `${brand}${cover}<span class="story-card-content"><span class="story-card-title">${md.utils.escapeHtml(story.title)}</span>${desc}${rating}</span>`

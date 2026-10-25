@@ -6,12 +6,13 @@ const mocks = vi.hoisted(() => ({
   execute: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
 }))
 vi.mock('@server/lib/db', () => ({ db: {
+  execute: mocks.execute,
   getConnection: async () => ({ execute: mocks.execute, beginTransaction: vi.fn(), commit: mocks.commit, rollback: mocks.rollback, release: mocks.release }),
 } }))
 vi.mock('@server/lib/storage', () => ({ delete_object_best_effort: vi.fn() }))
 vi.mock('@server/lib/sync', () => ({ publish_refresh: vi.fn(), sync_resource: (type: string, id: number) => `${type}:${id}` }))
 
-const { get_story_body } = await import('./story.service')
+const { get_story_body, list_stories } = await import('./story.service')
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -28,13 +29,22 @@ beforeEach(() => {
       return [[{ revision: mocks.title_revision, revision_floor: 0 }]]
     if (sql.includes('FROM content_stories'))
       return [[mocks.story].filter(row => row.id)]
-    if (sql.includes('FROM content_story_attachments'))
-      return [[{ story_id: 1, file_name: 'cover.png', object_key: mocks.cover_key }]]
+    if (sql.includes('FROM content_story_attachments')) {
+      return [[{ story_id: 1, file_name: 'cover.png', object_key: mocks.cover_key, avif_key: mocks.cover_key, jpeg_key: 'jpeg',
+        image_revision: 1, image_metadata: { width: 60, height: 40 }, lqip_jpeg: Buffer.from([255, 216, 255, 217]) }]]
+    }
     throw new Error(`Unexpected body query: ${sql}`)
   })
 })
 
 describe('independent viewer-specific story body', () => {
+  it('includes the same public cover dimensions and LQIP in the homepage list and story body', async () => {
+    const [summary] = await list_stories()
+    const body = await get_story_body(1, null)
+    expect(summary?.cover_image).toMatchObject({ width: 60, height: 40, lqip: 'data:image/jpeg;base64,/9j/2Q==' })
+    expect(body?.cover_image).toEqual(summary?.cover_image)
+    expect(body?.cover_url).toBe(summary?.cover_url)
+  })
   it('returns only the body projection and a scoped cover lookup, without attachment keys or task resources', async () => {
     const body = await get_story_body(1, null)
     expect(body).toMatchObject({ id: 1, revision: 9, namespace_revision: 3, title_revision: 4, viewer_key: 'anon:false', private_readable: false, has_private: true })

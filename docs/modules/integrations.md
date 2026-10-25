@@ -10,7 +10,13 @@
 
 服务端优先请求视频元数据接口，遇到实现识别的风控响应后尝试从视频观看页提取元数据。它依赖第三方当前返回结构，不保证所有网络、所有视频都可解析。
 
-缓存保存在 Redis：成功卡片携带保存时间，过了 freshness 时间后重新验证，刷新失败时保留旧卡片并进入失败冷却；无结果使用较短缓存期。同进程相同目标的并发请求共用正在执行的请求。Redis 不可用时仍可尝试上游，但可能增加外部请求。
+缓存保存在 Redis：成功卡片不设过期 TTL，24 小时内直接复用，过了 freshness 时间后按需重新验证；刷新失败继续返回旧卡片。同进程相同目标共用正在执行的请求，不同目标排队通过全局探测入口。
+
+只有上游明确返回视频不存在（`-404`，或观看页状态明确的 404）才会用空结果替换旧卡片。HTTP 200 的风控页、缺少初始状态、元数据不完整、未知 API 错误码和短链接异常都属于刷新失败，记录日志并走 stale-if-error；没有历史卡片时仍以短缓存抑制重复请求。浏览器对当前展示的空卡片按 `negativeCacheTtlMs` 到期重试，多处预览共享请求；移除链接或卸载预览后停止该预览的重试，不因空结果永久停留在占位状态。
+
+失败会开启 Redis 全局冷却，跨视频、跨应用实例、跨重启共用：基准依次为 30 分钟、1 小时、2 小时、4 小时，之后上限 6 小时。每次增加 0～20% 的正向随机抖动，总时长仍不超过 6 小时。冷却期内只返回已有卡片或占位，不访问 B 站，也不因占位读取而刷新成功卡片的保存时间。API 风控后即使观看页回退成功，也保留本轮风控冷却；只有未触发风控的成功探测才清除连续失败计数。
+
+冷却到期后，通过带 TTL 的 Redis 租约仅放行一个探测，原持有者只能以自己的 token 更新冷却并释放租约。Redis 不可用时暂停上游请求，并在进程内冷却，避免基础设施故障引起请求放大。浏览器占位检查和不存在结果的缓存也已改为 30 分钟；浏览器请求本应用不代表实际请求 B 站，后者仍受全局冷却限制。
 
 配置分组为 `integrations.bilibili`；超时、缓存时间等来自共享 settings 合并后的运行配置，见[配置说明](../deployment/configuration.md)。本集成不上传或转存视频本体。
 
@@ -23,6 +29,7 @@
 ## 源码与验证
 
 - 元数据读取与缓存：[`server/lib/bilibili.ts`](../../server/lib/bilibili.ts)。
+- 全局冷却与探测：[`server/lib/bilibili-throttle.ts`](../../server/lib/bilibili-throttle.ts)。
 - 批量业务入口：[`server/services/bilibili.service.ts`](../../server/services/bilibili.service.ts)。
 - 链接识别：[`server/shared/bilibili.ts`](../../server/shared/bilibili.ts)。
 - 卡片渲染：[`app/utils/content/markdown/link-cards.ts`](../../app/utils/content/markdown/link-cards.ts)。

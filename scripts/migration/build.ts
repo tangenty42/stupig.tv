@@ -74,6 +74,11 @@ export async function build_migration_scripts(dir: string, output_dir: string) {
                 loader: 'ts',
                 resolveDir: resolve(project_root, 'config/lib'),
               }))
+              plugin.onLoad({ filter: /[\\/]server[\\/]shared[\\/]settings\.generated\.ts$/ }, async () => ({
+                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/settings.generated.ts.snapshot'), 'utf8'),
+                loader: 'ts',
+                resolveDir: resolve(project_root, 'server/shared'),
+              }))
             },
           }]
         : [],

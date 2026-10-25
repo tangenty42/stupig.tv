@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { content_attachment_markdown, content_folder_markdown } from '~/utils/content/attachment-drag'
 import { create_story_markdown } from '~/utils/content/markdown'
 import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
+import { render_story_cover } from '~/utils/content/story-cover'
 
 function attachment(file_name: string, is_image: boolean): ContentStoryAttachment {
   return {
@@ -18,6 +19,15 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
     is_encrypted: false,
   }
 }
+
+it('uses the shared cover renderer for story references, including dimensions and LQIP', () => {
+  const image = { revision: 2, width: 120, height: 80, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: false }
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [], static_url: path => path, video_card: () => undefined, folder_card_openable: () => false,
+    stories: () => [{ id: 2, title: 'Other', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null,
+      cover: 'cover.png', cover_label: null, cover_url: '/cover', cover_version: 'v2', cover_image: image }] })
+  const html = md.render('[](content://Other)', { images: [], bilibili_hrefs: [] })
+  expect(html).toContain(render_story_cover('/cover', 'cover.png', image))
+})
 
 /** A story holding a `cards` gallery plus a few neighbours. */
 const attachments = [

@@ -106,6 +106,7 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
       const result = await content.execute_workspace_command(operation.command)
       if (epoch !== generation)
         return
+      catalog.accept(result.workspace)
       if (result.skipped.length || result.renamed.length)
         reports.value.push(result)
       operations.value = operations.value.filter(item => item !== operation)

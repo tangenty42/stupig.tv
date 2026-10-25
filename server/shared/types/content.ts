@@ -1,4 +1,5 @@
 import type { ContentEventPrecision } from '../content-markdown'
+import type { WorkspaceReport } from '../content-workspace'
 
 export type { ContentEventPrecision }
 export type { ContentRating, ContentRatingInput, ContentRatingTier } from '../content-markdown'
@@ -25,6 +26,8 @@ export interface ContentStorySummary {
   cover_version: string | null
   /** Root-relative object URL for a local-attachment cover; null for external covers. */
   cover_url: string | null
+  /** Public cover representation only, including a redaction's own dimensions/LQIP. */
+  cover_image?: ContentStoryAttachment['image']
 }
 
 export interface ContentStoryAttachment {
@@ -125,6 +128,10 @@ export interface ContentAttachmentWorkspace extends ContentAttachmentScope {
   root_id?: number
   namespace_revision: number
   viewer_key: string
+}
+
+export interface ContentWorkspaceCommandResult extends WorkspaceReport {
+  workspace: ContentAttachmentWorkspace
 }
 
 export interface ContentStoryCreated {

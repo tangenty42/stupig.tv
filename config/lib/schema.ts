@@ -61,9 +61,10 @@ export const settings_schema = z.strictObject({
   }),
   integrations: z.strictObject({
     mqtt: z.strictObject({ qos: z.union([z.literal(0), z.literal(1), z.literal(2)]), topicPrefix: identifier, clientIdPrefixServer: identifier, clientIdPrefixWeb: identifier, publishQueueSize: positive_integer }),
-    bilibili: z.strictObject({ fetchTimeoutMs: positive_integer, cacheTtlMs: positive_integer, negativeCacheTtlMs: positive_integer, fetchFailureCooldownMs: positive_integer }),
+    bilibili: z.strictObject({ fetchTimeoutMs: positive_integer, cacheTtlMs: positive_integer, negativeCacheTtlMs: positive_integer,
+      fetchFailureCooldownMs: positive_integer, fetchFailureMaxCooldownMs: positive_integer, retryJitterRatio: z.number().min(0).max(1) }),
   }),
-}).superRefine(({ app }, context) => {
+}).superRefine(({ app, integrations }, context) => {
   const { auth, content } = app
   const checks = [
     [auth.jwt.renewBeforeDays < auth.jwt.expiresInDays, ['app', 'auth', 'jwt', 'renewBeforeDays']],
@@ -72,6 +73,7 @@ export const settings_schema = z.strictObject({
     [content.workspace.heartbeatSeconds < content.workspace.leaseSeconds, ['app', 'content', 'workspace', 'heartbeatSeconds']],
     [content.upload.maxSizeMb <= content.upload.partSizeMb * 10000, ['app', 'content', 'upload', 'maxSizeMb']],
     [content.encrypt.maxSizeMb <= content.upload.maxSizeMb, ['app', 'content', 'encrypt', 'maxSizeMb']],
+    [integrations.bilibili.fetchFailureCooldownMs <= integrations.bilibili.fetchFailureMaxCooldownMs, ['integrations', 'bilibili', 'fetchFailureMaxCooldownMs']],
   ] as const
   for (const [valid, path] of checks) {
     if (! valid) {

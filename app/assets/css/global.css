@@ -2,6 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Shared by homepage/header Vue covers and Markdown story reference cards. */
+.content-cover {
+  @apply relative block w-full overflow-hidden bg-slate-200 dark:bg-slate-700;
+}
+
+.content-cover > img {
+  @apply block h-auto w-full;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.content-cover-constrained {
+  @apply mx-auto w-fit max-w-full rounded-sm;
+}
+
+.content-cover-constrained > img {
+  @apply max-h-60 w-auto max-w-full;
+}
+
+.content-cover[data-lqip]::before {
+  content: '';
+  @apply pointer-events-none absolute inset-0;
+  background: var(--content-lqip) center / cover no-repeat;
+  filter: blur(0.5rem);
+  transform: scale(1.05);
+  transition: opacity 200ms ease;
+}
+
+.content-cover > .image-loading-mask {
+  @apply pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
+}
+
+.content-cover > .image-loading-mask .iconify {
+  @apply animate-spin motion-reduce:animate-none;
+}
+
+.content-cover:is([data-image-loaded], [data-image-error]) > .image-loading-mask {
+  @apply hidden;
+}
+
+.content-cover:is([data-image-loaded], [data-image-error])::before {
+  opacity: 0;
+}
+
+.content-cover[data-image-loaded] > img {
+  opacity: 1;
+}
+
+.content-cover > .image-unavailable {
+  @apply hidden aspect-video w-full min-w-32 items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
+}
+
+.content-cover[data-image-error] > img {
+  @apply hidden;
+}
+
+.content-cover[data-image-error] > .image-unavailable {
+  @apply flex;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content-cover > img,
+  .content-cover::before {
+    transition: none;
+  }
+}
+
 :root {
   color-scheme: light;
 

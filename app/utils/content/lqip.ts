@@ -3,7 +3,7 @@ import { settings } from '@shared/settings'
 import { attachment_can_read } from './attachment'
 
 /** Only a bounded inline JPEG may enter CSS; never accept a URL from metadata. */
-export function image_lqip_style(attachment: ContentStoryAttachment | undefined) {
+export function image_lqip_style(attachment: (Pick<ContentStoryAttachment, 'url' | 'image'> & Partial<ContentStoryAttachment>) | undefined) {
   const image = attachment?.image
   if (! attachment || ! attachment_can_read(attachment) || ! image?.lqip || ! Number.isSafeInteger(image.revision) || image.revision < 1
     || ! Number.isSafeInteger(image.width) || ! Number.isSafeInteger(image.height) || image.width < 1 || image.height < 1

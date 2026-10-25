@@ -1,5 +1,6 @@
 import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import type { ContentStoryAttachment } from '@shared/types/content'
+import { settings } from '@shared/settings'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { computed, createSSRApp, effectScope, h, nextTick, onScopeDispose, onServerPrefetch, ref, watch } from 'vue'
 import { renderToString } from 'vue/server-renderer'
@@ -12,6 +13,7 @@ const b = 'https://www.bilibili.com/video/BV1xx411c7mE'
 const scopes: ReturnType<typeof effectScope>[] = []
 let app: object
 let cache = ref<Cards>({})
+let retry_at = ref<Record<string, number>>({})
 const prefetch: (() => Promise<void>)[] = []
 
 function card(title: string): BilibiliVideoCard {
@@ -31,18 +33,21 @@ function deferred() {
 beforeEach(() => {
   app = {}
   cache = ref({})
+  retry_at = ref({})
   prefetch.length = 0
   boundary.fetch.mockReset().mockResolvedValue({})
   for (const [name, value] of Object.entries({ computed, watch, onScopeDispose }))
     vi.stubGlobal(name, value)
   vi.stubGlobal('useNuxtApp', () => app)
-  vi.stubGlobal('useState', () => cache)
+  vi.stubGlobal('useState', (key: string) => key === 'content_bilibili_video_retry_at' ? retry_at : cache)
   vi.stubGlobal('useApi', () => ({ content: { get_bilibili_video_cards: boundary.fetch } }))
   vi.stubGlobal('onServerPrefetch', (fn: () => Promise<void>) => prefetch.push(fn))
+  vi.stubGlobal('onMounted', vi.fn())
 })
 
 afterEach(() => {
   scopes.splice(0).forEach(scope => scope.stop())
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -148,6 +153,79 @@ it('reuses serialized cards and explicit nulls during hydration', async () => {
   await prefetch[0]!()
   await settle()
   expect(boundary.fetch).not.toHaveBeenCalled()
+})
+
+it('retries a null after its expiry, joins overlapping consumers, and upgrades their placeholders', async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal('onMounted', (fn: () => void) => fn())
+  boundary.fetch.mockResolvedValueOnce({ [a]: null })
+  const one = setup(`[](${a})`)
+  const two = setup(`[](${a})`)
+  await settle()
+  expect(cache.value[a]).toBeNull()
+  expect(boundary.fetch).toHaveBeenCalledOnce()
+  boundary.fetch.mockResolvedValue({ [a]: card('Recovered') })
+  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
+  await settle()
+  expect(boundary.fetch).toHaveBeenCalledTimes(2)
+  expect(one.render_result.value.html).toContain('Recovered')
+  expect(two.render_result.value.html).toContain('Recovered')
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('keeps a retry cooldown after transport failure and clears timers on link removal or unmount', async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal('onMounted', (fn: () => void) => fn())
+  boundary.fetch.mockResolvedValueOnce({ [a]: null }).mockRejectedValue(new Error('offline'))
+  const preview = setup(`[](${a})`)
+  await settle()
+  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
+  expect(boundary.fetch).toHaveBeenCalledTimes(2)
+  await vi.advanceTimersByTimeAsync(100)
+  expect(boundary.fetch).toHaveBeenCalledTimes(2)
+  preview.markdown.value = 'no links'
+  await settle()
+  expect(vi.getTimerCount()).toBe(0)
+  preview.markdown.value = `[](${a})`
+  await settle()
+  expect(vi.getTimerCount()).toBe(1)
+  preview.unmount()
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('lets a surviving preview adopt a negative retry when its initiating consumer unmounts', async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal('onMounted', (fn: () => void) => fn())
+  boundary.fetch.mockResolvedValueOnce({ [a]: null })
+  const first = setup(`[](${a})`)
+  const second = setup(`[](${a})`)
+  await settle()
+  const retry = deferred()
+  boundary.fetch.mockReturnValueOnce(retry.promise)
+  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
+  expect(boundary.fetch).toHaveBeenCalledTimes(2)
+  first.unmount()
+  retry.resolve({ [a]: card('Surviving retry') })
+  await settle()
+  expect(second.render_result.value.html).toContain('Surviving retry')
+})
+
+it('gives hydrated legacy nulls an expiry without changing their initial HTML or fetching immediately', async () => {
+  vi.useFakeTimers()
+  cache.value = { [a]: null }
+  let mount!: () => void
+  vi.stubGlobal('onMounted', (fn: () => void) => {
+    mount = fn
+  })
+  const preview = setup(`[](${a})`)
+  const html = preview.render_result.value.html
+  await settle()
+  expect(boundary.fetch).not.toHaveBeenCalled()
+  mount()
+  expect(preview.render_result.value.html).toBe(html)
+  boundary.fetch.mockResolvedValue({ [a]: card('Hydrated recovery') })
+  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
+  expect(preview.render_result.value.html).toContain('Hydrated recovery')
 })
 
 it('joins repeated renders and overlapping previews without duplicate requests or cache publications', async () => {

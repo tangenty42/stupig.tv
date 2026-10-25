@@ -6,7 +6,7 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { createHash } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
-import { delete_story_attachment_rows, get_story_object_keys, list_cover_urls } from '@server/services/content-attachments.service'
+import { delete_story_attachment_rows, get_story_object_keys, list_cover_presentations } from '@server/services/content-attachments.service'
 import { extract_story_reference_titles, parse_story_markdown, rename_story_references } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
@@ -136,14 +136,15 @@ function parse_labels(value: string) {
   return value.split(/\s+/).filter(Boolean)
 }
 
-function format_desc_cover(story: Pick<StoryRow, 'description' | 'cover' | 'cover_label' | 'cover_version'>, cover_url: string | null = null) {
+function format_desc_cover(story: Pick<StoryRow, 'description' | 'cover' | 'cover_label' | 'cover_version'>, presentation?: { url: string, image: ContentStoryAttachment['image'] }) {
   return {
     desc: story.description || null,
     cover: story.cover || null,
     cover_label: story.cover_label || null,
     cover_version: story.cover ? story.cover_version : null,
     // Root-relative object URL for a local-attachment cover; null for external covers.
-    cover_url: story.cover ? cover_url : null,
+    cover_url: story.cover ? presentation?.url ?? null : null,
+    cover_image: story.cover ? presentation?.image : undefined,
   }
 }
 
@@ -160,7 +161,7 @@ export async function list_stories() {
   const [stories] = await db.execute<StoryRow[]>(
     'SELECT id, title, label, description, cover, cover_label, cover_version, event_precision, event_dates, created_at, updated_at FROM content_stories ORDER BY updated_at DESC',
   )
-  const cover_urls = await list_cover_urls(stories.flatMap(story => story.cover ? [{ story_id: story.id, file_name: story.cover }] : []))
+  const cover_urls = await list_cover_presentations(stories.flatMap(story => story.cover ? [{ story_id: story.id, file_name: story.cover }] : []))
   const [title_versions] = await db.execute<RowDataPacket[]>('SELECT revision FROM content_title_namespace WHERE id = 1')
 
   return stories.map(story => ({
@@ -172,7 +173,7 @@ export async function list_stories() {
     event_dates: parse_event_dates(story.event_dates),
     created_at: story.created_at,
     updated_at: story.updated_at,
-    ... format_desc_cover(story, cover_urls.get(`${story.id}:${story.cover}`) ?? null),
+    ... format_desc_cover(story, cover_urls.get(`${story.id}:${story.cover}`)),
   }))
 }
 
@@ -187,7 +188,7 @@ function story_viewer_key(viewer: AuthUser | null | undefined) {
 }
 
 /** Hash the viewer's actual representation; hidden source bytes never enter guest hashes. */
-function format_story_body(story: StoryRow, viewer: AuthUser | null, cover_url: string | null, title_revision: number): ContentStoryBody {
+function format_story_body(story: StoryRow, viewer: AuthUser | null, presentation: { url: string, image: ContentStoryAttachment['image'] } | undefined, title_revision: number): ContentStoryBody {
   const private_readable = has_permission(viewer, 'content_private', 'read')
   const body = {
     id: story.id, title: story.title, labels: parse_labels(story.label),
@@ -195,7 +196,7 @@ function format_story_body(story: StoryRow, viewer: AuthUser | null, cover_url: 
     markdown: private_readable ? story.markdown : redact_private_content(story.markdown),
     has_private: has_private_content(story.markdown), private_readable,
     revision: story.revision, created_at: story.created_at, updated_at: story.updated_at,
-    viewer_key: story_viewer_key(viewer), ... format_desc_cover(story, cover_url),
+    viewer_key: story_viewer_key(viewer), ... format_desc_cover(story, presentation),
   }
   return {
     ... body,
@@ -214,8 +215,8 @@ export async function get_story_body(id: number, viewer: AuthUser | null, base_r
     const story = rows[0]
     if (! story)
       throw new ApiError(404, '档案不存在或已被删除')
-    const covers = await list_cover_urls(story.cover ? [{ story_id: id, file_name: story.cover }] : [], connection)
-    const body = format_story_body(story, viewer, covers.get(`${id}:${story.cover}`) ?? null, title.revision)
+    const covers = await list_cover_presentations(story.cover ? [{ story_id: id, file_name: story.cover }] : [], connection)
+    const body = format_story_body(story, viewer, covers.get(`${id}:${story.cover}`), title.revision)
     await connection.commit()
     return body.representation_version === base_representation_version ? null : body
   }
