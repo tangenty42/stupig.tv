@@ -1,6 +1,12 @@
-# 蠢猪小组网站
+# About
 
-基于 Nuxt / Vue 的网站，提供用户与权限管理、Markdown 档案、附件工作区和图片编辑。MySQL 保存业务状态；OSS / ESA 交付 Content 资源；EMQX 提供实时更新。
+<!-- THIS IS A GOOD SECTION BEGIN -->
+This is the repository for our official website, built with our custom Markdown-powered full-stack CMS.
+
+We are the smart **Stupig**s!
+
+Learn more about us at our official website [stupig.tv](https://www.stupig.tv).
+<!-- THIS IS A GOOD SECTION END -->
 
 ## 从这里开始
 
@@ -41,3 +47,23 @@ pnpm test
 ## 部署注意
 
 CI/CD、环境加密、镜像发布和健康检查详见[部署手册](docs/deployment/README.md)。已有生产数据必须先完成[Content 迁移预演与维护切换](docs/operations/content-cutover.md)；代码中已有迁移实现不代表生产已经迁移。不要直接把最新镜像启动成功当作业务切换验收。
+
+<!-- THIS IS A GOOD SECTION BEGIN -->
+# This is why you should always update your VSCode without reading the changelog
+
+`POV: you click "update" in your VSCode as usual.`
+
+the following 2 hrs:
+
+![0](public/md/vscode/0a.png)
+![0](public/md/vscode/0b.png)
+![0](public/md/vscode/0c.png)
+
+occasionally:
+
+![1](public/md/vscode/1.png)
+
+you:
+
+![2](public/md/vscode/2.png)
+<!-- THIS IS A GOOD SECTION END -->

@@ -54,43 +54,43 @@
 
 | 文件 | 职责与实际调用方 | 能否删除/合并 |
 | --- | --- | --- |
-| `dev/cli.ts` | 组合启动、端口检查、应用和隧道生命周期；由 `dev` 调用 | 保留 |
-| `dev/frp.ts` | 生成/校验 frpc 配置、启动代理和 frpc、回调连通检查、信号处理；dev/cli.ts 与诊断命令共用 | 保留作为隧道的共同实现 |
-| `dev/auth-config.ts` | 解析开发通道 YAML，生成无明文 token 的 frpc 配置模板 | 保留；不是额外启动入口 |
-| `dev/process.mjs` | 受控子进程重启与清理，dev/frp.ts 调用 | 可转为 TS，和下面的手写声明合为一个文件 |
-| `dev/process.d.mts` | 上述 MJS 的 TypeScript 声明 | 实现转为 TS 后删除，不先单独删除 |
-| `dev/auth-proxy.mjs` | 仅转发 POST 授权回调的本地 HTTP 代理，由隧道管理器启动为子进程 | 保留进程边界；当前已通过 tsx 加载，可统一为 TS |
-| `dev/tunnel.mjs` | 仅调用 dev/frp.ts 的运行/信号函数并报告异常 | dev/frp.ts 已有等价 CLI，可删除此包装并更新命令 |
-| `env/build.ts` | 环境模板合成、已有值保留、必填值交互；3 个 env:build 入口共用 | 保留；无需为 dev/prod 复制实现 |
-| `env/gpg.ts` | encrypt/decrypt/check 共用 GPG、口令和临时文件逻辑 | 保留；3 个动作无需强行变成一个名字 |
-| `env/preload.mjs` | 在 CLI 业务模块导入前选择并注入 env、移除环境参数 | 保留原生 MJS 预载边界，不能简单改成依赖 Nuxt 的加载器 |
-| `background/worker.ts` | 独立 worker 适配器注册、保活、退出清理 | 保留 |
-| `background/status.ts` | 领域账本状态查询及 DB 关闭 | 保留 |
-| `content/preload-check.ts` | 预热状态/额度/分层缓存检查及 RAM policy 输出 | 保留，按内容预热归属 content/ |
-| `storage/audit.ts` | 旧 S3 只读盘点；package 命令及 maintenance build 都引用 | 不能当无调用方删除；旧源全部退役后再评估去除 |
-| `db/export-sample.ts` | mysqldump 流式替换及可选 gzip；db:dump:dev 调用 | 保留；需补明确源库/容器选择，并修正 pnpm 命令的误导命名 |
-| `content/reset-dev.ts` | 开发重置盘点、保护条件、数据库清除和对象清理续跑 | 保留；不并入日常迁移或普通清理 |
-| `migration/maintenance-build.ts` | 只调用 migration/build.ts 的 build_maintenance | 可将 CLI 入口放进 build.ts 后移除薄包装；保持 production 产物合同 |
-| `migration/local.ts` | 本地迁移入口：先构建冻结 TS 产物，再调用共同执行器 | 与容器入口有真实差异，不可简单删掉构建步骤 |
-| `migration/cli.ts` | 共同参数解析、信号取消、脱敏错误；也是容器打包的执行入口 | 保留，与本地入口共用逻辑但保留预构建产物边界 |
-| `migration/runner.ts` | 数据库锁、账本、SQL/TS 执行、维护门、checkpoint 和失败处理 | 核心实现，保留 |
-| `migration/catalog.ts` | 版本文件发现、摘要验证、计划和冻结产物加载 | 保留 |
-| `migration/contract.ts` | TS 迁移上下文及 define_migration 合同 | 保留；版本化迁移依赖它，整理不得改坏冻结摘要 |
-| `migration/build.ts` | 冻结 TS bundle/manifest 与 maintenance 产物构建 | 保留；可吸收 migration/maintenance-build.ts 的 CLI 包装 |
-| `migration/native.ts` | Sharp 等原生依赖打包、身份和完整性清单 | 保留；生产镜像内图片迁移需要 |
-| `verify/migration-runtime.ts` | 独立数据库中验证执行、恢复、冻结、容器产物等合同；Check 调用 | 保留为集成验证，不包装成日常应用命令 |
-| `verify/content-migration.ts` | 独立数据库验证 Content 转换，默认内存 OSS，显式参数可走真实开发对象存储；Check 调用默认模式 | 保留；与普通单测、生产迁移的职责不同 |
-| `esa/cli.ts` | 发布命令入口、目标输出、本机锁与脱敏记录 | 保留，两环境共用 |
-| `esa/config.ts` | 专用 YAML/env 校验、变量映射、脱敏 plan | 保留 |
-| `esa/api.ts` | 发布所需 ESA API 传输与错误脱敏 | 保留 |
-| `esa/commit.ts` | 调用锁定官方 CLI，隔离上传源码和发布凭据，解析本次版本 | 保留独立边界 |
-| `esa/deploy.ts` | 路由/变量/版本检查、同步与发布编排、不确定结果核对 | 保留；不要为减少文件把所有层塞入 cli.ts |
-| `deploy/remote.sh` | GitHub 经 SSH 传入生产主机；切换 env/Compose/镜像、健康门、失败恢复 | 保留 shell，当前不需要额外本地 pnpm 入口 |
-| `dev/emqx-entrypoint.sh` | 开发 EMQX 容器初始认证用户文件生成和原入口转交；Compose 挂载 | 保留 shell，不应与应用部署脚本合并 |
-| `tsconfig.json` | scripts 与版本化 TS 迁移的独立类型检查项目及 aliases | 保留，和 Nuxt tsconfig 的职责不同 |
-| `README.md` | 目录职责索引，链接回本清单 | 保留，避免在入口说明中复制操作手册 |
+| [`dev/cli.ts`](../../scripts/dev/cli.ts) | 组合启动、端口检查、应用和隧道生命周期；由 `dev` 调用 | 保留 |
+| [`dev/frp.ts`](../../scripts/dev/frp.ts) | 生成/校验 frpc 配置、启动代理和 frpc、回调连通检查、信号处理；dev/cli.ts 与诊断命令共用 | 保留作为隧道的共同实现 |
+| [`dev/auth-config.ts`](../../scripts/dev/auth-config.ts) | 解析开发通道 YAML，生成无明文 token 的 frpc 配置模板 | 保留；不是额外启动入口 |
+| [`dev/process.mjs`](../../scripts/dev/process.mjs) | 受控子进程重启与清理，dev/frp.ts 调用 | 可转为 TS，和下面的手写声明合为一个文件 |
+| [`dev/process.d.mts`](../../scripts/dev/process.d.mts) | 上述 MJS 的 TypeScript 声明 | 实现转为 TS 后删除，不先单独删除 |
+| [`dev/auth-proxy.mjs`](../../scripts/dev/auth-proxy.mjs) | 仅转发 POST 授权回调的本地 HTTP 代理，由隧道管理器启动为子进程 | 保留进程边界；当前已通过 tsx 加载，可统一为 TS |
+| [`dev/tunnel.mjs`](../../scripts/dev/tunnel.mjs) | 仅调用 dev/frp.ts 的运行/信号函数并报告异常 | dev/frp.ts 已有等价 CLI，可删除此包装并更新命令 |
+| [`env/build.ts`](../../scripts/env/build.ts) | 环境模板合成、已有值保留、必填值交互；3 个 env:build 入口共用 | 保留；无需为 dev/prod 复制实现 |
+| [`env/gpg.ts`](../../scripts/env/gpg.ts) | encrypt/decrypt/check 共用 GPG、口令和临时文件逻辑 | 保留；3 个动作无需强行变成一个名字 |
+| [`env/preload.mjs`](../../scripts/env/preload.mjs) | 在 CLI 业务模块导入前选择并注入 env、移除环境参数 | 保留原生 MJS 预载边界，不能简单改成依赖 Nuxt 的加载器 |
+| [`background/worker.ts`](../../scripts/background/worker.ts) | 独立 worker 适配器注册、保活、退出清理 | 保留 |
+| [`background/status.ts`](../../scripts/background/status.ts) | 领域账本状态查询及 DB 关闭 | 保留 |
+| [`content/preload-check.ts`](../../scripts/content/preload-check.ts) | 预热状态/额度/分层缓存检查及 RAM policy 输出 | 保留，按内容预热归属 content/ |
+| [`storage/audit.ts`](../../scripts/storage/audit.ts) | 旧 S3 只读盘点；package 命令及 maintenance build 都引用 | 不能当无调用方删除；旧源全部退役后再评估去除 |
+| [`db/export-sample.ts`](../../scripts/db/export-sample.ts) | mysqldump 流式替换及可选 gzip；db:dump:dev 调用 | 保留；需补明确源库/容器选择，并修正 pnpm 命令的误导命名 |
+| [`content/reset-dev.ts`](../../scripts/content/reset-dev.ts) | 开发重置盘点、保护条件、数据库清除和对象清理续跑 | 保留；不并入日常迁移或普通清理 |
+| [`migration/maintenance-build.ts`](../../scripts/migration/maintenance-build.ts) | 只调用 migration/build.ts 的 build_maintenance | 可将 CLI 入口放进 build.ts 后移除薄包装；保持 production 产物合同 |
+| [`migration/local.ts`](../../scripts/migration/local.ts) | 本地迁移入口：先构建冻结 TS 产物，再调用共同执行器 | 与容器入口有真实差异，不可简单删掉构建步骤 |
+| [`migration/cli.ts`](../../scripts/migration/cli.ts) | 共同参数解析、信号取消、脱敏错误；也是容器打包的执行入口 | 保留，与本地入口共用逻辑但保留预构建产物边界 |
+| [`migration/runner.ts`](../../scripts/migration/runner.ts) | 数据库锁、账本、SQL/TS 执行、维护门、checkpoint 和失败处理 | 核心实现，保留 |
+| [`migration/catalog.ts`](../../scripts/migration/catalog.ts) | 版本文件发现、摘要验证、计划和冻结产物加载 | 保留 |
+| [`migration/contract.ts`](../../scripts/migration/contract.ts) | TS 迁移上下文及 define_migration 合同 | 保留；版本化迁移依赖它，整理不得改坏冻结摘要 |
+| [`migration/build.ts`](../../scripts/migration/build.ts) | 冻结 TS bundle/manifest 与 maintenance 产物构建 | 保留；可吸收 migration/maintenance-build.ts 的 CLI 包装 |
+| [`migration/native.ts`](../../scripts/migration/native.ts) | Sharp 等原生依赖打包、身份和完整性清单 | 保留；生产镜像内图片迁移需要 |
+| [`verify/migration-runtime.ts`](../../scripts/verify/migration-runtime.ts) | 独立数据库中验证执行、恢复、冻结、容器产物等合同；Check 调用 | 保留为集成验证，不包装成日常应用命令 |
+| [`verify/content-migration.ts`](../../scripts/verify/content-migration.ts) | 独立数据库验证 Content 转换，默认内存 OSS，显式参数可走真实开发对象存储；Check 调用默认模式 | 保留；与普通单测、生产迁移的职责不同 |
+| [`esa/cli.ts`](../../scripts/esa/cli.ts) | 发布命令入口、目标输出、本机锁与脱敏记录 | 保留，两环境共用 |
+| [`esa/config.ts`](../../scripts/esa/config.ts) | 专用 YAML/env 校验、变量映射、脱敏 plan | 保留 |
+| [`esa/api.ts`](../../scripts/esa/api.ts) | 发布所需 ESA API 传输与错误脱敏 | 保留 |
+| [`esa/commit.ts`](../../scripts/esa/commit.ts) | 调用锁定官方 CLI，隔离上传源码和发布凭据，解析本次版本 | 保留独立边界 |
+| [`esa/deploy.ts`](../../scripts/esa/deploy.ts) | 路由/变量/版本检查、同步与发布编排、不确定结果核对 | 保留；不要为减少文件把所有层塞入 cli.ts |
+| [`deploy/remote.sh`](../../scripts/deploy/remote.sh) | GitHub 经 SSH 传入生产主机；切换 env/Compose/镜像、健康门、失败恢复 | 保留 shell，当前不需要额外本地 pnpm 入口 |
+| [`dev/emqx-entrypoint.sh`](../../scripts/dev/emqx-entrypoint.sh) | 开发 EMQX 容器初始认证用户文件生成和原入口转交；Compose 挂载 | 保留 shell，不应与应用部署脚本合并 |
+| [`tsconfig.json`](../../scripts/tsconfig.json) | scripts 与版本化 TS 迁移的独立类型检查项目及 aliases | 保留，和 Nuxt tsconfig 的职责不同 |
+| [`README.md`](../../scripts/README.md) | 目录职责索引，链接回本清单 | 保留，避免在入口说明中复制操作手册 |
 
-25 个 `*.test.ts` 均是测试，不是运维命令。其中 `verify/package.test.ts`、`deploy/docker-image.test.ts`、`verify/nuxt-config.test.ts`、`migration/maintenance-build.test.ts` 检查跨文件接线/产物，其余主要跟随相应模块。`migration/sql.test.ts`、`catalog-sql.test.ts`、`frozen.test.ts` 分别保护 SQL 执行/失败/幂等、版本识别及历史不可变合同。不要为了减少列表长度删掉这些测试。
+25 个 `*.test.ts` 均是测试，不是运维命令。其中 [`verify/package.test.ts`](../../scripts/verify/package.test.ts)、[`deploy/docker-image.test.ts`](../../scripts/deploy/docker-image.test.ts)、[`verify/nuxt-config.test.ts`](../../scripts/verify/nuxt-config.test.ts)、[`migration/maintenance-build.test.ts`](../../scripts/migration/maintenance-build.test.ts) 检查跨文件接线/产物，其余主要跟随相应模块。[`migration/sql.test.ts`](../../scripts/migration/sql.test.ts)、[`catalog-sql.test.ts`](../../scripts/migration/catalog-sql.test.ts)、[`frozen.test.ts`](../../scripts/migration/frozen.test.ts) 分别保护 SQL 执行/失败/幂等、版本识别及历史不可变合同。不要为了减少列表长度删掉这些测试。
 
 迁移实现位于 `migrations/`，scripts/migration 是运行工具。历史迁移与其冻结闭包不得改名、改内容或重新生成摘要来掩盖变化，见[迁移约束](../../.github/instructions/migrations.instructions.md)。
 
