@@ -1,7 +1,8 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { RenderEnvironment, StoryMarkdownPlugin } from './types'
 import { attachment_base_name, CONTENT_IMAGE_DENIED_TEXT } from '@shared/content-markdown'
-import { abridged_twin_of } from '~/utils/content/attachment'
+import { attachment_can_read, attachment_display_url, attachment_is_restricted, redacted_version_of } from '~/utils/content/attachment'
+import { image_lqip_style } from '~/utils/content/lqip'
 import { local_file_name, resolve_content_url } from './links'
 
 // Images resolve story-relative sources, feed the lightbox through the
@@ -21,16 +22,17 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
     const token = tokens[idx]
     const src = token?.attrGet('src')
     let denied = false
+    let invalid = ! src
     /** Plaintext twin an unauthorized viewer gets instead of the ciphertext. */
     let abridged: ContentStoryAttachment | null = null
-    /** Permitted viewer with a twin: the card carries a full/abridged toggle. */
-    let twin_url: string | null = null
+    let image_attachment: ContentStoryAttachment | undefined
     if (src && token) {
       const file_name = local_file_name(src)
       const attachment = file_name ? ctx.options.attachments().find(item => item.file_name === file_name) : undefined
-      if (attachment?.is_encrypted) {
-        const twin = abridged_twin_of(ctx.options.attachments(), attachment.file_name)
-        if (! attachment.encryption_key) {
+      image_attachment = attachment
+      if (attachment && attachment_is_restricted(attachment)) {
+        const twin = redacted_version_of(ctx.options.attachments(), attachment.file_name)
+        if (! attachment_can_read(attachment)) {
           if (twin) {
             abridged = twin
           }
@@ -39,54 +41,61 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
           }
         }
         else {
-          token.attrSet('data-encrypted', '')
-          if (twin) {
-            twin_url = ctx.options.static_url(twin.url)
-          }
+          token.attrSet('data-private', '')
         }
       }
       if (! denied) {
         // The abridged twin is a plaintext object: point the img straight at it.
-        const resolved_src = abridged ? ctx.options.static_url(abridged.url) : resolve_content_url(ctx.options, src)
-        const render_env = env as RenderEnvironment
-        const preview_image_index = render_env.images.push(resolved_src) - 1
-        // An empty alt or one repeating the file path is not a real label; fall
-        // back to the base file name for both alt and the preview aria-label.
-        const base_name = file_name ? attachment_base_name(file_name) : null
-        const label = token.content && token.content !== file_name ? token.content : (base_name ?? '图片')
-        // The default rule rebuilds alt from the children, so swap them.
-        token.children = [{ type: 'text', content: label } as unknown as NonNullable<typeof token.children>[number]]
-        token.attrSet('src', resolved_src)
-        token.attrSet('data-preview-index', String(preview_image_index))
-        token.attrSet('role', 'button')
-        token.attrSet('tabindex', '0')
-        token.attrSet('aria-label', `预览图片：${label}`)
+        const resolved_src = abridged ? attachment_display_url(ctx.options.static_url, abridged) : resolve_content_url(ctx.options, src)
+        if (! resolved_src) {
+          invalid = true
+        }
+        else {
+          const render_env = env as RenderEnvironment
+          const preview_image_index = render_env.images.push(resolved_src) - 1
+          // An empty alt or one repeating the file path is not a real label; fall
+          // back to the base file name for both alt and the preview aria-label.
+          const base_name = file_name ? attachment_base_name(file_name) : null
+          const label = token.content && token.content !== file_name ? token.content : (base_name ?? '图片')
+          // The default rule rebuilds alt from the children, so swap them.
+          token.children = [{ type: 'text', content: label } as unknown as NonNullable<typeof token.children>[number]]
+          token.attrSet('src', resolved_src)
+          token.attrSet('data-preview-index', String(preview_image_index))
+          token.attrSet('role', 'button')
+          token.attrSet('tabindex', '0')
+          token.attrSet('aria-label', `预览：${label}`)
+          const presentation = abridged ?? attachment
+          if (presentation?.image && image_lqip_style(presentation)) {
+            token.attrSet('width', String(presentation.image.width))
+            token.attrSet('height', String(presentation.image.height))
+          }
+        }
       }
     }
     // The denied placeholder keeps the picture's frame (and caption below) —
     // only the <img> itself is swapped out.
     const rendered_image = denied
       ? `<span class="encrypted-image-denied" role="img"><span class="iconify i-lucide:ban" aria-hidden="true"></span><span>${CONTENT_IMAGE_DENIED_TEXT}</span></span>`
-      : default_image_rule(tokens, idx, options, env, self)
-    const framed_image = `<span class="img-frame">${rendered_image}${denied ? '' : '<span class="long-img-cover" aria-hidden="true">点击查看长图</span>'}</span>`
+      : invalid ? '' : default_image_rule(tokens, idx, options, env, self)
+    const unavailable = denied ? '' : `<span class="image-unavailable" role="img" aria-label="${invalid ? '附件不存在或引用无效' : '图片加载失败'}"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span>`
+    const lqip = denied || invalid ? null : image_lqip_style(abridged ?? image_attachment)
+    const placeholder = lqip ? ` data-lqip style="${md.utils.escapeHtml(lqip)}"` : ''
+    const loading = denied || invalid ? '' : '<span class="image-loading-mask" role="status"><span class="iconify i-lucide:loader-circle" aria-hidden="true"></span><span class="sr-only">图片加载中</span></span>'
+    const state = invalid ? ' data-image-error' : denied ? '' : ' aria-busy="true"'
+    const framed_image = `<span class="img-frame"${placeholder}${state}>${rendered_image}${unavailable}${loading}${denied || invalid ? '' : '<span class="long-img-cover" aria-hidden="true">点击查看长图</span>'}</span>`
 
     // Permitted encrypted image: the normal picture/carousel body, just with
     // an amber brand strip on top marking it 机密附件. Until the preview swaps
     // in the decrypted blob, a loader stands in and the ciphertext img hides.
     // The abridged twin (unauthorized) renders the same strip with 删减版.
-    const encrypted = ! denied && ! abridged && token?.attrGet('data-encrypted') !== null && token?.attrGet('data-encrypted') !== undefined
-    const loading = encrypted ? '<span class="encrypted-image-loading" aria-hidden="true"><span class="iconify i-lucide:loader-circle"></span></span>' : ''
-    const brand_text = encrypted ? '机密附件·解密中' : '机密附件·删减版'
-    const brand_icon = encrypted ? 'i-lucide:lock-keyhole-open' : 'i-lucide:lock-keyhole'
+    const private_image = token?.attrGet('data-private') === ''
+    const brand_text = private_image ? '机密附件·完整版' : '机密附件·删减版'
+    const brand_icon = private_image ? 'i-lucide:lock-keyhole-open' : 'i-lucide:lock-keyhole'
     const brand = `<span class="encrypted-block-brand"><span class="iconify ${brand_icon}" aria-hidden="true"></span><span class="encrypted-block-brand-text">${brand_text}</span></span>`
-    // Full/abridged toggle bar at the very bottom, permitted viewers only.
-    const toggle_bar = twin_url ? '<span class="encrypted-toggle-bar"><span class="encrypted-toggle" role="button" tabindex="0">查看删减版</span></span>' : ''
-    const toggle_attr = twin_url ? ` data-twin-url="${md.utils.escapeHtml(twin_url)}"` : ''
-    if ((encrypted || abridged) && ! token?.meta?.carousel) {
-      const hidden_image = encrypted ? framed_image.replace('<img', '<img hidden') : framed_image
-      return `<div class="encrypted-block"${toggle_attr}>${brand}${loading}${hidden_image}${toggle_bar}</div>\n`
+    if ((private_image || abridged) && ! token?.meta?.carousel) {
+      return `<div class="encrypted-block">${brand}${framed_image}</div>\n`
     }
-    const output_image = encrypted ? framed_image.replace('<img', `${loading}<img hidden`) : framed_image
+    const output_image = framed_image
     if (! token?.meta?.carousel) {
       return output_image
     }
@@ -102,9 +111,9 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
     const captioned = caption ? ' carousel-item-captioned' : ''
     // The encrypted marker is a brand strip above the normal item body;
     // carousel items must stay spans, so CSS gives the strip its block look.
-    // The caption joins inside the card, the toggle bar closes it at the bottom.
-    const item_content = encrypted || abridged
-      ? `<span class="encrypted-block"${toggle_attr}>${brand}${output_image}${caption}${toggle_bar}</span>`
+    // The caption joins inside the card.
+    const item_content = private_image || abridged
+      ? `<span class="encrypted-block">${brand}${output_image}${caption}</span>`
       : `${output_image}${caption}`
     return `<span class="carousel-item${captioned}">${item_content}</span>`
   }

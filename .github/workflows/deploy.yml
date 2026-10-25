@@ -22,12 +22,49 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Build and push image
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.10.1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install publish tools
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Check registry credentials
+        env:
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
+          set -eu
+          : "${ACR_USERNAME:?Missing ACR_USERNAME repository secret}"
+          : "${ACR_PASSWORD:?Missing ACR_PASSWORD repository secret}"
+
+      - name: Decrypt production environment
+        env:
+          ENV_PASSPHRASE: ${{ secrets.ENV_PASSPHRASE }}
+        run: |
+          test -n "$ENV_PASSPHRASE" || { echo "Missing ENV_PASSPHRASE repository secret" >&2; exit 1; }
+          umask 077
+          printf '%s' "$ENV_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt \
+            --output .env.prod .env.prod.gpg
+
+      - name: Check production ESA target
+        run: pnpm esa:deploy:prod --check
+
+      - name: Build and push image
+        env:
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -euo pipefail
           IMAGE="${{ vars.ACR_IMAGE }}"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-          echo "${{ secrets.ACR_PASSWORD }}" | docker login "${IMAGE%%/*}" \
-            -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+          printf '%s' "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" \
+            -u "$ACR_USERNAME" --password-stdin
           # 只推 :latest：个人项目不指望镜像级回滚（回滚 = 重跑旧 commit 的 workflow），
           # 免得 ACR 里积一堆 :sha tag
           docker build -t "$IMAGE:latest" .
@@ -39,33 +76,49 @@ jobs:
       - name: Deploy to server
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          ENV_PASSPHRASE: ${{ secrets.ENV_PASSPHRASE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ vars.SSH_PORT }}" -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          test -n "$ENV_PASSPHRASE" || { echo "Missing ENV_PASSPHRASE repository secret" >&2; exit 1; }
-          # .env.prod 由本地 gpg 对称加密提交（scripts/gpg-env.ts）：runner 用
-          # ENV_PASSPHRASE 解密后直送服务器，服务器上不构建 .env；
-          # deploy-remote.sh 只校验没有 <required> 残留。
-          gpg --batch --yes --pinentry-mode loopback --passphrase "$ENV_PASSPHRASE" --decrypt \
-            --output .env.prod .env.prod.gpg
+          # 应用与 ESA 发布使用同一份已解密的生产配置。
           scp -P "${{ vars.SSH_PORT }}" .env.prod \
-            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:${{ vars.DEPLOY_DIR }}/.env.incoming"
-          shred -u .env.prod
+            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:${{ vars.DEPLOY_DIR }}/.env.prod.incoming"
           # 仓库里的 compose 是线上编排的唯一来源：先送过去，由远端脚本校验后换到位
           # （旧的备份成 docker-compose.yml.bak）。以前这份文件只在服务器上，会悄悄
           # 漂移（探针探 /、缺 container_name），而仓库里那份看起来是好的。
           scp -P "${{ vars.SSH_PORT }}" docker-compose.yml \
             "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:${{ vars.DEPLOY_DIR }}/docker-compose.yml.incoming"
-          # 远端序列在 scripts/deploy-remote.sh：SSH → 远端 shell 的两层引号转义本身就是
-          # 事故来源，脚本可以在本地用替身 docker 跑（scripts/deploy-remote.test.ts）。
+          # 远端序列在 scripts/deploy/remote.sh：SSH → 远端 shell 的两层引号转义本身就是
+          # 事故来源，脚本可以在本地用替身 docker 跑（scripts/deploy/remote.test.ts）。
           # 它内部带健康门：容器起不来就回滚到旧镜像，并让这一步红掉。
-          ssh -p "${{ vars.SSH_PORT }}" "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
-            "DEPLOY_DIR='${{ vars.DEPLOY_DIR }}' \
-             IMAGE='$IMAGE' \
-             ACR_USERNAME='${{ secrets.ACR_USERNAME }}' \
-             ACR_PASSWORD='${{ secrets.ACR_PASSWORD }}' \
-             sh -s" \
-            < scripts/deploy-remote.sh
+          # 共用的 Registry 凭据通过加密 SSH stdin 传入，不拼进远端命令行。
+          # base64 仅处理 shell 引号；传输保密由 SSH 提供。
+          {
+            printf 'ACR_USERNAME=$(printf %%s "%s" | base64 -d)\n' "$(printf '%s' "$ACR_USERNAME" | base64 -w0)"
+            printf 'ACR_PASSWORD=$(printf %%s "%s" | base64 -d)\n' "$(printf '%s' "$ACR_PASSWORD" | base64 -w0)"
+            cat scripts/deploy/remote.sh
+          } | ssh -p "${{ vars.SSH_PORT }}" "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
+            "DEPLOY_DIR='${{ vars.DEPLOY_DIR }}' IMAGE='$IMAGE' sh -s"
+
+      # 只有应用健康门通过，才发布本次 checkout 的 ESA 源码和变量。
+      - name: Publish production ESA function
+        run: pnpm esa:deploy:prod
+
+      - name: Remove plaintext environment
+        if: always()
+        run: |
+          if [ -f .env.prod ]; then shred -u .env.prod; fi
+
+      - name: Upload ESA deployment receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: esa-production-receipt
+          path: .data/esa-deploy/*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30

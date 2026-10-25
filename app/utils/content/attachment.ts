@@ -1,87 +1,54 @@
-import type { ContentStoryAttachment, ContentTaskResolution } from '@shared/types/content'
-import type { PendingTaskRow } from './task-row'
-import { attachment_download_name, decrypted_attachment_name, is_encrypted_attachment } from '@shared/content-markdown'
-import { decrypted_blob_url } from './attachment-crypto'
+import type { ContentStoryAttachment } from '@shared/types/content'
+import { is_encrypted_attachment } from '@shared/content-markdown'
 
-/**
- * The public "删减版" of an encrypted attachment: the plaintext sibling named
- * without the .good suffix. Authors upload it deliberately as the abridged
- * variant that unauthorized viewers get in place of the denied placeholder.
- */
-export function abridged_twin_of(attachments: ContentStoryAttachment[], file_name: string) {
-  if (! is_encrypted_attachment(file_name))
-    return null
-  const twin_name = decrypted_attachment_name(file_name)
-  return attachments.find(item => item.file_name === twin_name && ! item.is_encrypted) ?? null
+export function attachment_is_restricted(attachment: Pick<ContentStoryAttachment, 'is_private'>) {
+  return !! attachment.is_private
+}
+
+export function attachment_can_read(attachment: Pick<ContentStoryAttachment, 'url'>) {
+  return !! attachment.url
+}
+
+/** Preview the same representation an unprivileged reader receives without mutating the editing catalog. */
+export function public_preview_attachments(attachments: ContentStoryAttachment[]) {
+  return attachments.map((attachment) => {
+    if (! attachment_is_restricted(attachment))
+      return attachment
+    const { image: _image, encryption_key: _key, ... public_fields } = attachment
+    return { ... public_fields, url: null, is_redacted_view: Boolean(attachment.redacted_url && attachment.redacted_image) }
+  })
+}
+
+export function attachment_display_url(static_url: (path: string) => string, attachment: Pick<ContentStoryAttachment, 'url' | 'is_private'>) {
+  return attachment.url ? attachment.is_private ? attachment.url : static_url(attachment.url) : ''
+}
+
+/** Match the rendered URL: DOM .href expands relative attachment routes to absolute URLs. */
+export function attachment_for_link<T>(attachments: ReadonlyMap<string, T>, link: Pick<HTMLAnchorElement, 'getAttribute'>) {
+  return attachments.get(link.getAttribute('href') ?? '')
+}
+
+/** A redacted presentation belongs to this row; other attachments are independent. */
+export function redacted_version_of(attachments: ContentStoryAttachment[], file_name: string) {
+  const source = attachments.find(item => item.file_name === file_name)
+  if (source?.redacted_url && source.redacted_image)
+    return { ... source, url: source.redacted_url, image: source.redacted_image, is_private: false }
+  return null
 }
 
 export type AttachmentUploadStatus = 'queued' | 'uploading' | 'paused' | 'completed' | 'error' | 'cancelled'
-
-/** File view model for MyContentAttachmentCard: a stored attachment or a pending upload task. */
-export type AttachmentFileCardData
-  = | (ContentStoryAttachment & {
-    kind: 'stored'
-    /** Unreferenced stored attachments are deleted when the story is saved. */
-    referenced: boolean
-    /** This plaintext file is the 删减版 twin of an encrypted sibling. */
-    is_abridged_twin?: boolean
-  })
-  | {
-    kind: 'upload'
-    file_name: string
-    mime_type: string | null
-    file_size: number
-    status: AttachmentUploadStatus
-    progress: number
-    /** Live upload speed in bytes per second. */
-    speed: number
-    message: string | null
-    /** True when the source file (blob or handle) is available to resume. */
-    can_resume: boolean
-    /**
-     * Server-executed items (encrypt/decrypt) have no bytes to report: the bar
-     * hides and `pending_label` carries the verb (加密中/解密中).
-     */
-    indeterminate?: boolean
-    pending_label?: string | null
-    /** Server-executed rows cannot be paused/resumed from the client. */
-    server_side?: boolean
-    resolution?: ContentTaskResolution | null
-  }
-
-/** Unified view model for MyContentAttachmentCard: a file row or a folder row. */
-export type AttachmentCardData
-  = | AttachmentFileCardData
-    | {
-      kind: 'folder'
-      /** Full folder path (e.g. 'a/b'); the row carries it as data-folder. */
-      path: string
-      name: string
-      collapsed: boolean
-      /** Stored files anywhere under the folder (recursive). */
-      count: number
-      /** Drag-over highlight: this folder is the current drop target. */
-      drop_target: boolean
-      /** No-op or forbidden drop target (same-folder, self/descendant). */
-      drop_disabled: boolean
-      /** This folder is the target of the in-flight move batch. */
-      moving: boolean
-      /** Source/target/ancestor of the in-flight move batch: dimmed. */
-      dimmed: boolean
-      /** Any move batch is in flight: the row cannot be dragged. */
-      batch_pending: boolean
-    }
 
 /** A file plus the path it should be stored under; folder uploads carry nested paths. */
 export interface AttachmentUploadPick {
   file: File
   file_name: string
+  selection_root?: string
   /** FileSystemFileHandle from a picker/drop, for zero-copy resume after refresh. */
   handle?: FileSystemFileHandle | null
 }
 
 export function attachment_pick_from_file(file: File): AttachmentUploadPick {
-  return { file, file_name: file.webkitRelativePath || file.name }
+  return { file, file_name: file.webkitRelativePath || file.name, ... (file.webkitRelativePath ? { selection_root: file.webkitRelativePath.split('/')[0]! } : {}) }
 }
 
 /** Recursively flatten File System Access handles (files or folders) into picks. */
@@ -89,7 +56,7 @@ async function collect_file_system_handle(handle: FileSystemHandle, parent: stri
   const path = parent ? `${parent}/${handle.name}` : handle.name
   if (handle.kind === 'file') {
     try {
-      out.push({ file: await (handle as FileSystemFileHandle).getFile(), file_name: path, handle: handle as FileSystemFileHandle })
+      out.push({ file: await (handle as FileSystemFileHandle).getFile(), file_name: path, handle: handle as FileSystemFileHandle, ... (parent ? { selection_root: path.split('/')[0]! } : {}) })
     }
     catch {
       // Skip unreadable files rather than failing the whole drop.
@@ -126,7 +93,7 @@ async function collect_file_system_entry(entry: FileSystemEntry, parent: string,
   const path = parent ? `${parent}/${entry.name}` : entry.name
   if (entry.isFile) {
     try {
-      out.push({ file: await file_system_entry_file(entry as FileSystemFileEntry), file_name: path })
+      out.push({ file: await file_system_entry_file(entry as FileSystemFileEntry), file_name: path, ... (parent ? { selection_root: path.split('/')[0]! } : {}) })
     }
     catch {
       // Skip unreadable files rather than failing the whole drop.
@@ -189,71 +156,6 @@ export async function attachment_picks_from_data_transfer(data_transfer: DataTra
   const picks: AttachmentUploadPick[] = []
   await Promise.all(entries.map(entry => collect_file_system_entry(entry, '', picks)))
   return picks
-}
-
-export type AttachmentListItem = {
-  key: string
-  card: AttachmentFileCardData
-} & (
-  | { kind: 'stored', attachment: ContentStoryAttachment, move_source_file_name?: string }
-  | { kind: 'upload', row: PendingTaskRow }
-)
-
-/** Which corners of a selected row to round, so contiguous selections read as one block. */
-export type MyContentAttachmentSelectionEdges = 'top' | 'bottom' | 'none' | 'both' | null
-
-/** Interactive per-row state computed by the page and rendered by MyContentAttachmentCard. */
-export interface MyContentAttachmentRowState {
-  selected: boolean
-  selection_edges: MyContentAttachmentSelectionEdges
-  /** Rows in the current selection, when this row is selected (a count above 1 selects the batch menu). */
-  selection_count: number
-  delete_pending: boolean
-  delete_disabled: boolean
-  /** In-flight encrypt/decrypt on this file (disables the same actions as a delete). */
-  encrypt_pending: boolean
-  /**
-   * Why the action cannot run on the row's target set, or empty when it can —
-   * reported in the menu in place of the action, so nothing has to be refused
-   * server-side for the author to learn the reason. Independent causes are
-   * listed side by side (a selection of encrypted files plus an oversized
-   * plaintext one is `['已加密', '文件太大']`).
-   *
-   * The target set is the whole selection for a row inside a multi-selection
-   * (that is what its menu acts on) and the row itself otherwise. Decrypt and
-   * the 删减版 store the same name, so they share a reason.
-   */
-  encrypt_blocked_reasons: string[]
-  decrypt_blocked_reasons: string[]
-  delete_blocked_reasons: string[]
-  /**
-   * Why the file cannot be replaced, or empty when it can. Replacing an
-   * encrypted file would store the new bytes as plaintext while leaving the
-   * row's key in place, so the client would try to decrypt readable content —
-   * that transition belongs to 取消加密, not to a file swap.
-   */
-  replace_blocked_reasons: string[]
-  replace_disabled: boolean
-  retry_disabled: boolean
-  move_pending: boolean
-  /**
-   * A structure operation (move/rename/folder change) holds the scope's lock —
-   * either this tab's own in-flight one or another client's. Drag and the
-   * matching menu actions stay disabled so peers cannot collide into a 409.
-   */
-  structure_locked: boolean
-}
-
-/** A flat render row for MyContentAttachmentList: a folder row or a file row, fully described by the page. */
-export interface MyContentAttachmentRow {
-  /** Stable event identity (`folder:${path}` / `stored:${name}` / `upload:${id}`). */
-  key: string
-  depth: number
-  /** Render data: the folder view model, or a stored/upload file card. */
-  data: AttachmentCardData
-  state: MyContentAttachmentRowState
-  /** The page item for file rows (stored/upload); null for folder rows. */
-  item: AttachmentListItem | null
 }
 
 export const file_icon_names = [
@@ -333,56 +235,6 @@ export function attachment_leading_action(attachment: Pick<ContentStoryAttachmen
   return attachment_is_media(attachment) ? 'open' : 'download'
 }
 
-/**
- * Decrypts an encrypted attachment and hands the plaintext to the browser:
- * media opens in a new tab, anything else is saved under its display name.
- *
- * The tab is opened before the await, because a window opened after decryption
- * falls outside the click's user gesture and the browser blocks it. `noopener`
- * is unusable on that pre-open window — it returns null, leaving nothing to
- * navigate — so the opener link is severed by hand instead.
- *
- * `save` forces the save for media too, which is what the attachment list's
- * separate 下载 entry needs.
- */
-async function hand_over_decrypted(cipher_url: string, attachment: ContentStoryAttachment, save: boolean) {
-  const key = attachment.encryption_key
-  if (! key)
-    throw new Error('附件缺少解密密钥')
-  const tab = ! save && attachment_is_media(attachment) ? window.open('', '_blank') : null
-  if (tab)
-    tab.opener = null
-  try {
-    const blob_url = await decrypted_blob_url(cipher_url, key, attachment.mime_type)
-    // A null tab means the browser blocked the popup, not that the viewer asked
-    // for a file, so the save is the fallback that still delivers the content.
-    if (! tab)
-      save_url_as(blob_url, attachment_download_name(attachment.file_name))
-    else if (! tab.closed)
-      tab.location.replace(blob_url)
-  }
-  catch (ex) {
-    // The pre-opened tab is still blank; leave no stray tab behind.
-    tab?.close()
-    throw ex
-  }
-}
-
-/** Opens an encrypted attachment's plaintext: media in a tab, anything else saved. */
-export function open_decrypted_attachment(cipher_url: string, attachment: ContentStoryAttachment) {
-  return hand_over_decrypted(cipher_url, attachment, false)
-}
-
-/** Saves an encrypted attachment's plaintext under its display name, media included. */
-export function save_decrypted_attachment(cipher_url: string, attachment: ContentStoryAttachment) {
-  return hand_over_decrypted(cipher_url, attachment, true)
-}
-
-/**
- * Resolve a front matter `cover` link: bare file names are local attachments
- * whose object URL comes from the server payload (`cover_url`, root-relative);
- * anything else (external URL, `#` color) passes through unchanged.
- */
 export function story_front_cover_url(static_url: (path: string) => string, cover: string, cover_url?: string | null) {
   const segments = cover.split('/')
   // Bare names and folder paths point at the story's attachments.

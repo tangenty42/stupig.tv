@@ -10,6 +10,7 @@ dist
 !.env.example
 # 本机覆盖绝不能进镜像（local.yaml 不进仓库，模板见 config/local.example.yaml）
 config/local.yaml
+tmp.env
 .tmp-*
 *.log
 .vscode

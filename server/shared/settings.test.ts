@@ -13,7 +13,7 @@ describe('application settings', () => {
     expect(settings_schema.safeParse({ ... settings, secret: 'unexpected' }).success).toBe(false)
     const invalid = structuredClone(settings)
     expect(settings_schema.safeParse({ ... invalid, integrations: { ... invalid.integrations, mqtt: { ... invalid.integrations.mqtt, qos: 3 } } }).success).toBe(false)
-    invalid.app.content.task.heartbeatSeconds = invalid.app.content.operationLock.ttlSeconds
+    invalid.app.content.workspace.heartbeatSeconds = invalid.app.content.workspace.leaseSeconds
     expect(settings_schema.safeParse(invalid).success).toBe(false)
     expect(settings_schema.safeParse({ ... settings, app: { ... settings.app, api: { base: `\${SECRET}` } } }).success).toBe(false)
   })

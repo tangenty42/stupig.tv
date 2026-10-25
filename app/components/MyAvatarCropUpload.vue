@@ -4,7 +4,7 @@
 
     <MyDialog
       v-model:visible="crop_modal_visible"
-      header="调整头像"
+      header="调整"
       :pending="pending"
       @update:visible="() => { if (! crop_modal_visible) { close_crop_modal() } }"
     >

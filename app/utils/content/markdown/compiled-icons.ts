@@ -22,6 +22,7 @@ export const story_compiled_icons = [
   'lucide:thumbs-up',
   'lucide:book-open',
   'lucide:book-x',
+  'lucide:image-off',
   // The folder card's leading icon.
   'lucide:folder',
   // The private (机密) chrome: open keyhole for permitted viewers, the closed

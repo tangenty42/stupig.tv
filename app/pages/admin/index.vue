@@ -152,12 +152,12 @@
             @click="remove_verification"
           >
             <template #icon>
-              <MyIcon name="lucide:badge-x" />
+              <MyIcon name="lucide:check" />
             </template>
           </Button>
           <Button label="保存" :loading="verify_note_pending" :disabled="verify_dialog_pending" @click="submit_verification_note">
             <template #icon>
-              <MyIcon name="lucide:badge-check" />
+              <MyIcon name="lucide:check" />
             </template>
           </Button>
         </div>

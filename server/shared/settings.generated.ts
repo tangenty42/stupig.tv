@@ -81,9 +81,24 @@ export const settings: Settings = {
         autosaveDelayMs: 1000,
       },
       reference: {
-        legacyCompat: true,
+        journalRetentionDays: 30,
+        sweepIntervalSeconds: 60,
+      },
+      workspace: {
+        batchLimit: 500,
+        draftReferenceLimit: 10000,
+        suffixAttempts: 10000,
+        receiptHours: 24,
+        sessionHours: 24,
+        leaseSeconds: 120,
+        heartbeatSeconds: 30,
+        parallelUploads: 3,
+      },
+      name: {
+        suffixSeparator: '_',
       },
       upload: {
+        requestTimeoutSeconds: 120,
         handleStorageName: 'stupig_content_upload_handles',
         partSizeMb: 8,
         signBatchSize: 20,
@@ -93,18 +108,19 @@ export const settings: Settings = {
       download: {
         urlTtlSeconds: 300,
       },
+      read: {
+        urlTtlSeconds: 3600,
+      },
       redact: {
         maxDimension: 8192,
       },
-      operationLock: {
-        ttlSeconds: 120,
+      imageEditor: {
+        maxPixels: 24000000,
+        maxActions: 200,
+        maxStrokePoints: 100000,
       },
-      task: {
-        heartbeatSeconds: 30,
-        queuedTimeoutSeconds: 300,
-        retentionHours: 24,
-        sweepIntervalSeconds: 60,
-        clientIdStorageName: 'stupig_content_task_client_id',
+      image: {
+        lqipMaxBytes: 8192,
       },
       encrypt: {
         maxSizeMb: 20,

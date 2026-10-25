@@ -654,6 +654,10 @@ export function create_data_sync_transport(broker_url: string) {
 
       window.addEventListener('pagehide', handle_pagehide)
       window.addEventListener('pageshow', handle_pageshow)
+      // BroadcastChannel still delivers while HTTP is offline. A resumed MQTT
+      // session may only replay already-seen IDs, so recover resource reads
+      // independently of broker session state, including in background tabs.
+      window.addEventListener('online', notify_all_listeners_refresh)
 
       // Watches the user cookie rather than the auth token: the token cookie is
       // now httpOnly and unreadable here, and login/logout move the user cookie in
@@ -692,6 +696,7 @@ export function create_data_sync_transport(broker_url: string) {
     if (import.meta.client) {
       window.removeEventListener('pagehide', handle_pagehide)
       window.removeEventListener('pageshow', handle_pageshow)
+      window.removeEventListener('online', notify_all_listeners_refresh)
       document.removeEventListener('visibilitychange', handle_visibility_change)
       broadcast_channel?.removeEventListener('message', handle_broadcast_message)
       handle_pagehide()

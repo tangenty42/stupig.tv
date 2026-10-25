@@ -7,6 +7,8 @@ import {
   set_user_permissions,
   unban_user,
 } from '@server/services/admin.service'
+import { get_background_status } from '@server/services/background/status.service'
+import { get_storage_audit_findings } from '@server/services/storage-audit/service'
 import { permission_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
 import { ADMIN_FILTER_FIELDS } from '@shared/types/user'
@@ -15,6 +17,8 @@ const admin_read_procedure = permission_procedure('admin_access', 'readonly')
 const admin_full_procedure = permission_procedure('admin_access', 'full')
 
 export const admin_router = router({
+  getBackgroundStatus: admin_read_procedure.query(() => get_background_status()),
+  getStorageAuditFindings: admin_full_procedure.input(api_schema.admin.storage_audit_findings).query(({ input }) => get_storage_audit_findings(input)),
   getSelf: admin_read_procedure.query(({ ctx }) => ({
     id: ctx.auth_user.id,
     username: ctx.auth_user.username,

@@ -49,7 +49,7 @@ describe('app settings Nuxt module', () => {
     await callback('change', 'C:\\app\\config\\app-settings.yaml')
     await callback('change', '../config/app-settings.yaml')
     expect(mocks.generate_settings).toHaveBeenCalledTimes(3)
-    await callback('change', 'config/default.yaml')
+    await callback('change', 'config/shared.yaml')
     await callback('change', 'other-config/app-settings.yaml')
     expect(mocks.generate_settings).toHaveBeenCalledTimes(3)
   })

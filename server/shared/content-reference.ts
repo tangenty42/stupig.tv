@@ -36,6 +36,15 @@ export function parse_content_ref(destination: string): ContentRef | null {
     const title = decoded.slice(story_ref_scheme.length)
     return valid_segment(title) ? { kind: 'story', title } : null
   }
+  return null
+}
+
+/** Offline migration and rejection diagnostics only; never resolves runtime links. */
+export function parse_migration_ref(destination: string): ContentRef | null {
+  const current = parse_content_ref(destination)
+  if (current)
+    return current
+  const decoded = decode_content_destination(destination)
   if (decoded.startsWith('@')) {
     const title = decoded.slice(1)
     return valid_segment(title) ? { kind: 'legacy_story', title } : null
@@ -56,5 +65,5 @@ export function format_story_ref(title: string) {
 
 /** The same comparison is used by lint, rendering, extraction and title cascades. */
 export function content_title_key(title: string) {
-  return title.toLowerCase()
+  return title.normalize('NFC').toLowerCase()
 }

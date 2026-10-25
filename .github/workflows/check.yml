@@ -60,6 +60,8 @@ jobs:
 
       - run: npx nuxt typecheck
 
+      - run: pnpm exec tsc --project scripts/tsconfig.json --noEmit
+
       - run: pnpm test
 
   migrations:
@@ -100,7 +102,7 @@ jobs:
         env:
           NODE_ENV: production
         run: |
-          pnpm migrate
+          pnpm migrate --maintenance
           # 第二遍：全部已记录，应直接判 up to date（执行器幂等路径）
           pnpm migrate
           pnpm migrate --status
@@ -109,7 +111,7 @@ jobs:
         run: |
           # 关键结构断言（数量断言太脆，每次迁移都要改）：
           # 任务队列三表已就位、旧 scope 锁表已移除
-          for TABLE in content_locks content_tasks content_task_items; do
+          for TABLE in content_locks content_tasks content_task_items migration_runs; do
             FOUND=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
               -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = '$TABLE'")
             if [ "$FOUND" != "1" ]; then
@@ -124,4 +126,22 @@ jobs:
             exit 1
           fi
           mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
-            -e "SELECT filename, applied_at FROM schema_migrations ORDER BY filename"
+            -e "SELECT filename, finished_at FROM migration_runs WHERE status = 'completed' ORDER BY filename"
+          LEGACY=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
+            -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = 'schema_migrations'")
+          test "$LEGACY" = "0"
+
+      - name: Verify script recovery on isolated databases
+        env:
+          NODE_ENV: development
+          MYSQL_DEV_ROOT_PASSWORD: ci-root-password
+        run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/migration-runtime.ts
+
+      - name: Verify Content conversion on an isolated database
+        env:
+          NODE_ENV: development
+          MYSQL_DEV_ROOT_PASSWORD: ci-root-password
+          # The verifier uses in-memory OSS; these are schema-only fixtures.
+          ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
+          ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
+        run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.ts

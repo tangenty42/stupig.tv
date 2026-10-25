@@ -59,7 +59,7 @@
 
       <div v-if="can_manage" class="mt-4 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-slate-100 pt-4 dark:border-slate-800">
         <NuxtLink target="_blank" :to="profile_link" @click.stop>
-          <Button size="small" text label="修改信息">
+          <Button size="small" text label="编辑">
             <template #icon>
               <MyIcon name="lucide:square-pen" />
             </template>

@@ -17,8 +17,8 @@ const Dypnsapi = is_dypnsapi_module_default(DypnsapiModule)
   : DypnsapiModule as unknown as typeof DypnsapiClass
 
 const client = new Dypnsapi(new Config({
-  accessKeyId: config.aliyun.accessKeyId,
-  accessKeySecret: config.aliyun.accessKeySecret,
+  accessKeyId: config.aliyun.dypns.accessKeyId,
+  accessKeySecret: config.aliyun.dypns.accessKeySecret,
   endpoint: config.aliyun.dypns.endpoint,
   regionId: config.aliyun.dypns.regionId,
 }))

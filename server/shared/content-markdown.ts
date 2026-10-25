@@ -1,5 +1,6 @@
 import { html_no_markdown_tags, html_void_tags } from './content-html'
-import { content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref } from './content-reference'
+import { content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref, parse_migration_ref } from './content-reference'
+import { scan_reference_definitions } from './content-reference-definitions'
 
 export { link_file_name_illegal_chars } from './content-reference'
 
@@ -111,7 +112,6 @@ export interface ContentMarkdownConfig {
   /** Existing story titles (id + title) for duplicate-title linting; `current_story_id` excludes the story being edited. */
   existing_titles?: { id: number, title: string }[]
   attachment_paths?: string[]
-  legacy_compat?: boolean
 }
 
 const fm_key_line = /^([A-Z_]\w*)\s*:(.*)$/i
@@ -482,13 +482,19 @@ export function attachment_folder_of(file_name: string) {
 // listings carry no content type, so types are derived from the file name.
 const attachment_mime_by_extension: Record<string, string> = {
   avif: 'image/avif',
+  apng: 'image/apng',
   bmp: 'image/bmp',
   gif: 'image/gif',
   ico: 'image/x-icon',
+  heic: 'image/heic',
+  heif: 'image/heif',
   jpeg: 'image/jpeg',
   jpg: 'image/jpeg',
+  jxl: 'image/jxl',
   png: 'image/png',
   svg: 'image/svg+xml',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
   webp: 'image/webp',
   avi: 'video/x-msvideo',
   mkv: 'video/x-matroska',
@@ -516,6 +522,11 @@ export function attachment_mime_type(file_name: string) {
   return attachment_mime_by_extension[file_name.slice(dot + 1).toLowerCase()] ?? null
 }
 
+/** Formats admitted to the existing single-frame AVIF/JPEG processing pipeline. */
+export function processable_image_mime(mime: string | null | undefined) {
+  return ['image/jpeg', 'image/png', 'image/webp', 'image/avif'].includes(mime ?? '')
+}
+
 /** The file name without its folder prefix. */
 export function attachment_base_name(file_name: string) {
   return file_name.slice(file_name.lastIndexOf('/') + 1)
@@ -524,17 +535,25 @@ export function attachment_base_name(file_name: string) {
 /** The name with its extension lowercased (`A.PNG` → `A.png`); a name with no extension passes through. */
 export function lowercased_attachment_extension(file_name: string) {
   const dot = file_name.lastIndexOf('.')
-  // dot 0 is a leading dot that IS the name (`.good`), not an extension separator.
-  return dot > 0 ? `${file_name.slice(0, dot)}${file_name.slice(dot).toLowerCase()}` : file_name
+  // Dots in parent directories and a basename's leading dot are not extensions.
+  return dot > file_name.lastIndexOf('/') + 1 ? `${file_name.slice(0, dot)}${file_name.slice(dot).toLowerCase()}` : file_name
 }
 
-// Encrypted attachments carry a `.good` suffix (appended by the server-side
-// encrypt step, which also swaps the object for the ciphertext). The original
-// mime type stays on the row, so the suffix is display-level only.
+// A `.good` path segment declares private access, inherited by its descendants.
+// It is an ACL marker; uploaded bytes retain their original format.
 export const encrypted_attachment_suffix = '.good'
 
 export function is_encrypted_attachment(file_name: string) {
-  return file_name.endsWith(encrypted_attachment_suffix)
+  return file_name.toLowerCase().endsWith(encrypted_attachment_suffix)
+}
+
+/** Effective access includes declarations on any ancestor directory. */
+export function attachment_path_is_private(path: string) {
+  return path.split('/').some(is_encrypted_attachment)
+}
+
+export function attachment_inherits_private(path: string) {
+  return attachment_path_is_private(attachment_folder_of(path) ?? '')
 }
 
 /** The name an encrypted attachment had before encryption (`a.png.good` → `a.png`). */
@@ -545,7 +564,7 @@ export function decrypted_attachment_name(file_name: string) {
 /**
  * The name an attachment is saved under: its base name, encryption marker
  * stripped, extension lowercased — legacy rows may still carry an uppercase
- * extension, while new and renamed ones arrive normalized.
+ * extension, while new uploads normalize extensions at admission.
  */
 export function attachment_download_name(file_name: string) {
   return lowercased_attachment_extension(attachment_base_name(decrypted_attachment_name(file_name)))
@@ -557,8 +576,8 @@ export function attachment_download_name(file_name: string) {
  * The marker is itself the last dot, so lowercasing the final suffix alone
  * would leave the real extension (`secret.PNG.good` → `secret.PNG.good`) — the
  * plaintext extension has to be normalized first and the marker re-appended.
- * This is the rule every name boundary uses; `lowercased_attachment_extension`
- * is the primitive underneath it.
+ * Upload admission uses this rule; renames preserve the existing locked tail.
+ * `lowercased_attachment_extension` is the primitive underneath it.
  */
 export function normalized_attachment_extension(file_name: string) {
   if (! is_encrypted_attachment(file_name))
@@ -574,9 +593,8 @@ export function normalized_attachment_extension(file_name: string) {
  * `plain_file.good` locks only `.good` (there is no other extension). The
  * extension is locked because it decides the mime type and how the file
  * renders: letting it ride inside the editable text would let a rename dress a
- * file up as another kind. The marker is locked because it is the server's own
- * state on the row — an author writing or dropping it is a fake, which is why
- * only 加密/取消加密 change it.
+ * file up as another kind. File renames keep the ACL marker locked; the
+ * dedicated privacy action changes a file's own declaration.
  *
  * Shared so the rename prompt and the server's validation cannot disagree about
  * where the editable part ends.
@@ -633,6 +651,11 @@ export function compare_attachment_names(left: string, right: string) {
   return left.localeCompare(right, 'zh-CN', { numeric: true })
 }
 
+/** Directory views put folders first, then use the same natural name order. */
+export function compare_attachment_items(left: { name: string, is_folder: boolean }, right: { name: string, is_folder: boolean }) {
+  return Number(right.is_folder) - Number(left.is_folder) || compare_attachment_names(left.name, right.name)
+}
+
 /** The attachment fields the folder helpers read. */
 export interface NamedAttachment {
   file_name: string
@@ -648,19 +671,19 @@ function normalize_folder_path(folder_path: string) {
 }
 
 /**
- * Whether a destination names a folder in this scope. Folders only exist
- * implicitly here — the attachment list carries files, so a path is a folder
- * exactly when something lives under it. A file with the same name wins, so
+ * Whether a destination names a folder in this scope, including explicitly
+ * stored empty directories. Files can also imply their ancestor directories.
+ * A file with the same name wins, so
  * `![](cards)` stays an image when `cards` really is a file.
  */
-export function is_attachment_folder(attachments: readonly NamedAttachment[], folder_path: string) {
+export function is_attachment_folder(attachments: readonly NamedAttachment[], folder_path: string, folders: readonly string[] = []) {
   const folder = normalize_folder_path(folder_path)
   if (! folder)
     return false
   if (attachments.some(item => item.file_name === folder))
     return false
   const prefix = `${folder}/`
-  return attachments.some(item => item.file_name.startsWith(prefix))
+  return folders.some(path => path === folder || path.startsWith(prefix)) || attachments.some(item => item.file_name.startsWith(prefix))
 }
 
 /**
@@ -763,15 +786,11 @@ export const link_file_name_reserved_base = /^(con|prn|aux|nul|com[1-9]|lpt[1-9]
  * here rather than in the tRPC schema or whichever service checks first. The
  * scope-dependent half is `attachment_path_taken` below.
  *
- * The `.good` suffix is reserved because it marks server-side encryption: a
- * hand-made one would pass for an encrypted row and would occupy the very name
- * a real decrypt (or a 删减版) needs.
+ * A `.good` suffix is accepted for both files and directories.
  */
 export function attachment_name_segment_violation(name: string) {
   if (! name)
     return '文件名不能为空'
-  if (is_encrypted_attachment(name))
-    return `文件名不能以 ${encrypted_attachment_suffix} 结尾`
   if (name.startsWith('.') || name.endsWith('.'))
     return '文件名不能以点号开头或结尾'
   if (has_attachment_illegal_char(name))
@@ -795,9 +814,11 @@ export function link_file_name_byte_length(name: string) {
   return new TextEncoder().encode(name).length
 }
 
-/** Strip what storage and a Markdown link cannot carry, and cap the byte length. */
-function clean_attachment_segment(base: string, max_bytes: number) {
-  let cleaned = base.replace(link_file_name_illegal_chars, '').trim().replace(/^\.+/, '').replace(/\.+$/, '')
+/** Replace characters storage and Markdown cannot carry, and cap the byte length. */
+function clean_attachment_segment(base: string, max_bytes: number): string {
+  if (is_encrypted_attachment(base))
+    return clean_attachment_segment(decrypted_attachment_name(base), max_bytes - encrypted_attachment_suffix.length) + encrypted_attachment_suffix
+  let cleaned = base.replace(link_file_name_illegal_chars, '_').trim().replace(/^\.+/, '').replace(/\.+$/, '')
   if (link_file_name_reserved_base.test(cleaned.split('.')[0] ?? '')) {
     cleaned = `_${cleaned}`
   }
@@ -1033,12 +1054,24 @@ function parse_link_at(text: string, start: number, limit: number): MarkdownLink
   }
 }
 
-/** All top-level inline link/image spans; labels may contain nested links (walked separately). */
+/** Inline link/image spans plus live definition targets; nested labels are walked separately. */
 function scan_markdown_links(text: string): MarkdownLinkSpan[] {
+  const count = front_matter_line_count(text)
+  const front_end = count ? text.split('\n').slice(0, count).join('\n').length + 1 : 0
+  const references = scan_reference_definitions(text, front_end)
+  const spans = scan_inline_links(text, references.ranges)
+  for (const definition of references.definitions) {
+    spans.push({ start: definition.from, end: definition.to, image: false, label: '', label_start: definition.from, label_end: definition.from, destination: definition.destination, dest_start: definition.from, dest_end: definition.to })
+  }
+  return spans.sort((a, b) => a.start - b.start)
+}
+
+function scan_inline_links(text: string, excluded: { from: number, to: number }[]): MarkdownLinkSpan[] {
   const spans: MarkdownLinkSpan[] = []
   const wrappers: string[] = []
   const fenced = fenced_code_ranges(text)
   let fence_index = 0
+  let excluded_index = 0
   let cursor = 0
   // Scan the non-fenced segments one at a time so a code span can never
   // "close" inside a fenced block and swallow it.
@@ -1049,6 +1082,13 @@ function scan_markdown_links(text: string): MarkdownLinkSpan[] {
     const limit = fence_index < fenced.length ? fenced[fence_index]![0] : text.length
     let i = cursor
     while (i < limit) {
+      while (excluded_index < excluded.length && excluded[excluded_index]!.to <= i)
+        excluded_index ++
+      const region = excluded[excluded_index]
+      if (region && region.from <= i) {
+        i = region.to
+        continue
+      }
       // Raw HTML attributes/comments and raw-text elements are not Markdown.
       if (text[i] === '<') {
         const html = /^(?:<!--[\s\S]*?(?:-->|$)|<([a-z][\w-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>|<\/([a-z][\w-]*)\s*>)/i.exec(text.slice(i, limit))
@@ -1099,7 +1139,7 @@ function scan_markdown_links(text: string): MarkdownLinkSpan[] {
     if (fence_index >= fenced.length) {
       break
     }
-    cursor = fenced[fence_index]![1]
+    cursor = Math.max(i, fenced[fence_index]![1])
   }
   return spans
 }
@@ -1142,7 +1182,7 @@ function rewrite_markdown_links(text: string, patch: (span: MarkdownLinkSpan) =>
       + text.slice(span.start, span.label_start)
       + (change.label ?? text.slice(span.label_start, span.label_end))
       + text.slice(span.label_end, span.dest_start)
-      + (change.destination ?? text.slice(span.dest_start, span.dest_end))
+      + (change.destination === undefined || change.destination === span.destination ? text.slice(span.dest_start, span.dest_end) : change.destination)
       + text.slice(span.dest_end, span.end)
     cursor = span.end
   }
@@ -1157,11 +1197,12 @@ function attachment_name_from_url(url: string) {
 /** Extract attachment file names referenced from the markdown body for a story. */
 export function extract_attachment_names(markdown: string) {
   const names = new Set<string>()
-  for_each_link_span(markdown, (span) => {
-    const name = attachment_name_from_url(span.destination)
+  map_content_refs(markdown, (destination) => {
+    const name = attachment_name_from_url(destination)
     if (name) {
       names.add(name)
     }
+    return destination
   })
   return [... names]
 }
@@ -1237,6 +1278,61 @@ export function rewrite_content_refs(markdown: string, steps: readonly ContentRe
   return steps.reduce(rewrite_ref_step, markdown)
 }
 
+/** Map live destinations only; code and raw HTML use the same scanner as rendering/lint. */
+export function map_content_refs(markdown: string, transform: (destination: string, from: number, to: number) => string) {
+  const visit = (text: string, offset = 0): string => rewrite_markdown_links(text, (span) => {
+    const destination = transform(span.destination, offset + span.dest_start, offset + span.dest_end)
+    let label = visit(span.label, offset + span.label_start)
+    const old_ref = parse_content_ref(span.destination)
+    const new_ref = parse_content_ref(destination)
+    if (old_ref && new_ref) {
+      const old_name = 'path' in old_ref ? old_ref.path : old_ref.title
+      const new_name = 'path' in new_ref ? new_ref.path : new_ref.title
+      if (span.label === old_name)
+        label = new_name
+    }
+    return { destination, label }
+  })
+  const body = visit(markdown)
+  // Cover offsets must refer to the original snapshot, before link edits.
+  let offset = 0
+  const covers = new Map<string, string>()
+  for (const line of markdown.split('\n').slice(0, front_matter_line_count(markdown))) {
+    const match = /^(cover:\s*)([^\s[\]()]+)\s*$/.exec(line)
+    if (match) {
+      const from = offset + match[1]!.length
+      covers.set(match[2]!, transform(match[2]!, from, from + match[2]!.length))
+    }
+    offset += line.length + 1
+  }
+  return rewrite_bare_cover(body, destination => covers.get(destination) ?? destination)
+}
+
+/** Disjoint link-sized patches keep unrelated typing and editor selections intact. */
+export function content_ref_changes(before: string, after: string) {
+  const changes: { from: number, to: number, insert: string }[] = []
+  const old_spans = scan_markdown_links(before)
+  const new_spans = scan_markdown_links(after)
+  if (old_spans.length !== new_spans.length)
+    throw new Error('Reference rewrite changed document structure')
+  for (const [index, span] of old_spans.entries()) {
+    const next = new_spans[index]!
+    const insert = after.slice(next.start, next.end)
+    if (insert !== before.slice(span.start, span.end))
+      changes.push({ from: span.start, to: span.end, insert })
+  }
+  const old_lines = before.split('\n')
+  const new_lines = after.split('\n')
+  let offset = 0
+  for (let index = 0; index < front_matter_line_count(before); index ++) {
+    const line = old_lines[index]!
+    if (/^cover:\s*[^\s[\]()]+\s*$/.test(line) && line !== new_lines[index])
+      changes.push({ from: offset, to: offset + line.length, insert: new_lines[index]! })
+    offset += line.length + 1
+  }
+  return changes.sort((a, b) => a.from - b.from)
+}
+
 /** Bare cover destinations are outside Markdown's link scanner. */
 function rewrite_bare_cover(markdown: string, transform: (destination: string) => string) {
   const count = front_matter_line_count(markdown)
@@ -1252,7 +1348,7 @@ function rewrite_bare_cover(markdown: string, transform: (destination: string) =
 /** Syntax-only, idempotent conversion; never needs a live attachment catalog. */
 export function upgrade_legacy_refs(markdown: string): string {
   const upgrade = (destination: string) => {
-    const ref = parse_content_ref(destination)
+    const ref = parse_migration_ref(destination)
     if (ref?.kind === 'legacy_attachment')
       return format_attachment_ref(ref.path)
     if (ref?.kind === 'legacy_story')
@@ -1281,22 +1377,15 @@ export function lint_content_refs(markdown: string, config: ContentMarkdownConfi
     }
     if (! ref) {
       if (decoded.startsWith('att://') || decoded.startsWith('content://'))
-        issues.push({ line, severity: 'error', source, message: decoded.startsWith('content://') ? '档案引用标题不合法，不能包含 /' : '附件引用路径不合法' })
+        issues.push({ line, severity: 'warning', source, message: decoded.startsWith('content://') ? '档案引用标题不合法，不能包含 /' : '附件引用路径不合法' })
       return
-    }
-    if (config.legacy_compat === false && ref.kind.startsWith('legacy_')) {
-      const exists = 'path' in ref
-        ? config.attachment_paths?.includes(ref.path)
-        : config.existing_titles?.some(item => content_title_key(item.title) === content_title_key(ref.title))
-      const insert = 'path' in ref ? format_attachment_ref(ref.path) : format_story_ref(ref.title)
-      issues.push({ line, severity: 'error', source: 'legacy-ref', message: '旧引用写法已停用，请使用 att:// 或 content://', ... (exists ? { fix: { from: start, to: end, insert } } : {}) })
     }
     if ('title' in ref) {
       const key = content_title_key(ref.title)
       if (key === content_title_key(own_title ?? ''))
-        issues.push({ line, severity: 'error', source: 'at-story', message: '不允许自我引用' })
+        issues.push({ line, severity: 'warning', source: 'at-story', message: '不允许自我引用' })
       else if (! config.existing_titles?.some(item => content_title_key(item.title) === key))
-        issues.push({ line, severity: 'error', source: 'at-story', message: `档案『${ref.title}』不可引用` })
+        issues.push({ line, severity: 'warning', source: 'at-story', message: `档案『${ref.title}』不可引用` })
     }
     else if (config.attachment_paths && ! config.attachment_paths.includes(ref.path)) {
       issues.push({ line, severity: 'warning', source, message: `附件『${ref.path}』不存在` })

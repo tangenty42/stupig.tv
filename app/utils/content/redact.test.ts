@@ -40,6 +40,16 @@ function fake_context() {
 }
 
 /** Row-major RGBA pixels, `width` per row. */
+it('erases ink for taps and drags and switches back to opaque painting', () => {
+  const { context } = fake_context()
+  paint_redaction_stroke(context, { width: 8, erase: true, points: [{ x: 2, y: 3 }] }, 0)
+  expect(context.globalCompositeOperation).toBe('destination-out')
+  paint_redaction_stroke(context, { width: 8, erase: true, points: [{ x: 2, y: 3 }, { x: 8, y: 9 }] }, 0)
+  expect(context.globalCompositeOperation).toBe('destination-out')
+  paint_redaction_stroke(context, { width: 8, points: [{ x: 2, y: 3 }] }, 0)
+  expect(context.globalCompositeOperation).toBe('source-over')
+})
+
 function image_data(pixels: number[][], width: number) {
   const data = new Uint8ClampedArray(pixels.length * 4)
   pixels.forEach((pixel, index) => pixel.forEach((channel, offset) => {

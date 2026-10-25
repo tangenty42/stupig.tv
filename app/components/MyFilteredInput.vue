@@ -35,11 +35,14 @@ function emit_filtered(raw: string) {
   const el = input_component.value?.$el
   const start = el?.selectionStart ?? 0
   const end = el?.selectionEnd ?? 0
+  // Even an unchanged clean model must repair the native input's raw value.
+  if (filtered !== raw && el)
+    el.value = filtered
   emit('update:modelValue', filtered)
   // Vue re-patches el.value when the model changes, which moves the cursor
   // to the end; put it back where the edit happened.
   if (filtered !== raw && el) {
-    nextTick(() => el.setSelectionRange(Math.min(start, filtered.length), Math.min(end, filtered.length)))
+    nextTick(() => el.setSelectionRange(sanitize(raw.slice(0, start)).length, sanitize(raw.slice(0, end)).length))
   }
 }
 
@@ -55,6 +58,6 @@ function on_composition_end() {
   ime_composing.value = false
   // The trailing input event normally sanitizes; this covers IMEs that end
   // a composition without one.
-  emit_filtered(props.modelValue)
+  emit_filtered(input_component.value?.$el.value ?? props.modelValue)
 }
 </script>

@@ -59,7 +59,11 @@ function setup_carousel(carousel: HTMLElement) {
     return
   }
   shell.dataset.wired = 'true'
-  const update = () => update_carousel_navs(carousel)
+  let active = true
+  const update = () => {
+    if (active)
+      update_carousel_navs(carousel)
+  }
   // Scroll to the start of the next/previous image rather than a raw
   // viewport step, so an image always lands at the strip's leading edge.
   // The landing target shifts back by the edge-fade width so the image
@@ -81,8 +85,10 @@ function setup_carousel(carousel: HTMLElement) {
   }
   const prev_button = shell.querySelector<HTMLElement>('.carousel-prev')
   const next_button = shell.querySelector<HTMLElement>('.carousel-next')
-  prev_button?.addEventListener('click', () => scroll_to_image(- 1))
-  next_button?.addEventListener('click', () => scroll_to_image(1))
+  const on_prev = () => scroll_to_image(- 1)
+  const on_next = () => scroll_to_image(1)
+  prev_button?.addEventListener('click', on_prev)
+  next_button?.addEventListener('click', on_next)
   // First-scroll nudge: the next button shows a "右边还有" label until the
   // carousel is scrolled once, then data-hint is dropped for good.
   const snapshot = carousel_snapshots.get(carousel_key(carousel))
@@ -98,12 +104,13 @@ function setup_carousel(carousel: HTMLElement) {
   if (next_button && snapshot?.hint !== false) {
     next_button.dataset.hint = 'true'
   }
-  carousel.addEventListener('scroll', () => {
+  const on_scroll = () => {
     if (next_button?.dataset.hint) {
       delete next_button.dataset.hint
     }
     update()
-  }, { passive: true })
+  }
+  carousel.addEventListener('scroll', on_scroll, { passive: true })
   // At setup the images are usually still loading, so the strip has no
   // overflow yet and no scroll event fires when its scrollWidth grows as
   // they load. Recompute whenever the strip or its items resize, and when
@@ -122,11 +129,26 @@ function setup_carousel(carousel: HTMLElement) {
   update()
   // rAF covers the visible case; the timeout frees hidden tabs where rAF
   // never fires.
-  requestAnimationFrame(() => shell.classList.remove('carousel-no-fx'))
-  setTimeout(() => shell.classList.remove('carousel-no-fx'), 100)
+  const frame = requestAnimationFrame(() => shell.classList.remove('carousel-no-fx'))
+  const timer = setTimeout(() => shell.classList.remove('carousel-no-fx'), 100)
+  return () => {
+    if (! active)
+      return
+    active = false
+    observer.disconnect()
+    prev_button?.removeEventListener('click', on_prev)
+    next_button?.removeEventListener('click', on_next)
+    carousel.removeEventListener('scroll', on_scroll)
+    carousel.removeEventListener('load', update, true)
+    cancelAnimationFrame(frame)
+    clearTimeout(timer)
+    shell.classList.remove('carousel-no-fx')
+    delete shell.dataset.wired
+  }
 }
 
-/** Wire every carousel in the body (unwired shells only). */
+/** Wire unwired shells and return the disposer for exactly those resources. */
 export function setup_carousels(body: HTMLElement) {
-  body.querySelectorAll<HTMLElement>('.image-carousel').forEach(setup_carousel)
+  const cleanups = [... body.querySelectorAll<HTMLElement>('.image-carousel')].map(setup_carousel)
+  return () => cleanups.forEach(cleanup => cleanup?.())
 }

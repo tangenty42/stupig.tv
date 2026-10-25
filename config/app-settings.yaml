@@ -59,8 +59,21 @@ app:
       storagePrefix: stupig_content_draft_
       autosaveDelayMs: 1000
     reference:
-      legacyCompat: true
+      journalRetentionDays: 30
+      sweepIntervalSeconds: 60
+    workspace:
+      batchLimit: 500
+      draftReferenceLimit: 10000
+      suffixAttempts: 10000
+      receiptHours: 24
+      sessionHours: 24
+      leaseSeconds: 120
+      heartbeatSeconds: 30
+      parallelUploads: 3
+    name:
+      suffixSeparator: _
     upload:
+      requestTimeoutSeconds: 120
       handleStorageName: stupig_content_upload_handles
       partSizeMb: 8
       signBatchSize: 20
@@ -68,16 +81,16 @@ app:
       maxSizeMb: 20480
     download:
       urlTtlSeconds: 300
+    read:
+      urlTtlSeconds: 3600
     redact:
       maxDimension: 8192
-    operationLock:
-      ttlSeconds: 120
-    task:
-      heartbeatSeconds: 30
-      queuedTimeoutSeconds: 300
-      retentionHours: 24
-      sweepIntervalSeconds: 60
-      clientIdStorageName: stupig_content_task_client_id
+    imageEditor:
+      maxPixels: 24000000
+      maxActions: 200
+      maxStrokePoints: 100000
+    image:
+      lqipMaxBytes: 8192
     # 加解密是整块 buffer 处理（AES-GCM 单 tag 认证整段，不能流式），这个上限就是
     # 它的内存/耗时边界：只挡加密入口——现存每一份密文都出自 ≤ 该值的明文，解密天然
     # 在界内。调大它等于放宽整块处理的边界，需要连同解密内存一起评估。

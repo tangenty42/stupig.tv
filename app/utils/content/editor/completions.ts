@@ -4,14 +4,21 @@
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
+import type { ContentItemPresentation } from '~/utils/content/item-presentation'
 import { autocompletion } from '@codemirror/autocomplete'
 import { syntaxTree } from '@codemirror/language'
 import { html_no_markdown_tags } from '@shared/content-html'
-import { attachment_folder_of, compare_attachment_names } from '@shared/content-markdown'
+import { attachment_folder_of, compare_attachment_items } from '@shared/content-markdown'
 import { attachment_ref_scheme, format_attachment_ref, format_story_ref, story_ref_scheme } from '@shared/content-reference'
-import { content_rating_tiers, pinned_label, rating_label, story_rating } from '@shared/types/content'
+import { content_rating_tiers, pinned_label, rating_label } from '@shared/types/content'
 import { alert_labels, alert_types } from '~/utils/content/alerts'
+import { attachment_can_read, attachment_is_restricted } from '~/utils/content/attachment'
 import { content_attachment_markdown } from '~/utils/content/attachment-drag'
+import { attachment_item_presentation, folder_item_presentation } from '~/utils/content/item-presentation'
+
+interface ReferenceCompletion extends Completion {
+  presentation: ContentItemPresentation
+}
 
 export interface EditorCompletionSources {
   stories: () => ContentStorySummary[]
@@ -27,6 +34,12 @@ const at_reference_valid = /^@[^/)\s<>]*$/u
 const reference_query_valid = /^[^/)\s<>]*$/u
 const story_section = { name: '蠢猪档案', rank: 0 }
 const attachment_section = { name: '附件', rank: 1 }
+
+export function compare_reference_completions(left: Completion, right: Completion) {
+  if (left.section === attachment_section && right.section === attachment_section)
+    return compare_attachment_items({ name: left.displayLabel ?? left.label, is_folder: left.type === 'folder' }, { name: right.displayLabel ?? right.label, is_folder: right.type === 'folder' })
+  return (left.sortText ?? left.label).localeCompare(right.sortText ?? right.label)
+}
 
 /** One source and one replacement range for the two reference sections. */
 export function reference_completion_source(sources: EditorCompletionSources) {
@@ -82,28 +95,29 @@ export function reference_completion_source(sources: EditorCompletionSources) {
     const display_name = (path: string) => parent ? path.slice(parent.length + 1) : path
     const label = (name: string) => at ? `@${name}` : name
     const attachment_destination = (path: string) => attachment_only ? display_name(path) : format_attachment_ref(path)
-    const folders: Completion[] = sources.folders().filter(folder => attachment_folder_of(folder) === parent).map(folder => ({
+    const folders: ReferenceCompletion[] = sources.folders().filter(folder => attachment_folder_of(folder) === parent).map(folder => ({
       label: label(display_name(folder)),
       displayLabel: display_name(folder),
-      detail: '文件夹',
+      presentation: folder_item_presentation(),
       type: 'folder',
       section: attachment_section,
       apply: apply_reference(attachment_destination(folder), content_attachment_markdown({ file_name: folder, is_image: false, url: '' }), true),
     }))
-    const files: Completion[] = sources.attachments().filter(attachment => attachment_folder_of(attachment.file_name) === parent).map(attachment => ({
+    const available_attachments = sources.attachments()
+    const files: ReferenceCompletion[] = available_attachments.filter(attachment => attachment_folder_of(attachment.file_name) === parent).map(attachment => ({
       label: label(display_name(attachment.file_name)),
       displayLabel: display_name(attachment.file_name),
-      detail: attachment.is_encrypted ? '机密附件' : (attachment.is_image ? '图片' : '附件'),
-      type: attachment.is_encrypted ? (attachment.encryption_key ? 'encrypted' : 'encrypted-denied') : (attachment.is_image ? 'image' : 'file'),
+      presentation: attachment_item_presentation(attachment),
+      type: attachment_is_restricted(attachment) ? (attachment_can_read(attachment) ? 'encrypted' : 'encrypted-denied') : (attachment.is_image ? 'image' : 'file'),
       section: attachment_section,
       apply: apply_reference(attachment_destination(attachment.file_name), content_attachment_markdown(attachment)),
     }))
     const attachments = [... folders, ... files]
-      .sort((left, right) => compare_attachment_names(left.label, right.label))
-    const stories: Completion[] = sources.stories().filter(story => story.id !== sources.story_id()).map(story => ({
+      .sort(compare_reference_completions)
+    const stories: ReferenceCompletion[] = sources.stories().filter(story => story.id !== sources.story_id()).map(story => ({
       label: label(story.title),
       displayLabel: story.title,
-      detail: story_rating(story.labels),
+      presentation: { icon: 'lucide:book-open', tone: 'muted' },
       type: 'story',
       section: story_section,
       apply: apply_reference(story_only ? story.title : format_story_ref(story.title), `[](${format_story_ref(story.title)})`),
@@ -248,29 +262,23 @@ const completion_icon_by_type: Record<string, string> = {
   'encrypted-denied': 'lucide:lock',
 }
 export const completion_icon_names = [... new Set(Object.values(completion_icon_by_type))]
-completion_icon_names.push('lucide:chevron-right')
-
-function completion_folder_indicator(completion: Completion): Node | null {
-  if (completion.type !== 'folder')
-    return null
-  const span = document.createElement('span')
-  span.className = 'completion-folder-indicator iconify i-lucide:chevron-right'
-  span.setAttribute('aria-hidden', 'true')
-  return span
-}
+completion_icon_names.push('lucide:chevron-right', 'lucide:lock-open', 'lucide:file-image', 'lucide:file-video', 'lucide:file-audio', 'lucide:file-text', 'lucide:file-archive', 'lucide:file-code-2', 'lucide:sheet')
 
 // Injects the type icon into an autocomplete option. The span keeps its width
 // for a type with no icon, so every label starts at the same x.
 function completion_icon_renderer(completion: Completion): Node {
-  const icon = completion.type ? completion_icon_by_type[completion.type] : undefined
+  const presentation = (completion as Partial<ReferenceCompletion>).presentation
+  const icon = presentation?.icon ?? (completion.type ? completion_icon_by_type[completion.type] : undefined)
+  const icon_class = presentation ? 'content-item-icon' : 'completion-type-icon'
   const span = document.createElement('span')
-  span.className = icon ? `completion-type-icon iconify i-${icon}` : 'completion-type-icon'
+  span.className = icon ? `${icon_class} iconify i-${icon}` : icon_class
   span.setAttribute('aria-hidden', 'true')
   return span
 }
 
 export function create_completion_extensions(sources: EditorCompletionSources) {
   return autocompletion({
+    compareCompletions: compare_reference_completions,
     override: [
       reference_completion_source(sources),
       label_completion_source(sources),
@@ -283,9 +291,13 @@ export function create_completion_extensions(sources: EditorCompletionSources) {
     // hide-list (the encrypted attachments sat right of the plaintext ones).
     // Ours replaces it outright, so the label column is flush for every type.
     icons: false,
+    optionClass: (completion) => {
+      const presentation = (completion as Partial<ReferenceCompletion>).presentation
+      return presentation ? `content-item content-item-${presentation.tone}` : ''
+    },
     addToOptions: [{
       render: completion_icon_renderer,
       position: 20,
-    }, { render: completion_folder_indicator, position: 90 }],
+    }],
   })
 }

@@ -1,4 +1,5 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
+import type { WorkspaceListRow } from './workspace'
 import { attachment_markdown_path } from '@shared/content-markdown'
 
 export const content_attachment_drag_type = 'application/x-stupig-content-attachment'
@@ -7,11 +8,13 @@ export const content_folder_drag_type = 'application/x-stupig-content-folder'
 export interface ContentFolderDragData {
   folder: string
   file_names?: string[]
+  markdown?: string
 }
 
 export type ContentAttachmentDragData = Pick<ContentStoryAttachment, 'file_name' | 'is_image' | 'url'> & {
   /** All file names being dragged when a multi-selection is dragged; absent for single drags. */
   file_names?: string[]
+  markdown?: string
 }
 
 export function set_content_attachment_drag_data(event: DragEvent, attachment: ContentAttachmentDragData) {
@@ -32,7 +35,7 @@ export function get_content_attachment_drag_data(data_transfer: DataTransfer | n
 
   try {
     const data = JSON.parse(raw) as Partial<ContentAttachmentDragData>
-    if (typeof data.file_name !== 'string' || typeof data.url !== 'string' || typeof data.is_image !== 'boolean')
+    if (typeof data.file_name !== 'string' || (data.url !== null && typeof data.url !== 'string') || typeof data.is_image !== 'boolean')
       return null
     const file_names = Array.isArray(data.file_names) && data.file_names.every(name => typeof name === 'string')
       ? data.file_names
@@ -42,6 +45,7 @@ export function get_content_attachment_drag_data(data_transfer: DataTransfer | n
       is_image: data.is_image,
       url: data.url,
       file_names,
+      ... (typeof data.markdown === 'string' ? { markdown: data.markdown } : {}),
     }
   }
   catch {
@@ -54,7 +58,7 @@ export function content_attachment_drag_file_names(data: ContentAttachmentDragDa
   return data.file_names?.length ? data.file_names : [data.file_name]
 }
 
-export function set_content_folder_drag_data(event: DragEvent, folder: string, file_names?: string[]) {
+export function set_content_folder_drag_data(event: DragEvent, folder: string, file_names?: string[], markdown?: string) {
   if (! event.dataTransfer)
     return
   // 'copyMove', for the same reason the attachment payload uses it: a folder is
@@ -66,6 +70,7 @@ export function set_content_folder_drag_data(event: DragEvent, folder: string, f
   event.dataTransfer.setData(content_folder_drag_type, JSON.stringify({
     folder,
     file_names: file_names?.length ? file_names : undefined,
+    markdown,
   } satisfies ContentFolderDragData))
 }
 
@@ -80,7 +85,7 @@ export function get_content_folder_drag_data(data_transfer: DataTransfer | null)
     const file_names = Array.isArray(data.file_names) && data.file_names.every(name => typeof name === 'string')
       ? data.file_names
       : undefined
-    return { folder: data.folder, file_names }
+    return { folder: data.folder, file_names, ... (typeof data.markdown === 'string' ? { markdown: data.markdown } : {}) }
   }
   catch {
     // Older drags used the folder path directly as the payload.
@@ -100,4 +105,9 @@ export function content_attachment_markdown(attachment: ContentAttachmentDragDat
  */
 export function content_folder_markdown(folder: string) {
   return content_attachment_markdown({ file_name: folder, is_image: false, url: '' })
+}
+
+/** Clipboard and editor drags share the exact same ordered references. */
+export function content_selection_markdown(rows: readonly WorkspaceListRow[]) {
+  return rows.filter(row => row.node).map(row => row.node!.kind === 'folder' ? content_folder_markdown(row.path) : content_attachment_markdown(row.node!.attachment!)).join('\n')
 }

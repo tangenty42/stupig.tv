@@ -1,4 +1,16 @@
-import type { StoryMarkdownPlugin } from './types'
+import type MarkdownIt from 'markdown-it'
+import type { RenderEnvironment, StoryMarkdownContext, StoryMarkdownPlugin } from './types'
+
+/** Nested bodies share preview collections while suppressing shifted anchors. */
+export function render_nested_markdown(md: MarkdownIt, ctx: StoryMarkdownContext, source: string, env: RenderEnvironment) {
+  ctx.anchor_render_depth ++
+  try {
+    return md.render(source, env)
+  }
+  finally {
+    ctx.anchor_render_depth --
+  }
+}
 
 // VSCode-style source anchors: block elements carry their body line so the
 // fullscreen editor's scroll sync can interpolate element-to-element. Nested

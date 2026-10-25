@@ -9,3 +9,8 @@ export const html_no_markdown_tags = new Set([
 
 /** HTML void elements do not open a content region, with or without a trailing slash. */
 export const html_void_tags = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
+
+/** The preview preserves HTML table markup instead of rendering its contents as Markdown. */
+export const html_table_tags = new Set([
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col',
+])

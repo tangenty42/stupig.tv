@@ -13,9 +13,5 @@ export const code_blocks_plugin: StoryMarkdownPlugin = (md) => {
     return `<pre${line_attr}><div class="code-scroll"><code${lang_class}>${md.utils.escapeHtml(token.content)}</code></div></pre>\n`
   }
 
-  md.renderer.rules.code_block = (tokens, idx) => {
-    const token = tokens[idx]!
-    const line_attr = token.map ? ` data-line="${token.map[0]}"` : ''
-    return `<pre${line_attr}><div class="code-scroll"><code>${md.utils.escapeHtml(token.content)}</code></div></pre>\n`
-  }
+  md.renderer.rules.code_block = md.renderer.rules.fence
 }

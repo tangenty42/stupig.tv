@@ -4,7 +4,6 @@ export type {
   ContentEventPrecision,
   ContentStoryAttachment,
   ContentStoryCreated,
-  ContentStoryDetail,
   ContentStorySummary,
 } from './content'
 export type { OtpCooldownResult } from './otp'

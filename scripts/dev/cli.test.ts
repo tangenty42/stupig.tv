@@ -1,0 +1,66 @@
+import { EventEmitter } from 'node:events'
+import { createServer } from 'node:net'
+import { resolve } from 'node:path'
+import { afterEach, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => ({ spawn: vi.fn(), tunnel: vi.fn(), config: vi.fn() }))
+vi.mock('node:child_process', () => ({ spawn: mocks.spawn }))
+vi.mock('./frp', () => ({ run_dev_tunnel: mocks.tunnel }))
+vi.mock('./auth-config', () => ({ load_dev_auth_config: mocks.config }))
+// Keep failure diffs isolated from the developer's real env files and credentials.
+vi.mock('../../config/lib/environment.mjs', () => ({ load_environment: () => ({ NODE_ENV: 'development' }) }))
+const { run_development } = await import('./cli')
+afterEach(() => vi.resetAllMocks())
+
+async function reserve_port(host = '127.0.0.1') {
+  const server = createServer()
+  await new Promise<void>(resolve => server.listen(0, host, resolve))
+  const address = server.address()
+  if (! address || typeof address === 'string')
+    throw new Error('Expected TCP address')
+  mocks.config.mockReturnValue({ proxy: { targetHost: '127.0.0.1', targetPort: address.port } })
+  const close = () => new Promise<void>(resolve => server.close(() => resolve()))
+  return { close, port: address.port }
+}
+
+it.each(['127.0.0.1', '0.0.0.0'])('refuses a running app on %s without starting a second app or tunnel', async (host) => {
+  const reservation = await reserve_port(host)
+  try {
+    await expect(run_development()).rejects.toThrow('port is occupied')
+    expect(mocks.spawn).not.toHaveBeenCalled()
+    expect(mocks.tunnel).not.toHaveBeenCalled()
+  }
+  finally { await reservation.close() }
+})
+
+it.each(['exit', 'error', 'stop'] as const)('releases owned tunnel and app on %s', async (event) => {
+  const reservation = await reserve_port()
+  await reservation.close()
+  const stop_tunnel = vi.fn()
+  mocks.tunnel.mockResolvedValue(stop_tunnel)
+  const app = Object.assign(new EventEmitter(), { kill: vi.fn() })
+  mocks.spawn.mockReturnValue(app)
+  const session = await run_development()
+  const [executable, args, options] = mocks.spawn.mock.calls[0]!
+  expect(executable).toBe(process.execPath)
+  expect(args).toEqual(expect.arrayContaining([resolve('node_modules/nuxt/bin/nuxt.mjs'), 'dev', '--port', String(reservation.port)]))
+  expect(options.windowsHide).toBe(true)
+  if (event === 'stop')
+    session.stop()
+  else if (event === 'error')
+    app.emit('error', new Error('spawn failed'))
+  else
+    app.emit('exit', 7)
+  expect(await session.completed).toBe(event === 'stop' ? 0 : event === 'error' ? 1 : 7)
+  session.stop()
+  expect(stop_tunnel).toHaveBeenCalledOnce()
+  expect(app.kill).toHaveBeenCalledOnce()
+})
+
+it('does not launch the app if tunnel setup fails', async () => {
+  const reservation = await reserve_port()
+  await reservation.close()
+  mocks.tunnel.mockRejectedValue(new Error('invalid tunnel configuration'))
+  await expect(run_development()).rejects.toThrow('invalid tunnel configuration')
+  expect(mocks.spawn).not.toHaveBeenCalled()
+})

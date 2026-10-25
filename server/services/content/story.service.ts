@@ -1,19 +1,23 @@
 import type { AuthUser } from '@server/types/auth'
 import type { ContentMarkdownConfig, ContentStoryMeta } from '@shared/content-markdown'
-import type { ContentBatchSkipped, ContentStoryAttachment, ContentStoryDetail } from '@shared/types/content'
+import type { ContentStoryAttachment, ContentStoryBody } from '@shared/types/content'
+import type { ContentReferenceBaseline } from '@shared/types/content-reference'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+import { createHash } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
-import { get_operation_lock, list_scope_locks } from '@server/lib/operation-lock'
-import { delete_object_best_effort } from '@server/lib/storage'
-import { publish_refresh, sync_resource } from '@server/lib/sync'
-import { delete_attachment_rows, delete_story_attachment_rows, get_scope_object_keys, get_story_object_keys, list_cover_urls, list_scope_attachments, list_scope_encryption_keys, list_scope_folders } from '@server/services/content-attachments.service'
-import { extract_attachment_names, extract_story_reference_titles, lint_content_refs, parse_story_markdown, rename_story_references, upgrade_legacy_refs } from '@shared/content-markdown'
+import { delete_story_attachment_rows, get_story_object_keys, list_cover_urls } from '@server/services/content-attachments.service'
+import { extract_story_reference_titles, parse_story_markdown, rename_story_references } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 import { has_permission } from '@shared/permissions'
 import { settings } from '@shared/settings'
-import { list_scope_tasks } from './task.service'
+import { sync_resource } from '@shared/types/sync'
+import { enqueue_object_retirement } from './object-retirement.repository'
+import { lock_title_namespace, record_title_change, replay_locked_references } from './reference-history.service'
+import { enqueue_content_refresh } from './sync-outbox.repository'
+import { require_workspace_actor } from './workspace-auth.service'
+import { active_reservations, ensure_workspace_root } from './workspace.repository'
 
 interface StoryRow extends RowDataPacket {
   id: number
@@ -34,15 +38,12 @@ interface StoryRow extends RowDataPacket {
   created_at: string
   updated_at: string
   revision: number
+  namespace_revision: number
 }
 
 interface StoryReferrerRow extends RowDataPacket {
   id: number
   markdown: string
-}
-
-interface StoryRevisionRow extends RowDataPacket {
-  revision: number
 }
 
 const content_markdown_config = {
@@ -53,24 +54,10 @@ const content_markdown_config = {
   markdown_max_bytes: settings.app.content.story.markdownMaxBytes,
 } satisfies ContentMarkdownConfig
 
-export function normalize_story_refs(markdown: string) {
-  if (settings.app.content.reference.legacyCompat)
-    return upgrade_legacy_refs(markdown)
-  const issues = lint_content_refs(markdown, { ... content_markdown_config, legacy_compat: false }).filter(issue => issue.source === 'legacy-ref')
-  if (issues.length) {
-    throw new ApiError(400, `旧引用写法已停用（第 ${[... new Set(issues.map(issue => issue.line))].join('、')} 行）`, {
-      code: 'LEGACY_REF',
-      details: { lines: [... new Set(issues.map(issue => issue.line))] },
-    })
-  }
-  return markdown
-}
-
 function parse_or_throw(markdown: string, existing_titles: ContentMarkdownConfig['existing_titles']) {
   const { meta, issues } = parse_story_markdown(markdown, {
     ... content_markdown_config,
     existing_titles,
-    legacy_compat: settings.app.content.reference.legacyCompat,
   })
   if (! meta) {
     throw new ApiError(400, issues[0]?.message ?? '档案格式不正确')
@@ -88,8 +75,8 @@ function parse_or_throw(markdown: string, existing_titles: ContentMarkdownConfig
 }
 
 /** Existing story ids+titles for dead-`@ref` validation, excluding the story being edited. */
-async function existing_story_titles(exclude_id: number) {
-  const [rows] = await db.execute<RowDataPacket[]>(
+async function existing_story_titles(exclude_id: number, executor = db as Pick<typeof db, 'execute'>) {
+  const [rows] = await executor.execute<RowDataPacket[]>(
     'SELECT id, title FROM content_stories WHERE id != ?',
     [exclude_id],
   )
@@ -97,8 +84,8 @@ async function existing_story_titles(exclude_id: number) {
 }
 
 /** Rejects duplicate titles (case-insensitive, matching the table's unique index). */
-async function ensure_unique_title(title: string, exclude_id: number) {
-  const [rows] = await db.execute<RowDataPacket[]>(
+async function ensure_unique_title(title: string, exclude_id: number, executor = db as Pick<typeof db, 'execute'>) {
+  const [rows] = await executor.execute<RowDataPacket[]>(
     'SELECT id FROM content_stories WHERE title = ? AND id != ? LIMIT 1',
     [title, exclude_id],
   )
@@ -110,13 +97,13 @@ async function ensure_unique_title(title: string, exclude_id: number) {
 const max_related_story_refs = 200
 
 /** Resolve `[](@title)` references in the markdown to story ids (excluding self), as a JSON array. */
-async function resolve_related_story_ids(markdown: string, exclude_id: number) {
+async function resolve_related_story_ids(markdown: string, exclude_id: number, executor = db as Pick<typeof db, 'execute'>) {
   const titles = extract_story_reference_titles(markdown).slice(0, max_related_story_refs)
   if (! titles.length) {
     return '[]'
   }
   const placeholders = titles.map(() => '?').join(',')
-  const [rows] = await db.execute<RowDataPacket[]>(
+  const [rows] = await executor.execute<RowDataPacket[]>(
     `SELECT id FROM content_stories WHERE id != ? AND title IN (${placeholders})`,
     [exclude_id, ... titles],
   )
@@ -174,10 +161,12 @@ export async function list_stories() {
     'SELECT id, title, label, description, cover, cover_label, cover_version, event_precision, event_dates, created_at, updated_at FROM content_stories ORDER BY updated_at DESC',
   )
   const cover_urls = await list_cover_urls(stories.flatMap(story => story.cover ? [{ story_id: story.id, file_name: story.cover }] : []))
+  const [title_versions] = await db.execute<RowDataPacket[]>('SELECT revision FROM content_title_namespace WHERE id = 1')
 
   return stories.map(story => ({
     id: story.id,
     title: story.title,
+    title_revision: Number(title_versions[0]?.revision ?? 0),
     labels: parse_labels(story.label),
     event_precision: story.event_precision,
     event_dates: parse_event_dates(story.event_dates),
@@ -197,74 +186,45 @@ function story_viewer_key(viewer: AuthUser | null | undefined) {
     : `${viewer?.id ?? 'anon'}:${has_permission(viewer, 'content_private', 'read')}`
 }
 
-export async function get_story(id: number): Promise<ContentStoryDetail>
-export async function get_story(id: number, base: undefined, viewer: AuthUser | null): Promise<ContentStoryDetail>
-export async function get_story(id: number, base: { updated_at: string, viewer_key: string }, viewer: AuthUser | null): Promise<ContentStoryDetail | null>
-export async function get_story(id: number, base?: { updated_at: string, viewer_key: string }, viewer?: AuthUser | null): Promise<ContentStoryDetail | null> {
-  const viewer_key = story_viewer_key(viewer)
-  if (base && base.viewer_key === viewer_key) {
-    const [versions] = await db.execute<RowDataPacket[]>(
-      'SELECT updated_at FROM content_stories WHERE id = ?',
-      [id],
-    )
-    const version = versions[0]
-    if (! version) {
-      throw new ApiError(404, '档案不存在或已被删除')
-    }
-    if (new Date(version.updated_at).getTime() === new Date(base.updated_at).getTime()) {
-      return null
-    }
+/** Hash the viewer's actual representation; hidden source bytes never enter guest hashes. */
+function format_story_body(story: StoryRow, viewer: AuthUser | null, cover_url: string | null, title_revision: number): ContentStoryBody {
+  const private_readable = has_permission(viewer, 'content_private', 'read')
+  const body = {
+    id: story.id, title: story.title, labels: parse_labels(story.label),
+    event_precision: story.event_precision, event_dates: parse_event_dates(story.event_dates),
+    markdown: private_readable ? story.markdown : redact_private_content(story.markdown),
+    has_private: has_private_content(story.markdown), private_readable,
+    revision: story.revision, created_at: story.created_at, updated_at: story.updated_at,
+    viewer_key: story_viewer_key(viewer), ... format_desc_cover(story, cover_url),
   }
-
-  const [stories] = await db.execute<StoryRow[]>(
-    'SELECT id, title, label, description, cover, cover_label, cover_version, event_precision, event_dates, markdown, created_at, updated_at, revision FROM content_stories WHERE id = ?',
-    [id],
-  )
-  const story = stories[0]
-  if (! story) {
-    throw new ApiError(404, '档案不存在或已被删除')
-  }
-
-  const attachments = await list_scope_attachments(story.id)
-  // The per-file decryption keys ship only to viewers who may read private
-  // content; everyone else learns that a file is encrypted, never its key.
-  if (viewer && has_permission(viewer, 'content_private', 'read')) {
-    const keys = await list_scope_encryption_keys(story.id)
-    if (keys.size) {
-      for (const attachment of attachments) {
-        const key = keys.get(attachment.file_name)
-        if (key)
-          attachment.encryption_key = key
-      }
-    }
-  }
-  const has_private = has_private_content(story.markdown)
-  // viewer === undefined: internal call, full markdown. viewer === null or a
-  // user without the content_private permission: private elements stripped.
-  const markdown = viewer !== undefined && ! has_permission(viewer, 'content_private', 'read')
-    ? redact_private_content(story.markdown)
-    : story.markdown
   return {
-    id: story.id,
-    title: story.title,
-    labels: parse_labels(story.label),
-    event_precision: story.event_precision,
-    event_dates: parse_event_dates(story.event_dates),
-    markdown,
-    has_private,
-    attachments,
-    folders: await list_scope_folders(story.id),
-    created_at: story.created_at,
-    updated_at: story.updated_at,
-    revision: story.revision,
-    viewer_key,
-    operation_lock: await get_operation_lock(story.id),
-    // Only content managers can see or act on tasks, so the payload carries
-    // them (and the finer-grained locks) for that audience alone.
-    ... (viewer && has_permission(viewer, 'content_manage', 'full')
-      ? { tasks: await list_scope_tasks(story.id), locks: await list_scope_locks(story.id) }
-      : {}),
-    ... format_desc_cover(story, attachments.find(item => item.file_name === story.cover)?.url ?? null),
+    ... body,
+    // Namespace/title tokens belong to their own resources, not body freshness.
+    namespace_revision: Number(story.namespace_revision), title_revision,
+    representation_version: createHash('sha256').update(JSON.stringify(body)).digest('hex'),
+  }
+}
+
+export async function get_story_body(id: number, viewer: AuthUser | null, base_representation_version?: string) {
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    const title = await lock_title_namespace(connection)
+    const [rows] = await connection.execute<StoryRow[]>('SELECT * FROM content_stories WHERE id = ? FOR SHARE', [id])
+    const story = rows[0]
+    if (! story)
+      throw new ApiError(404, '档案不存在或已被删除')
+    const covers = await list_cover_urls(story.cover ? [{ story_id: id, file_name: story.cover }] : [], connection)
+    const body = format_story_body(story, viewer, covers.get(`${id}:${story.cover}`) ?? null, title.revision)
+    await connection.commit()
+    return body.representation_version === base_representation_version ? null : body
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
   }
 }
 
@@ -276,105 +236,25 @@ function story_event_dates(meta: ContentStoryMeta) {
 }
 
 export async function create_story(created_by: number, markdown: string, can_private: boolean) {
-  markdown = normalize_story_refs(markdown)
   if (! can_private && has_private_content(markdown)) {
     throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
   }
-  const existing_titles = await existing_story_titles(0)
-  const meta = parse_or_throw(markdown, existing_titles)
-  await ensure_unique_title(meta.title, 0)
-
-  const [result] = await db.execute<ResultSetHeader>(
-    'INSERT INTO content_stories (title, label, description, cover, cover_label, event_precision, event_dates, related_story_ids, markdown, created_by) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?)',
-    [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', meta.event_precision, story_event_dates(meta), await resolve_related_story_ids(markdown, 0), markdown, created_by],
-  )
-  const story_id = Number(result.insertId)
-
-  publish_refresh({ resource: sync_resource('content_stories', 'all') })
-  return story_id
-}
-
-/**
- * Saves the markdown and permanently deletes the attachments listed in
- * `delete_files` (trash bin confirmation flow). Returns the accepted file
- * names for callers that need to confirm a requested deletion occurred.
- */
-export async function update_story(id: number, markdown: string, delete_files: string[], base_revision: number, can_private: boolean) {
-  markdown = normalize_story_refs(markdown)
-  const story = await get_story(id)
-  // Old markdown checked too: an editor without the private permission must
-  // not silently delete private elements by saving over them.
-  if (! can_private && (has_private_content(markdown) || has_private_content(story.markdown))) {
-    throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
-  }
-  const existing_titles = await existing_story_titles(id)
-  const meta = parse_or_throw(markdown, existing_titles)
-  await ensure_unique_title(meta.title, id)
-
-  const referenced = new Set(extract_attachment_names(markdown))
-  const known_files = new Set(story.attachments.map(a => a.file_name))
-
-  const accepted_deletes: string[] = []
-  const skipped: ContentBatchSkipped[] = []
-  for (const file_name of new Set(delete_files)) {
-    if (! known_files.has(file_name)) {
-      skipped.push({ file_name, reason: '附件不存在或已被删除' })
-      continue
-    }
-    if (referenced.has(file_name)) {
-      skipped.push({ file_name, reason: '已被正文引用' })
-      continue
-    }
-    accepted_deletes.push(file_name)
-  }
-
-  const related_story_ids = await resolve_related_story_ids(markdown, id)
-  const old_title = story.title
-  const new_title = meta.title
-  const rewritten_referrers: number[] = []
-
   const connection = await db.getConnection()
+  let story_id: number
   try {
     await connection.beginTransaction()
-    const [version_rows] = await connection.execute<StoryRevisionRow[]>(
-      'SELECT revision FROM content_stories WHERE id = ? FOR UPDATE',
-      [id],
+    const title = await lock_title_namespace(connection, true)
+    const meta = parse_or_throw(markdown, await existing_story_titles(0, connection))
+    await ensure_unique_title(meta.title, 0, connection)
+    const [result] = await connection.execute<ResultSetHeader>(
+      'INSERT INTO content_stories (title, label, description, cover, cover_label, event_precision, event_dates, related_story_ids, markdown, created_by) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?)',
+      [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', meta.event_precision, story_event_dates(meta), await resolve_related_story_ids(markdown, 0, connection), markdown, created_by],
     )
-    const current_version = version_rows[0]
-    if (! current_version) {
-      throw new ApiError(404, '档案不存在或已被删除')
-    }
-    if (current_version.revision !== base_revision) {
-      throw new ApiError(409, '档案已被其他编辑更新，请先处理版本冲突')
-    }
-
-    await connection.execute(
-      'UPDATE content_stories SET title = ?, label = ?, description = ?, cover = ?, cover_label = ?, cover_version = ?, event_precision = ?, event_dates = CAST(? AS JSON), related_story_ids = CAST(? AS JSON), markdown = ?, revision = revision + 1 WHERE id = ?',
-      [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', cover_version_from(story.attachments, meta.cover ?? ''), meta.event_precision, story_event_dates(meta), related_story_ids, markdown, id],
-    )
-
-    // A title change must cascade into stories that `@`-referenced the old title.
-    if (old_title !== new_title) {
-      const [referrers] = await connection.execute<StoryReferrerRow[]>(
-        'SELECT id, markdown FROM content_stories WHERE JSON_CONTAINS(related_story_ids, ?) AND id != ?',
-        [String(id), id],
-      )
-      for (const referrer of referrers) {
-        const rewritten = rename_story_references(referrer.markdown, old_title, new_title)
-        if (rewritten !== referrer.markdown) {
-          // A mechanical reference rewrite bumps `updated_at` (ON UPDATE
-          // CURRENT_TIMESTAMP) so viewers refetch the rewritten markdown, but
-          // leaves `revision` alone so an in-progress editor's base version
-          // stays valid (no false 409 on save).
-          await connection.execute(
-            'UPDATE content_stories SET markdown = ? WHERE id = ?',
-            [rewritten, referrer.id],
-          )
-          rewritten_referrers.push(referrer.id)
-        }
-      }
-    }
-
+    story_id = Number(result.insertId)
+    await ensure_workspace_root(connection, story_id)
+    // Creation advances catalog freshness without remapping an existing title.
+    await record_title_change(connection, title.revision)
+    await enqueue_content_refresh(connection, [sync_resource('content_stories', 'all'), sync_resource('content_titles', 'all')])
     await connection.commit()
   }
   catch (error) {
@@ -385,39 +265,127 @@ export async function update_story(id: number, markdown: string, delete_files: s
     connection.release()
   }
 
-  publish_refresh({ resource: sync_resource('content_stories', 'all') })
-  publish_refresh({ resource: sync_resource('content_story', id) })
-  for (const referrer_id of rewritten_referrers) {
-    publish_refresh({ resource: sync_resource('content_story', referrer_id) })
-  }
+  return story_id
+}
 
-  const delete_keys = await get_scope_object_keys(id, accepted_deletes)
-  await delete_attachment_rows(id, accepted_deletes)
-  await Promise.all(delete_keys.map(key => delete_object_best_effort(key)))
-  return { succeeded: accepted_deletes, skipped }
+/** Save under title then scope locks; mechanical changes never consume body revisions. */
+export async function update_story(id: number, markdown: string, base_revision: number, can_private: boolean, baseline: ContentReferenceBaseline = { base_namespace_revision: null, base_title_revision: null }) {
+  const connection = await db.getConnection()
+  const rewritten_referrers: number[] = []
+  let result
+  let title_changed = false
+  let exclusive_title_lock = false
+  const submitted_markdown = markdown
+  try {
+    while (true) {
+      markdown = submitted_markdown
+      await connection.beginTransaction()
+      const title_namespace = await lock_title_namespace(connection, exclusive_title_lock)
+      const [rows] = await connection.execute<StoryRow[]>('SELECT * FROM content_stories WHERE id = ? FOR UPDATE', [id])
+      const story = rows[0]
+      if (! story)
+        throw new ApiError(404, '档案不存在或已被删除')
+      if (story.revision !== base_revision)
+        throw new ApiError(409, '档案已被其他编辑更新，请先处理版本冲突')
+      if (! can_private && (has_private_content(markdown) || has_private_content(story.markdown)))
+        throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
+      const replayed = await replay_locked_references(connection, id, markdown, baseline, title_namespace)
+      const replaced = replayed.diagnostics.filter(item => item.reason === 'replaced')
+      if (replaced.length) {
+        throw new ApiError(409, '引用目标已被删除并同名重建，请确认引用后再保存', {
+          code: 'REF_TARGET_REPLACED',
+          details: { namespace_revision: replayed.namespace_revision, title_revision: replayed.title_revision, references: replaced.map(item => ({ ... item, reason: 'replaced' as const })) },
+        })
+      }
+      markdown = replayed.confirmation?.markdown ?? replayed.markdown
+      const meta = parse_or_throw(markdown, await existing_story_titles(id, connection))
+      // Ordinary saves share the title lock. A rename retries from scratch with
+      // an exclusive lock, never upgrading a shared lock while holding scope rows.
+      if (story.title !== meta.title && ! exclusive_title_lock) {
+        await connection.rollback()
+        exclusive_title_lock = true
+        continue
+      }
+      await ensure_unique_title(meta.title, id, connection)
+      const [attachments] = await connection.execute<RowDataPacket[]>('SELECT file_name, version FROM content_story_attachments WHERE story_id = ? AND is_folder = 0', [id])
+      const related = await resolve_related_story_ids(markdown, id, connection)
+      await connection.execute(
+        'UPDATE content_stories SET title = ?, label = ?, description = ?, cover = ?, cover_label = ?, cover_version = ?, event_precision = ?, event_dates = CAST(? AS JSON), related_story_ids = CAST(? AS JSON), markdown = ?, revision = revision + 1 WHERE id = ?',
+        [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', attachments.find(row => row.file_name === meta.cover)?.version ?? null, meta.event_precision, story_event_dates(meta), related, markdown, id],
+      )
+      let title_revision = title_namespace.revision
+      if (story.title !== meta.title) {
+        title_changed = true
+        await record_title_change(connection, title_revision, { node_id: id, from: story.title, to: meta.title })
+        title_revision ++
+        const [referrers] = await connection.execute<StoryReferrerRow[]>('SELECT id, markdown FROM content_stories WHERE JSON_CONTAINS(related_story_ids, ?) AND id != ? ORDER BY id FOR UPDATE', [String(id), id])
+        for (const referrer of referrers) {
+          const rewritten = rename_story_references(referrer.markdown, story.title, meta.title)
+          if (rewritten !== referrer.markdown) {
+            await connection.execute('UPDATE content_stories SET markdown = ? WHERE id = ?', [rewritten, referrer.id])
+            rewritten_referrers.push(referrer.id)
+          }
+        }
+      }
+      result = { markdown, revision: base_revision + 1, namespace_revision: replayed.namespace_revision, title_revision, baseline_unavailable: replayed.baseline_unavailable, diagnostics: replayed.diagnostics }
+      await enqueue_content_refresh(connection, [
+        sync_resource('content_stories', 'all'), sync_resource('content_story', id),
+        ... (title_changed ? [sync_resource('content_titles', 'all')] : []),
+        ... rewritten_referrers.map(referrer_id => sync_resource('content_story', referrer_id)),
+      ])
+      await connection.commit()
+      break
+    }
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
+  return result!
 }
 
 /** Deletes the story row and its attachment directory. */
-export async function delete_story(id: number) {
-  await get_story(id)
-
-  // Refuse to delete a story that other stories `@`-reference, so dead links
-  // are never silently introduced. Point the referrers out instead.
-  const [referrers] = await db.execute<RowDataPacket[]>(
-    'SELECT id, title FROM content_stories WHERE JSON_CONTAINS(related_story_ids, ?) AND id != ? ORDER BY id',
-    [String(id), id],
-  )
-  if (referrers.length) {
-    const titles = referrers.map(row => `『${row.title}』`).join('、')
-    throw new ApiError(409, `无法删除：仍有 ${referrers.length} 个档案引用本档案（${titles}），请先移除相关引用`)
+export async function delete_story(id: number, actor_id: number) {
+  const connection = await db.getConnection()
+  let object_keys: Awaited<ReturnType<typeof get_story_object_keys>> = []
+  try {
+    await connection.beginTransaction()
+    const titles = await lock_title_namespace(connection, true)
+    const [stories] = await connection.execute<StoryRow[]>('SELECT * FROM content_stories WHERE id = ? FOR UPDATE', [id])
+    if (! stories[0])
+      throw new ApiError(404, '档案不存在或已被删除')
+    const [private_files] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_attachments WHERE story_id = ? AND is_private = 1 LIMIT 1', [id])
+    await require_workspace_actor(actor_id, has_private_content(stories[0].markdown) || private_files.length > 0, connection)
+    const { rows: active, expired_sessions } = await active_reservations(connection, id)
+    if (active.length)
+      throw new ApiError(409, '档案还有未完成的上传，请先取消或完成')
+    const [referrers] = await connection.execute<RowDataPacket[]>('SELECT id, title FROM content_stories WHERE JSON_CONTAINS(related_story_ids, ?) AND id != ? ORDER BY id FOR UPDATE', [String(id), id])
+    if (referrers.length)
+      throw new ApiError(409, `仍有档案引用本档案：${referrers.map(row => String(row.title)).join('、')}`)
+    object_keys = await get_story_object_keys(id, connection)
+    if (object_keys.some(object => object.provider !== 'aliyun'))
+      throw new ApiError(503, '档案附件尚未完成迁移')
+    for (const object of object_keys)
+      await enqueue_object_retirement(connection, object.key, id, 'story-delete')
+    await record_title_change(connection, titles.revision, { node_id: id, from: stories[0].title, to: null })
+    await delete_story_attachment_rows(id, connection)
+    await connection.execute('DELETE FROM content_stories WHERE id = ?', [id])
+    await connection.execute('DELETE FROM content_reference_journals WHERE scope_id = ?', [id])
+    await enqueue_content_refresh(connection, [
+      sync_resource('content_stories', 'all'), sync_resource('content_story', id),
+      sync_resource('content_titles', 'all'), sync_resource('content_attachments', id),
+      ... (expired_sessions.length ? [sync_resource('content_uploads', id), ... expired_sessions.map(session => sync_resource('content_upload_session', session))] : []),
+    ])
+    await connection.commit()
   }
-
-  const object_keys = await get_story_object_keys(id)
-  await db.execute('DELETE FROM content_stories WHERE id = ?', [id])
-  // No FK (MySQL 8.4 blocks FKs on generated-column tables), so rows go explicitly.
-  await delete_story_attachment_rows(id)
-
-  publish_refresh({ resource: sync_resource('content_stories', 'all') })
-  publish_refresh({ resource: sync_resource('content_story', id) })
-  await Promise.all(object_keys.map(key => delete_object_best_effort(key)))
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally {
+    connection.release()
+  }
 }
