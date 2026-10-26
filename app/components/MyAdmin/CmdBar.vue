@@ -66,7 +66,7 @@
 
 <script setup lang="ts">
 import type AutoComplete from 'primevue/autocomplete'
-import { Parser as SqlParser } from 'node-sql-parser'
+import sqlParser from 'node-sql-parser'
 
 const props = defineProps<{
   selected_ids: Set<number>
@@ -79,7 +79,7 @@ const emit = defineEmits<{
   (e: 'clear-selection'): void
 }>()
 
-const sql_parser = new SqlParser()
+const sql_parser = new sqlParser.Parser()
 
 type AutoCompleteInstance = InstanceType<typeof AutoComplete> & {
   overlayVisible: boolean
