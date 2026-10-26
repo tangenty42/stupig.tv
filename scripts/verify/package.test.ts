@@ -1,6 +1,9 @@
+import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'vue/compiler-sfc'
 
 // 幽灵依赖守卫：package.json 脚本里调用的 CLI，必须是自己声明过的依赖。
 //
@@ -152,5 +155,26 @@ describe('package.json 脚本', () => {
       .filter(([, script]) => /\$\{/.test(script))
       .map(([name]) => name)
     expect(offenders).toEqual([])
+  })
+})
+
+describe('admin SSR dependencies', () => {
+  it('loads the command bar SQL parser through native Node ESM', () => {
+    const component = readFileSync(resolve(project_root, 'app/components/MyAdmin/CmdBar.vue'), 'utf8')
+    const script = parse(component).descriptor.scriptSetup?.content
+    if (! script)
+      throw new Error('Command bar script is missing')
+    const source = ts.createSourceFile('CmdBar.ts', script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    const dependency = source.statements.filter(ts.isImportDeclaration).find(statement =>
+      ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === 'node-sql-parser' && ! statement.importClause?.isTypeOnly,
+    )
+    if (! dependency)
+      throw new Error('Command bar SQL parser dependency is missing')
+    const output = execFileSync(process.execPath, ['--input-type=module', '--eval', `${dependency.getText(source)}\nprocess.stdout.write('loaded')`], {
+      cwd: project_root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    expect(output).toBe('loaded')
   })
 })
