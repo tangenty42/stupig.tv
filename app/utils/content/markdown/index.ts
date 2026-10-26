@@ -9,6 +9,7 @@ import { html_wrappers_plugin } from './html-wrappers'
 import { images_plugin } from './images'
 import { link_cards_plugin } from './link-cards'
 import { private_blocks_plugin } from './private'
+import { sanitize_story_html } from './sanitize'
 import { source_anchor_plugin } from './source-anchor'
 
 /**
@@ -33,5 +34,9 @@ export function create_story_markdown(options: StoryMarkdownOptions) {
   code_blocks_plugin(md, ctx)
   private_blocks_plugin(md, ctx)
   html_wrappers_plugin(md, ctx)
+  const render = md.render.bind(md)
+  const render_inline = md.renderInline.bind(md)
+  md.render = (source, env) => sanitize_story_html(render(source, env))
+  md.renderInline = (source, env) => sanitize_story_html(render_inline(source, env))
   return md
 }

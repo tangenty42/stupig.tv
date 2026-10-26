@@ -129,7 +129,7 @@ export const aliyun_esa_config_schema = z.object({
   }, 'Use an HTTPS ESA origin without credentials, path or query'),
   // Empty while provisioning; this is independent of OSS RAM credentials.
   authKey: z.union([z.literal(''), z.string().regex(/^[\x21-\x7E]{32,128}$/)]).default(''),
-  // Must match TTL_SECONDS in the deployed Type A edge function.
+  // Must match TTL_SECONDS in the deployed Content edge function.
   urlTtlSeconds: positive_integer.max(3600).default(300),
 })
 

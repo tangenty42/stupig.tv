@@ -1,6 +1,6 @@
 import type { AuthUser } from '@server/types/auth'
 import type { ImageAccessRow } from './attachment-access.service'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { content_authorization_proof, create_content_authorizer, create_content_bypass } from '../../../config/esa/content-auth.mjs'
 
@@ -155,6 +155,14 @@ describe('online ESA authorization before cached bytes', () => {
   it('rejects old protocols, forged metadata, other hosts and noncanonical URLs before DB access', async () => {
     const valid = await signed()
     const urls = [create_esa().signed_read_url('content/att/file', 300)]
+    const legacy = new URL(valid)
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const rand = createHash('sha256').update(JSON.stringify([
+      legacy.searchParams.get('response-content-disposition') ?? '', legacy.searchParams.get('access'),
+    ])).digest('hex')
+    const signature = createHash('md5').update([legacy.pathname, timestamp, rand, '1', state.config.authKey].join('-')).digest('hex')
+    legacy.searchParams.set('auth_key', `${timestamp}-${rand}-1-${signature}`)
+    urls.push(legacy.href)
     for (const change of [
       (u: URL) => { u.hostname = 'other.test' },
       (u: URL) => u.searchParams.set('access', Buffer.from('{"id":99}').toString('base64url')),
@@ -196,5 +204,30 @@ describe('online ESA authorization before cached bytes', () => {
       expect(await create_content_authorizer(state.config.authKey, endpoint, 1000, remote)(new Request(url))).toBe(503)
     expect(remote).not.toHaveBeenCalled()
     expect(await create_content_bypass(state.config.authKey, 300, (allowed, status) => ({ allowed, status }))(new Request(url))).toEqual({ allowed: false, status: 503 })
+  })
+
+  it.each(['missing', 'short', 'long', 'nonhex', 'uppercase', 'wrong-key', 'url-signature'])('rejects %s callback proofs without falling back', async (kind) => {
+    const url = await signed()
+    const remote = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(String(init?.body))
+      let proof = content_authorization_proof(state.config.authKey, input.nonce, input.url, input.method)
+      if (kind === 'short')
+        proof = proof.slice(1)
+      else if (kind === 'long')
+        proof += '0'
+      else if (kind === 'nonhex')
+        proof = 'g'.repeat(64)
+      else if (kind === 'uppercase')
+        proof = proof.toUpperCase()
+      else if (kind === 'wrong-key')
+        proof = content_authorization_proof('other-key', input.nonce, input.url, input.method)
+      else if (kind === 'url-signature')
+        proof = new URL(input.url).searchParams.get('auth_key')!.split('-')[4]!
+      return new Response(null, { status: 204, headers: kind === 'missing' ? {} : { 'X-Content-Authorization': proof } })
+    })
+    const gate = create_content_authorizer(state.config.authKey, 'https://auth.test/api/content/authorize', 1000, remote)
+
+    expect(await gate(new Request(url))).toBe(503)
+    expect(remote).toHaveBeenCalledOnce()
   })
 })

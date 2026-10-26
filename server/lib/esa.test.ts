@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import bypass_deployment, { content_authorization_proof, create_content_auth, create_content_bypass as create_online_bypass } from '../../config/esa/content-auth.mjs'
+import bypass_deployment, { authorize_content_request, content_authorization_proof, create_content_auth, create_content_bypass as create_online_bypass } from '../../config/esa/content-auth.mjs'
 import { create_esa } from './esa'
 
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ aliyun: { esa: null } }) }))
@@ -11,6 +11,25 @@ beforeEach(() => vi.useRealTimers())
 const create_content_bypass = (key: string, ttl = 300, respond?: (allowed: boolean, status: number) => unknown) => create_online_bypass(key, ttl, respond, async () => 200)
 
 describe('eSA signed Content reads', () => {
+  it('rejects correctly signed unexpired MD5 URLs before authorization or object access', async () => {
+    const url = new URL('/content/att/key', config.baseUrl)
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const header = 'attachment; filename*=UTF-8\'\'old.txt'
+    const rand = createHash('sha256').update(header).digest('hex')
+    const signature = createHash('md5').update([url.pathname, timestamp, rand, '0', config.authKey].join('-')).digest('hex')
+    url.searchParams.set('auth_key', `${timestamp}-${rand}-0-${signature}`)
+    url.searchParams.set('response-content-disposition', header)
+    const authorize = vi.fn(async () => 200)
+    const origin = vi.fn<typeof fetch>()
+    const handler = create_content_auth(config.authKey, 300, origin, authorize)
+    const bypass = create_online_bypass(config.authKey, 300, (allowed, status) => ({ allowed, status }), authorize)
+
+    expect((await handler(new Request(url))).status).toBe(403)
+    expect(await bypass(new Request(url))).toEqual({ allowed: false, status: 403 })
+    expect(authorize).not.toHaveBeenCalled()
+    expect(origin).not.toHaveBeenCalled()
+  })
+
   it('fails closed without configuration and rejects unsafe object paths', async () => {
     expect(() => create_esa()).toThrow('ESA 读取鉴权尚未配置')
     const esa = create_esa(config)
@@ -24,13 +43,16 @@ describe('eSA signed Content reads', () => {
     expect(url.origin).toBe(config.baseUrl)
     expect(decodeURIComponent(url.pathname)).toBe('/content/att/中文 #%.avif')
     expect([... url.searchParams.keys()]).toEqual(['auth_key', 'response-content-disposition'])
-    const [timestamp, rand, uid, hash] = url.searchParams.get('auth_key')!.split('-')
+    const [version, timestamp, expires_at, nonce, hash] = url.searchParams.get('auth_key')!.split('-')
+    expect(version).toBe('v2')
     expect(Number(timestamp)).toBe(Math.floor(Date.now() / 1000))
+    expect(Number(expires_at)).toBe(Number(timestamp) + config.urlTtlSeconds)
     const header = url.searchParams.get('response-content-disposition')!
-    expect(rand).toBe(createHash('sha256').update(header).digest('hex'))
-    expect(hash).toBe(createHash('md5').update([url.pathname, timestamp, rand, uid, config.authKey].join('-')).digest('hex'))
+    expect(hash).toBe(createHmac('sha256', config.authKey).update(JSON.stringify([
+      'content-url-v2', url.origin, url.pathname, ['GET', 'HEAD'], timestamp, expires_at, nonce, header, '',
+    ])).digest('hex'))
     const shorter = new URL(create_esa(config).signed_read_url('content/att/key', 60))
-    expect(Number(shorter.searchParams.get('auth_key')!.split('-')[0]) + config.urlTtlSeconds).toBe(Math.floor(Date.now() / 1000) + 60)
+    expect(Number(shorter.searchParams.get('auth_key')!.split('-')[2])).toBe(Math.floor(Date.now() / 1000) + 60)
   })
 
   it('keeps Range/HEAD and streams cached bytes while names and disposition vary per request', async () => {
@@ -59,6 +81,73 @@ describe('eSA signed Content reads', () => {
     origin.mockImplementationOnce(async () => new Response(null))
     await handler(new Request(esa.signed_read_url('content/att/key', 300, 'HEAD'), { method: 'HEAD' }))
     expect((origin.mock.calls.at(- 1)![0] as Request).method).toBe('HEAD')
+  })
+
+  it('binds the origin, path, times, nonce, filename and access grant into the v2 HMAC', async () => {
+    const base = create_esa(config).signed_read_url('content/att/key', 300, 'GET', 'report.txt', 'attachment', {
+      id: 1, revision: 'a'.repeat(64), role: 'auto', session: 0, generation: 0,
+    })
+    expect(authorize_content_request(config.authKey, 300, new Request(base)).status).toBe(200)
+    const authorize = vi.fn(async () => 200)
+    const origin = vi.fn<typeof fetch>()
+    const handler = create_content_auth(config.authKey, 300, origin, authorize)
+    const variants = [
+      (url: URL) => { url.hostname = 'other.example.test' },
+      (url: URL) => { url.protocol = 'http:' },
+      (url: URL) => { url.port = '8443' },
+      (url: URL) => { url.pathname += 'changed' },
+      (url: URL) => url.searchParams.set('response-content-disposition', 'inline; filename*=UTF-8\'\'other.txt'),
+      (url: URL) => url.searchParams.set('access', Buffer.from('{"id":99}').toString('base64url')),
+      (url: URL) => url.searchParams.delete('access'),
+      ... [0, 1, 2, 3, 4].map(index => (url: URL) => {
+        const fields = url.searchParams.get('auth_key')!.split('-')
+        fields[index] = index === 0 ? 'v3' : index < 3 ? String(Number(fields[index]) + 1) : 'b'.repeat(index === 3 ? 32 : 64)
+        url.searchParams.set('auth_key', fields.join('-'))
+      }),
+    ]
+    for (const change of variants) {
+      const url = new URL(base)
+      change(url)
+      expect((await handler(new Request(url))).status).toBe(403)
+    }
+    expect(authorize).not.toHaveBeenCalled()
+    expect(origin).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { offset: 0, lifetime: 300, status: 200 },
+    { offset: 30, lifetime: 300, status: 200 },
+    { offset: 31, lifetime: 300, status: 403 },
+    { offset: - 300, lifetime: 300, status: 403 },
+    { offset: - 299, lifetime: 300, status: 200 },
+    { offset: 0, lifetime: 301, status: 403 },
+    { offset: 0, lifetime: 0, status: 403 },
+    { offset: 0, lifetime: - 1, status: 403 },
+  ])('enforces signed time boundaries: %j', ({ offset, lifetime, status }) => {
+    vi.useFakeTimers().setSystemTime(new Date('2026-10-26T12:00:00Z'))
+    const url = new URL('/content/att/key', config.baseUrl)
+    const issued_at = String(Math.floor(Date.now() / 1000) + offset)
+    const expires_at = String(Number(issued_at) + lifetime)
+    const nonce = 'a'.repeat(32)
+    const signature = createHmac('sha256', config.authKey).update(JSON.stringify([
+      'content-url-v2', url.origin, url.pathname, ['GET', 'HEAD'], issued_at, expires_at, nonce, '', '',
+    ])).digest('hex')
+    url.searchParams.set('auth_key', `v2-${issued_at}-${expires_at}-${nonce}-${signature}`)
+
+    expect(authorize_content_request(config.authKey, 300, new Request(url)).status).toBe(status)
+  })
+
+  it.each([0, - 1, 3601, 1.5, Number.NaN, Number.POSITIVE_INFINITY])('fails closed for invalid verifier TTL %s', (ttl) => {
+    const url = create_esa(config).signed_read_url('content/att/key', 300)
+    expect(authorize_content_request(config.authKey, ttl, new Request(url)).status).toBe(503)
+  })
+
+  it.each(['a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64), 'A'.repeat(64)])('rejects malformed URL digests without throwing: %s', (signature) => {
+    const url = new URL(create_esa(config).signed_read_url('content/att/key', 300))
+    const fields = url.searchParams.get('auth_key')!.split('-')
+    fields[4] = signature
+    url.searchParams.set('auth_key', fields.join('-'))
+    expect(authorize_content_request(config.authKey, 300, new Request(url)).status).toBe(403)
   })
 
   it('rejects tampered metadata, duplicate parameters and expired capabilities before cache access', async () => {

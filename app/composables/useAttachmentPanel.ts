@@ -1,7 +1,7 @@
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ErrorPolicy, WorkspaceCommand, WorkspaceIssue, WorkspaceReport } from '@shared/content-workspace'
 import type { ContentStoryAttachment } from '@shared/types/content'
-import type { UploadEntry } from '~/stores/contentUploads'
+import type { UploadEntry } from '~/composables/useContentUploadAdmission'
 import type { WorkspaceAction, WorkspaceCommandFootprint, WorkspaceListRow } from '~/utils/content/workspace'
 import { attachment_folder_of, attachment_path_join, decrypted_attachment_name, extract_attachment_names, normalized_attachment_extension, split_attachment_editable_name } from '@shared/content-markdown'
 import { error_policy_schema } from '@shared/content-workspace'

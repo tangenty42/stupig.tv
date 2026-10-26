@@ -15,6 +15,49 @@ function render(source: string, story_exists = false) {
 }
 
 describe('story Markdown preset contracts', () => {
+  it.each([
+    '<script>alert(1)</script>',
+    '<iframe src="https://example.test" srcdoc="<script>alert(1)</script>"></iframe>',
+    '<img src="https://example.test/image.png" onerror="alert(1)">',
+    '<div onclick="alert(1)">static text</div>',
+    '<a href="java&#x73;cript:alert(1)">link</a>',
+    '<a href="java&#9;script:alert(1)">link</a>',
+    '<a href="data:text/html,<script>alert(1)</script>">link</a>',
+    '<svg onload="alert(1)"><a xlink:href="javascript:alert(1)">link</a></svg>',
+    '<object data="data:text/html,<script>alert(1)</script>"></object>',
+    '<embed src="data:text/html,<script>alert(1)</script>">',
+    '<meta http-equiv="refresh" content="0;url=javascript:alert(1)">',
+    '<div style="background-image:url(javascript:alert(1));width:expression(alert(1))">text</div>',
+    '<div>\n<script>alert(1)</script>\n<iframe src="https://example.test"></iframe>\n</div>',
+    '<math><mtext><table><mglyph><style><!--</style><img title="--><img src=x onerror=alert(1)>">',
+  ])('removes executable HTML and embedded frames: %s', (source) => {
+    const html = render(source)
+    expect(html).not.toMatch(/<(?:script|iframe|svg|math|object|embed|meta|style)\b/i)
+    expect(html).not.toMatch(/\s(?:on\w+|srcdoc)\s*=/i)
+    expect(html).not.toMatch(/(?:javascript:|expression\()/i)
+  })
+
+  it('preserves static HTML wrappers while removing execution attributes', () => {
+    const html = render('<center onclick="alert(1)">\n**safe**\n</center>')
+    expect(html).toContain('<center')
+    expect(html).toContain('<strong>safe</strong>')
+    expect(html).not.toContain('onclick')
+  })
+
+  it('also sanitizes the public inline rendering entry point', () => {
+    const md = create_story_markdown({
+      story_id: () => 1,
+      attachments: () => [],
+      stories: () => [],
+      static_url: path => path,
+      video_card: () => null,
+      folder_card_openable: () => false,
+    })
+    const html = md.renderInline('<img src="/image.png" onerror="alert(1)"><iframe src="/frame"></iframe><a href="javascript:alert(1)">link</a>')
+    expect(html).toContain('src="/image.png"')
+    expect(html).not.toMatch(/iframe|onerror|javascript:/i)
+  })
+
   it.each([true, false])('keeps formatted story labels as balanced links (target exists: %s)', (exists) => {
     for (const label of ['**label**', '*label*', '`label`']) {
       const html = render(`[${label}](content://Other)`, exists)
@@ -28,7 +71,7 @@ describe('story Markdown preset contracts', () => {
   })
   it('keeps headings, emphasis, deletion, lists, quotes and hard breaks', () => {
     const html = render('# Heading\n\nUnderline\n===\n\n**bold** *emphasis* ~~removed~~  \nnext\n\n- item\n\n1. ordered\n\n> quote\n\n---')
-    for (const fragment of ['>Heading</h1>', '>Underline</h1>', '<strong>bold</strong>', '<em>emphasis</em>', '<s>removed</s>', '<br>', '<ul ', '<ol ', '<blockquote ', '<hr '])
+    for (const fragment of ['>Heading</h1>', '>Underline</h1>', '<strong>bold</strong>', '<em>emphasis</em>', '<s>removed</s>', '<br />', '<ul ', '<ol ', '<blockquote ', '<hr '])
       expect(html).toContain(fragment)
   })
 

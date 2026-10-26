@@ -20,7 +20,7 @@
 
 浏览器提交 `lot_number`、`captcha_output`、`pass_token`、`gen_time`，服务端以 appKey 对 lot_number 做 HMAC-SHA256，向 `https://captcha.alicaptcha.com/validate` 二次核验。协议见 [PNVS 服务端集成](https://help.aliyun.com/en/pnvs/developer-reference/graphical-authentication-server-integration)。当前控制台实际域名白名单本轮未读取，迁移域名后必须用新页面真实完成一次验证。
 
-现行故障行为需要明确：字段缺失会拒绝，服务返回非 success 会拒绝；网络异常、HTTP 非 2xx 或 JSON 解析失败落入 catch 后会放行（fail-open）。这是当前代码的业务选择，不应在部署说明中误写为任何故障均拒绝。若要改为失败关闭，应作为业务行为变更单独实现与验收。
+服务端采用失败关闭：字段缺失返回 400，服务明确返回非 success 时返回 403；网络异常、HTTP 非 2xx、JSON 解析失败或响应缺少有效结果时统一返回 503，不继续登录、注册或短信发送。上游故障期间需要图形验证的操作不可用，不回退为放行。
 
 ## 开发与生产开关
 
@@ -29,6 +29,6 @@
 | `NUXT_OTP_DEBUG` | 默认 true，跳过真实短信发送/核验 | 必须 false |
 | `NUXT_CAPTCHA_DEBUG` | 默认 true，跳过图形验证 | 必须 false |
 
-生产 loader 对任一 debug 开启均拒绝启动，不能把开发 `.env.dev` 直接部署。开发测试账号手机号不能用于真实短信：在任何发送流程前确认运行中配置为 OTP debug，或改用密码登录/已有会话。
+两种 debug 使用同一配置校验规则：仅允许在 `NODE_ENV=development` 开启，生产 loader 对任一 debug 开启均拒绝启动；短信发送、短信核验和图形验证的运行时跳过逻辑也都同时检查开发环境与对应 debug 标记。不能把开发 `.env.dev` 直接部署。开发测试账号手机号不能用于真实短信：在任何发送流程前确认运行中配置为 OTP debug，或改用密码登录/已有会话。
 
 短信发送失败先区分 RAM 拒绝、未开通产品、签名/模板不匹配、额度/频控及网络；不要把 OSS 或 ESA 的 AccessKey 填进短信凭据来试错。服务成本和限额以当前账号控制台为准，本仓库没有自动设置短信套餐或消费上限。
