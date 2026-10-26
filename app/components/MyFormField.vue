@@ -94,8 +94,6 @@
 import type { useFormReturn } from '@primevue/forms/useform'
 import { FormField } from '@primevue/forms'
 import { phone_schema } from '@shared/schemas'
-import { settings } from '@shared/settings'
-import { sync_resource } from '@shared/types/sync'
 import { useApi } from '~/composables/useApi'
 
 interface MyFormFieldOtpSendOptions {
@@ -141,8 +139,6 @@ const otp_state_key = props.otpSend ? `${props.otpSend.purpose}:${props.name}` :
 const otp_cooldown_until = useSyncedState<string | null>(`otp_cooldown_${otp_state_key}`, () => null)
 const otp_send_loading = ref(false)
 const otp_sync_loading = useState(`otp_cooldown_loading_${otp_state_key}`, () => false)
-
-const identity_token = useCookie(settings.app.identity.cookieName)
 
 async function target_field_has_error() {
   const field_name = props.otpSend?.targetFieldName
@@ -193,6 +189,10 @@ if (props.otpSend) {
     return phone_schema.safeParse(phone).success ? phone : null
   })
 
+  // Cooldown channels are keyed server-side; the browser cannot derive them,
+  // so the subscription sources follow whatever the last query returned.
+  const otp_channels = ref<{ phone: string | null, identity: string | null }>({ phone: null, identity: null })
+
   async function sync_otp_cooldown() {
     const target_phone = otp_target_phone.value
 
@@ -203,12 +203,11 @@ if (props.otpSend) {
     try {
       const data = await auth_api.get_otp_cooldown({ phone: target_phone })
 
-      const next_available_at = data?.next_available_at
-      if (! next_available_at) {
-        return null
+      if (data?.channels) {
+        otp_channels.value = data.channels
       }
 
-      return next_available_at
+      return data?.next_available_at ?? null
     }
     catch {
       return null
@@ -232,27 +231,20 @@ if (props.otpSend) {
     }
   }, { immediate: true, flush: 'sync' })
 
-  const otp_sync_source = computed(() => {
-    if (otp_sync_source_has_error.value || ! otp_target_phone.value) {
-      return null
-    }
-
-    return sync_resource('otp_cooldown', otp_target_phone.value)
-  })
-
-  const otp_sync_by_identity_source = computed(() => {
-    if (otp_sync_source_has_error.value || ! otp_target_phone.value || ! identity_token.value) {
-      return null
-    }
-
-    return sync_resource('otp_cooldown_by_identity', identity_token.value)
-  })
+  const otp_sync_ready = computed(() => ! otp_sync_source_has_error.value && !! otp_target_phone.value)
+  const otp_sync_source = computed(() => otp_sync_ready.value ? otp_channels.value.phone : null)
+  const otp_sync_by_identity_source = computed(() => otp_sync_ready.value ? otp_channels.value.identity : null)
 
   await useSyncedData<string | null>(
     [otp_sync_source, otp_sync_by_identity_source],
     sync_otp_cooldown,
     otp_cooldown_until,
     otp_sync_loading,
+    // The query key is the typed phone, not the channels: it exists before the
+    // first fetch (so the initial query can run with no channel known yet),
+    // a phone change re-fetches exactly once, and channel updates arriving
+    // with the data only re-subscribe without fetching again.
+    { query_key: otp_target_phone },
   )
 
   watch(otp_sync_source_has_error, (new_val) => {

@@ -11,6 +11,7 @@ import { error_fields, log_error } from '@server/lib/log'
 import { clear_auth_token_cookie, make_token_hash, set_auth_token_cookie, sign_auth_token } from '@server/lib/session'
 import { check_otp_sms, send_otp_sms } from '@server/lib/sms'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
+import { otp_cooldown_channels } from '@server/lib/sync-channel'
 import { require_auth_user } from '@server/services/auth-guards.service'
 import { create_login_session, logout_session } from '@server/services/session.service'
 import { normalize_permission_grants } from '@shared/permissions'
@@ -180,17 +181,17 @@ export async function get_otp_cooldown(input: AuthOtpCooldownInput) {
   )
   const record = rows[0]
 
-  if (! record) {
-    return { can_send: true, next_available_at: null }
+  const cooldown_until = record ? dayjs.utc(record.cooldown_until) : null
+  // The channel strings are the only way a browser can name these resources:
+  // they are keyed server-side and re-issued on every query, so the client
+  // follows a key rotation on its next fetch.
+  const channels = otp_cooldown_channels(input.phone, input.identity_token)
+
+  if (! cooldown_until || cooldown_until.diff(now) <= 0) {
+    return { can_send: true, next_available_at: null, channels }
   }
 
-  const cooldown_until = dayjs.utc(record.cooldown_until)
-  const diff_ms = cooldown_until.diff(now)
-  if (diff_ms <= 0) {
-    return { can_send: true, next_available_at: null }
-  }
-
-  return { can_send: false, next_available_at: record.cooldown_until }
+  return { can_send: false, next_available_at: record!.cooldown_until, channels }
 }
 
 function calc_otp_send_tier(sent_count: number) {

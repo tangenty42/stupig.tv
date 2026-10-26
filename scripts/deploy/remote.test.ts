@@ -72,6 +72,11 @@ case "$1" in
     cat > "$STUB_DIR/login-password"
     exit 0
     ;;
+  rm)
+    echo "$*" >> "$STUB_DIR/calls"
+    rm -f "$STUB_DIR/mqtt-created"
+    exit 0
+    ;;
   tag|image)
     echo "$*" >> "$STUB_DIR/calls"
     exit 0
@@ -81,7 +86,13 @@ case "$1" in
     # "compose ps -q <service>" 是脚本解析容器的方式（不靠固定容器名）。容器 ID
     # 故意取一个与任何名字都不像的值：写死 stupig-tv 的实现在这里就会暴露。
     case "$*" in
+      *"ps -q emqx"*)
+        if [ -f "$STUB_DIR/mqtt-created" ] || [ -n "$STUB_PREVIOUS_MQTT_IMAGE" ]; then
+          echo mqtt-service-id
+        fi
+        ;;
       *"ps -q"*) echo "$STUB_CONTAINER_ID" ;;
+      *" up -d") : > "$STUB_DIR/mqtt-created" ;;
       # 校验送来的 compose：默认通过，STUB_COMPOSE_CONFIG_FAILS 非空则失败
       *"config -q"*) [ -n "\${STUB_COMPOSE_CONFIG_FAILS:-}" ] && exit 1 ;;
       *" pull"*) [ -n "\${STUB_COMPOSE_PULL_FAILS:-}" ] && exit 1 ;;
@@ -89,6 +100,20 @@ case "$1" in
     exit 0
     ;;
   inspect)
+    case "$*" in
+      *mqtt-service-id*)
+        for arg in "$@"; do
+          case "$arg" in
+            *State.Health*)
+              if [ -s "$STUB_DIR/mqtt_health_queue" ]; then pop "$STUB_DIR/mqtt_health_queue"; else echo healthy; fi
+              exit 0 ;;
+            *State.Status*) echo running; exit 0 ;;
+            *Config.Image*) echo registry.example.com/ns/app:mqtt; exit 0 ;;
+            *.Image*) echo "$STUB_PREVIOUS_MQTT_IMAGE"; exit 0 ;;
+          esac
+        done
+        ;;
+    esac
     # 注意顺序：健康检查的 --format 是
     # '{{if .State.Health}}{{.State.Health.Status}}...'，里面也含 "State.Status"，
     # 所以必须先匹配 State.Health，否则健康查询会去弹状态队列
@@ -123,6 +148,8 @@ interface Scenario {
   statuses: string[]
   healths: string[]
   previous_image?: string
+  previous_mqtt_image?: string
+  mqtt_healths?: string[]
   /** 设为空字符串即模拟"compose 找不到该服务的容器" */
   container_id?: string
   /** 预置到部署目录的文件（用来模拟服务器上已有的 compose 与送来的那一份） */
@@ -149,6 +176,7 @@ function run_deploy(scenario: Scenario): RunResult {
   chmodSync(join(fakebin, 'docker'), 0o755)
   writeFileSync(join(dir, 'status_queue'), `${scenario.statuses.join('\n')}\n`)
   writeFileSync(join(dir, 'health_queue'), `${scenario.healths.join('\n')}\n`)
+  writeFileSync(join(dir, 'mqtt_health_queue'), `${(scenario.mqtt_healths ?? []).join('\n')}`)
   writeFileSync(join(dir, 'calls'), '')
   const env_content = scenario.env_content === undefined ? 'APP_PORT=3042\nDEPLOYMENT_ENV=old\n' : scenario.env_content
   if (env_content !== null) {
@@ -187,6 +215,7 @@ function run_deploy(scenario: Scenario): RunResult {
       STUB_DOCKER: join(fakebin, 'docker'),
       DEPLOY_SCRIPT: script_path,
       STUB_PREVIOUS_IMAGE: scenario.previous_image ?? '',
+      STUB_PREVIOUS_MQTT_IMAGE: scenario.previous_mqtt_image ?? '',
       STUB_CONTAINER_ID: scenario.container_id ?? 'a1b2c3d4e5f6',
       STUB_COMPOSE_CONFIG_FAILS: scenario.compose_config_fails ? '1' : '',
       STUB_COMPOSE_PULL_FAILS: scenario.compose_pull_fails ? '1' : '',
@@ -197,7 +226,7 @@ function run_deploy(scenario: Scenario): RunResult {
   const files: Record<string, string> = {}
   for (const name of readdirSync(dir)) {
     // 队列/记录文件是测试自己的脚手架，不是被测对象留下的东西
-    if (['fakebin', 'status_queue', 'health_queue', 'calls', 'login-password'].includes(name))
+    if (['fakebin', 'status_queue', 'health_queue', 'mqtt_health_queue', 'mqtt-created', 'calls', 'login-password'].includes(name))
       continue
     files[name] = readFileSync(join(dir, name), 'utf-8')
   }
@@ -210,6 +239,12 @@ function run_deploy(scenario: Scenario): RunResult {
 const needs_shell = shell ? describe : describe.skip
 
 describe('registry identity workflow wiring', () => {
+  it('builds and publishes the dedicated MQTT target alongside the application', () => {
+    const build = workflow_steps.find(step => step.name === 'Build and push image')!
+    expect(build.run).toContain('docker build --target mqtt -t "$IMAGE:mqtt" .')
+    expect(build.run).toContain('docker push "$IMAGE:mqtt"')
+  })
+
   it('uses the same Registry secrets for CI and the host and checks them before building', () => {
     const check = workflow_steps.find(step => step.name === 'Check registry credentials')!
     const build = workflow_steps.find(step => step.name === 'Build and push image')!
@@ -279,6 +314,42 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
       delete process.env.HEALTH_ATTEMPTS
     else
       process.env.HEALTH_ATTEMPTS = saved_attempts
+  })
+
+  it('restores both images and checks both services when an existing managed deployment fails', () => {
+    const result = run_deploy({
+      statuses: ['exited', 'running'],
+      healths: ['unhealthy', 'healthy'],
+      previous_image: 'sha256:old-app',
+      previous_mqtt_image: 'sha256:old-mqtt',
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.calls).toContain('tag sha256:old-mqtt registry.example.com/ns/app:mqtt')
+    expect(result.calls).toContain('tag sha256:old-app registry.example.com/ns/app:latest')
+    expect(result.calls).not.toContain('rm -f mqtt-service-id')
+    expect(result.output).toContain('已完整回滚')
+  })
+
+  it('removes only the newly introduced broker container on a failed migration and retains its volume', () => {
+    const result = run_deploy({
+      statuses: ['exited', 'running'], healths: ['unhealthy', 'healthy'], previous_image: 'sha256:old-app',
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.calls).toContain('rm -f mqtt-service-id')
+    expect(result.calls.some(call => call.startsWith('rm ') && call.includes('-v'))).toBe(false)
+    expect(result.files['docker-compose.yml']).toBe('old-compose\n')
+    expect(result.output).toContain('已完整回滚')
+  })
+
+  it('rejects an unhealthy broker even if the application could report healthy', () => {
+    const result = run_deploy({
+      statuses: ['running'], healths: ['healthy'], previous_image: 'sha256:old-app',
+      previous_mqtt_image: 'sha256:old-mqtt', mqtt_healths: ['unhealthy', 'unhealthy', 'unhealthy', 'healthy'],
+    })
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('项目 MQTT broker 未就绪')
+    expect(result.output).toContain('已完整回滚')
+    expect(result.calls.some(call => call.startsWith('image prune'))).toBe(false)
   })
 
   it('logs Docker in with the shared Registry identity and sends the exact password through stdin', () => {

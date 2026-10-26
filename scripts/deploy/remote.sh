@@ -46,21 +46,22 @@ compose() {
 # 看不到容器 —— 2026-10-09 第一次上线时就是这样：容器其实健康，门却超时判失败，
 # 回滚锚点也是空的。
 resolve_container() {
-  compose ps -q "$SERVICE" 2>/dev/null | head -n 1
+  compose ps -q "${1:-$SERVICE}" 2>/dev/null | head -n 1
 }
 
 wait_until_ready() {
+  readiness_service=${1:-$SERVICE}
   attempt=0
   while [ "$attempt" -lt "$ATTEMPTS" ]; do
     attempt=$((attempt + 1))
-    container=$(resolve_container)
+    container=$(resolve_container "$readiness_service")
     if [ -z "$container" ]; then
-      echo "[$attempt/$ATTEMPTS] 没找到 $SERVICE 服务的容器" >&2
+      echo "[$attempt/$ATTEMPTS] 没找到 $readiness_service 服务的容器" >&2
       return 1
     fi
     status=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || echo missing)
     health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || echo missing)
-    echo "[$attempt/$ATTEMPTS] status=$status health=$health"
+    echo "[$attempt/$ATTEMPTS] service=$readiness_service status=$status health=$health"
     case "$status" in
       running)
         if [ "$health" = healthy ]; then
@@ -84,6 +85,13 @@ wait_until_ready() {
 
 previous_container=$(resolve_container)
 previous_image=$(docker inspect --format '{{.Image}}' "$previous_container" 2>/dev/null || true)
+previous_mqtt_container=$(resolve_container emqx)
+previous_mqtt_image=
+previous_mqtt_ref=
+if [ -n "$previous_mqtt_container" ]; then
+  previous_mqtt_image=$(docker inspect --format '{{.Image}}' "$previous_mqtt_container")
+  previous_mqtt_ref=$(docker inspect --format '{{.Config.Image}}' "$previous_mqtt_container")
+fi
 echo "previous container: ${previous_container:-<none>} image: ${previous_image:-<none>}"
 
 transaction_started=0
@@ -100,6 +108,12 @@ rollback_on_exit() {
     set +e
     rollback_ok=1
     echo "部署失败：恢复旧 .env.prod 与 compose 配置" >&2
+    if [ "$up_started" -eq 1 ] && [ -z "$previous_mqtt_container" ]; then
+      candidate_mqtt_container=$(resolve_container emqx)
+      if [ -n "$candidate_mqtt_container" ]; then
+        docker rm -f "$candidate_mqtt_container" || rollback_ok=0
+      fi
+    fi
     if [ "$had_env" -eq 1 ]; then
       cp -p .env.prod.bak "$previous_env_file" || rollback_ok=0
       if [ "$previous_env_file" != .env.prod ]; then
@@ -116,10 +130,16 @@ rollback_on_exit() {
     fi
     rm -f .env.prod.incoming docker-compose.yml.incoming || rollback_ok=0
 
+    if [ "$pull_started" -eq 1 ] && [ -n "$previous_mqtt_image" ]; then
+      docker tag "$previous_mqtt_image" "$previous_mqtt_ref" || rollback_ok=0
+    fi
     if [ "$rollback_ok" -eq 1 ] && [ "$pull_started" -eq 1 ] && [ -n "$previous_image" ]; then
       docker tag "$previous_image" "$IMAGE" || rollback_ok=0
       if [ "$rollback_ok" -eq 1 ] && [ "$up_started" -eq 1 ]; then
         compose up -d --force-recreate || rollback_ok=0
+        if [ "$rollback_ok" -eq 1 ] && [ -n "$previous_mqtt_container" ]; then
+          wait_until_ready emqx || rollback_ok=0
+        fi
         if [ "$rollback_ok" -eq 1 ]; then
           wait_until_ready || rollback_ok=0
         fi
@@ -185,6 +205,12 @@ pull_started=1
 compose pull
 up_started=1
 compose up -d
+
+if ! wait_until_ready emqx; then
+  echo "项目 MQTT broker 未就绪，拒绝完成部署。" >&2
+  docker logs --tail 80 "$(resolve_container emqx)" 2>&1 || true
+  exit 1
+fi
 
 set +e
 wait_until_ready

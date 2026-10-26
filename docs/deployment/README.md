@@ -6,7 +6,7 @@
 
 | 顺序 | 做什么 | 操作说明 |
 | --- | --- | --- |
-| 1 | 准备主机、反代、Docker 网络、MySQL/Redis/EMQX | [服务器](server.md)、[MySQL/Redis](mysql-redis.md)、[EMQX](mqtt.md) |
+| 1 | 准备主机、反代、Docker 网络、MySQL/Redis，规划项目 EMQX 的反代切换 | [服务器](server.md)、[MySQL/Redis](mysql-redis.md)、[EMQX](mqtt.md) |
 | 2 | 创建 RAM 策略/用户，保存各身份凭据 | [RAM 清单](ram.md)；策略 JSON 已备齐 |
 | 3 | 配 OSS 桶、域名、ESA 函数与路由/原生规则，开通短信与图形验证 | [OSS](oss.md)、[ESA 规则](esa.md)、[ESA 函数](esa-functions.md)、[短信/CAPTCHA](sms-captcha.md) |
 | 4 | 填好生产 env/YAML，并更新配置密文 | [配置填写清单](configuration.md) |
@@ -15,7 +15,7 @@
 | 7 | 启动应用、检查回调，发布正式函数代码 | [服务器](server.md)、[函数发布](esa-functions.md)；生产回调为 www.stupig.tv，不使用开发隧道 |
 | 8 | 验收后开放流量，最后单独启用预热 | 下表 |
 
-生产 Compose 只部署应用，不会自动创建数据库、broker、RAM、桶、域名或 ESA 规则。空库也要跑完迁移，再按[首个管理员](mysql-redis.md#空库的首个管理员)完成账号初始化。
+生产 Compose 部署应用和专用 EMQX broker，不会自动创建数据库、RAM、桶、域名或 ESA 规则。EMQX 的账号、ACL 与健康检查自动初始化，HTTPS/WSS 反代仍需手动配置。空库也要跑完迁移，再按[首个管理员](mysql-redis.md#空库的首个管理员)完成账号初始化。
 
 ## 上线验收
 

@@ -2,9 +2,9 @@
 
 当前浏览器匿名连接 WS/WSS，只订阅刷新事件；服务端用用户名/密码连接内网 TCP，发布刷新事件。消息不是业务数据源，客户端收到后通过 API 重新授权、读取数据，协议见[实时同步](../modules/realtime.md)。
 
-事实源：[ACL](../../emqx-acl.conf)、[开发初始化](../../scripts/dev/emqx-entrypoint.sh)、[开发 Compose](../../docker-compose.dev.yml)、[服务端 MQTT](../../server/lib/mqtt.ts)、[浏览器连接](../../app/composables/useDataSync.ts)。
+事实源：[生产 Compose](../../docker-compose.yml)、[Dockerfile](../../Dockerfile)、[生产初始化](../../scripts/deploy/emqx-entrypoint.sh)、[共享账号初始化](../../scripts/dev/emqx-entrypoint.sh)、[ACL](../../emqx-acl.conf)、[服务端 MQTT](../../server/lib/mqtt.ts)、[浏览器连接](../../app/composables/useDataSync.ts)。
 
-2026-10-24 用户确认生产版本为 **EMQX 6.2.2**；本地也已升级并固定 `emqx/emqx:6.2.2`，保留原数据卷、日志卷与节点身份。本页已对照官方 **v6.2 文档与 6.2.2 配置 schema**，权限矩阵已在本地 6.2.2 复测。**尚未读取生产 broker 的有效配置、账号和共享情况**，本地验收不代替生产验收。
+生产 EMQX **6.2.2** 由本项目 Compose 管理，与应用分容器、同批部署；MySQL 和 Redis 继续使用外部网络中的实例。账号初始化、认证器、listener、ACL 和健康检查自动交付，只需手动配置 HTTPS/WSS 反代。生产旧 1Panel 实例不由部署脚本停止、修改或删除。本地验收不代替生产验收。
 
 ## 6.2.2 版本基线与默认值
 
@@ -46,139 +46,65 @@
 
 **`web_` / `server_` 只是客户端 ID 命名习惯，不是可信身份。** 不能靠前缀授予发布权。尤其不能在匿名 WS 上只用 `{username, "发布账号"}` 放行：用户名也可由客户端自行填写。本方案的发布权来自 TCP 上的真实认证结果，WS 跳过认证后保持非 superuser。
 
-## 专用 broker 的配置步骤
+## 自动构建与部署
 
-以下与仓库现行方案一致；如果 broker 还服务其他项目，先看[共享 broker](#共享-broker-不能直接套用全局规则)，不要覆盖其认证链或全局 ACL。
+Check 的 `mqtt` 作业构建 Dockerfile 的 `mqtt` 目标，并运行[真实集成测试](../../scripts/deploy/emqx.integration.test.ts)。测试使用随机 Compose 项目、临时账号和卷，不连接生产；覆盖账号初始化、实际收发、拒绝矩阵、失效凭据健康检查及重启后账号可用，结束时清理自己的资源。
 
-### 1. 确定配置由哪里管理
+main 的 Check 全部成功后，[Deploy](../../.github/workflows/deploy.yml) 构建并推送 `${ACR_IMAGE}:latest`（应用）和 `${ACR_IMAGE}:mqtt`（broker），上传 Compose 与解密后的 `.env.prod`，由[远端脚本](../../scripts/deploy/remote.sh)拉取、启动并检查两个服务。镜像包含 ACL、初始化和健康检查脚本；密码只在运行时注入，不进入镜像。
 
-先备份现有 EMQX 数据、认证用户、认证/授权链、listener 和反代设置。在 1Panel 查看实际镜像标签、挂载路径、环境变量及网络；应用的 `.env.prod` 不会替外部 EMQX 创建账号或设置 ACL。
+首次启动从 `MQTT_USERNAME/PASSWORD` 创建内置数据库超级发布账号。认证器、TCP/WS 开关、唯一 File 授权源及 deny/disconnect 策略由 Compose 环境变量统一管理，不需要进 Dashboard 配置。不要再通过 Dashboard 改同一批字段；当前 HTTP Dashboard、SSL 和 WSS listener 均关闭。
 
-建议 listener/ACL 由挂载配置维护，MQTT 用户通过 Dashboard 的内置数据库维护。也可以全用 Dashboard，但同一字段只选一处长期维护。本地和生产的 6.2.2 配置优先级为：
+应用等待 broker 的凭据健康检查通过后才启动。已有托管部署失败时脚本恢复两个旧镜像及旧配置；首次引入 broker 失败时只移除本次新增容器，保留卷，不碰旧 1Panel 实例。此回滚不恢复数据库迁移，也不修改外部反代；回滚失败会报告需要人工介入。
 
-```text
-base.hocon < data/configs/cluster.hocon < etc/emqx.conf < EMQX_* 环境变量
-```
-
-Dashboard/API/CLI 的运行期修改会持久化到 `cluster.hocon`；若 1Panel 环境变量或 `emqx.conf` 还有旧值，重启可能恢复旧行为。不要只看保存提示，必须读回并重启验收。[官方配置覆盖规则](https://docs.emqx.com/en/emqx/v6.2/configuration/configuration.html#config-override-rules)。
-
-### 2. 建立发布认证器及账号
-
-在 Dashboard 的 **Access Control → Authentication**：
-
-1. 若已有 Password-Based / Built-in Database，先检查其配置和用户，不重复创建或删除认证器。
-2. 新建时选择 **Password-Based → Built-in Database**，UserID Type 选择 **username**，启用认证器。UserID Type 不能选 clientid，服务端 client ID 会动态生成。
-3. 新建认证器可采用与开发一致的 `sha256`、Salt Position `suffix`。不要为照抄示例而修改现有认证器的哈希算法、盐位置或 UserID Type，这会影响已有账号。
-4. 在该认证器操作列进入 **Users / 用户管理**，建立独立生产发布账号，例如 `stupig-publisher-prod`，使用强密码，开启 **Super User / is_superuser**。这些值同步填入应用 `.env.prod`，不下发浏览器。
-5. 核对实际 TCP listener 是否使用全局认证链，是否还有 listener 专属认证链覆盖。账号必须创建在该 TCP 连接实际使用的认证器内；链中其他放行机制也要逐项检查。
-
-**仅设置 `enable_authn=true` 不算完成。** 这个字段把连接交给配置的认证链，并不证明链中已有可用认证器；必须核对实际链并实测匿名 TCP、错误密码被拒。开发 5.x 的空认证链可能放行，生产也不能仅凭 no_match=deny 判断连接认证安全，因为那是另一阶段的 topic 授权设置。[6.2 内置数据库](https://docs.emqx.com/en/emqx/v6.2/access-control/authn/mnesia.html)、[6.2 认证链](https://docs.emqx.com/en/emqx/v6.2/access-control/authn/authn.html)。
-
-Dashboard 管理密码与这里的 MQTT 密码分别轮换。开发 bootstrap 只用于初始化，不覆盖已存在用户；改应用 env 或重启 broker 都不保证更新 Mnesia 中的旧密码。生产不要套用开发 bootstrap 生成逻辑来反复覆盖账号。
-
-### 3. 分开 TCP 与浏览器 listener
-
-在 **Management → Listeners** 核对 listener ID 和认证开关；不同界面翻译可能显示为监听器设置。典型反代拓扑：
+### 网络与持久化
 
 ```text
-应用容器 ── TCP 1883（内网、需密码）── EMQX tcp:default
-浏览器 ── WSS 443 ── Nginx/1Panel ── WS 8083 ── EMQX ws:default
+应用容器 -> 项目 mqtt bridge -> emqx:1883（需要发布凭据）
+浏览器 -> WSS 443 -> HTTPS 反代 -> 宿主机 127.0.0.1:8085 -> emqx:8083
 ```
 
-| listener | 设置 | 网络要求 |
-| --- | --- | --- |
-| `tcp:default` | `enable=true, enable_authn=true, zone=default` | 仅应用可达的可信内网 |
-| `ws:default` | `enable=true, enable_authn=false, zone=default`，MQTT path `/mqtt` | 只让 HTTPS 反代到达 |
-| 未使用的 SSL/WSS/其他 listener | 停用或确认没有外部入口 | 不因 Docker 没映射宿主机端口就忽略同网络容器的访问 |
+broker 只加入项目专用 `mqtt` bridge，不加入 MySQL/Redis 的外部网络；应用同时加入两个网络。TCP 1883、Dashboard、SSL/WSS 不映射宿主机，WS 只映射回环 `${MQTT_WS_PORT:-8085}`。这是普通 bridge，不承诺阻断 broker 出站流量；不能设置 `internal: true` 后仍假定宿主机端口可正常发布。
 
-若 TLS 直接终止在 EMQX `wss:default`，浏览器认证开关要配到 **wss**；若 TLS 在 Nginx 终止，浏览器实际到 broker 的是 **ws**。不能只根据外部 URL 是 `wss://` 就修改 WSS listener。[官方 listener 配置](https://docs.emqx.com/en/emqx/v6.2/configuration/listener.html)。
+`mqtt-data` 和 `mqtt-log` 命名卷保存数据和日志；节点名固定为 `stupig@127.0.0.1`。不要使用 `down -v`、清空 Mnesia、修改节点名或换空卷排除故障。备份数据时保留节点身份，并在隔离副本验证恢复；旧 1Panel 节点的数据不直接挂到新节点上。[官方备份恢复](https://docs.emqx.com/en/emqx/v6.2/operations/backup-restore.html)。
 
-固定配置的最小增量如下，可合并到专用 broker 的 `base.hocon`；这不是包含认证用户、证书、集群和持久化设置的完整配置，不应覆盖整个现有文件：
+### 首次从 1Panel 切换
 
-```hocon
-listeners.tcp.default {
-  enable = true
-  bind = "0.0.0.0:1883"
-  zone = default
-  enable_authn = true
-}
-listeners.ws.default {
-  enable = true
-  bind = "0.0.0.0:8083"
-  zone = default
-  enable_authn = false
-  websocket.mqtt_path = "/mqtt"
-}
-authorization {
-  no_match = deny
-  deny_action = disconnect
-  sources = [
-    {
-      type = file
-      enable = true
-      path = "/opt/emqx/etc/acl.conf"
-    }
-  ]
-}
-```
+用户提供的旧实例为专用 `1panel-EMQX`、镜像 `emqx/emqx:6.2.2`、尚无认证器，反代域名为 `mqtt.stupig.tv`。这些不是已经在生产读回的验收结果。
 
-配置源若使用环境变量，字段分别为 `EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN=true`、`EMQX_LISTENERS__WS__DEFAULT__ENABLE_AUTHN=false` 等，双下划线表示层级。不要同时保留另一套相反的 Dashboard 设置。
+1. 在维护窗口前保存旧 Compose、数据备份与反代配置。确认 `.env.prod` 已有强 `MQTT_USERNAME/PASSWORD`，`MQTT_WEB_URL=wss://mqtt.stupig.tv/mqtt`；`MQTT_WS_PORT` 选择空闲宿主机端口，建议 8085，避开旧实例的 8083。旧加密文件若没有这个变量，Compose 使用 8085；若已有 8083，必须先改为空闲端口并重新加密。
+2. 通过 PR、Check 和部署流程启动新 broker。应用的 Compose 显式覆盖 `MQTT_HOST=emqx`、`MQTT_TCP_PORT=1883`，不会继续使用旧外部 broker 地址。确认两个服务均健康。
+3. 手动把反代 `/mqtt` 切到新 WS 上游。此时浏览器和应用才会使用同一个新 broker；部署完成到反代切换之间允许短暂通知中断，需安排维护窗口。不要把应用健康当作 WSS 切换完成。
+4. 完成本页[上线验收表](#上线验收表)，包括公网真实收发、拒绝和应用跨标签同步。确认 Content outbox 恢复派发；业务数据源仍是 API/数据库，不迁移旧 MQTT 会话或 retained 消息。
+5. 验收通过后，在 1Panel 手动停止旧 broker，保留旧数据和配置到回滚窗口结束。自动部署不停止、删除旧容器或其挂载。
 
-应用目前明确使用 `protocol: mqtt`，连接可信内网 TCP；**仅把 `MQTT_TCP_PORT` 改成 8883 不会启用 MQTT TLS**。需要跨不可信网络发布时，应先实现并验证应用端 MQTT TLS 配置。
+若切换后需要退回旧架构，需同时恢复匹配的应用版本、Compose/env 和反代上游，不能只把反代指回旧 broker。不要为恢复而清空新旧数据卷。
 
-### 4. 配置授权源和规则
+## 凭据与配置维护
 
-在 **Access Control → Authorization**：
+bootstrap **只初始化，不覆盖已存在用户**。改 `.env.prod` 后重启不等于轮换 Mnesia 密码，健康检查会拒绝与内置库不匹配的凭据。当前不是自动改密或通用用户管理工具。
 
-1. 专用 broker 使用 File 授权源，启用并填入下面两条规则；删除默认示例中的放行所有、按 localhost 放行等规则。
-2. 相关全局设置明确选择 **No Match Action = deny**、**Deny Action = disconnect**。6.2.2 的 no_match 默认 deny，但 deny_action 默认 ignore；仍明确设置两者，并检查升级前持久化值。
-3. 核对完整授权源顺序。文件内从上到下命中即停止；授权源链也可能在更早的 Allow/Deny 上结束。前置宽泛 Allow 会绕开后面的拒绝；文件末尾 `{deny, all}` 则会阻止继续尝试后面的源。
+轮换前保留旧发布账号：通过受控管理 CLI/API 创建第二个超级发布账号，在内网验证后更新应用与 broker 的 `MQTT_USERNAME/PASSWORD`、重新加密生产环境并部署。确认新连接发布和健康检查成功后，再撤销旧账号并让旧连接断开。Dashboard 默认不开放，不要为省事把 18083 映射公网。账号管理操作须先在隔离实例验证，不打印或提交密码。
 
-直接复用仓库 [`emqx-acl.conf`](../../emqx-acl.conf)：
-
-```erlang
-{allow, all, subscribe, ["stupig/sync/#"]}.
-{deny, all}.
-```
-
-这里没有为普通连接授予任何 publish。superuser 在检查这些规则之前就绕过授权，因此真实发布账号可以发布；WS `enable_authn=false` 只跳过认证，不跳过 ACL。即使 WS 客户端提交正确发布账号密码，也不会因这个被跳过的认证器获得 superuser。
-
-File 授权在 Dashboard/API 编辑后，EMQX 会把新 ACL 保存到 `data/authz/acl.conf` 并切换读取路径；此后只改原来的只读挂载文件可能不生效。挂载文件和 Dashboard 二选一维护，并以有效 `authorization.sources[].path` 为准。[官方文件授权及路径行为](https://docs.emqx.com/en/emqx/v6.2/access-control/authz/file.html)。
-
-### 5. 读回、重连并验证持久化
-
-在服务器终端运行，`<emqx-container>` 替换为 1Panel 实际容器名：
+诊断使用生产部署目录中的同一份 Compose/env，通过包装入口运行 CLI，以使用一致的节点 Cookie：
 
 ```sh
-docker exec <emqx-container> emqx ctl status
-docker exec <emqx-container> emqx ctl conf show listeners
-docker exec <emqx-container> emqx ctl conf show authentication
-docker exec <emqx-container> emqx ctl conf show authorization
+docker compose --env-file .env.prod ps
+docker compose --env-file .env.prod logs --tail 80 emqx
+docker compose --env-file .env.prod exec emqx /bin/sh /opt/emqx/etc/production-entrypoint.sh --cli ctl status
+docker compose --env-file .env.prod exec emqx /bin/sh /opt/emqx/etc/production-entrypoint.sh --cli ctl conf show authorization
 ```
 
-这些命令在本机 6.2.2 已核对可用，`conf show`、`authz cache-clean` 也已对照 [6.2 官方 CLI](https://docs.emqx.com/en/emqx/v6.2/admin/cli.html)；尚未在生产执行。只在本机查看必要子树，不分享完整配置；外部认证后端的配置可能包含敏感参数。检查所有集群节点及最终认证链、listener 开关、ACL 路径，不能只检查某份文件。
-
-更新规则后优先清理本次测试客户端的授权缓存并断开重连：
-
-```sh
-docker exec <emqx-container> emqx ctl authz cache-clean <test-client-id>
-```
-
-命令中的 Client ID 是真实测试连接 ID。`authz cache-clean all` 会作用于所有节点，专用 broker 有必要时才使用；清授权缓存不会更新旧连接的认证属性。更改密码或 superuser 后还需让相关连接重连，不能只刷新浏览器页面。
-
-6.2.2 还有外部资源节点缓存；本页的内置数据库认证和 File 授权不使用它。若生产额外接了 SQL/HTTP 等外部认证或授权源，须另查其缓存状态、TTL 和失效方式，不能把一次客户端授权缓存清理视为所有层都已失效。依据 [6.2 外部认证缓存](https://docs.emqx.com/en/emqx/v6.2/access-control/authn/authn.html#external-resource-cache)与[外部授权缓存](https://docs.emqx.com/en/emqx/v6.2/access-control/authz/authz.html#external-resource-cache)。
-
-先用受控客户端按下表验收，再在维护安排下重启 broker，重复验收，确认环境变量/文件优先级及数据持久化没有使设置回退。不要通过删卷、清空 Mnesia 或重建认证器排除密码问题。
+完整认证配置和引导文件只在服务器本地查看，不能分享其中的凭据。配置、ACL 改动走仓库和新镜像；用户权限变化需断开旧连接后重新验收。应用通过可信 Docker 网络使用明文 MQTT TCP，单改端口为 8883 不会启用 TLS，不要跨不可信网络直接使用。
 
 ## WSS 反代与应用参数
 
-`.env.prod` 中 `MQTT_HOST` 填应用容器可达的 EMQX 网络地址，`MQTT_TCP_PORT=1883`，凭据对应实际 MQTT 用户；容器内 `127.0.0.1` 是应用自己。`MQTT_WEB_URL` 则是浏览器访问的完整 URL，例如 `wss://mqtt.example.com/mqtt`。
+应用 TCP 地址由生产 Compose 固定为 `emqx:1883`；`MQTT_WEB_URL` 是浏览器访问的完整 URL，例如 `wss://mqtt.stupig.tv/mqtt`。以下上游默认使用宿主机回环的 8085，与 `MQTT_WS_PORT` 保持一致。
 
 以下合并到实际 HTTPS server，upstream 按反代所在网络替换：
 
 ```nginx
 location /mqtt {
-    proxy_pass http://127.0.0.1:8083;
+    proxy_pass http://127.0.0.1:8085;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -188,15 +114,9 @@ location /mqtt {
 }
 ```
 
-反代在容器中时用 EMQX 服务地址，不能照抄宿主机回环地址。保持 MQTT 子协议和 `/mqtt` 路径，不缓存升级请求；不要加需要登录或浏览器挑战的网关。公网只开放 HTTPS/WSS，发布 TCP 和 Dashboard 留内网/受控管理入口。浏览器签发业务登录令牌不参与 broker 认证。[Nginx WebSocket 官方说明](https://nginx.org/en/docs/http/websocket.html)。
+**先确认反代的网络模式。** 宿主机进程或 host 网络反代可以使用上述回环上游；bridge 容器里的 `127.0.0.1` 是反代自身，且只接入旧外部网络的反代不能解析新 broker 的 `emqx` 服务名。此时需要单独规划反代到项目网络的接入或宿主机代理，不能直接复制示例或把 TCP/Dashboard 一并暴露；本次没有替生产更改该网络。
 
-## 1Panel 的持久化与轮换
-
-保留当前数据和配置挂载，特别是 `/opt/emqx/data` 下的 Mnesia、`configs`、`authz`，以及 `etc` 的声明配置、外部挂载 ACL 和 TLS 材料。镜像标签、稳定 node name 与恢复流程也要记录；不能把换卷或改节点身份当成无损更新。
-
-本机开发 Compose 没有显式命名 EMQX 数据卷；本次 inspect 确认镜像创建了 `/opt/emqx/data`、`/opt/emqx/log` 两个匿名卷。这不代表生产已做好持久化。生产按 1Panel 实际挂载进行备份，并在隔离环境验证账号、规则和节点状态能恢复；不要新挂空卷覆盖已有数据。[官方备份恢复](https://docs.emqx.com/en/emqx/v6.2/operations/backup-restore.html)。
-
-密码轮换优先新建第二个受控发布账号，验证后更新应用 `.env.prod`、加密交付并重启应用，确认新连接发布成功，再撤销旧账号；在过渡期保持匿名发布拒绝。改认证器哈希算法不是正常的密码轮换操作。
+保持 MQTT 子协议和 `/mqtt` 路径，不缓存升级请求；不要加需要登录或浏览器挑战的网关。公网只开放 HTTPS/WSS。浏览器业务登录令牌不参与 broker 认证。[Nginx WebSocket 官方说明](https://nginx.org/en/docs/http/websocket.html)。
 
 ## 上线验收表
 
@@ -227,7 +147,7 @@ MQTT 5 可以观察 Not authorized（135）、Bad User Name or Password（134）
 | 应用认证成功却不能发布 | 真实 MQTT 用户是否 superuser、是否仍为改权限前的旧连接、是否连错 broker |
 | WS 伪造用户名就能发布 | 删除以客户端可控 username/client ID 直接授予发布的规则，核对前置授权源和认证附带权限 |
 | 订阅成功但无通知 | topicPrefix、实际业务资源主题、服务端 TCP 发布、反代超时与 outbox 积压 |
-| Dashboard 保存后重启回退 | 1Panel 的 EMQX_*、emqx.conf 与 cluster.hocon 优先级 |
+| 手动修改配置后重启回退 | Compose 的 EMQX_* 是声明配置来源，不通过 Dashboard 重复管理 |
 | 修改挂载 ACL 后无效果 | 实际 sources.path 是否已切到 data/authz/acl.conf，是否清缓存并重连 |
 | 改 .env.prod 后密码仍不对 | 应用已重启、broker 内置库用户是否同步轮换；bootstrap 不覆盖旧用户 |
 

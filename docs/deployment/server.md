@@ -5,8 +5,8 @@
 ## 主机准备
 
 1. 安装 Docker 与 Compose 插件，建立可由部署用户写入的 `DEPLOY_DIR`。
-2. 准备 MySQL、Redis、EMQX 的持久化与备份，连接到供应用使用的 Docker 网络。将网络实际名称填写为 `EXTERNAL_DOCKER_NETWORK`；Compose 不会创建 external 网络。
-3. 用容器网络地址填写 `MYSQL_HOST`、`REDIS_HOST`、`MQTT_HOST`。应用容器中的 `127.0.0.1` 指应用自己，不是数据库或宿主机。
+2. 准备 MySQL、Redis 的持久化与备份，连接到供应用使用的 Docker 网络。将网络实际名称填写为 `EXTERNAL_DOCKER_NETWORK`；Compose 不会创建 external 网络。EMQX 由项目 Compose 管理，使用独立网络和持久卷，见 [MQTT](mqtt.md)。
+3. 用容器网络地址填写 `MYSQL_HOST`、`REDIS_HOST`；应用 MQTT 地址由 Compose 固定为 `emqx:1883`。应用容器中的 `127.0.0.1` 指应用自己，不是数据库或宿主机。
 4. 准备 OpenResty/Nginx 与 TLS。应用固定容器名为 `stupig-tv`，宿主机映射只有 `127.0.0.1:${APP_PORT}`，外部入口交给反代。
 5. 配置 [GitHub/ACR](github-acr.md) 与生产 env；禁用旧 `cleanup --delete` cron。后台任务随应用运行时不要再启动旧任务执行器。
 

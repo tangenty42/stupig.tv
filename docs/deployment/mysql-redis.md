@@ -1,6 +1,6 @@
 # MySQL 与 Redis
 
-入口：[数据库连接](../../server/lib/db.ts)、[Redis 连接](../../server/lib/redis.ts)、[开发 Compose](../../docker-compose.dev.yml)。生产 Compose 只部署应用，这两个服务由服务器环境独立维护。
+入口：[数据库连接](../../server/lib/db.ts)、[Redis 连接](../../server/lib/redis.ts)、[开发 Compose](../../docker-compose.dev.yml)。生产 Compose 部署应用和专用 EMQX；MySQL、Redis 仍由服务器环境独立维护。
 
 ## MySQL
 

@@ -1,6 +1,7 @@
 import type { DataSyncEvent } from '@shared/types/sync'
 import { sync_resource } from '@shared/types/sync'
 import { publish_sync } from './mqtt'
+import { wire_resource } from './sync-channel'
 
 export { sync_resource }
 
@@ -14,6 +15,9 @@ export function publish_refresh(event: Omit<DataSyncEvent, 'id' | 'type' | 'time
     id: next_event_id(),
     type: 'refresh',
     ... event,
+    // The resource reaches the topic name and the payload, both readable by
+    // subscribe-only broker connections; secret ids travel as keyed channels.
+    resource: wire_resource(event.resource),
     timestamp: Date.now(),
   }
 

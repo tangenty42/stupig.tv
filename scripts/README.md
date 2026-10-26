@@ -16,3 +16,5 @@
 | `verify/` | 跨模块接线检查、隔离数据库集成验证 |
 
 具体命令、每个脚本的用途及尚未实施的简化建议见[完整清单](../docs/development/commands.md)。版本化迁移位于根目录的 [migrations/](../migrations/)，不要放进这里；它们及冻结依赖的内容和路径必须保持稳定。
+
+生产 EMQX 由项目 Compose 自动部署，镜像携带 ACL、初始化与健康检查入口；真实镜像权限和持久化测试通过 `STUPIG_EMQX_IMAGE` 启用，并在 Check 工作流中执行。首次切换、手动反代、凭据维护和生产验收见 [MQTT 手册](../docs/deployment/mqtt.md)。

@@ -11,12 +11,51 @@ function read(relative: string) {
 }
 
 describe('镜像自带的运行期配置注入', () => {
+  it('生产 MQTT 镜像复用开发初始化入口和仓库 ACL', () => {
+    const dockerfile = read('Dockerfile')
+    expect(dockerfile).toContain('FROM emqx/emqx:6.2.2 AS mqtt')
+    expect(dockerfile).toContain('COPY --chown=emqx:emqx emqx-acl.conf /opt/emqx/etc/acl.conf')
+    expect(dockerfile).toContain('COPY --chown=emqx:emqx scripts/dev/emqx-entrypoint.sh /opt/emqx/etc/stupig-entrypoint.sh')
+    expect(dockerfile).toContain('ENTRYPOINT ["/bin/sh", "/opt/emqx/etc/production-entrypoint.sh"]')
+    expect(read('scripts/deploy/emqx-entrypoint.sh')).toContain('exec /bin/sh /opt/emqx/etc/stupig-entrypoint.sh "$@"')
+  })
+
+  it('生产 Compose 自带隔离持久化 broker，应用等待其凭据健康检查', () => {
+    const compose = parse(read('docker-compose.yml'))
+    const broker = compose.services.emqx
+    // eslint-disable-next-line no-template-curly-in-string -- Compose expands this literal placeholder, not JavaScript.
+    expect(broker.image).toBe('${ACR_IMAGE}:mqtt')
+    // eslint-disable-next-line no-template-curly-in-string -- Preserve Compose's literal default-value expression.
+    expect(broker.ports).toEqual(['127.0.0.1:${MQTT_WS_PORT:-8085}:8083'])
+    expect(broker.networks).toEqual(['mqtt'])
+    expect(compose.networks.mqtt.driver).toBe('bridge')
+    expect(compose.networks.mqtt.internal).not.toBe(true)
+    expect(broker.volumes).toEqual(['mqtt-data:/opt/emqx/data', 'mqtt-log:/opt/emqx/log'])
+    expect(broker.healthcheck.test).toEqual(['CMD', '/bin/sh', '/opt/emqx/etc/production-entrypoint.sh', '--healthcheck'])
+    expect(broker.environment.EMQX_DASHBOARD__LISTENERS__HTTP__BIND).toBe('0')
+    expect(broker.environment.EMQX_LISTENERS__SSL__DEFAULT__ENABLE).toBe('false')
+    expect(broker.environment.EMQX_LISTENERS__WSS__DEFAULT__ENABLE).toBe('false')
+    expect(compose.services.app.environment).toMatchObject({ MQTT_HOST: 'emqx', MQTT_TCP_PORT: 1883 })
+    expect(compose.services.app.depends_on.emqx.condition).toBe('service_healthy')
+  })
+
   it('入口脚本直接透传命令，不再派生配置别名', () => {
     const script = read('docker-entrypoint.sh')
 
     expect(script).not.toMatch(/export |MQTT_WEB_URL/)
     // 作为入口执行时必须透传 CMD，否则迁移与服务都跑不起来
     expect(script).toMatch(/exec "\$@"/)
+  })
+
+  it('cI 构建生产 MQTT 镜像并启用真实权限与持久化验证', () => {
+    const workflow = parse(read('.github/workflows/check.yml'))
+    const steps = workflow.jobs.mqtt.steps
+    const build = steps.find((step: { name?: string }) => step.name === 'Build production MQTT image')
+    const verify = steps.find((step: { name?: string }) => step.name === 'Verify production MQTT permissions and persistence')
+
+    expect(build.run).toBe('docker build --target mqtt -t stupig-mqtt-ci:local .')
+    expect(verify.env.STUPIG_EMQX_IMAGE).toBe('stupig-mqtt-ci:local')
+    expect(verify.run).toBe('pnpm exec vitest run --project tools scripts/deploy/emqx.integration.test.ts')
   })
 
   it('dockerfile 把运行时 YAML 与入口脚本装进镜像', () => {
@@ -140,7 +179,8 @@ describe('部署的健康检查与自愈接线', () => {
     // 服务器上的 compose 会被 CD 覆盖成仓库这份，但容器名仍由 compose 里有没有
     // container_name 决定。写死名字 → docker inspect 报 No such container → 健康门
     // 永远看不到容器、回滚锚点也是空的：2026-10-09 第一次上线就踩了这个。
-    expect(script).toMatch(/compose ps -q "\$SERVICE"/)
+    // eslint-disable-next-line no-template-curly-in-string -- The shell expands this literal parameter expression.
+    expect(script).toContain('compose ps -q "${1:-$SERVICE}"')
     expect(script).toContain('docker compose --env-file "$active_env_file" "$@"')
     expect(script).not.toMatch(/^CONTAINER=/m)
   })
