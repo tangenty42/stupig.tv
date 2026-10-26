@@ -66,6 +66,26 @@ jobs:
 
       - run: pnpm test
 
+  mqtt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.10.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build production MQTT image
+        run: docker build --target mqtt -t stupig-mqtt-ci:local .
+      - name: Verify production MQTT permissions and persistence
+        env:
+          STUPIG_EMQX_IMAGE: stupig-mqtt-ci:local
+        run: pnpm exec vitest run --project tools scripts/deploy/emqx.integration.test.ts
+
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

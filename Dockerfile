@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1
 
+FROM emqx/emqx:6.2.2 AS mqtt
+COPY --chown=emqx:emqx emqx-acl.conf /opt/emqx/etc/acl.conf
+COPY --chown=emqx:emqx scripts/dev/emqx-entrypoint.sh /opt/emqx/etc/stupig-entrypoint.sh
+COPY --chown=emqx:emqx scripts/deploy/emqx-entrypoint.sh /opt/emqx/etc/production-entrypoint.sh
+COPY --chown=emqx:emqx scripts/deploy/emqx-healthcheck.sh /opt/emqx/etc/stupig-healthcheck.sh
+RUN sed -i 's/\r$//' /opt/emqx/etc/stupig-entrypoint.sh /opt/emqx/etc/production-entrypoint.sh /opt/emqx/etc/stupig-healthcheck.sh
+ENTRYPOINT ["/bin/sh", "/opt/emqx/etc/production-entrypoint.sh"]
+CMD ["/opt/emqx/bin/emqx", "foreground"]
+
 FROM node:24-slim AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

@@ -352,7 +352,7 @@ describe('get_otp_cooldown', () => {
   it('allows sending when the device has no history', async () => {
     use_cooldown_row(null)
 
-    await expect(get_otp_cooldown({ identity_token: DEVICE })).resolves.toEqual({ can_send: true, next_available_at: null })
+    await expect(get_otp_cooldown({ identity_token: DEVICE })).resolves.toEqual({ can_send: true, next_available_at: null, channels: { phone: null, identity: expect.any(String) } })
   })
 
   it('reports the remaining cooldown while one is open', async () => {
@@ -361,13 +361,25 @@ describe('get_otp_cooldown', () => {
     await expect(get_otp_cooldown({ identity_token: DEVICE })).resolves.toEqual({
       can_send: false,
       next_available_at: '2026-09-11T08:00:30.000Z',
+      channels: { phone: null, identity: expect.any(String) },
     })
   })
 
   it('allows sending again once the cooldown has elapsed', async () => {
     use_cooldown_row('2026-09-11T07:59:00.000Z')
 
-    await expect(get_otp_cooldown({ identity_token: DEVICE })).resolves.toEqual({ can_send: true, next_available_at: null })
+    await expect(get_otp_cooldown({ identity_token: DEVICE })).resolves.toEqual({ can_send: true, next_available_at: null, channels: { phone: null, identity: expect.any(String) } })
+  })
+
+  it('issues keyed channels for the typed phone and the device identity', async () => {
+    use_cooldown_row(null)
+
+    const result = await get_otp_cooldown({ identity_token: DEVICE, phone: PHONE })
+
+    expect(result.channels.phone).toMatch(/^otp_cooldown:v1\.[\w-]{22}$/)
+    expect(result.channels.identity).toMatch(/^otp_cooldown_by_identity:v1\.[\w-]{22}$/)
+    expect(`${result.channels.phone}${result.channels.identity}`).not.toContain(PHONE)
+    expect(`${result.channels.phone}${result.channels.identity}`).not.toContain(DEVICE)
   })
 
   it('also matches the phone number when one is given', async () => {

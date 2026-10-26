@@ -65,8 +65,10 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           printf '%s' "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" \
             -u "$ACR_USERNAME" --password-stdin
-          # 只推 :latest：个人项目不指望镜像级回滚（回滚 = 重跑旧 commit 的 workflow），
+          # 只推 :latest / :mqtt：个人项目的历史版本回退仍靠重跑旧 commit 的 workflow，
           # 免得 ACR 里积一堆 :sha tag
+          docker build --target mqtt -t "$IMAGE:mqtt" .
+          docker push "$IMAGE:mqtt"
           docker build -t "$IMAGE:latest" .
           docker push "$IMAGE:latest"
 

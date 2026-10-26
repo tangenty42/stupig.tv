@@ -9,7 +9,7 @@
                                   └→ BroadcastChannel → 同浏览器其他页面
 ```
 
-资源名与事件类型定义于 [`server/shared/types/sync.ts`](../../server/shared/types/sync.ts)。主题前缀来自共享 settings；服务端发布器和浏览器订阅器必须使用同一规则。EMQX 的网络与权限配置见 [MQTT 部署](../deployment/mqtt.md)。
+资源名与事件类型定义于 [`server/shared/types/sync.ts`](../../server/shared/types/sync.ts)。主题前缀来自共享 settings；服务端发布器和浏览器订阅器必须使用同一规则。EMQX 允许匿名连接订阅应用主题，因此手机号、设备身份这类个人标识不进入主题与事件明文：[`server/lib/sync-channel.ts`](../../server/lib/sync-channel.ts) 用密钥化 HMAC（密钥为 JWT 密钥的域分隔子密钥，`v1.` 前缀标识当前版本）把相应资源的 id 转为 channel，`publish_refresh()` 发布其 channel 形式，浏览器无法自行推导，只能通过查询接口拿到——OTP 冷却的 channel 随 `getOtpCooldown` 响应下发，`useDataSync` 原样订阅。密钥不出服务端，可避免通过原始标识直接订阅或离线字典反查；查询接口仍会向调用者返回 channel，不防主动查询/枚举，也不代替 broker 的订阅授权。发布与查询共用同一推导，保证订阅的主题与事件一致。更换 JWT 密钥会改变 channel，客户端需重新查询和订阅；当前不提供双密钥过渡。EMQX 的网络与权限配置见 [MQTT 部署](../deployment/mqtt.md)。
 
 `useDataSync` 负责浏览器 MQTT 连接、资源订阅、跨标签消息与页面可见性变化。隐藏页面断开自己的 MQTT 连接，并通过 BroadcastChannel 与其他页面协调资源订阅；不要把它理解为数据库锁或可靠持久消息队列。连接恢复时也需要重新读取受影响的资源。
 

@@ -21,7 +21,7 @@ GitHub Ruleset 应要求 `check` 与 `migrations` 检查通过。仓库中的注
 
 创建命名空间与私有镜像仓库，从该实例的访问凭证页面取得实际 registry 和登录名。ACR 新旧个人版地址不同，不能从旧示例猜 registry；按[官方推送/拉取指南](https://help.aliyun.com/zh/acr/user-guide/use-a-container-registry-personal-edition-instance-to-push-and-pull-images)取得地址。企业版也使用实例提供的访问入口和凭据。
 
-首次上线确认 GitHub runner 可登录/推送，服务器可登录/拉取同一仓库。当前流程只维护 `:latest`，没有每次 SHA tag，也不由 ACR 自动构建。构建成功后推送；后续 SSH 部署失败不会自动把远端 ACR 的 latest 标签改回旧版本。
+首次上线确认 GitHub runner 可登录/推送，服务器可登录/拉取同一仓库。当前流程维护应用 `:latest` 和 EMQX `:mqtt`，没有每次 SHA tag，也不由 ACR 自动构建。构建成功后推送；后续 SSH 部署失败只恢复服务器本地镜像标签，不会把远端 ACR 标签改回旧版本。
 
 2026-10-25 已通过个人版 API 重新确认目标仓库 PRIVATE/NORMAL、仅一个 latest、无自动构建规则；未验证 GitHub 中的登录凭据和服务器拉取。推拉共用一组 Registry 凭据，固定发布 tag/digest 尚未实现；实际资源与云端状态见[ACR 台账](aliyun.md#acr-已确认状态)。
 
@@ -36,11 +36,11 @@ workflow 在构建前检查两项凭据非空，不再要求独立 pull 身份�
 ## CI 到部署的实际顺序
 
 1. Pull Request 和 main push 触发 Check。Node 24、pnpm 12.10.1，运行 settings 一致性、lint、Nuxt typecheck、脚本 typecheck、Vitest。
-2. 另一个 Check job 使用全新 MySQL 8.4 执行完整 SQL/TS 迁移，再跑第二遍验证；同时运行隔离的迁移框架和 Content 转换验证。CI 的存储边界夹具不代表真实生产 OSS/ESA 已验收。
+2. 独立 Check jobs 验证真实生产 MQTT 镜像的权限与重启持久化、Chromium 浏览器流程，以及全新 MySQL 8.4 的完整 SQL/TS 迁移、第二遍幂等执行、隔离迁移框架和 Content 转换。CI 的存储边界夹具不代表真实生产 OSS/ESA 已验收。
 3. main 的 Check 成功触发 Deploy，检出该次 Check 的 `head_sha`；部署同组串行，不取消正在执行的旧部署。安装发布工具时使用锁文件并禁用安装脚本。
-4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；通过后构建/推送 ACR latest，并上传 `.env.prod.incoming` 及 `docker-compose.yml.incoming`。明文不会打进镜像。
+4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；通过后构建/推送 ACR latest 与 mqtt，并上传 `.env.prod.incoming` 及 `docker-compose.yml.incoming`。明文不会打进镜像。
 5. SSH 将 `scripts/deploy/remote.sh` 交给远端 shell，备份旧 env/Compose 和旧运行镜像 ID，校验候选配置，再 pull/up。
-6. 健康门默认最多 72 次、间隔 5 秒。容器退出或重启循环立即失败；健康成功后只清理悬空镜像。
+6. 应用依赖 EMQX 凭据健康检查；远端另对两个服务依次执行健康门，默认各最多 72 次、间隔 5 秒。容器退出或重启循环立即失败；两个服务健康后只清理悬空镜像。WSS 反代切换仍需手动完成，见 [MQTT](mqtt.md)。
 7. 健康门成功后运行 `pnpm esa:deploy:prod`，同步函数变量、创建并发布本次代码版本，读回确认。目标统一来自 prod YAML 的 `esaFunction`，无需在工作流中重复函数名或回调。
 8. 无论成功或失败，清理 runner 明文 `.env.prod`，上传不含密钥的 `esa-production-receipt` artifact，保留 30 天。发布详情与首次资源准备见[函数发布](esa-functions.md)。
 
@@ -61,11 +61,11 @@ pnpm env:check
 
 ## 部署失败与回退
 
-远端脚本在候选切换后的失败路径恢复 `.env.prod.bak`、`docker-compose.yml.bak` 和 pull 前的镜像 ID，并再次检查旧容器。无旧镜像的首次部署无法恢复一个不存在的旧实例，需人工处理。自动恢复成功后 workflow 仍报告失败，便于追查原因。
+远端脚本在候选切换后的失败路径恢复 `.env.prod.bak`、`docker-compose.yml.bak` 和 pull 前的应用/broker 镜像 ID，并再次检查旧容器。首次引入托管 broker 失败时移除本次新增容器但保留卷，不操作旧 1Panel broker；无旧应用镜像的首次部署仍需人工处理。自动恢复成功后 workflow 仍报告失败，便于追查原因。
 
 数据库迁移是前向步骤，自动回退不会撤销 schema 或外部对象变更。维护迁移必须先在受控窗口执行，不能让 Deploy 的健康门替代切换计划。回退旧应用须先确认它能兼容当前数据库，必要时使用[备份恢复](../operations/backup-recovery.md)。
 
-上述自动回退只覆盖远端应用部署失败。若应用已经健康、随后 ESA 发布失败，工作流报错但应用保持新版本；检查 artifact 的阶段与版本，修正后可单独运行生产 ESA 命令。应用与函数不是原子事务，密钥轮换或不兼容协议变更需要协调窗口，不能自动回滚另一侧来掩盖问题。
+上述自动回退只覆盖远端 Compose 部署失败，不修改外部反代。若应用已经健康、随后 ESA 发布失败，工作流报错但应用保持新版本；检查 artifact 的阶段与版本，修正后可单独运行生产 ESA 命令。应用与函数不是原子事务，密钥轮换或不兼容协议变更需要协调窗口，不能自动回滚另一侧来掩盖问题。
 
 当前工作流没有 `workflow_dispatch`。需要重新交付旧提交时，使用与目标提交相符的可重跑 workflow，并复核其实际 checkout SHA；不要假定重跑最新 workflow 会自动选择旧代码。历史镜像没有永久 SHA tag，服务器成功后还会清理悬空镜像。
 

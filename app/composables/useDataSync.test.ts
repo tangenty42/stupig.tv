@@ -102,6 +102,22 @@ describe('data sync transport', () => {
     expect(client.unsubscribe).toHaveBeenCalledOnce()
   })
 
+  it('subscribes server-issued channel strings verbatim and dispatches their events', async () => {
+    const { transport, client } = await start()
+    const listener = vi.fn()
+    // Opaque server-issued channel for a personal identifier; the transport
+    // must not derive or rewrite it in any way.
+    const channel = 'otp_cooldown:v1.AAAAaaaaBBBBbbbbCCCCcc'
+
+    transport.subscribe(channel, listener)
+
+    const topics = client.subscribe.mock.calls.map(call => call[0]).flat().filter((value): value is string => typeof value === 'string')
+    expect(topics).toContain(`${settings.integrations.mqtt.topicPrefix}/${channel}`)
+
+    client.emit('message', 'topic', Buffer.from(JSON.stringify({ id: 'channel-1', type: 'refresh', resource: channel, timestamp: Date.now() })))
+    expect(listener).toHaveBeenCalledOnce()
+  })
+
   it('deduplicates nonconsecutive events across MQTT and the broadcast channel', async () => {
     const { transport, client, channel } = await start()
     const listener = vi.fn()

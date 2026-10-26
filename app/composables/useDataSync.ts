@@ -721,6 +721,9 @@ export function create_data_sync_transport(broker_url: string) {
       if (disposed) {
         return () => {}
       }
+      // Resources are used verbatim: public ids are computed by callers, and
+      // sensitive ids arrive as opaque server-issued channel strings from the
+      // API, so there is no client-side derivation to apply here.
       const is_new_resource = ! listeners.has(resource)
 
       if (is_new_resource) {
