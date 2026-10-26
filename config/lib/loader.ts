@@ -175,11 +175,10 @@ export function load_config(env = environment()) {
     delete deployment.esaFunction
   }
   const value = parse_config(deployment_config_schema, interpolate_config(deployment, env))
-  if (node_env === 'production' && value.app.otp.debug) {
-    throw new Error('Invalid configuration: app.otp.debug: OTP debug mode must be disabled in production')
-  }
-  if (node_env !== 'development' && value.app.captcha.debug) {
-    throw new Error('Invalid configuration: app.captcha.debug: CAPTCHA debug mode is only allowed in development')
+  for (const kind of ['otp', 'captcha'] as const) {
+    if (node_env !== 'development' && value.app[kind].debug) {
+      throw new Error(`Invalid configuration: app.${kind}.debug: debug mode is only allowed in development`)
+    }
   }
 
   return merge_config_layers(settings, value)

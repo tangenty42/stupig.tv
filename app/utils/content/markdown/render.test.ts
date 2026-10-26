@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { content_attachment_markdown, content_folder_markdown } from '~/utils/content/attachment-drag'
 import { create_story_markdown } from '~/utils/content/markdown'
 import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
+import { sanitize_story_html } from '~/utils/content/markdown/sanitize'
 import { render_story_cover } from '~/utils/content/story-cover'
 
 function attachment(file_name: string, is_image: boolean): ContentStoryAttachment {
@@ -26,7 +27,7 @@ it('uses the shared cover renderer for story references, including dimensions an
     stories: () => [{ id: 2, title: 'Other', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null,
       cover: 'cover.png', cover_label: null, cover_url: '/cover', cover_version: 'v2', cover_image: image }] })
   const html = md.render('[](content://Other)', { images: [], bilibili_hrefs: [] })
-  expect(html).toContain(render_story_cover('/cover', 'cover.png', image))
+  expect(html).toContain(sanitize_story_html(render_story_cover('/cover', 'cover.png', image)))
 })
 
 /** A story holding a `cards` gallery plus a few neighbours. */

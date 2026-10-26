@@ -46,10 +46,12 @@ export async function verify_captcha(params: CaptchaParams | undefined) {
       throw new Error(`HTTP ${response.status}`)
     }
     result = await response.json() as typeof result
+    if (! result || typeof result.result !== 'string' || ! result.result) {
+      throw new Error('Invalid captcha response')
+    }
   }
   catch {
-    // Aliyun captcha service is down; let it pass (fail-open)
-    return
+    throw new ApiError(503, '人机验证服务暂时不可用，请稍后重试')
   }
 
   if (result.result !== 'success') {

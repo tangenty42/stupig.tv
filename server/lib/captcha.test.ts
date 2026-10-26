@@ -120,19 +120,19 @@ describe('verify_captcha', () => {
     await expect(verify_captcha(valid_params)).rejects.toMatchObject({ statusCode: 403, message: '汝果真人机乎？！' })
   })
 
-  it('fails open when the captcha service is unreachable', async () => {
+  it('refuses when the captcha service is unreachable', async () => {
     respond_with(null, { throws: true })
 
-    await expect(verify_captcha(valid_params)).resolves.toBeUndefined()
+    await expect(verify_captcha(valid_params)).rejects.toMatchObject({ statusCode: 503, message: '人机验证服务暂时不可用，请稍后重试' })
   })
 
-  it('fails open on a non-2xx response', async () => {
+  it('refuses on a non-2xx response', async () => {
     respond_with(null, { ok: false, status: 502 })
 
-    await expect(verify_captcha(valid_params)).resolves.toBeUndefined()
+    await expect(verify_captcha(valid_params)).rejects.toMatchObject({ statusCode: 503 })
   })
 
-  it('fails open when the response body is not JSON', async () => {
+  it('refuses when the response body is not JSON', async () => {
     fetch_mock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -141,6 +141,12 @@ describe('verify_captcha', () => {
       },
     })
 
-    await expect(verify_captcha(valid_params)).resolves.toBeUndefined()
+    await expect(verify_captcha(valid_params)).rejects.toMatchObject({ statusCode: 503 })
+  })
+
+  it.each([null, {}, { result: null }, { result: '' }, { result: 1 }])('refuses malformed upstream results: %j', async (body) => {
+    respond_with(body)
+
+    await expect(verify_captcha(valid_params)).rejects.toMatchObject({ statusCode: 503 })
   })
 })

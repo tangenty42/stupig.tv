@@ -29,7 +29,7 @@ interface SendOtpSmsInput {
 }
 
 export async function send_otp_sms(input: SendOtpSmsInput) {
-  if (config.app.otp.debug) {
+  if (process.env.NODE_ENV === 'development' && config.app.otp.debug) {
     return
   }
 
@@ -45,7 +45,7 @@ export async function send_otp_sms(input: SendOtpSmsInput) {
     codeLength: 6,
     codeType: 1,
     validTime: config.app.otp.expiresMinutes * 60,
-    returnVerifyCode: config.app.otp.debug,
+    returnVerifyCode: false,
     outId: input.out_id,
   })
 
@@ -70,7 +70,7 @@ interface CheckOtpSmsInput {
 }
 
 export async function check_otp_sms(input: CheckOtpSmsInput) {
-  if (config.app.otp.debug) {
+  if (process.env.NODE_ENV === 'development' && config.app.otp.debug) {
     return
   }
 

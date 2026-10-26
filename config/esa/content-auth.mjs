@@ -1,5 +1,6 @@
 /* global ResponseBypass: readonly */
-import { createHash, createHmac, randomUUID } from 'node:crypto'
+import { Buffer } from 'node:buffer'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 
 const TTL_SECONDS = 300
 const CLOCK_SKEW_SECONDS = 30
@@ -23,47 +24,56 @@ function trace_bypass(request, stage, allowed = null, status = null) {
   }
 }
 
+/** @param {string | null} actual @param {string} expected */
+function equal_signature(actual, expected) {
+  return typeof actual === 'string' && /^[a-f\d]{64}$/.test(actual)
+    && timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'))
+}
+
+/** @param {string} privateKey @param {URL} url @param {string} issuedAt @param {string} expiresAt @param {string} nonce */
+export function content_url_signature(privateKey, url, issuedAt, expiresAt, nonce) {
+  return createHmac('sha256', privateKey).update(JSON.stringify([
+    'content-url-v2', url.origin, url.pathname, ['GET', 'HEAD'], issuedAt, expiresAt, nonce,
+    url.searchParams.get('response-content-disposition') ?? '', url.searchParams.get('access') ?? '',
+  ])).digest('hex')
+}
+
 /** @param {string} privateKey @param {number} ttlSeconds @param {Request} request */
 export function authorize_content_request(privateKey, ttlSeconds, request) {
   const deny = (status = 403) => ({ status, url: null, disposition: null })
   if (! privateKey || privateKey === 'REPLACE_WITH_RANDOM_SECRET')
     return deny(503)
+  if (! Number.isSafeInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 3600) {
+    return deny(503)
+  }
   if (! ['GET', 'HEAD'].includes(request.method))
     return deny(405)
   const url = new URL(request.url)
   const headerName = 'response-content-disposition'
-  if (url.searchParams.getAll('auth_key').length !== 1
+  if (url.username || url.password || url.hash || url.searchParams.getAll('auth_key').length !== 1
     || url.searchParams.getAll(headerName).length > 1
     || url.searchParams.getAll('access').length > 1
     || [... url.searchParams.keys()].some(key => ! ['auth_key', headerName, 'access'].includes(key))) {
     return deny()
   }
-  const match = /^(\d{10})-([a-z\d]{1,64})-(\d{1,20})-([a-f\d]{32})$/i.exec(url.searchParams.get('auth_key') ?? '')
-  if (! match)
-    return deny()
-  const [, timestamp, rand, uid, signature] = match
-  const issuedAt = Number(timestamp)
-  const now = Math.floor(Date.now() / 1000)
-  if (issuedAt > now + CLOCK_SKEW_SECONDS || now >= issuedAt + ttlSeconds)
-    return deny()
-  const hash = createHash('md5').update([url.pathname, timestamp, rand, uid, privateKey].join('-')).digest('hex')
-  if (hash !== signature)
-    return deny()
   const disposition = url.searchParams.get(headerName)
   const access = url.searchParams.get('access')
   if (disposition !== null && ! /^(?:attachment|inline); filename\*=UTF-8''(?:[\w.~-]|%[a-f\d]{2})+$/i.test(disposition))
     return deny()
-  if (access !== null
-    ? (! /^[\w-]{1,2048}$/.test(access) || uid !== '1' || content_signature_metadata(disposition ?? '', access) !== rand)
-    : (uid !== '0' || (disposition === null ? rand.length === 64 : content_signature_metadata(disposition) !== rand))) {
+  if (access !== null && ! /^[\w-]{1,2048}$/.test(access))
+    return deny()
+  const token = url.searchParams.get('auth_key') ?? ''
+  const now = Math.floor(Date.now() / 1000)
+  const current = /^v2-(\d{10})-(\d{10})-([a-f\d]{32})-([a-f\d]{64})$/.exec(token)
+  if (! current)
+    return deny()
+  const [, issuedAt, expiresAt, nonce, signature] = current
+  if (Number(issuedAt) > now + CLOCK_SKEW_SECONDS || now >= Number(expiresAt)
+    || Number(expiresAt) <= Number(issuedAt) || Number(expiresAt) - Number(issuedAt) > ttlSeconds
+    || ! equal_signature(signature, content_url_signature(privateKey, url, issuedAt, expiresAt, nonce))) {
     return deny()
   }
   return { status: 200, url, disposition }
-}
-
-/** @param {string} disposition @param {string | undefined} access */
-export function content_signature_metadata(disposition, access) {
-  return createHash('sha256').update(access === undefined ? disposition : JSON.stringify([disposition, access])).digest('hex')
 }
 
 /** A nonce-bound acknowledgement prevents stale/cached authorization replies. */
@@ -105,7 +115,7 @@ export function create_content_authorizer(privateKey, endpoint, timeoutMs = 5000
       await response.body?.cancel()
       if (response.status === 403)
         return 403
-      return response.status === 204 && proof === content_authorization_proof(privateKey, nonce, request.url, request.method) ? 200 : 503
+      return response.status === 204 && equal_signature(proof, content_authorization_proof(privateKey, nonce, request.url, request.method)) ? 200 : 503
     }
     catch { return 503 }
     finally { clearTimeout(timer) }

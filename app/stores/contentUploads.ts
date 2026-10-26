@@ -9,8 +9,6 @@ import { createContentUploadResource } from '~/composables/useContentUploadResou
 import { accept_attachment_snapshot } from '~/utils/content/attachment-snapshot'
 import { create_upload_runtime } from '~/utils/content/upload-runtime'
 
-export type { UploadEntry } from '~/composables/useContentUploadAdmission'
-
 /** Durable state comes from the API; File and SDK drivers remain client-only closures. */
 export function useContentUploadsStore(scope: number) {
   return defineStore(`content-uploads:${scope}`, () => {
