@@ -50,7 +50,7 @@ export default async function setup(_playwright: FullConfig) {
     throw new Error('Browser tests require a local MQTT broker')
   config.mqtt.host = local.MQTT_HOST!
   config.mqtt.port = Number(local.MQTT_TCP_PORT)
-  config.mqtt.web.wsUrl = `ws://localhost:${local.MQTT_WS_PORT}/mqtt`
+  config.mqtt.web.wsUrl = `ws://${config.mqtt.host}:${local.MQTT_WS_PORT}/mqtt`
   config.app.auth.jwt.secret = environment.JWT_SECRET
   config.app.otp.debug = config.app.captcha.debug = true
   config.aliyun.oss = { region: 'oss-cn-shenzhen', endpoint: 'https://oss.invalid', bucket: 'e2e', publicBaseUrl: 'https://delivery.invalid',
@@ -117,6 +117,7 @@ export default async function setup(_playwright: FullConfig) {
       '@config/loader': unix(resolve(root, 'tests/support/e2e-config.ts')),
       '@server/lib/aliyun-oss': unix(resolve(root, 'tests/support/e2e-storage.ts')),
       '@server/lib/captcha': unix(resolve(root, 'tests/support/e2e-captcha.ts')),
+      '@server/lib/sms': unix(resolve(root, 'tests/support/e2e-sms.ts')),
       '@shared/settings': unix(settings_path),
     }
     await writeFile(resolve(directory, 'nuxt.config.ts'), `import base from '${unix(resolve(root, 'nuxt.config'))}'

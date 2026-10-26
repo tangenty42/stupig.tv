@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
-import { randomUUID } from 'node:crypto'
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
+import { create_story, login, markdown, ready, test } from '../support/e2e-browser'
 
 async function local_storage(page: Page) {
   // Preserve the production HTTPS bucket/key/part grant checks. Only the OSS
@@ -18,41 +18,6 @@ async function local_storage(page: Page) {
     })
     await route.fulfill({ response, headers: { ... response.headers(), ... cors } })
   })
-}
-
-async function login(page: Page) {
-  await page.goto('/content')
-  await ready(page)
-  await page.getByRole('button', { name: '登录 / 注册', exact: true }).click()
-  const form = page.locator('#login-password-form')
-  await form.locator('input[name="username_or_phone"]').click()
-  await form.locator('input[name="username_or_phone"]').fill('admin')
-  await form.locator('input[type="password"]').click()
-  await form.locator('input[type="password"]').fill('AaAaAaAa888')
-  await form.locator('input[type="password"]').press('Tab')
-  await expect(form.locator('input[type="password"]')).toHaveValue('AaAaAaAa888')
-  await page.getByRole('button', { name: '立即登录', exact: true }).click()
-  await expect(page.getByRole('button', { name: '新建', exact: true })).toBeVisible()
-}
-
-async function ready(page: Page) {
-  await page.waitForFunction(() => (window as unknown as { __STUPIG_E2E_READY__?: () => boolean }).__STUPIG_E2E_READY__?.())
-}
-
-async function create_story(page: Page) {
-  const title = `E2E${randomUUID().slice(0, 8)}`
-  await page.goto('/content/new/edit')
-  await ready(page)
-  const editor = page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true })
-  await expect(editor).toBeVisible()
-  await editor.fill(markdown(title, 'E2E initial body'))
-  await page.getByRole('button', { name: '创建', exact: true }).click()
-  await expect(page).toHaveURL(/\/content\/\d+(?:\/edit)?$/)
-  return { title, id: /\/content\/(\d+)/.exec(page.url())![1] }
-}
-
-function markdown(title: string, body: string) {
-  return `---\ntitle: ${title}\nlabel: #人上人\ntime: 2026/01/01\n---\n\n${body}\n`
 }
 
 test('password login remains authenticated after a page reload', async ({ page }) => {
