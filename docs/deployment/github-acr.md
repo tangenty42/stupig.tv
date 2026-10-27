@@ -17,6 +17,8 @@
 
 GitHub Ruleset 应要求 `check` 与 `migrations` 检查通过。仓库中的注释记录曾配置过规则，但本轮未在线读取 Ruleset，应在仓库控制台确认当前要求。
 
+Actions 策略允许 GitHub 官方 Action 和 `pnpm/action-setup@*`，并要求 Action 固定到完整提交 SHA。工作流使用的 Action 均固定 SHA；更新时应核对上游提交。
+
 ## ACR 准备
 
 创建命名空间与私有镜像仓库，从该实例的访问凭证页面取得实际 registry 和登录名。ACR 新旧个人版地址不同，不能从旧示例猜 registry；按[官方推送/拉取指南](https://help.aliyun.com/zh/acr/user-guide/use-a-container-registry-personal-edition-instance-to-push-and-pull-images)取得地址。企业版也使用实例提供的访问入口和凭据。
@@ -37,7 +39,7 @@ workflow 在构建前检查两项凭据非空，不再要求独立 pull 身份�
 
 1. Pull Request 和非纯文档的 main push 触发 Check。Node 24、pnpm 12.10.1，运行 settings 一致性、lint、Nuxt typecheck、脚本 typecheck、Vitest；纯文档 PR 跳过应用检查，纯文档 main push 不触发 Check 或 Deploy。
 2. 独立 Check jobs 验证真实生产 MQTT 镜像的权限与重启持久化、Chromium 浏览器流程，以及全新 MySQL 8.4 的完整 SQL/TS 迁移、第二遍幂等执行、隔离迁移框架和 Content 转换。main 可在确认 PR 所有检查成功且代码树一致时复用这些结果；否则完整重跑。CI 的存储边界夹具不代表真实生产 OSS/ESA 已验收。
-3. main 的 Check 成功触发 Deploy，检出该次 Check 的 `head_sha`；部署同组串行，不取消正在执行的旧部署。安装发布工具时使用锁文件并禁用安装脚本。
+3. main 的 Check 成功触发 Deploy，检出该次 Check 的 `head_sha`；部署仅接受本仓库 `push` 触发的 Check，拒绝 PR 触发的 run。部署同组串行，不取消正在执行的旧部署。安装发布工具时使用锁文件并禁用安装脚本。
 4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；通过后构建/推送 ACR latest 与 mqtt，并上传 `.env.prod.incoming` 及 `docker-compose.yml.incoming`。明文不会打进镜像。
 5. SSH 将 `scripts/deploy/remote.sh` 交给远端 shell，备份旧 env/Compose 和旧运行镜像 ID，校验候选配置，再 pull/up。
 6. 应用依赖 EMQX 凭据健康检查；远端另对两个服务依次执行健康门，默认各最多 72 次、间隔 5 秒。容器退出或重启循环立即失败；两个服务健康后只清理悬空镜像。WSS 反代切换仍需手动完成，见 [MQTT](mqtt.md)。
