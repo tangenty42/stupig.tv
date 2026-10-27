@@ -70,7 +70,7 @@ function template_tag_from_path(path: string): TemplateTag {
   throw new Error(`Unrecognized env template name: ${name}`)
 }
 
-function collect_assignments(source: string, source_name: string): EnvAssignment[] {
+export function collect_assignments(source: string, source_name: string): EnvAssignment[] {
   const lines = source.split(/\r?\n/)
   const assignments: EnvAssignment[] = []
   const keys = new Set<string>()

@@ -37,7 +37,9 @@ pnpm env:encrypt
 pnpm env:check
 ```
 
-plan 只显示脱敏目标；check 使用生产发布身份做云端只读检查，不发布。提交 YAML、必要模板和 `.env.prod.gpg`；GitHub `ENV_PASSPHRASE` 与本机加密口令一致。本机口令优先从进程环境读取，其次取 `.env.dev`，不放进生产应用配置。
+plan 只显示脱敏目标；check 使用生产发布身份做云端只读检查，不发布。提交 YAML、必要模板和 `.env.prod.gpg`；GitHub `ENV_PASSPHRASE` 与本机加密口令一致。本机口令优先从进程环境读取，其次取 `.env.dev`，不放进生产应用配置。口令应由密码管理器生成高熵随机值；批处理使用 stdin 传给 GPG，不放入命令行参数，且不支持换行或 NUL。加密固定 AES-256、SHA-256 和迭代加盐 S2K（count 65011712）。
+
+更换口令时先核对本机实际使用的来源，重新加密并运行 `env:check`，再协调 GitHub Secret 与密文交付。两者不一致期间的生产部署会在解密阶段失败。旧密文仍存在于 Git 历史；若旧口令可能泄露或太弱，仅更换口令不能撤销旧密文中的凭据，应按需轮换对应生产凭据。
 
 ## 运行时选哪个文件
 

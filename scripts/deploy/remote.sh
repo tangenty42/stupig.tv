@@ -41,6 +41,44 @@ compose() {
   docker compose --env-file "$active_env_file" "$@"
 }
 
+# Old rollback files may still contain publisher credentials. Only rewrite a
+# simple, fully understood single-line dotenv file; otherwise preserve it for
+# manual cleanup. This runs after the new release is healthy, not during rollback.
+sanitize_backup() {
+  backup=$1
+  [ -f "$backup" ] || return 0
+  temporary=$(mktemp "${backup}.sanitized.XXXXXX") || return 1
+  if awk '
+    /^[[:space:]]*(#|$)/ { print; next }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (! match(line, /^[[:space:]]*(export[[:space:]]+)?[[:alnum:]_.-]+[[:space:]]*=/)) exit 2
+      prefix = substr(line, 1, RLENGTH)
+      key = prefix
+      sub(/^[[:space:]]*(export[[:space:]]+)?/, "", key)
+      sub(/[[:space:]]*=.*/, "", key)
+      value = substr(line, RLENGTH + 1)
+      sub(/^[[:space:]]*/, "", value)
+      quote = substr(value, 1, 1)
+      if (quote == sprintf("%c", 39) || quote == sprintf("%c", 34) || quote == sprintf("%c", 96)) {
+        closed = 0
+        for (i = 2; i <= length(value); i++) {
+          character = substr(value, i, 1)
+          if (character == "\\") exit 2
+          if (character == quote) { closed = 1; break }
+        }
+        if (! closed || substr(value, i + 1) !~ /^[[:space:]]*(#.*)?$/) exit 2
+      }
+      if (key !~ /^ALIYUN_ESA_PUBLISH_/) print
+    }
+  ' "$backup" > "$temporary" && chmod 600 "$temporary" && mv -f "$temporary" "$backup"; then
+    return 0
+  fi
+  rm -f "$temporary"
+  return 1
+}
+
 # 容器名必须问 compose，不能写死：容器名由 compose 里有没有 container_name 决定
 # （这份 compose 是 CD 送来的，也可能被服务器上的人改过），写死名字会让健康门永远
 # 看不到容器 —— 2026-10-09 第一次上线时就是这样：容器其实健康，门却超时判失败，
@@ -223,6 +261,11 @@ if [ "$readiness" -eq 0 ]; then
   fi
   docker image prune -f || echo "清理悬空镜像失败，忽略此项" >&2
   deployment_succeeded=1
+  for backup in .env.prod.bak .env.legacy.bak; do
+    if ! sanitize_backup "$backup"; then
+      echo "无法安全清理 $backup 中的发布凭据；请手动检查该备份。" >&2
+    fi
+  done
   echo "部署完成：容器已就绪"
   exit 0
 fi
