@@ -39,6 +39,10 @@ describe('tRPC application error transport', () => {
     const error = Object.assign(new Error('引用目标已变更'), { data: { httpStatus: 400, applicationError } })
     await expect(useTrpcClient().call(Promise.reject(error))).rejects.toMatchObject({ status: 400, ... applicationError })
   })
+  it.each(['REF_HISTORY_UNAVAILABLE'] as const)('preserves %s through API error normalization', async (code) => {
+    const error = Object.assign(new Error('引用需要处理'), { data: { httpStatus: 409, applicationError: { code } } })
+    await expect(useTrpcClient().call(Promise.reject(error))).rejects.toMatchObject({ status: 409, code })
+  })
   it('keeps the same typed details through the XHR path and its second normalization', async () => {
     mocks.response = { error: { message: '引用目标已变更', data: { httpStatus: 400, applicationError } } }
     await expect(useTrpcClient().upload('profile.uploadAvatar', new FormData())).rejects.toMatchObject({ status: 400, ... applicationError })

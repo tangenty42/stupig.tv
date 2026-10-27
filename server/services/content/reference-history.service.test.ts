@@ -175,6 +175,25 @@ describe('transactional reference history', () => {
     expect(state.writes).toEqual([])
   })
 
+  it('refuses to save when the reference history is unavailable', async () => {
+    state.story.namespace_revision = 5
+    state.story.namespace_floor = 3
+    await expect(update_story(1, state.story.markdown, 7, true, { base_namespace_revision: 0, base_title_revision: 0 }))
+      .rejects.toMatchObject({ statusCode: 409, reference_code: 'REF_HISTORY_UNAVAILABLE' })
+    expect(state.writes).toEqual([])
+    expect(state.rolled_back).toBe(1)
+    await expect(update_story(1, state.story.markdown, 7, true, { base_namespace_revision: 0, base_title_revision: 0 }, true))
+      .resolves.toMatchObject({ revision: 8, baseline_unavailable: { namespace: true, title: false } })
+  })
+
+  it('keeps revision and private-content checks when history is confirmed', async () => {
+    const baseline = { base_namespace_revision: null, base_title_revision: null }
+    await expect(update_story(1, state.story.markdown, 6, true, baseline, true)).rejects.toMatchObject({ statusCode: 409 })
+    state.story.markdown += '\n<good>secret</good>'
+    await expect(update_story(1, state.story.markdown, 7, false, baseline, true)).rejects.toMatchObject({ statusCode: 403 })
+    expect(state.writes).toEqual([])
+  })
+
   it('replays at save even when the client missed every namespace event', async () => {
     const old = state.story.markdown
     await with_namespace_change(1, async () => {
@@ -216,35 +235,39 @@ describe('transactional reference history', () => {
     expect(state.rolled_back).toBe(1)
   })
 
-  it('rejects same-name replacement before any save writes and keeps the old baseline', async () => {
+  it('allows an attachment reference to point to a same-name replacement', async () => {
     state.story.namespace_revision = 2
     state.journals = [{ scope_id: 1, revision: 1, changes: [{ node_id: 11, from: 'old.png', to: null }] }, { scope_id: 1, revision: 2, changes: [] }]
     state.nodes[0]!.id = 99
     const draft = await rewrite_draft_references(1, state.story.markdown, { base_namespace_revision: 0, base_title_revision: 0 }, true)
-    expect(draft.base_namespace_revision).toBe(0)
-    await expect(update_story(1, state.story.markdown, 7, true, { base_namespace_revision: 0, base_title_revision: 0 })).rejects.toMatchObject({ statusCode: 409, public_data: { code: 'REF_TARGET_REPLACED', details: { namespace_revision: 2 } } })
-    expect(state.story.revision).toBe(7)
-    expect(state.writes).toEqual([])
-    expect(state.events).toEqual([])
-    expect(state.rolled_back).toBe(1)
-    // Explicit confirmation advances the baseline to the reviewed current version.
-    await expect(update_story(1, state.story.markdown, 7, true, { base_namespace_revision: 2, base_title_revision: 0 })).resolves.toMatchObject({ revision: 8 })
+    expect(draft.base_namespace_revision).toBe(2)
+    expect(draft.diagnostics[0]).toMatchObject({ reason: 'replaced', kind: 'attachment' })
+    await expect(update_story(1, state.story.markdown, 7, true, { base_namespace_revision: 0, base_title_revision: 0 })).resolves.toMatchObject({ revision: 8, namespace_revision: 2 })
   })
 
-  it('pins a deleted reference before recreation, so the later new owner cannot bypass review', async () => {
+  it('allows saving a dangling attachment reference and later follows the same name', async () => {
     state.story.namespace_revision = 1
     state.journals = [{ scope_id: 1, revision: 1, changes: [{ node_id: 11, from: 'old.png', to: null }] }]
     state.nodes = []
     const baseline = { base_namespace_revision: 0, base_title_revision: 0 }
     const dangling = await rewrite_draft_references(1, state.story.markdown, baseline, true)
-    expect(dangling.base_namespace_revision).toBe(0)
+    expect(dangling.base_namespace_revision).toBe(1)
     expect(dangling.diagnostics[0]?.reason).toBe('missing')
+    await expect(update_story(1, state.story.markdown, 7, true, baseline)).resolves.toMatchObject({ revision: 8 })
     state.story.namespace_revision = 2
     state.nodes = [{ id: 99, file_name: 'old.png', is_folder: 0, object_key: 'new-owner', version: 'v2' }]
     state.journals.push({ scope_id: 1, revision: 2, changes: [] })
     const recreated = await rewrite_draft_references(1, dangling.markdown, dangling, true)
-    expect(recreated.diagnostics[0]?.reason).toBe('replaced')
-    expect(recreated.base_namespace_revision).toBe(0)
+    expect(recreated.diagnostics).toEqual([])
+    expect(recreated.base_namespace_revision).toBe(2)
+  })
+
+  it('still requires confirmation for a same-name replacement of a referenced story', async () => {
+    state.title_revision = 1
+    state.journals = [{ scope_id: 0, revision: 1, changes: [{ node_id: 10, from: '新标题', to: null }] }]
+    const markdown = `${state.story.markdown}\n[](content://新标题)`
+    await expect(update_story(1, markdown, 7, true, { base_namespace_revision: 0, base_title_revision: 0 }))
+      .rejects.toMatchObject({ statusCode: 409, public_data: { code: 'REF_TARGET_REPLACED' } })
     expect(state.writes).toEqual([])
   })
 

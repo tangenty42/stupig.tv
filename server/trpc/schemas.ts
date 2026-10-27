@@ -100,6 +100,7 @@ export const api_schema = {
     update_story: public_id_input.extend(content_story_update.shape).extend({
       base_namespace_revision: z.number().int().nonnegative().nullable().default(null),
       base_title_revision: z.number().int().nonnegative().nullable().default(null),
+      confirm_reference_history: z.boolean().default(false),
     }),
     rewrite_draft_references: public_id_input.extend({
       markdown: markdown_input.or(z.literal('')),

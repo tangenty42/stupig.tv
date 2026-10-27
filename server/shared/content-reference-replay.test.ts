@@ -7,6 +7,18 @@ const catalogs = {
 }
 
 describe('reference journal replay', () => {
+  it('follows the rename of a same-name attachment recreated after deletion', () => {
+    const result = replay_content_references('[](att://old.png)', {
+      attachment_targets: [{ id: 2, name: 'new.png' }], title_targets: [], titles: [],
+      attachments: [
+        { revision: 1, changes: [{ node_id: 1, from: 'old.png', to: null }] },
+        { revision: 2, changes: [] },
+        { revision: 3, changes: [{ node_id: 2, from: 'old.png', to: 'new.png' }] },
+      ],
+    })
+    expect(result.markdown).toBe('[](att://new.png)')
+    expect(result.diagnostics[0]).toMatchObject({ target: 'new.png', reason: 'replaced' })
+  })
   it('replays live definition destinations with disjoint patches and detects replacement at the definition', () => {
     const markdown = '[picture][p] [story][s]\r\n\r\n[p]: att://A/a.png "keep"\r\n[s]: content://Old\r\n[unused]: att://A/a.png'
     const result = replay_content_references(markdown, {
@@ -44,18 +56,18 @@ describe('reference journal replay', () => {
     expect(result.changes).toHaveLength(4)
   })
 
-  it('detects a deleted target recreated under the same name, and stops following its new owner', () => {
+  it('follows a recreated attachment while preserving story replacement diagnostics', () => {
     const result = replay_content_references('[](att://old) [](content://旧标题)', {
-      attachment_targets: [{ id: 99, name: 'old' }], title_targets: [{ id: 88, name: '旧标题' }],
+      attachment_targets: [{ id: 77, name: 'new' }], title_targets: [{ id: 88, name: '旧标题' }],
       attachments: [
         { revision: 1, changes: [{ node_id: 1, from: 'old', to: null }] },
         { revision: 3, changes: [{ node_id: 77, from: 'old', to: 'new' }] },
       ],
       titles: [{ revision: 1, changes: [{ node_id: 4, from: '旧标题', to: null }] }],
     })
-    expect(result.markdown).toBe('[](att://old) [](content://旧标题)')
+    expect(result.markdown).toBe('[](att://new) [](content://旧标题)')
     expect(result.diagnostics).toEqual([
-      { kind: 'attachment', target: 'old', from: 3, to: 12, line: 1, reason: 'replaced' },
+      { kind: 'attachment', target: 'new', from: 3, to: 12, line: 1, reason: 'replaced' },
       { kind: 'story', target: '旧标题', from: 17, to: 30, line: 1, reason: 'replaced' },
     ])
   })

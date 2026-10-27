@@ -94,6 +94,7 @@ export const content_router = router({
         input.base_revision,
         has_permission(ctx.auth_user, 'content_private', 'read'),
         { base_namespace_revision: input.base_namespace_revision, base_title_revision: input.base_title_revision },
+        input.confirm_reference_history,
       )
     }),
 

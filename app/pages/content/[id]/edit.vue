@@ -24,7 +24,7 @@
             :label="is_edit ? '保存' : '创建'"
             size="small"
             :loading="save_pending"
-            :disabled="save_pending || reference_rewrite_pending"
+            :disabled="save_pending || reference_rewrite_pending || ! tab_writable"
             @click="on_save_click"
           >
             <template #icon>
@@ -38,7 +38,7 @@
         <MyContentMarkdownEditor
           ref="markdown_editor"
           v-model="markdown"
-          :readonly="reference_rewrite_pending"
+          :readonly="reference_rewrite_pending || ! tab_writable"
           :story-id="is_edit ? story!.id : null"
           :attachments="stored_attachments"
           :stories="existing_stories ?? []"
@@ -48,20 +48,20 @@
           @attachment-drop-outside="on_attachment_drop_outside"
         >
           <template #diagnostics>
-            <div v-if="reference_review && (reference_review.baseline_unavailable.namespace || reference_review.baseline_unavailable.title || reference_review.diagnostics.some(item => item.reason === 'replaced'))" class="shrink-0 rounded-sm border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
-              <p v-if="reference_review.baseline_unavailable.namespace || reference_review.baseline_unavailable.title">
-                这份草稿的部分引用历史不可用，请核对引用目标后保存。
+            <p v-if="! tab_writable" class="rounded-sm bg-slate-50 p-2 text-xs text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
+              {{ tab_lock_unavailable ? '当前浏览器不支持安全的多标签页草稿同步，请使用支持 Web Locks 的浏览器。' : '正在同步其他标签页的草稿；切回此页面后即可继续编辑。' }}
+            </p>
+            <div v-if="reference_review" class="shrink-0 rounded-sm border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
+              <p v-if="reference_review.diagnostics.some(item => item.kind === 'story' && item.reason === 'replaced')">
+                以下档案已被删除并同名重建，保存前需要确认：
               </p>
-              <p v-if="reference_review.diagnostics.some(item => item.reason === 'replaced')">
-                以下目标已被删除并同名重建，保存前需要确认：
-              </p>
-              <p v-for="item in reference_review.diagnostics.filter(item => item.reason === 'replaced')" :key="`${item.from}:${item.kind}`">
+              <p v-for="item in reference_review.diagnostics.filter(item => item.kind === 'story' && item.reason === 'replaced')" :key="`${item.from}:${item.kind}`">
                 第 {{ item.line }} 行：{{ item.target }}（目标已变更）
               </p>
-              <p v-if="reference_review.diagnostics.some(item => item.reason === 'replaced') && ! reference_review_can_confirm(reference_review)">
-                请先移除或修复不存在的目标，再确认同名目标。
+              <p v-for="item in reference_review.diagnostics.filter(item => item.reason === 'missing')" :key="`${item.from}:${item.kind}`">
+                第 {{ item.line }} 行：{{ item.target }}（目标不存在）
               </p>
-              <Button v-if="reference_review.diagnostics.some(item => item.reason === 'replaced')" label="确认引用当前同名目标" :disabled="! reference_review_can_confirm(reference_review)" size="small" text @click="confirm_reference_targets" />
+              <Button label="确认当前引用目标" :disabled="! tab_writable || ! reference_review_can_confirm(reference_review)" size="small" text @click="confirm_reference_targets" />
             </div>
           </template>
           <template #toolbar-start>
@@ -83,7 +83,7 @@
                 severity="danger"
                 class="!px-1.5 !py-1 !text-xs"
                 :loading="discard_draft_pending"
-                :disabled="discard_draft_pending"
+                :disabled="discard_draft_pending || ! tab_writable"
                 @click="confirm_abandon_draft"
               />
             </div>
@@ -117,6 +117,20 @@
       档案不存在或已被删除
     </div>
 
+    <MyDialog v-model:visible="reference_history_warning_visible" header="引用历史不可用" :pending="save_pending">
+      <p class="text-sm text-slate-600 dark:text-slate-300">
+        这份草稿的部分引用历史已不可用，无法自动更新这段时间内变化的引用。请核对当前正文中的引用，确认后将按当前内容继续保存
+      </p>
+      <template #footer>
+        <Button label="取消" severity="secondary" text :disabled="save_pending" @click="reference_history_warning_visible = false" />
+        <Button label="继续保存" :loading="save_pending" :disabled="save_pending || reference_rewrite_pending || ! tab_writable" @click="confirm_reference_history_save">
+          <template #icon>
+            <MyIcon name="lucide:check" />
+          </template>
+        </Button>
+      </template>
+    </MyDialog>
+
     <MyDialog
       v-model:visible="draft_conflict_visible"
       header="版本冲突"
@@ -124,7 +138,7 @@
       <div class="space-y-3 text-sm text-slate-600 dark:text-slate-300">
         <p>这份自动保存的草稿基于较旧的数据库版本，继续编辑可能覆盖其他人已保存的修改！</p>
         <p v-if="pending_conflict_draft" class="text-xs text-slate-500 dark:text-slate-400">
-          （本地草稿保存于 {{ datetime_format(pending_conflict_draft.saved_at, time_context.timezone) }}）
+          本地草稿保存于 {{ datetime_format(pending_conflict_draft.saved_at, time_context.timezone) }}
         </p>
       </div>
 
@@ -274,8 +288,8 @@ const editing = useStoryEditSession({
   toast: { ok, error }, confirm_require,
 })
 const { story, private_blocked, page_disposed, draft_storage_error, draft_dirty,
-  draft_status_label, save_pending, reference_rewrite_pending, delete_pending, draft_conflict_visible, pending_conflict_draft, discard_draft_pending,
-  reference_review, confirm_reference_targets, confirm_abandon_draft, use_database_version, restore_conflicting_draft,
+  draft_status_label, save_pending, reference_rewrite_pending, tab_writable, tab_lock_unavailable, delete_pending, draft_conflict_visible, pending_conflict_draft, discard_draft_pending,
+  reference_review, reference_history_warning_visible, confirm_reference_history_save, confirm_reference_targets, confirm_abandon_draft, use_database_version, restore_conflicting_draft,
   on_save_click, confirm_delete_story } = editing
 
 await editing.load()

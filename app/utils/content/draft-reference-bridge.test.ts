@@ -62,11 +62,12 @@ describe('draft reference bridge', () => {
     expect(on_error).toHaveBeenCalledTimes(mode === 'failure' ? 1 : 0)
   })
 
-  it('does not release missing tombstones when another reference is confirmed against a new owner', () => {
-    const replaced = { kind: 'attachment' as const, target: 'new.png', from: 0, to: 10, line: 1, reason: 'replaced' as const }
+  it('confirms unavailable history and preserves story replacement checks', () => {
+    const replaced = { kind: 'story' as const, target: 'new', from: 0, to: 10, line: 1, reason: 'replaced' as const }
     expect(reference_review_can_confirm({ ... response, diagnostics: [replaced] })).toBe(true)
     expect(reference_review_can_confirm({ ... response, diagnostics: [replaced, { ... replaced, target: 'missing.png', reason: 'missing' }] })).toBe(false)
     expect(reference_review_can_confirm(response)).toBe(false)
+    expect(reference_review_can_confirm({ ... response, baseline_unavailable: { namespace: true, title: false } })).toBe(true)
   })
   it('discards a response after typing and serializes a retry of the newest snapshot', async () => {
     let current = { ... initial }
@@ -92,9 +93,9 @@ describe('draft reference bridge', () => {
     expect(rewrite).toHaveBeenCalledTimes(2)
   })
 
-  it('preserves unknown baselines and retries only for a newer server version', async () => {
-    let current = { ... initial, base_namespace_revision: null }
-    const rewrite = vi.fn(async () => ({ ... response, base_namespace_revision: null, baseline_unavailable: { namespace: true, title: false } }))
+  it.each([null, 0])('does not interrupt typing when history is unavailable for baseline %s', async (baseline) => {
+    let current = { ... initial, base_namespace_revision: baseline }
+    const rewrite = vi.fn(async () => ({ ... response, base_namespace_revision: baseline, baseline_unavailable: { namespace: true, title: false } }))
     const apply = vi.fn((_snapshot, result) => {
       current = { ... current, ... result }
       return true
@@ -103,11 +104,39 @@ describe('draft reference bridge', () => {
     await bridge.request()
     current.markdown = 'typing'
     await bridge.request()
-    expect(current.base_namespace_revision).toBeNull()
+    expect(current.base_namespace_revision).toBe(baseline)
     expect(rewrite).toHaveBeenCalledTimes(1)
     current.namespace_revision = 4
     await bridge.request()
     expect(rewrite).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries a failed rewrite without requiring another change', async () => {
+    vi.useFakeTimers()
+    try {
+      const rewrite = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(response)
+      const apply = vi.fn(() => true)
+      const bridge = create_draft_reference_bridge({ snapshot: () => initial, rewrite, apply, on_error: vi.fn() })
+      await bridge.request()
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(rewrite).toHaveBeenCalledTimes(2)
+      expect(apply).toHaveBeenCalledOnce()
+      bridge.stop()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forces a server replay after invalidation even when cached versions match', async () => {
+    const current = { ... initial, base_namespace_revision: 2, base_title_revision: 3 }
+    const rewrite = vi.fn().mockResolvedValue(response)
+    const bridge = create_draft_reference_bridge({ snapshot: () => current, rewrite, apply: () => true, on_error: vi.fn() })
+    await bridge.request()
+    expect(rewrite).not.toHaveBeenCalled()
+    bridge.invalidate(true)
+    await bridge.request()
+    expect(rewrite).toHaveBeenCalledOnce()
   })
 
   it('discards a stale response even when typing then undo restored the same text', async () => {

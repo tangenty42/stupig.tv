@@ -5,6 +5,7 @@ import type { ContentReferenceBaseline } from '@shared/types/content-reference'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { createHash } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
+import { ReferenceSafetyError } from '@server/errors/ReferenceSafetyError'
 import { db } from '@server/lib/db'
 import { delete_story_attachment_rows, get_story_object_keys, list_cover_presentations } from '@server/services/content-attachments.service'
 import { extract_story_reference_titles, parse_story_markdown, rename_story_references } from '@shared/content-markdown'
@@ -270,7 +271,7 @@ export async function create_story(created_by: number, markdown: string, can_pri
 }
 
 /** Save under title then scope locks; mechanical changes never consume body revisions. */
-export async function update_story(id: number, markdown: string, base_revision: number, can_private: boolean, baseline: ContentReferenceBaseline = { base_namespace_revision: null, base_title_revision: null }) {
+export async function update_story(id: number, markdown: string, base_revision: number, can_private: boolean, baseline: ContentReferenceBaseline = { base_namespace_revision: null, base_title_revision: null }, confirm_reference_history = false) {
   const connection = await db.getConnection()
   const rewritten_referrers: number[] = []
   let result
@@ -291,9 +292,11 @@ export async function update_story(id: number, markdown: string, base_revision: 
       if (! can_private && (has_private_content(markdown) || has_private_content(story.markdown)))
         throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
       const replayed = await replay_locked_references(connection, id, markdown, baseline, title_namespace)
-      const replaced = replayed.diagnostics.filter(item => item.reason === 'replaced')
+      if (! confirm_reference_history && (replayed.baseline_unavailable.namespace || replayed.baseline_unavailable.title))
+        throw new ReferenceSafetyError('引用历史不可用，请核对当前引用后再保存', 'REF_HISTORY_UNAVAILABLE')
+      const replaced = replayed.diagnostics.filter(item => item.kind === 'story' && item.reason === 'replaced')
       if (replaced.length) {
-        throw new ApiError(409, '引用目标已被删除并同名重建，请确认引用后再保存', {
+        throw new ApiError(409, '引用的档案已被删除并同名重建，请确认引用后再保存', {
           code: 'REF_TARGET_REPLACED',
           details: { namespace_revision: replayed.namespace_revision, title_revision: replayed.title_revision, references: replaced.map(item => ({ ... item, reason: 'replaced' as const })) },
         })

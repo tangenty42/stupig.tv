@@ -154,14 +154,12 @@ export async function replay_locked_references(connection: Connection, story_id:
     title_targets: catalog.map(row => ({ id: Number(row.id), name: String(row.title) })),
   })
   return {
-    markdown: replayed.deleted_reference ? markdown : replayed.markdown,
-    changes: replayed.deleted_reference ? [] : replayed.changes,
+    markdown: replayed.deleted_story_reference ? markdown : replayed.markdown,
+    changes: replayed.deleted_story_reference ? [] : replayed.changes,
     diagnostics: replayed.diagnostics,
-    ... (replayed.deleted_reference ? { confirmation: { markdown: replayed.markdown, changes: replayed.changes } } : {}),
-    // A dangling deleted reference must retain its tombstone until reviewed or
-    // removed, otherwise a later same-name creation would silently retarget it.
-    base_namespace_revision: attachments.unavailable || replayed.deleted_reference ? baseline.base_namespace_revision : namespace_revision,
-    base_title_revision: titles.unavailable || replayed.deleted_reference ? baseline.base_title_revision : title.revision,
+    ... (replayed.deleted_story_reference ? { confirmation: { markdown: replayed.markdown, changes: replayed.changes } } : {}),
+    base_namespace_revision: attachments.unavailable || replayed.deleted_story_reference ? baseline.base_namespace_revision : namespace_revision,
+    base_title_revision: titles.unavailable || replayed.deleted_story_reference ? baseline.base_title_revision : title.revision,
     namespace_revision, title_revision: title.revision,
     baseline_unavailable: { namespace: attachments.unavailable, title: titles.unavailable },
   }

@@ -10,9 +10,10 @@ export interface DraftReferenceSnapshot extends ContentReferenceBaseline {
   saving: boolean
 }
 
-/** Advancing aggregate baselines must not release another still-missing tombstone. */
 export function reference_review_can_confirm(result: ContentReferenceRewriteResult) {
-  return result.diagnostics.some(item => item.reason === 'replaced') && ! result.diagnostics.some(item => item.reason === 'missing')
+  const story_replaced = result.diagnostics.some(item => item.kind === 'story' && item.reason === 'replaced')
+  const story_missing = result.diagnostics.some(item => item.kind === 'story' && item.reason === 'missing')
+  return (result.baseline_unavailable.namespace || result.baseline_unavailable.title || story_replaced) && ! (story_replaced && story_missing)
 }
 
 /** Serialize requests; apply only to exactly the snapshot the server inspected. */
@@ -27,8 +28,11 @@ export function create_draft_reference_bridge(options: {
   let stopped = false
   let requested = false
   let last_attempt = ''
+  let last_history_unavailable = false
   let generation = 0
   let pending = false
+  let retry_timer: ReturnType<typeof setTimeout> | null = null
+  let force_next = false
   function set_pending(value: boolean) {
     if (pending === value)
       return
@@ -36,8 +40,7 @@ export function create_draft_reference_bridge(options: {
     options.on_pending?.(value)
   }
   const version_key = (snapshot: DraftReferenceSnapshot) => JSON.stringify([snapshot.story_id, snapshot.viewer_key, snapshot.namespace_revision, snapshot.title_revision, snapshot.base_namespace_revision, snapshot.base_title_revision,
-    // Known pinned baselines may recover after the user removes a dead link.
-    snapshot.base_namespace_revision !== null && snapshot.base_title_revision !== null ? snapshot.markdown : null,
+    last_history_unavailable ? null : snapshot.markdown,
   ])
 
   async function request() {
@@ -56,11 +59,12 @@ export function create_draft_reference_bridge(options: {
         if (! snapshot || snapshot.saving)
           continue
         const key = version_key(snapshot)
-        if (snapshot.base_namespace_revision === snapshot.namespace_revision && snapshot.base_title_revision === snapshot.title_revision)
+        if (! force_next && snapshot.base_namespace_revision === snapshot.namespace_revision && snapshot.base_title_revision === snapshot.title_revision)
           continue
-        if (last_attempt === key)
+        if (! force_next && last_attempt === key)
           continue
         const epoch = generation
+        force_next = false
         try {
           set_pending(true)
           const result = await options.rewrite(snapshot)
@@ -72,15 +76,21 @@ export function create_draft_reference_bridge(options: {
             continue
           }
           if (options.apply(snapshot, result)) {
-            // Unknown/expired baselines stay unknown. Do not retry on every keystroke.
+            last_history_unavailable = result.baseline_unavailable.namespace || result.baseline_unavailable.title
             const after = options.snapshot()
             last_attempt = after ? version_key(after) : key
           }
         }
         catch (error) {
           if (! stopped && epoch === generation) {
-            last_attempt = key
+            force_next = true
             options.on_error(error)
+            if (! retry_timer) {
+              retry_timer = setTimeout(() => {
+                retry_timer = null
+                void request()
+              }, 3000)
+            }
           }
         }
       }
@@ -92,13 +102,22 @@ export function create_draft_reference_bridge(options: {
   }
   return {
     request,
-    invalidate() {
+    invalidate(force = false) {
       generation ++
       last_attempt = ''
+      last_history_unavailable = false
+      force_next = force
+      if (retry_timer) {
+        clearTimeout(retry_timer)
+        retry_timer = null
+      }
     },
     stop() {
       stopped = true
       generation ++
+      if (retry_timer)
+        clearTimeout(retry_timer)
+      retry_timer = null
       set_pending(false)
     },
   }

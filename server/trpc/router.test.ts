@@ -1,6 +1,7 @@
 import type { AuthUser } from '@server/types/auth'
 import type { H3Event } from 'h3'
 import { ApiError } from '@server/errors/ApiError'
+import { ReferenceSafetyError } from '@server/errors/ReferenceSafetyError'
 import { public_procedure, router } from '@server/trpc/init'
 import { getTRPCErrorShape, TRPCError } from '@trpc/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -217,6 +218,7 @@ describe('tRPC router contracts', () => {
     const public_data = { code: 'REF_TARGET_REPLACED' as const, details: { namespace_revision: 2, title_revision: 3, references: [{ kind: 'attachment' as const, target: 'a.txt', from: 5, to: 10, line: 2, reason: 'replaced' as const }] } }
     expect(shape(new ApiError(409, '引用目标已变更', public_data)).data.applicationError).toEqual(public_data)
     expect(shape(new ApiError(409, '上传会话已过期', { code: 'UPLOAD_SESSION_EXPIRED' })).data.applicationError).toEqual({ code: 'UPLOAD_SESSION_EXPIRED' })
+    expect(shape(new ReferenceSafetyError('历史不可用', 'REF_HISTORY_UNAVAILABLE')).data.applicationError).toEqual({ code: 'REF_HISTORY_UNAVAILABLE' })
     // A lookalike internal error cannot smuggle its SQL/metadata through the formatter.
     expect(shape(Object.assign(new Error('internal'), { public_data })).data.applicationError).toBeUndefined()
     const unsafe = Object.assign(new ApiError(400, 'expected'), { public_data: { ... public_data, details: { ... public_data.details, sql: 'private SQL' } } })
