@@ -46,7 +46,9 @@ export function wrap_heading_sections(body: HTMLElement | DocumentFragment) {
    the layout back with an equal negative section margin. The incoming
    heading then physically pushes the pinned one away. Deepest sections
    first: once a leaf's edge is extended, ancestors sharing the boundary
-   measure a negative gap and skip.
+   measure a negative gap and skip. At the end of the body there is no next
+   heading to measure, but the final leaf still needs the heading's bottom
+   margin compensated so it stays pinned until its last content has passed.
  */
 export function reset_heading_compensation(body: HTMLElement) {
   for (const spacer of body.querySelectorAll<HTMLElement>('[data-story-heading-spacer]')) {
@@ -76,6 +78,16 @@ export function compensate_section_push(body: HTMLElement) {
       }
       const heading = section.firstElementChild
       const next_heading = boundary?.firstElementChild
+      if (! boundary && heading instanceof HTMLElement && ! section.querySelector('.story-section')) {
+        const heading_mb = Number.parseFloat(getComputedStyle(heading).marginBottom) || 0
+        if (heading_mb > 0) {
+          const spacer = document.createElement('div')
+          spacer.dataset.storyHeadingSpacer = ''
+          spacer.style.height = `${heading_mb}px`
+          section.append(spacer)
+        }
+        continue
+      }
       if (! (heading instanceof HTMLElement)
         || ! (next_heading instanceof HTMLElement)
         || ! /^H[1-6]$/.test(next_heading.tagName)) {
