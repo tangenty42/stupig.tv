@@ -31,6 +31,16 @@ describe('reusing PR checks on main', () => {
     expect(verified_jobs(jobs, 'd'.repeat(40))).toBe(false)
   })
 
+  it('accepts a fixed verification job only when its tree step succeeded', () => {
+    const fixed_job = { name: 'verified-tree', status: 'completed', conclusion: 'success', steps: [{ name: `verified-tree-${tree}`, status: 'completed', conclusion: 'success' }] }
+    const fixed_jobs = [... jobs.slice(0, - 1), fixed_job]
+    expect(verified_jobs(fixed_jobs, tree)).toBe(true)
+    expect(verified_jobs(fixed_jobs, 'd'.repeat(40))).toBe(false)
+    expect(verified_jobs([... jobs.slice(0, - 1), { ... fixed_job, conclusion: 'failure' }], tree)).toBe(false)
+    expect(verified_jobs([... jobs.slice(0, - 1), { ... fixed_job, steps: [] }], tree)).toBe(false)
+    expect(verified_jobs([... jobs.slice(0, - 1), { ... fixed_job, steps: [{ ... fixed_job.steps[0]!, conclusion: 'skipped' }] }], tree)).toBe(false)
+  })
+
   it('does not reuse checks when the GitHub API fails', async () => {
     const api = async () => {
       throw new Error('network unavailable')

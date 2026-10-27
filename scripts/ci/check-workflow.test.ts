@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 
@@ -29,5 +30,23 @@ describe('documentation-only CI and deployment', () => {
   it('starts deployment only from completed main Check runs', () => {
     expect(deploy.on.workflow_run).toEqual({ workflows: ['Check'], types: ['completed'], branches: ['main'] })
     expect(deploy.jobs['build-and-deploy'].if).toBe('github.event.workflow_run.conclusion == \'success\'')
+  })
+
+  it('uses a fixed verification job label and records the tree in a step', () => {
+    expect(check.jobs['verified-tree'].name).toBe('verified-tree')
+    expect(check.jobs['verified-tree'].steps[0].name).toBe('verified-tree-$' + '{{ needs.changes.outputs.tree }}')
+  })
+
+  it.each([
+    { code: 'true', reuse: '', run: true },
+    { code: 'true', reuse: 'true', run: false },
+    { code: 'true', reuse: 'false', run: true },
+    { code: '', reuse: '', run: true },
+    { code: 'false', reuse: '', run: false },
+  ])('runs every application job only when verification is needed: %#', ({ code, reuse, run }) => {
+    for (const name of ['check', 'migrations', 'mqtt', 'browser']) {
+      const context = { cancelled: () => false, needs: { changes: { outputs: { code, reuse } } } }
+      expect(runInNewContext(check.jobs[name].if, context), name).toBe(run)
+    }
   })
 })

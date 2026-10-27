@@ -2,6 +2,7 @@ export interface CheckJob {
   name: string
   status: string
   conclusion: string | null
+  steps?: CheckJob[]
 }
 
 export function verified_jobs(jobs: CheckJob[], tree: string): boolean
