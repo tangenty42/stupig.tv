@@ -14,10 +14,10 @@ export interface E2eTarget {
 }
 
 /** 同时接受 `--shard=i/n` 与 `--shard i/n` 两种写法。 */
-function parse_shard(argv: readonly string[]) {
+function parse_shard(argv: readonly string[], inherited_shard?: string) {
   const attached = argv.find(argument => argument.startsWith('--shard='))
   const separate = argv.indexOf('--shard')
-  const raw = attached?.slice('--shard='.length) ?? (separate < 0 ? undefined : argv[separate + 1])
+  const raw = attached?.slice('--shard='.length) ?? (separate < 0 ? inherited_shard : argv[separate + 1])
   if (raw === undefined)
     return { current: 1, total: 1 }
   const match = /^([1-9]\d{0,2})\/([1-9]\d{0,2})$/.exec(raw)
@@ -26,8 +26,8 @@ function parse_shard(argv: readonly string[]) {
   return { current: Number(match[1]), total: Number(match[2]) }
 }
 
-export function e2e_target(argv: readonly string[]): E2eTarget {
-  const shard = parse_shard(argv)
+export function e2e_target(argv: readonly string[], inherited_shard?: string): E2eTarget {
+  const shard = parse_shard(argv, inherited_shard)
   const port = BASE_PORT + shard.current - 1
   return { port, baseUrl: `http://localhost:${port}`, shard }
 }

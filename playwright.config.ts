@@ -1,7 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 import { e2e_target } from './scripts/testing/e2e-target'
 
-const target = e2e_target(process.argv.slice(2))
+// Playwright reloads this config in workers without the original CLI arguments.
+const target = e2e_target(process.argv.slice(2), process.env.STUPIG_E2E_SHARD)
+process.env.STUPIG_E2E_SHARD = `${target.shard.current}/${target.shard.total}`
 // 本机并行分片不能互相覆盖 trace 与报告；未分片时路径与文档一致。
 const artifacts = target.shard.total > 1 ? `-shard-${target.shard.current}` : ''
 

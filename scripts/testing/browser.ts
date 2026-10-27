@@ -25,7 +25,7 @@ export default async function setup(_playwright: FullConfig) {
   const database = `stupig_e2e_${run}`
   const directory = resolve('.dev/e2e', run)
   // 与 playwright.config.ts 的 baseURL 同源，分片各占一个端口。
-  const { port, baseUrl: base_url } = e2e_target(process.argv.slice(2))
+  const { port, baseUrl: base_url } = e2e_target(process.argv.slice(2), process.env.STUPIG_E2E_SHARD)
   // Never attach browser tests to an existing app backed by someone else's data.
   await new Promise<void>((accept, reject) => {
     const probe = createServer()
