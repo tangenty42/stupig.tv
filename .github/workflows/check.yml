@@ -43,8 +43,8 @@ env:
   MYSQL_PASSWORD: ci-mysql-password
 
 jobs:
-  # 只判断"这次改动是否需要跑应用测试"，本身不验证任何东西。main 上的推送
-  # 仍运行 check 和 migrations：Deploy 以本次 Check 的完成事件为触发条件。
+  # 只判断"这次改动是否需要跑应用测试"，本身不验证任何东西。main 上复用
+  # 成功的 PR 结果时保留该 job：Deploy 以本次 Check 的完成事件为触发条件。
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -91,8 +91,8 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     needs: changes
-    # 只有确认是纯文档改动才跳过；检测本身失败时退回全量。
-    if: "!cancelled() && needs.changes.outputs.code != 'false'"
+    # 仅跳过纯文档 PR 或已确认与 PR 测试代码树一致的 main；检测失败时退回全量。
+    if: "!cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true'"
     steps:
       - uses: actions/checkout@v5
 
@@ -235,7 +235,7 @@ jobs:
   migrations:
     runs-on: ubuntu-24.04
     needs: changes
-    if: "!cancelled() && needs.changes.outputs.code != 'false'"
+    if: "!cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true'"
 
     services:
       mysql:
@@ -321,7 +321,7 @@ jobs:
         run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.ts
 
   verified-tree:
-    name: verified-tree-${{ needs.changes.outputs.tree }}
+    name: verified-tree
     needs:
       - changes
       - check
@@ -331,4 +331,5 @@ jobs:
     if: "github.event_name == 'pull_request' && needs.changes.outputs.code == 'true' && needs.check.result == 'success' && needs.mqtt.result == 'success' && needs.browser.result == 'success' && needs.migrations.result == 'success'"
     runs-on: ubuntu-24.04
     steps:
-      - run: echo 'All application checks passed for the PR merge tree.'
+      - name: verified-tree-${{ needs.changes.outputs.tree }}
+        run: echo 'All application checks passed for the PR merge tree.'

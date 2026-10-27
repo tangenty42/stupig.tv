@@ -36,7 +36,7 @@ workflow 在构建前检查两项凭据非空，不再要求独立 pull 身份�
 ## CI 到部署的实际顺序
 
 1. Pull Request 和非纯文档的 main push 触发 Check。Node 24、pnpm 12.10.1，运行 settings 一致性、lint、Nuxt typecheck、脚本 typecheck、Vitest；纯文档 PR 跳过应用检查，纯文档 main push 不触发 Check 或 Deploy。
-2. 独立 Check jobs 验证真实生产 MQTT 镜像的权限与重启持久化、Chromium 浏览器流程，以及全新 MySQL 8.4 的完整 SQL/TS 迁移、第二遍幂等执行、隔离迁移框架和 Content 转换。CI 的存储边界夹具不代表真实生产 OSS/ESA 已验收。
+2. 独立 Check jobs 验证真实生产 MQTT 镜像的权限与重启持久化、Chromium 浏览器流程，以及全新 MySQL 8.4 的完整 SQL/TS 迁移、第二遍幂等执行、隔离迁移框架和 Content 转换。main 可在确认 PR 所有检查成功且代码树一致时复用这些结果；否则完整重跑。CI 的存储边界夹具不代表真实生产 OSS/ESA 已验收。
 3. main 的 Check 成功触发 Deploy，检出该次 Check 的 `head_sha`；部署同组串行，不取消正在执行的旧部署。安装发布工具时使用锁文件并禁用安装脚本。
 4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；通过后构建/推送 ACR latest 与 mqtt，并上传 `.env.prod.incoming` 及 `docker-compose.yml.incoming`。明文不会打进镜像。
 5. SSH 将 `scripts/deploy/remote.sh` 交给远端 shell，备份旧 env/Compose 和旧运行镜像 ID，校验候选配置，再 pull/up。
