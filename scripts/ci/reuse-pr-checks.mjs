@@ -7,8 +7,14 @@ const required_jobs = ['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser 
 
 // A successful workflow alone is insufficient: skipped jobs also yield success.
 export function verified_jobs(jobs, tree) {
-  const required = [... required_jobs, `verified-tree-${tree}`]
-  return required.every(name => jobs.some(job => job.name === name && job.status === 'completed' && job.conclusion === 'success'))
+  const successful = item => item.status === 'completed' && item.conclusion === 'success'
+  if (! required_jobs.every(name => jobs.some(job => job.name === name && successful(job))))
+    return false
+  return jobs.some(job => successful(job) && (
+    job.name === `verified-tree-${tree}`
+    || (job.name === 'verified-tree' && Array.isArray(job.steps)
+      && job.steps.some(step => step.name === `verified-tree-${tree}` && successful(step)))
+  ))
 }
 
 async function find_verified_pr({ api, repository, sha, tree }) {
