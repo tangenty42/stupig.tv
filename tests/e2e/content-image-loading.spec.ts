@@ -30,19 +30,21 @@ test('image placeholders breathe and stay behind the image during its fade', asy
     frame.style.setProperty('--content-lqip', `url(data:image/jpeg;base64,${data})`)
   }, lqip)
   await expect.poll(() => frame.locator('.image-loading-mask .iconify').evaluate(element => getComputedStyle(element).animationName)).toBe('image-loading-breathe')
+  await frame.evaluate(async (element) => {
+    void getComputedStyle(element.querySelector('img')!).opacity
+    await new Promise(requestAnimationFrame)
+  })
   await frame.evaluate((element) => {
     const observer = new MutationObserver(() => {
       if (! element.hasAttribute('data-image-loaded'))
         return
       observer.disconnect()
       void getComputedStyle(element.querySelector('img')!).opacity
-      requestAnimationFrame(() => {
-        for (const animation of element.getAnimations({ subtree: true })) {
-          animation.pause()
-          animation.currentTime = 225
-        }
-        element.setAttribute('data-test-paused', '')
-      })
+      for (const animation of element.getAnimations({ subtree: true })) {
+        animation.pause()
+        animation.currentTime = 225
+      }
+      element.setAttribute('data-test-paused', '')
     })
     observer.observe(element, { attributes: true, attributeFilter: ['data-image-loaded'] })
   })
@@ -55,13 +57,15 @@ test('image placeholders breathe and stay behind the image during its fade', asy
     const rect = image.getBoundingClientRect()
     return {
       image_opacity: Number(getComputedStyle(image).opacity),
+      image_transition: getComputedStyle(image).transition,
+      animations: element.getAnimations({ subtree: true }).map(animation => animation instanceof CSSTransition ? animation.transitionProperty : animation.effect?.constructor.name),
       placeholder_opacity: Number(getComputedStyle(element, '::before').opacity),
       mask_opacity: Number(getComputedStyle(mask).opacity),
       image_on_top: document.elementFromPoint(rect.left + 10, rect.top + 10) === image,
     }
   })
   expect(transition.image_opacity).toBeGreaterThan(0)
-  expect(transition.image_opacity).toBeLessThan(1)
+  expect(transition.image_opacity, JSON.stringify(transition)).toBeLessThan(1)
   expect(transition.placeholder_opacity).toBe(1)
   expect(transition.mask_opacity).toBeGreaterThan(0)
   expect(transition.mask_opacity).toBeLessThan(1)
@@ -69,10 +73,10 @@ test('image placeholders breathe and stay behind the image during its fade', asy
 
   const cover = await page.evaluate(async ({ lqip, png }) => {
     const frame = document.createElement('span')
-    frame.className = 'content-cover'
+    frame.className = 'img-frame content-cover'
     frame.dataset.lqip = ''
     frame.style.setProperty('--content-lqip', `url(data:image/jpeg;base64,${lqip})`)
-    frame.innerHTML = `<img src="data:image/png;base64,${png}" alt="cover"><span class="image-loading-mask"><span class="iconify"></span></span>`
+    frame.innerHTML = `<img src="data:image/png;base64,${png}" alt="cover"><span class="image-loading-mask"><span class="iconify"></span></span><span class="image-unavailable">unavailable</span>`
     document.body.append(frame)
     const mask = frame.querySelector<HTMLElement>('.image-loading-mask')!
     const image = frame.querySelector('img')!
@@ -104,4 +108,14 @@ test('image placeholders breathe and stay behind the image during its fade', asy
   await expect.poll(() => page.locator('body > .content-cover').evaluate(element => getComputedStyle(element, '::before').transitionDuration)).toBe('0s')
   await expect.poll(() => frame.locator('.image-loading-mask .iconify').evaluate(element => getComputedStyle(element).animationName)).toBe('none')
   await expect.poll(() => page.locator('body > .content-cover .iconify').evaluate(element => getComputedStyle(element).animationName)).toBe('none')
+
+  for (const item of [frame, page.locator('body > .content-cover')]) {
+    await item.evaluate((element) => {
+      element.removeAttribute('data-image-loaded')
+      element.setAttribute('data-image-error', '')
+    })
+    await expect(item.locator('img')).toBeHidden()
+    await expect(item.locator('.image-unavailable')).toBeVisible()
+    await expect(item.locator('.image-loading-mask')).toBeHidden()
+  }
 })

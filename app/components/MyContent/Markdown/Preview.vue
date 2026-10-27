@@ -703,7 +703,7 @@ function on_preview_keydown(event: KeyboardEvent) {
    rating badge's h-6 would otherwise lose to the min-h floor. */
 .story-body :deep(img:not(.built-in-img)) {
   /* LQIP width/height attributes reserve the aspect ratio, not a fixed size. */
-  @apply w-auto h-auto max-w-full max-h-64 min-w-32 min-h-32 cursor-zoom-in rounded-sm object-cover object-top transition-[filter] duration-300;
+  @apply w-auto h-auto max-w-full max-h-64 min-w-32 min-h-32 cursor-zoom-in rounded-sm object-cover object-top;
 }
 
 /* The frame owns the image's corner shape and clips to it, so every layer
@@ -724,78 +724,15 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Clipped by the frame, so the image carries no radius of its own here. */
 .story-body :deep(.img-frame > img) {
-  @apply relative z-[1] block rounded-none;
-  opacity: 0;
-  transition: opacity 450ms ease, filter 300ms ease;
-}
-
-.story-body :deep(.image-loading-mask) {
-  @apply pointer-events-none absolute inset-0 z-[2] flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
-  transition: opacity 450ms ease, visibility 0s linear 450ms;
-}
-
-.story-body :deep(.img-frame > .image-loading-mask .iconify) {
-  animation: image-loading-breathe 2s ease-in-out infinite;
-}
-
-.story-body :deep(.img-frame[data-image-loaded] > .image-loading-mask) {
-  opacity: 0;
-  visibility: hidden;
-}
-
-.story-body :deep(.img-frame[data-image-error] > .image-loading-mask) {
-  @apply invisible opacity-0;
-  transition: none;
-}
-
-.story-body :deep(.img-frame[data-lqip]::before) {
-  content: '';
-  @apply pointer-events-none absolute inset-0;
-  background: var(--content-lqip) center / cover no-repeat;
-  filter: blur(0.5rem);
-  transform: scale(1.05);
-  transition: opacity 200ms ease;
-}
-
-.story-body :deep(.img-frame[data-lqip][data-image-loaded]::before) {
-  opacity: 0;
-  transition: opacity 150ms ease 450ms;
-}
-
-.story-body :deep(.img-frame[data-lqip][data-image-error]::before) {
-  opacity: 0;
-  transition: none;
-}
-
-.story-body :deep(.img-frame[data-image-loaded] > img) {
-  opacity: 1;
+  @apply rounded-none;
 }
 
 .story-body :deep(.image-unavailable) {
-  @apply hidden aspect-video w-64 max-w-full items-center justify-center bg-slate-200 text-3xl text-slate-400 dark:bg-slate-800 dark:text-slate-500;
+  @apply aspect-video w-64 max-w-full items-center justify-center bg-slate-200 text-3xl text-slate-400 dark:bg-slate-800 dark:text-slate-500;
 }
 
 .story-body :deep(.img-frame[data-image-error]) {
   @apply max-w-full;
-}
-
-.story-body :deep(.img-frame[data-image-error] > img) {
-  @apply hidden;
-}
-
-.story-body :deep(.img-frame[data-image-error] > .image-unavailable) {
-  @apply flex;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .story-body :deep(.img-frame[data-lqip]::before),
-  .story-body :deep(.img-frame[data-lqip][data-image-loaded]::before),
-  .story-body :deep(.img-frame > img),
-  .story-body :deep(.image-loading-mask),
-  .story-body :deep(.img-frame > .image-loading-mask .iconify) {
-    transition: none;
-    animation: none;
-  }
 }
 
 /* Bottom-anchored gradient cover, shown only when JS confirms the image is
