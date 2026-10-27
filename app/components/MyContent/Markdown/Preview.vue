@@ -724,21 +724,28 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Clipped by the frame, so the image carries no radius of its own here. */
 .story-body :deep(.img-frame > img) {
-  @apply block rounded-none;
+  @apply relative z-[1] block rounded-none;
   opacity: 0;
-  transition: opacity 200ms ease, filter 300ms ease;
+  transition: opacity 450ms ease, filter 300ms ease;
 }
 
 .story-body :deep(.image-loading-mask) {
-  @apply pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-100/70 text-xl text-slate-500 dark:bg-slate-900/70 dark:text-slate-400;
+  @apply pointer-events-none absolute inset-0 z-[2] flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
+  transition: opacity 450ms ease, visibility 0s linear 450ms;
 }
 
-.story-body :deep(.image-loading-mask .iconify) {
-  @apply animate-spin motion-reduce:animate-none;
+.story-body :deep(.img-frame > .image-loading-mask .iconify) {
+  animation: image-loading-breathe 2s ease-in-out infinite;
 }
 
-.story-body :deep(.img-frame:is([data-image-loaded], [data-image-error]) .image-loading-mask) {
-  @apply hidden;
+.story-body :deep(.img-frame[data-image-loaded] > .image-loading-mask) {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.story-body :deep(.img-frame[data-image-error] > .image-loading-mask) {
+  @apply invisible opacity-0;
+  transition: none;
 }
 
 .story-body :deep(.img-frame[data-lqip]::before) {
@@ -750,11 +757,17 @@ function on_preview_keydown(event: KeyboardEvent) {
   transition: opacity 200ms ease;
 }
 
-.story-body :deep(.img-frame[data-lqip]:is([data-image-loaded], [data-image-error])::before) {
+.story-body :deep(.img-frame[data-lqip][data-image-loaded]::before) {
   opacity: 0;
+  transition: opacity 150ms ease 450ms;
 }
 
-.story-body :deep(.img-frame:is([data-image-loaded], [data-image-error]) > img) {
+.story-body :deep(.img-frame[data-lqip][data-image-error]::before) {
+  opacity: 0;
+  transition: none;
+}
+
+.story-body :deep(.img-frame[data-image-loaded] > img) {
   opacity: 1;
 }
 
@@ -776,8 +789,12 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 @media (prefers-reduced-motion: reduce) {
   .story-body :deep(.img-frame[data-lqip]::before),
-  .story-body :deep(.img-frame > img) {
+  .story-body :deep(.img-frame[data-lqip][data-image-loaded]::before),
+  .story-body :deep(.img-frame > img),
+  .story-body :deep(.image-loading-mask),
+  .story-body :deep(.img-frame > .image-loading-mask .iconify) {
     transition: none;
+    animation: none;
   }
 }
 
@@ -785,7 +802,7 @@ function on_preview_keydown(event: KeyboardEvent) {
    actually clipped (data-cropped). Clicks fall through to the image. The
    long fade (pt-16) keeps the hint text on a solid enough background. */
 .story-body :deep(.long-img-cover) {
-  @apply pointer-events-none absolute inset-x-0 bottom-0 hidden items-end justify-center bg-gradient-to-t from-slate-950/90 via-slate-900/50 to-transparent px-2 pb-2 pt-16 text-center text-xs font-medium text-white;
+  @apply pointer-events-none absolute inset-x-0 bottom-0 z-[2] hidden items-end justify-center bg-gradient-to-t from-slate-950/90 via-slate-900/50 to-transparent px-2 pb-2 pt-16 text-center text-xs font-medium text-white;
 }
 
 .story-body :deep(.img-frame[data-cropped][data-image-loaded] .long-img-cover) {

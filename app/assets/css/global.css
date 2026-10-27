@@ -8,9 +8,9 @@
 }
 
 .content-cover > img {
-  @apply block h-auto w-full;
+  @apply relative z-[1] block h-auto w-full;
   opacity: 0;
-  transition: opacity 200ms ease;
+  transition: opacity 450ms ease;
 }
 
 .content-cover-constrained {
@@ -31,19 +31,38 @@
 }
 
 .content-cover > .image-loading-mask {
-  @apply pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
+  @apply pointer-events-none absolute inset-0 z-[2] flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
+  transition: opacity 450ms ease, visibility 0s linear 450ms;
 }
 
 .content-cover > .image-loading-mask .iconify {
-  @apply animate-spin motion-reduce:animate-none;
+  animation: image-loading-breathe 2s ease-in-out infinite;
 }
 
-.content-cover:is([data-image-loaded], [data-image-error]) > .image-loading-mask {
-  @apply hidden;
+@keyframes image-loading-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
-.content-cover:is([data-image-loaded], [data-image-error])::before {
+.content-cover[data-image-loaded] > .image-loading-mask {
   opacity: 0;
+  visibility: hidden;
+}
+
+.content-cover[data-image-error] > .image-loading-mask {
+  @apply invisible opacity-0;
+  transition: none;
+}
+
+/* Keep the placeholder opaque underneath until the image has faded in. */
+.content-cover[data-image-loaded]::before {
+  opacity: 0;
+  transition: opacity 150ms ease 450ms;
+}
+
+.content-cover[data-image-error]::before {
+  opacity: 0;
+  transition: none;
 }
 
 .content-cover[data-image-loaded] > img {
@@ -64,8 +83,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .content-cover > img,
-  .content-cover::before {
+  .content-cover::before,
+  .content-cover[data-image-loaded]::before,
+  .content-cover > .image-loading-mask,
+  .content-cover > .image-loading-mask .iconify {
     transition: none;
+    animation: none;
   }
 }
 
