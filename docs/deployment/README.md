@@ -15,7 +15,7 @@
 | 7 | 启动应用、检查回调，发布正式函数代码 | [服务器](server.md)、[函数发布](esa-functions.md)；生产回调为 www.stupig.tv，不使用开发隧道 |
 | 8 | 验收后开放流量，最后单独启用预热 | 下表 |
 
-生产 Compose 部署应用和专用 EMQX broker，不会自动创建数据库、RAM、桶、域名或 ESA 规则。EMQX 的账号、ACL 与健康检查自动初始化，HTTPS/WSS 反代仍需手动配置。空库也要跑完迁移，再按[首个管理员](mysql-redis.md#空库的首个管理员)完成账号初始化。
+生产 Compose 部署应用和专用 EMQX broker，不会自动创建数据库、RAM、桶、域名或 ESA 规则。EMQX 的账号、ACL 与健康检查自动初始化，HTTPS/WSS 反代仍需手动配置。空库也要跑完迁移，再按[首个管理员](mysql-redis.md)完成账号初始化。
 
 ## 上线验收
 
@@ -28,10 +28,10 @@
 | ESA | 冷请求/HIT、HEAD/Range、完整下载、中文文件名、Canvas、回调失败关闭 |
 | 后台 | 图片、同步、上传、退役/刷新无异常积压；生产预热验收后再开 |
 
-`/healthz` 只证明数据库与迁移账本可读，不代替 OSS、ESA、短信、MQTT 或迁移完整性验收。当前云端状态与待补验收看[上线结果与待补验收](aliyun.md#上线结果与待补验收)。
+`/healthz` 只证明数据库与迁移账本可读，不代替 OSS、ESA、短信、MQTT 或迁移完整性验收。当前云端状态与待补验收看[上线结果与待补验收](aliyun.md)。
 
 ## 日常升级
 
-迁移预演与备份 → 必要时维护迁移 → Check → 生产 ESA 预检 → 推送镜像/配置 → 应用健康门 → 自动发布生产 ESA → 业务冒烟。部署失败的镜像/配置恢复不会回滚数据库；应用健康后 ESA 发布失败也不会自动回滚应用。[失败处理](github-acr.md#部署失败与回退)、[恢复](../operations/backup-recovery.md)。
+迁移预演与备份 → 必要时维护迁移 → Check → 生产 ESA 预检 → 推送镜像/配置 → 应用健康门 → 自动发布生产 ESA → 业务冒烟。部署失败的镜像/配置恢复不会回滚数据库；应用健康后 ESA 发布失败也不会自动回滚应用。[失败处理](github-acr.md)、[恢复](../operations/backup-recovery.md)。
 
 需要查某一字段、默认值或 env 选择规则时再看[配置项参考](configuration-reference.md)；RAM 授权细节见[权限参考](ram-reference.md)。

@@ -20,7 +20,7 @@ pnpm env:build:prod
 | Content OSS、ESA、短信身份 | 按 [RAM 创建清单](ram.md)逐行绑定策略，再填写对应 AccessKey |
 | ESA SiteId / 读取密钥 | `ALIYUN_ESA_SITE_ID=181553031729356`；`ALIYUN_ESA_AUTH_KEY` 自行生成，每环境不同，32–128 个无空格可打印 ASCII 字符 |
 | 图形验证 | `ALIYUN_DYPNS_CAPTCHA_APP_KEY` 来自产品控制台，见 [短信/CAPTCHA](sms-captcha.md) |
-| 静态资源与头像 | 与 Content 共用 `ALIYUN_OSS_*` 和新桶；静态 URL 来自 `oss.buckets.public.publicBaseUrl`，见 [OSS](oss.md#站点静态资源与头像) |
+| 静态资源与头像 | 与 Content 共用 `ALIYUN_OSS_*` 和新桶；静态 URL 来自 `oss.buckets.public.publicBaseUrl`，见 [OSS](oss.md) |
 | 登录与 debug | `JWT_SECRET` 至少 32 字符；生产 OTP/CAPTCHA debug 都为 false |
 | 部署 | `ACR_IMAGE` 不带 tag，`EXTERNAL_DOCKER_NETWORK` 必须已存在，见 [服务器](server.md) |
 | 开发隧道 | `.env.dev` 的 `DEV_FRP_TOKEN`，见[隧道](../development/auth-tunnel.md) |

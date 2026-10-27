@@ -1,6 +1,6 @@
 ﻿# RAM 配置清单
 
-2026-10-25 已按用户授权建立本页的 10 个用户、7 份策略；8 组应用凭据已写入本机 dev/prod env，生产密文已同步。ACR 改回共用 Tangenty 现有 Registry 凭据，两个新 RAM 用户保留备用。读回结果见[台账](aliyun.md#ram-与-acr-的收敛)。
+2026-10-25 已按用户授权建立本页的 10 个用户、7 份策略；8 组应用凭据已写入本机 dev/prod env，生产密文已同步。ACR 改回共用 Tangenty 现有 Registry 凭据，两个新 RAM 用户保留备用。读回结果见[台账](aliyun.md)。
 
 下表用于核对或新环境配置。JSON 位于 [config/ram](../../config/ram/)，后续修改仍需显式应用，不会随代码自动部署到阿里云。权限原理见[策略说明](ram-reference.md)。
 
@@ -20,7 +20,7 @@
 
 `ID/SECRET` 分别表示两个完整变量名的 `ACCESS_KEY_ID` 和 `ACCESS_KEY_SECRET`，不能填成一个组合变量。开发和生产推荐独立用户、独立密钥；ESA/SMS 的同一份策略可以分别绑定给两个用户，无需复制 JSON。
 
-后补的 ACR 控制台初始化策略已撤销并删除。当前部署仅需 GitHub 的 `ACR_USERNAME/PASSWORD`，具体见 [ACR](github-acr.md#推拉身份)。
+后补的 ACR 控制台初始化策略已撤销并删除。当前部署仅需 GitHub 的 `ACR_USERNAME/PASSWORD`，具体见 [ACR](github-acr.md)。
 
 ## 按这个顺序配置
 
@@ -40,10 +40,10 @@ ESA 发布检查不会发布代码；预热检查需要对应数据库可达，�
 
 ## 三个容易配错的地方
 
-- **ESA 共用站点**：缓存策略作用于整站，发布策略作用于账号支持的函数操作；两个用户名并不提供 RAM 层面的 dev/prod 隔离。发布身份应与应用身份分开；当前 Compose 会注入整份 `.env.prod`，其中发布凭据也会进入容器，工具身份的实际交付隔离仍待改造，见[权限参考](ram-reference.md#凭据交付边界)。
-- **ACR 个人版**：Registry 密码不是 AccessKey Secret。CI 和主机共用 `ACR_USERNAME/PASSWORD`，使用 Tangenty 现有的 Registry 固定密码，不再要求独立拉取账号。见 [ACR](github-acr.md#推拉身份)。
+- **ESA 共用站点**：缓存策略作用于整站，发布策略作用于账号支持的函数操作；两个用户名并不提供 RAM 层面的 dev/prod 隔离。发布身份应与应用身份分开；当前 Compose 会注入整份 `.env.prod`，其中发布凭据也会进入容器，工具身份的实际交付隔离仍待改造，见[权限参考](ram-reference.md)。
+- **ACR 个人版**：Registry 密码不是 AccessKey Secret。CI 和主机共用 `ACR_USERNAME/PASSWORD`，使用 Tangenty 现有的 Registry 固定密码，不再要求独立拉取账号。见 [ACR](github-acr.md)。
 - **ESA 私有 OSS 回源**：在 ESA 控制台授权产品使用已有服务角色；不要把应用 AccessKey 或临时管理员密钥填进函数变量。函数只需要业务共享密钥、回调 URL 和超时。
 
 ## ESA 发布策略
 
-日常发布只绑定上表的通用发布策略，包含上传版本、变量同步、发布和只读路由检查。首次创建函数、修改路由/缓存/安全规则由管理员在控制台完成，不给发布用户追加 ESA FullAccess。详细范围见[策略说明](ram-reference.md#esa-发布)。
+日常发布只绑定上表的通用发布策略，包含上传版本、变量同步、发布和只读路由检查。首次创建函数、修改路由/缓存/安全规则由管理员在控制台完成，不给发布用户追加 ESA FullAccess。详细范围见[策略说明](ram-reference.md)。

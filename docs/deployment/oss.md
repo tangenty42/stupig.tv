@@ -11,7 +11,7 @@ Content、头像和站点静态资源统一使用本环境的阿里云 OSS 桶�
 | dev | `stupig-static-dev` | `https://oss-cn-shenzhen.aliyuncs.com` | `stupig-static-dev.oss.tangenty.cn` |
 | prod | `stupig-static` | 同深圳 endpoint | `stupig-static.oss.tangenty.cn` |
 
-2026-10-25 云 API 已确认两桶与上述声明一致，均 private、ZRS、版本控制 Enabled，阻止公共访问均已开启，两桶历史版本当前均保留 7 天；完整差异及调整建议见[资源台账](aliyun.md#oss保留什么调整什么)。SDK endpoint 使用 OSS API 地址，不能替换成 ESA 加速域名。当前适配器拒绝通过 `URLLIB_PROXY` / `URLLIB_ENABLE_PROXY` 启用 urllib 代理。
+2026-10-25 云 API 已确认两桶与上述声明一致，均 private、ZRS、版本控制 Enabled，阻止公共访问均已开启，两桶历史版本当前均保留 7 天；完整差异及调整建议见[资源台账](aliyun.md)。SDK endpoint 使用 OSS API 地址，不能替换成 ESA 加速域名。当前适配器拒绝通过 `URLLIB_PROXY` / `URLLIB_ENABLE_PROXY` 启用 urllib 代理。
 
 Content 对象位于 `content/att/`。全部对象创建/完成时显式 private，普通附件与机密附件的区别由应用 ACL 和在线授权控制，**公开业务附件也不把 OSS ACL 改为公有读**。默认桶 ACL 也应私有，避免非预期对象继承公开访问。
 
