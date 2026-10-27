@@ -1,5 +1,5 @@
 import type { ImageSaveMode } from '@shared/content-upload'
-import type { ErrorPolicy, WorkspaceCommand, WorkspaceIssue, WorkspaceReport } from '@shared/content-workspace'
+import type { ErrorPolicy, WorkspaceCommand, WorkspaceIssue } from '@shared/content-workspace'
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { UploadEntry } from '~/composables/useContentUploadAdmission'
 import type { WorkspaceAction, WorkspaceCommandFootprint, WorkspaceListRow } from '~/utils/content/workspace'
@@ -34,16 +34,11 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     selection: Set<string>
   }
   const operations = ref<Operation[]>([])
-  const reports = ref<WorkspaceReport[]>([])
   const pending = computed(() => operations.value.some(operation => operation.pending))
   const resolution_operation = computed(() => operations.value.find(operation => operation.resolution))
   const resolution = computed(() => resolution_operation.value?.resolution ?? null)
   const resolution_pending = computed(() => resolution_operation.value?.pending ?? false)
   const request_error = computed(() => operations.value.find(operation => operation.error)?.error ?? '')
-  const report = computed({ get: () => reports.value[0] ?? null, set: (value: WorkspaceReport | null) => {
-    if (! value)
-      reports.value.shift()
-  } })
   const completion = create_upload_completion_context()
   let generation = 0
   let anchor: string | null = null
@@ -107,8 +102,6 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
       if (epoch !== generation)
         return
       catalog.accept(result.workspace)
-      if (result.skipped.length || result.renamed.length)
-        reports.value.push(result)
       operations.value = operations.value.filter(item => item !== operation)
       selected.value = new Set([... selected.value].filter(key => ! operation.selection.has(key)))
     }
@@ -221,7 +214,6 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     completion.reset()
     selected.value = new Set()
     operations.value = []
-    reports.value = []
     preview_visible.value = false
   }, { flush: 'sync' })
   onUnmounted(() => {
@@ -229,9 +221,8 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     completion.dispose()
     generation ++
     operations.value = []
-    reports.value = []
   })
   await Promise.all([catalog.ready, sync_pending])
-  return { catalog, uploads, selected, selected_rows, expanded, drag_ids, preview_visible, preview_images, rows, root_id, readonly, can_private, references, pending, resolution, report, request_error,
+  return { catalog, uploads, selected, selected_rows, expanded, drag_ids, preview_visible, preview_images, rows, root_id, readonly, can_private, references, pending, resolution, request_error,
     resolution_pending, command_pending, command_moving, can_execute, target, capabilities, toggle_folder, select, submit, execute, dismiss_resolution, start, open, preview, download, replace, edit_image }
 }

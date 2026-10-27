@@ -54,7 +54,7 @@ export function useContentUploadsStore(scope: number) {
       is_paused: id => runtime.paused.has(id),
       resume,
     })
-    const { preparing, resolution, report, admission_error, admitting, submit, dismiss_resolution, start } = admission
+    const { preparing, resolution, admission_error, admitting, submit, dismiss_resolution, start } = admission
     const busy = computed(() => preparing.value !== null || active.size > 0)
     function apply_list(value: { enabled: boolean, sessions: ContentUploadSession[], reservations?: ContentUploadReservation[] }, epoch = generation) {
       if (epoch !== generation)
@@ -73,6 +73,6 @@ export function useContentUploadsStore(scope: number) {
     }
     // Pinia's own effect scope survives the component that first created it.
     watch(identity_key, reset, { flush: 'sync' })
-    return { identity_key, snapshot_epoch, enabled, ready, sessions, reservations, progress, errors, active, queued, finalizing, preparing, busy, resolution, report, admission_error, admitting, submit, dismiss_resolution, has_file, apply_list, start, resume, pause, cancel, reset }
+    return { identity_key, snapshot_epoch, enabled, ready, sessions, reservations, progress, errors, active, queued, finalizing, preparing, busy, resolution, admission_error, admitting, submit, dismiss_resolution, has_file, apply_list, start, resume, pause, cancel, reset }
   })()
 }
