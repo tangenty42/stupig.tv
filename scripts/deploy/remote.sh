@@ -87,6 +87,30 @@ resolve_container() {
   compose ps -q "${1:-$SERVICE}" 2>/dev/null | head -n 1
 }
 
+# A rollback may remove the failed container. Keep its logs on the server with
+# restricted permissions; never stream their contents into the CI log.
+capture_failure_logs() {
+  log_service=$1
+  log_container=$(resolve_container "$log_service")
+  if [ -z "$log_container" ]; then
+    echo "未找到 $log_service 容器，无法保存其日志。" >&2
+    return 0
+  fi
+  case "$log_service" in
+    ''|*[!a-zA-Z0-9_-]*) log_label=service ;;
+    *) log_label=$log_service ;;
+  esac
+  log_path=$(umask 077; mktemp "$DEPLOY_DIR/.deploy-failure-${log_label}.XXXXXX.log") || {
+    echo "无法创建服务器诊断日志文件。" >&2
+    return 0
+  }
+  if docker logs --tail 80 "$log_container" > "$log_path" 2>&1; then
+    echo "容器日志保留在服务器：$log_path" >&2
+  else
+    echo "读取容器日志失败，诊断文件保留在服务器：$log_path" >&2
+  fi
+}
+
 wait_until_ready() {
   readiness_service=${1:-$SERVICE}
   attempt=0
@@ -246,7 +270,7 @@ compose up -d
 
 if ! wait_until_ready emqx; then
   echo "项目 MQTT broker 未就绪，拒绝完成部署。" >&2
-  docker logs --tail 80 "$(resolve_container emqx)" 2>&1 || true
+  capture_failure_logs emqx
   exit 1
 fi
 
@@ -270,10 +294,7 @@ if [ "$readiness" -eq 0 ]; then
   exit 0
 fi
 
-echo "--- docker compose ps ---"
-compose ps || true
-echo "--- 容器最后 80 行日志 ---"
-docker logs --tail 80 "$(resolve_container)" 2>&1 || true
+capture_failure_logs "$SERVICE"
 
 echo "健康门失败（状态码 $readiness），将恢复旧镜像和配置。" >&2
 exit 1

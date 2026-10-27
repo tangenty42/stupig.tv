@@ -11,6 +11,16 @@ function read(relative: string) {
 }
 
 describe('镜像自带的运行期配置注入', () => {
+  it('binds every development dependency port to loopback', () => {
+    const services = parse(read('docker-compose.dev.yml')).services as Record<string, { ports?: string[] }>
+    for (const name of ['mysql', 'redis', 'emqx', 'phpmyadmin']) {
+      const ports = services[name]?.ports
+      expect(ports?.length, name).toBeGreaterThan(0)
+      for (const port of ports ?? [])
+        expect(port, name).toMatch(/^127\.0\.0\.1:/)
+    }
+  })
+
   it('生产 MQTT 镜像复用开发初始化入口和仓库 ACL', () => {
     const dockerfile = read('Dockerfile')
     expect(dockerfile).toContain('FROM emqx/emqx:6.2.2 AS mqtt')

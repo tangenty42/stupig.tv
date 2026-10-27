@@ -11,7 +11,7 @@
     "storage:cleanup": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/storage/audit.ts",
     "db:dump:dev": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/db/export-sample.ts",
     "dev": "docker compose --env-file .env.dev -f docker-compose.dev.yml up -d && node --import tsx scripts/dev/cli.ts",
-    "dev:app": "nuxt dev --dotenv .env.dev --host 0.0.0.0",
+    "dev:app": "nuxt dev --dotenv .env.dev --host 127.0.0.1",
     "dev:tunnel": "node --import tsx scripts/dev/tunnel.mjs",
     "dev:auth:prepare": "tsx scripts/dev/frp.ts --prepare",
     "dev:auth:verify": "tsx scripts/dev/frp.ts --verify",

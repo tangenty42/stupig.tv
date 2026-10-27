@@ -6,6 +6,7 @@
 
 - Node.js 24；CI 使用 pnpm 12.10.1。版本依据是 [Check 工作流](../../.github/workflows/check.yml) 和 [Dockerfile](../../Dockerfile)。
 - Docker 与 Compose：开发 MySQL、Redis、EMQX、phpMyAdmin 由 [docker-compose.dev.yml](../../docker-compose.dev.yml) 启动；Nuxt 在宿主机运行。
+- 开发依赖的宿主机端口仅绑定 `127.0.0.1`，包括免登录的 phpMyAdmin；它们仍可通过 Compose 内部网络相互访问。修改端口绑定后需重新创建对应容器，数据卷保留。
 - EMQX 固定 `emqx/emqx:6.2.2`，与当前生产版本一致；认证、listener 和 ACL 见[MQTT 手册](../deployment/mqtt.md)。
 - 当前开发隧道要求 frpc 0.71.0。Windows 默认路径见 [config/dev.yaml](../../config/dev.yaml)，其他平台可自行创建开发专用的 `config/local.yaml` 覆盖可执行文件路径。该本机配置不入库，未创建时不存在是正常情况，见[配置说明](../deployment/configuration.md)。
 - 依赖锁文件为 `pnpm-lock.yaml`。首次 `pnpm install` 会运行仓库已有的 Nuxt prepare 和 Git hooks 安装，不需要反复手动 prepare。
@@ -40,7 +41,7 @@ pnpm dev:auth:verify
 pnpm dev
 ```
 
-`pnpm dev` 会再次确保 Docker 依赖已启动，然后启动 Nuxt、授权专用代理及 frpc。应用端口取 `.env.dev` 的 `APP_PORT`；当前模板为 3042。不要使用 `--port` 临时改变组合启动的端口，否则代理目标与应用会不一致。
+`pnpm dev` 会再次确保 Docker 依赖已启动，然后启动 Nuxt、授权专用代理及 frpc。Nuxt 和代理均监听 `127.0.0.1`，应用端口取 `.env.dev` 的 `APP_PORT`；当前模板为 3042。组合启动不允许通过 `--host`、`-h`、`--public` 或 `--port` 覆盖监听地址和端口，确保代理目标与应用一致。`pnpm dev:app` 默认也监听回环地址。
 
 启动后会在独立子进程中只读检查开发 ESA 函数的活动版本、路由和非机密变量；检查不会阻塞 Nuxt，也不会发布函数。新发布的开发版本携带源码摘要，可与本地源码比较；旧版本若没有摘要，会尝试读取在线源码，或使用与当前版本和目标精确对应的本机发布记录。均不可用时提示无法核对。源码或配置不一致时，按需手动运行 `pnpm esa:deploy:dev`；网络或权限故障可先用 `pnpm esa:deploy:dev --check` 排查。加密密钥无法只读比对，提示一致也不能代替真实附件读取验证。
 
@@ -57,7 +58,7 @@ pnpm dev
 
 默认入口遇到应用端口占用会拒绝启动，不会让 Nuxt 自动换端口。代理端口只能复用带 `X-Dev-Auth-Proxy: 1` 标识的既有开发代理，未知进程不会被接管或终止。Ctrl+C 后 Docker 依赖继续运行；被复用的外部代理也不归本次入口清理。
 
-开发 MySQL 使用命名数据卷；不要用删除数据卷的方式解决普通启动错误。当前开发 Compose 的 MySQL、Redis、phpMyAdmin 端口并非全部限制为回环，运行在共享网络的机器上应核对主机防火墙；EMQX 映射已限定回环。
+开发 MySQL 使用命名数据卷；不要用删除数据卷的方式解决普通启动错误。开发 Compose 的 MySQL、Redis、phpMyAdmin 和 EMQX 宿主机端口均限定回环。
 
 ## EMQX 版本与升级
 

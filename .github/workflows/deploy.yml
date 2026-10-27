@@ -78,6 +78,7 @@ jobs:
           umask 077
           printf '%s' "$ENV_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt \
             --output .env.prod .env.prod.gpg
+          pnpm exec tsx scripts/deploy/mask-env.ts
 
       - name: Check production ESA target
         run: pnpm esa:deploy:prod --check

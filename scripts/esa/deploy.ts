@@ -32,7 +32,13 @@ export function deployment_versions(detail: Record<string, unknown>, environment
   const versions = record(env?.CodeDeploy).CodeVersions
   if (! Array.isArray(versions))
     return []
-  return versions.map(record).map(item => ({ CodeVersion: String(item.CodeVersion), Percentage: Number(item.Percentage) }))
+  return versions.map(record).map((item) => {
+    const version = String(item.CodeVersion)
+    const percentage = Number(item.Percentage)
+    if (! /^\d+$/.test(version) || ! Number.isFinite(percentage) || percentage < 0 || percentage > 100)
+      throw new PublishError('Invalid ESA deployment version metadata')
+    return { CodeVersion: version, Percentage: percentage }
+  })
 }
 
 export async function preflight(config: PublishConfig, api: Api) {
