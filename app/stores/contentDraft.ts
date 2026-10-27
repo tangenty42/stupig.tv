@@ -56,6 +56,7 @@ function create_draft_state(target_story_id: number | null) {
   const autosave_pending = ref(false)
   const storage_error = ref(false)
   const edit_version = ref(0)
+  let persistence_enabled = true
 
   let autosave_timer: ReturnType<typeof setTimeout> | null = null
 
@@ -70,7 +71,7 @@ function create_draft_state(target_story_id: number | null) {
   }
 
   function remove_persisted() {
-    if (import.meta.client) {
+    if (import.meta.client && persistence_enabled) {
       try {
         localStorage.removeItem(storage_key)
         storage_error.value = false
@@ -125,7 +126,7 @@ function create_draft_state(target_story_id: number | null) {
 
   function persist_now() {
     clear_timer()
-    if (! import.meta.client || ! initialized.value) {
+    if (! import.meta.client || ! initialized.value || ! persistence_enabled) {
       return
     }
 
@@ -158,7 +159,7 @@ function create_draft_state(target_story_id: number | null) {
   function schedule_persist() {
     const had_pending = autosave_pending.value
     clear_timer()
-    if (! initialized.value || ! import.meta.client) {
+    if (! initialized.value || ! import.meta.client || ! persistence_enabled) {
       return
     }
 
@@ -228,6 +229,12 @@ function create_draft_state(target_story_id: number | null) {
     initialized.value = false
   }
 
+  function set_persistence_enabled(enabled: boolean) {
+    persistence_enabled = enabled
+    if (! enabled)
+      clear_timer()
+  }
+
   watch([markdown, base_namespace_revision, base_title_revision], schedule_persist)
   watch([markdown, base_revision, base_namespace_revision, base_title_revision], () => {
     edit_version.value ++
@@ -250,6 +257,7 @@ function create_draft_state(target_story_id: number | null) {
     advance_base,
     mark_saved,
     persist_now,
+    set_persistence_enabled,
     discard,
     suspend,
   }

@@ -1,7 +1,7 @@
 import type { AppRouter } from '@server/trpc/router'
-import type { PublicApiError } from '@shared/api-error'
+import type { ApplicationError } from '@shared/content-reference-error'
 import type { inferRouterOutputs } from '@trpc/server'
-import { parse_public_api_error } from '@shared/api-error'
+import { parse_application_error } from '@shared/content-reference-error'
 import { settings } from '@shared/settings'
 import { createTRPCClient, httpBatchLink } from '@trpc/client'
 
@@ -14,7 +14,7 @@ interface TrpcErrorShape {
   message?: string
   data?: {
     httpStatus?: number
-    applicationError?: PublicApiError
+    applicationError?: ApplicationError
   }
 }
 
@@ -34,14 +34,14 @@ let ping_pending = false
 
 export class TrpcApiError extends Error {
   status?: number
-  code?: PublicApiError['code']
-  details?: PublicApiError['details']
+  code?: ApplicationError['code']
+  details?: ApplicationError['details']
 
-  constructor(message: string, status?: number, application_error?: PublicApiError) {
+  constructor(message: string, status?: number, application_error?: ApplicationError) {
     super(message)
     this.name = 'ApiError'
     this.status = status
-    const safe = parse_public_api_error(application_error)
+    const safe = parse_application_error(application_error)
     this.code = safe?.code
     this.details = safe?.details
   }
@@ -113,7 +113,7 @@ export function useTrpcClient() {
     }
 
     const data = error as { data?: { applicationError?: unknown }, code?: unknown, details?: unknown }
-    const application_error = parse_public_api_error(data?.data?.applicationError ?? { code: data?.code, details: data?.details })
+    const application_error = parse_application_error(data?.data?.applicationError ?? { code: data?.code, details: data?.details })
     throw new TrpcApiError(message, status, application_error)
   }
 

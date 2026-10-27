@@ -1,5 +1,5 @@
 <template>
-  <MyDialog :visible="!! resolution || !! report" :header="resolution ? '处理冲突' : '操作回执'" :closable="! pending" @update:visible="close">
+  <MyDialog :visible="!! resolution" header="处理冲突" :closable="! pending" @update:visible="close">
     <div v-if="resolution" class="space-y-4">
       <p class="text-sm">
         整批尚未执行，{{ resolution.items.length }} 项需要处理：
@@ -22,18 +22,6 @@
         </div>
       </section>
     </div>
-    <div v-else-if="report" class="space-y-2 text-sm">
-      <p>{{ admission ? '已受理' : '成功' }} {{ report.succeeded.length }} 项，跳过 {{ report.skipped.length }} 项。</p>
-      <p v-if="admission">
-        文件上传和发布进度请查看附件列表。
-      </p>
-      <p v-for="item in report.renamed" :key="`${item.target}:${item.via}`" class="break-words">
-        {{ item.from }} → {{ item.to }}（{{ item.via === 'suffix' ? '自动编号' : '清洗' }}）
-      </p>
-      <p v-for="item in report.skipped" :key="item.target" class="break-words">
-        {{ item.target }}：{{ item.reason }}
-      </p>
-    </div>
     <template #footer>
       <Button label="取消" severity="secondary" text :disabled="pending" @click="close" />
       <Button v-if="resolution" label="重试" :loading="pending" :disabled="pending" @click="submit_resolution">
@@ -46,13 +34,13 @@
 </template>
 
 <script setup lang="ts">
-import type { ErrorCategory, ErrorPolicy, WorkspaceIssue, WorkspaceReport } from '@shared/content-workspace'
+import type { ErrorCategory, ErrorPolicy, WorkspaceIssue } from '@shared/content-workspace'
 import type { ContentWorkspaceNode } from '@shared/types/content'
 import type { MyContentAttachmentRow } from '~/utils/content/attachment-list'
 import { attachment_name_key, error_categories, error_policy_schema } from '@shared/content-workspace'
 import { attachment_summary_tree } from '~/utils/content/attachment-list'
 
-const props = withDefaults(defineProps<{ resolution: { items: WorkspaceIssue[], valid_count: number, valid_targets?: string[] } | null, report: WorkspaceReport | null, pending: boolean, admission?: boolean, nodes?: ContentWorkspaceNode[] }>(), { nodes: () => [] })
+const props = withDefaults(defineProps<{ resolution: { items: WorkspaceIssue[], valid_count: number, valid_targets?: string[] } | null, pending: boolean, nodes?: ContentWorkspaceNode[] }>(), { nodes: () => [] })
 const emit = defineEmits<{ submit: [policy: ErrorPolicy], close: [] }>()
 const policy = reactive(error_policy_schema.parse({}))
 const collapsed_folders = ref(new Set<string>())

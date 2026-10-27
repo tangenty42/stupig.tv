@@ -9,9 +9,9 @@ afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 async function open(category: typeof error_categories[number] = 'name_conflict') {
   const issue = workspace_issue('docs/photo.png', category, 'TEST', '具体原因')
   const wrapper = await mountSuspended(Resolve, {
-    props: { resolution: { items: [issue], valid_count: 1, valid_targets: ['docs/ok.txt'] }, report: null, pending: false },
+    props: { resolution: { items: [issue], valid_count: 1, valid_targets: ['docs/ok.txt'] }, pending: false },
     global: { stubs: {
-      MyDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+      MyDialog: { props: ['visible'], template: '<div v-if="visible"><slot /><slot name="footer" /></div>' },
       MyIcon: true,
       MyContentAttachmentCard: { props: ['row'], emits: ['click'], template: '<button @click="$emit(\'click\')">{{ row.data.file_name }}</button>' },
     } },
@@ -19,6 +19,13 @@ async function open(category: typeof error_categories[number] = 'name_conflict')
   wrappers.push(wrapper)
   return wrapper
 }
+
+it('closes the dialog when resolution finishes', async () => {
+  const wrapper = await open()
+  expect(wrapper.text()).toContain('整批尚未执行')
+  await wrapper.setProps({ resolution: null })
+  expect(wrapper.text()).toBe('')
+})
 
 it.each(error_categories)('renders %s resolution choices and submits the category policy', async (category) => {
   const wrapper = await open(category)

@@ -184,7 +184,7 @@ export function useApi() {
       return trpc_call(trpc.content.createStory.mutate({ markdown }))
     },
 
-    async update_story(id: number, payload: { markdown: string, base_revision: number, base_namespace_revision?: number | null, base_title_revision?: number | null }) {
+    async update_story(id: number, payload: { markdown: string, base_revision: number, base_namespace_revision?: number | null, base_title_revision?: number | null, confirm_reference_history?: boolean }) {
       return trpc_call(trpc.content.updateStory.mutate({ id, ... payload }))
     },
 

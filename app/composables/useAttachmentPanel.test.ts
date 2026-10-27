@@ -265,7 +265,6 @@ it('discards all old identity command responses, errors and busy fences', async 
   finish({ ... success, workspace: { ... workspace, namespace_revision: 99 }, renamed: [{ target: 'old', from: 'old', to: 'next', via: 'suffix' }] })
   await first
   expect(panel.request_error.value).toBe('')
-  expect(panel.report.value).toBeNull()
   expect(panel.catalog.data.value?.namespace_revision).toBe(1)
 })
 
@@ -281,6 +280,19 @@ it('retries a lost conflict resubmission with the same receipt instead of offeri
   const retried = mocks.execute.mock.calls[1]![0]
   await panel.submit()
   expect(mocks.execute.mock.calls[2]![0]).toEqual(retried)
+})
+
+it('finishes a resolved command with renamed items and applies its workspace', async () => {
+  const details = { items: [{ target: 'qa.txt', category: 'name_conflict', code: 'NAME_TAKEN', reason: '已占用', allowed: ['fail', 'suffix'] }], valid_count: 0 }
+  mocks.execute.mockRejectedValueOnce(Object.assign(new Error('整批未执行'), { code: 'BATCH_REJECTED', details }))
+    .mockResolvedValueOnce({ ... success, renamed: [{ target: 'qa.txt', from: 'qa.txt', to: 'qa-1.txt', via: 'suffix' }], workspace: { ... workspace, namespace_revision: 2 } })
+  const panel = await mount()
+  await panel.execute(action)
+  expect(panel.resolution.value).not.toBeNull()
+  await panel.submit({ name_conflict: 'suffix', reserved: 'fail', source_busy: 'fail', invalid_name: 'fail', other: 'fail', redacted: 'fail' })
+  expect(panel.resolution.value).toBeNull()
+  expect(panel.catalog.data.value?.namespace_revision).toBe(2)
+  expect(panel.request_error.value).toBe('')
 })
 
 it('runs unrelated commands independently and keeps selection made during a pending command', async () => {
@@ -333,7 +345,6 @@ it('finishes a successful deletion without an error even with a legacy pending-c
   expect(panel.request_error.value).toBe('')
   expect(panel.pending.value).toBe(false)
   expect(panel.selected.value.size).toBe(0)
-  expect(panel.report.value).toBeNull()
   await panel.execute(action)
   expect(mocks.execute).toHaveBeenCalledTimes(2)
 })

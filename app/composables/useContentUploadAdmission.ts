@@ -1,5 +1,5 @@
 import type { ImageSaveMode, UploadBatch } from '@shared/content-upload'
-import type { ErrorPolicy, WorkspaceIssue, WorkspaceReport } from '@shared/content-workspace'
+import type { ErrorPolicy, WorkspaceIssue } from '@shared/content-workspace'
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { useApi } from './useApi'
@@ -31,7 +31,6 @@ interface AdmissionOptions {
 export function createContentUploadAdmission(scope: number, options: AdmissionOptions) {
   const preparing = ref<{ path: string, loaded: number, total: number } | null>(null)
   const resolution = ref<{ items: WorkspaceIssue[], valid_count: number } | null>(null)
-  const report = ref<WorkspaceReport | null>(null)
   const admission_error = ref('')
   const admitting = ref(false)
   let pending: { input: UploadBatch, entries: UploadEntry[] } | null = null
@@ -59,7 +58,6 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
         if (epoch !== options.snapshot_epoch())
           return
       }
-      report.value = result.skipped.length || result.renamed.length ? result : null
       resolution.value = null
       pending = null
       // Admission of the complete selection precedes every byte transfer.
@@ -101,7 +99,6 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
     if (pending)
       throw new Error('请先处理上一批上传的受理结果')
     accepting = true
-    report.value = null
     const epoch = options.snapshot_epoch()
     const prepared: UploadBatch['entries'] = []
     try {
@@ -145,9 +142,8 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
     accepting = false
     pending = null
     resolution.value = null
-    report.value = null
     admission_error.value = ''
     admitting.value = false
   }
-  return { preparing, resolution, report, admission_error, admitting, submit, dismiss_resolution, start, reset }
+  return { preparing, resolution, admission_error, admitting, submit, dismiss_resolution, start, reset }
 }

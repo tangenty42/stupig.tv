@@ -313,6 +313,7 @@ it('keeps the request identity on network retry and changes it only after explic
   expect(store.resolution?.items[0]?.code).toBe('NAME_TAKEN')
   await store.submit(error_policy_schema.parse({ name_conflict: 'suffix' }))
   expect(state.api.begin_upload_batch.mock.calls[2]![0].request_id).not.toBe(original)
+  expect(store.resolution).toBeNull()
   await vi.waitFor(() => expect(store.sessions).toEqual([]))
 })
 
@@ -583,7 +584,6 @@ it('attaches the whole accepted batch before bytes and maps renamed entries by s
   await pending
   await vi.waitFor(() => expect(state.run).toHaveBeenCalledTimes(2))
   expect(state.run.mock.calls.map(call => call[0])).toEqual([second, first])
-  expect(store.report?.renamed).toEqual([{ from: 'second.txt', to: 'renamed.txt' }])
   await vi.waitFor(() => expect(store.active.size).toBe(0))
 })
 

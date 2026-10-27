@@ -112,7 +112,7 @@
       </template>
     </MyDialog>
     <MyContentAttachmentImageEditor v-model:visible="image_editor_visible" :attachment="image_editor_row?.node?.attachment ?? null" :redacted="editing_redacted" @save="save_image" />
-    <MyContentAttachmentResolve v-if="dialogs" :resolution="model.resolution ?? model.uploads.resolution" :report="model.report ?? model.uploads.report" :admission="! model.report && !! model.uploads.report" :pending="model.resolution ? model.resolution_pending : !! model.uploads.resolution && model.uploads.admitting" :nodes="model.catalog.data?.nodes" @submit="resolve" @close="close_resolve" />
+    <MyContentAttachmentResolve v-if="dialogs" :resolution="model.resolution ?? model.uploads.resolution" :pending="model.resolution ? model.resolution_pending : !! model.uploads.resolution && model.uploads.admitting" :nodes="model.catalog.data?.nodes" @submit="resolve" @close="close_resolve" />
     <ClientOnly v-if="dialogs">
       <MyImagePreview v-model:visible="model.preview_visible" :images="model.preview_images" :initial-index="0" />
     </ClientOnly>
@@ -549,10 +549,6 @@ function close_resolve() {
     model.dismiss_resolution()
   else if (model.uploads.resolution)
     model.uploads.dismiss_resolution()
-  else if (model.report)
-    model.report = null
-  else
-    model.uploads.report = null
 }
 function drag(event: DragEvent, row: WorkspaceListRow) {
   if (! model.selected.has(row.key))

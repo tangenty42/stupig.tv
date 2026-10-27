@@ -150,13 +150,6 @@ async function on_select_file(event: Event) {
     return
   }
 
-  const max_size_bytes = settings.app.avatar.maxSizeMb * 1024 * 1024
-  if (file.size > max_size_bytes) {
-    error(`文件不能超过 ${format_bytes(max_size_bytes)}`)
-    reset_file_input()
-    return
-  }
-
   if (! ['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
     error('只支持 JPG / PNG / WebP')
     reset_file_input()
@@ -198,6 +191,10 @@ async function submit_avatar() {
         resolve(result)
       }, 'image/jpeg', 0.92)
     })
+
+    const max_size_bytes = settings.app.avatar.maxSizeMb * 1024 * 1024
+    if (blob.size > max_size_bytes)
+      throw new Error(`裁剪后的头像不能超过 ${format_bytes(max_size_bytes)}`)
 
     await profile_api.upload_avatar(
       new File([blob], `avatar_${Date.now()}.jpg`, { type: 'image/jpeg' }),

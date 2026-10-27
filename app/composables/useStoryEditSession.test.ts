@@ -185,6 +185,34 @@ it('sends all three base revisions and preserves edits typed while save is in fl
   expect(f.draft.dirty).toBe(true)
 })
 
+it('asks on save and retries the same draft with explicit history confirmation', async () => {
+  const f = await open()
+  f.draft.markdown = 'local edits'
+  update.mockRejectedValueOnce(Object.assign(new Error('history unavailable'), { status: 409, code: 'REF_HISTORY_UNAVAILABLE' }))
+    .mockResolvedValueOnce({ markdown: 'local edits', revision: 3, namespace_revision: 3, title_revision: 1 })
+  f.on_save_click()
+  await vi.waitFor(() => expect(f.reference_history_warning_visible.value).toBe(true))
+  expect(f.draft_conflict_visible.value).toBe(false)
+  expect(f.draft.markdown).toBe('local edits')
+  f.confirm_reference_history_save()
+  await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+  expect(update.mock.calls[1]![1]).toMatchObject({ markdown: 'local edits', confirm_reference_history: true })
+  await vi.waitFor(() => expect(f.save_pending.value).toBe(false))
+})
+
+it('does not reuse history confirmation after the draft changes', async () => {
+  const f = await open()
+  f.draft.markdown = 'first draft'
+  update.mockRejectedValue(Object.assign(new Error('history unavailable'), { status: 409, code: 'REF_HISTORY_UNAVAILABLE' }))
+  f.on_save_click()
+  await vi.waitFor(() => expect(f.reference_history_warning_visible.value).toBe(true))
+  f.draft.markdown = 'changed draft'
+  f.confirm_reference_history_save()
+  await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+  expect(update.mock.calls[1]![1]).toMatchObject({ markdown: 'changed draft' })
+  expect(update.mock.calls[1]![1]).not.toHaveProperty('confirm_reference_history')
+})
+
 it.each(['database', 'local'])('keeps the existing conflict dialog and applies the %s choice', async (choice) => {
   const f = await open()
   f.draft.markdown = 'local edits'

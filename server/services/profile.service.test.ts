@@ -44,10 +44,12 @@ describe('upload_profile_avatar', () => {
   it('rejects an avatar larger than the configured limit before writing to storage', async () => {
     const form = new FormData()
     form.append('avatar', new Blob([new Uint8Array(1024 * 1024 + 1)], { type: 'image/jpeg' }), 'avatar.jpg')
+    const read = vi.spyOn(form.get('avatar') as Blob, 'arrayBuffer')
 
     await expect(upload_profile_avatar(7, form, () => ({ max_size_mb: 1 })))
       .rejects.toMatchObject({ statusCode: 413, message: '头像文件太大了，不能超过 1 MB' })
     expect(mocks.put_object).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
   })
 
   it('publishes a new immutable avatar key and removes the previous avatar through OSS', async () => {
