@@ -1,0 +1,28 @@
+import { expect } from '@playwright/test'
+import { logout, ready, test } from '../support/e2e-browser'
+
+test('phone login sends a code, enforces cooldown and rejects incorrect codes', async ({ page }) => {
+  await page.goto('/')
+  await ready(page)
+  await page.getByRole('button', { name: '登录 / 注册', exact: true }).click()
+  await page.getByRole('button', { name: '手机验证码登录', exact: true }).click()
+  const form = page.locator('#login-phone-form')
+  await form.locator('input[name="phone"]').fill('19000000000')
+  await form.locator('input[name="phone"]').press('Tab')
+  const sent = page.waitForResponse(response => response.url().includes('auth.sendOtp') && response.request().method() === 'POST')
+  await form.getByRole('button', { name: '发送', exact: true }).click()
+  expect((await sent).ok()).toBe(true)
+  await expect(form.getByRole('button')).toBeDisabled()
+  const repeated = await page.request.post('/api/trpc/auth.sendOtp', { data: { phone: '19000000000', purpose: 'login' } })
+  expect(repeated.status()).toBe(429)
+  await form.locator('input[autocomplete="one-time-code"]').fill('000000')
+  await page.getByRole('button', { name: '立即登录', exact: true }).click()
+  await expect(page.getByText('验证码不正确或已过期', { exact: true })).toBeVisible()
+  await form.locator('input[autocomplete="one-time-code"]').fill('123456')
+  await page.getByRole('button', { name: '立即登录', exact: true }).click()
+  await expect(page.getByRole('button', { name: '用户菜单：user', exact: true })).toBeVisible()
+  await page.reload()
+  await ready(page)
+  await expect(page.getByRole('button', { name: '用户菜单：user', exact: true })).toBeVisible()
+  await logout(page)
+})
