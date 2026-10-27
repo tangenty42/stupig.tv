@@ -39,6 +39,16 @@ html .img-frame > img[role='button'] {
   filter: blur(0.5rem);
   transform: scale(1.05);
   transition: opacity 200ms ease;
+  animation: image-placeholder-breathe 2.4s ease-in-out infinite;
+}
+
+.img-frame[data-lqip][data-image-loaded]::before {
+  animation-play-state: paused;
+}
+
+@keyframes image-placeholder-breathe {
+  0%, 100% { filter: blur(0.5rem) opacity(0.65); }
+  50% { filter: blur(0.5rem) opacity(1); }
 }
 
 .img-frame > .image-loading-mask {
@@ -47,12 +57,11 @@ html .img-frame > img[role='button'] {
 }
 
 .img-frame > .image-loading-mask .iconify {
-  animation: image-loading-breathe 2s ease-in-out infinite;
+  animation: image-loading-spin 1s linear infinite;
 }
 
-@keyframes image-loading-breathe {
-  0%, 100% { opacity: 0.55; transform: scale(0.9); }
-  50% { opacity: 1; transform: scale(1); }
+@keyframes image-loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 .img-frame[data-image-loaded] > .image-loading-mask {

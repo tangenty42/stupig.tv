@@ -29,7 +29,27 @@ test('image placeholders breathe and stay behind the image during its fade', asy
     const frame = element as HTMLElement
     frame.style.setProperty('--content-lqip', `url(data:image/jpeg;base64,${data})`)
   }, lqip)
-  await expect.poll(() => frame.locator('.image-loading-mask .iconify').evaluate(element => getComputedStyle(element).animationName)).toBe('image-loading-breathe')
+  const motion = await frame.evaluate((element) => {
+    const icon = element.querySelector('.image-loading-mask .iconify')!
+    const placeholder = element.getAnimations({ subtree: true }).find(animation => animation instanceof CSSAnimation && animation.animationName === 'image-placeholder-breathe')!
+    const spinner = icon.getAnimations().find(animation => animation instanceof CSSAnimation && animation.animationName === 'image-loading-spin')!
+    placeholder.pause()
+    spinner.pause()
+    placeholder.currentTime = 0
+    spinner.currentTime = 0
+    const dim = getComputedStyle(element, '::before').filter
+    const start = getComputedStyle(icon).transform
+    placeholder.currentTime = 1200
+    spinner.currentTime = 250
+    const bright = getComputedStyle(element, '::before').filter
+    const quarter_turn = getComputedStyle(icon).transform
+    placeholder.play()
+    spinner.play()
+    return { dim, bright, start, quarter_turn }
+  })
+  expect(motion.dim).toContain('opacity(0.65)')
+  expect(motion.bright).toContain('opacity(1)')
+  expect(motion.quarter_turn).not.toBe(motion.start)
   await frame.evaluate(async (element) => {
     void getComputedStyle(element.querySelector('img')!).opacity
     await new Promise(requestAnimationFrame)
@@ -81,7 +101,8 @@ test('image placeholders breathe and stay behind the image during its fade', asy
     const mask = frame.querySelector<HTMLElement>('.image-loading-mask')!
     const image = frame.querySelector('img')!
     await image.decode()
-    const breathing = getComputedStyle(mask.querySelector('.iconify')!).animationName
+    const breathing = getComputedStyle(frame, '::before').animationName
+    const spinning = getComputedStyle(mask.querySelector('.iconify')!).animationName
     await new Promise(requestAnimationFrame)
     frame.dataset.imageLoaded = ''
     await new Promise(requestAnimationFrame)
@@ -91,12 +112,14 @@ test('image placeholders breathe and stay behind the image during its fade', asy
     }
     return {
       breathing,
+      spinning,
       image_opacity: Number(getComputedStyle(image).opacity),
       placeholder_opacity: Number(getComputedStyle(frame, '::before').opacity),
       mask_opacity: Number(getComputedStyle(mask).opacity),
     }
   }, { lqip, png: image.toString('base64') })
-  expect(cover.breathing).toBe('image-loading-breathe')
+  expect(cover.breathing).toBe('image-placeholder-breathe')
+  expect(cover.spinning).toBe('image-loading-spin')
   expect(cover.image_opacity).toBeGreaterThan(0)
   expect(cover.image_opacity).toBeLessThan(1)
   expect(cover.placeholder_opacity).toBe(1)
@@ -105,6 +128,7 @@ test('image placeholders breathe and stay behind the image during its fade', asy
 
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await expect.poll(() => frame.evaluate(element => getComputedStyle(element, '::before').transitionDuration)).toBe('0s')
+  await expect.poll(() => frame.evaluate(element => getComputedStyle(element, '::before').animationName)).toBe('none')
   await expect.poll(() => page.locator('body > .content-cover').evaluate(element => getComputedStyle(element, '::before').transitionDuration)).toBe('0s')
   await expect.poll(() => frame.locator('.image-loading-mask .iconify').evaluate(element => getComputedStyle(element).animationName)).toBe('none')
   await expect.poll(() => page.locator('body > .content-cover .iconify').evaluate(element => getComputedStyle(element).animationName)).toBe('none')
