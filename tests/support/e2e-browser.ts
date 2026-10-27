@@ -85,3 +85,21 @@ export async function logout(page: Page) {
 export function markdown(title: string, body: string) {
   return `---\ntitle: ${title}\nlabel: #人上人\ntime: 2026/01/01\n---\n\n${body}\n`
 }
+
+export async function local_storage(page: Page) {
+  // Preserve the production HTTPS bucket/key/part grant checks. Only the OSS
+  // network boundary is redirected to the local fixture's byte receiver.
+  await page.route('https://e2e.oss.invalid/**', async (route) => {
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'PUT, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Content-MD5', 'Access-Control-Expose-Headers': 'ETag' }
+    if (route.request().method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers: cors })
+      return
+    }
+    const url = new URL(route.request().url())
+    const response = await page.request.put(`/api/e2e-oss/${url.searchParams.get('uploadId')}?part=${url.searchParams.get('partNumber')}`, {
+      data: route.request().postDataBuffer()!,
+    })
+    await route.fulfill({ response, headers: { ... response.headers(), ... cors } })
+  })
+}
