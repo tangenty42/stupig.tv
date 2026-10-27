@@ -83,6 +83,13 @@ describe('eSA publication orchestration', () => {
     expect(writes()).toEqual([])
   })
 
+  it('rejects unexpected version metadata before it reaches a receipt', async () => {
+    const { deps, state } = harness()
+    state.current = [{ CodeVersion: config.accessKeySecret, Percentage: 100 }]
+    await expect(publish(config, source, description, deps)).rejects.toThrow('Invalid ESA deployment version metadata')
+    expect(JSON.stringify(vi.mocked(deps.checkpoint).mock.calls)).not.toContain(config.accessKeySecret)
+  })
+
   it('syncs encrypted/plain variables before commit and deploys only the returned version', async () => {
     const { deps, api } = harness()
     expect(await publish(config, source, description, deps)).toBe('200')
@@ -94,7 +101,9 @@ describe('eSA publication orchestration', () => {
     const deployment = api.mock.calls.find(([action]) => action === 'CreateRoutineCodeDeployment')![1]
     expect(JSON.parse(deployment.CodeVersions!)).toEqual([{ CodeVersion: '200', Percentage: 100 }])
     expect(deps.checkpoint).toHaveBeenLastCalledWith({ stage: 'deployed', version: '200', acknowledgementLost: false })
-    expect(JSON.stringify(vi.mocked(deps.checkpoint).mock.calls)).not.toContain(config.authKey)
+    const receipt_updates = JSON.stringify(vi.mocked(deps.checkpoint).mock.calls)
+    for (const secret of [config.authKey, config.accessKeyId, config.accessKeySecret])
+      expect(receipt_updates).not.toContain(secret)
   })
 
   it.each([

@@ -50,6 +50,7 @@ describe('production publication workflow', () => {
     const index = (name: string) => steps.findIndex(step => step.name === name)
     expect(workflow.concurrency['cancel-in-progress']).toBe(false)
     expect(index('Decrypt production environment')).toBeLessThan(index('Check production ESA target'))
+    expect(steps[index('Decrypt production environment')]?.run).toContain('pnpm exec tsx scripts/deploy/mask-env.ts')
     expect(index('Check production ESA target')).toBeLessThan(index('Deploy to server'))
     expect(index('Prepare server environment')).toBeGreaterThan(index('Check production ESA target'))
     expect(index('Prepare server environment')).toBeLessThan(index('Deploy to server'))
