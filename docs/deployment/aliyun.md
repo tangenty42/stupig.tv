@@ -83,7 +83,7 @@
 
 缓存 `test` / `test2` 和响应头 `test` 均已停用。已修改 filename 的路径范围及 Content Range 规则的 OriginScheme=https；Range force / 1MB 和其他项目的回源规则读回保持不变。
 
-文件名规则已采用[ESA 手册](esa.md#规则匹配与已知兼容边界)中的整体 AND 结构。相同对象连续使用中文、空格、`#`、`%` 下载名，响应头分别匹配且字节摘要一致。出站响应头按顺序执行，后续同名头会覆盖前项，见[官方说明](https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/modify-outgoing-response-header)。
+文件名规则已采用[ESA 手册](esa.md)中的整体 AND 结构。相同对象连续使用中文、空格、`#`、`%` 下载名，响应头分别匹配且字节摘要一致。出站响应头按顺序执行，后续同名头会覆盖前项，见[官方说明](https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/modify-outgoing-response-header)。
 
 旁路 `http.request.uri.path` 历史问题未重做字段对照实验；继续用 `uri` 匹配路径、`full_uri` 匹配文件名参数。Content 回源规则已显式设置 HTTPS；开发定点刷新后冷请求仍为 200，第二次 Age 为 2，源文件与两次下载摘要一致。生产冷回源仍待验收，见[回源协议](https://help.aliyun.com/en/edge-security-acceleration/esa/user-guide/back-to-source-protocols-and-ports)。
 
@@ -132,7 +132,7 @@
 - 旧 4 用户、2 上传角色和 5 旧策略已删除；当前全部 `stupig-` 用户/策略恰好等于新清单，没有额外前缀角色。当前上传不需要 STS 角色，因此未另建替代上传角色。
 - 新凭据实际验证：8 个 STS 调用者均匹配对应用户；OSS 两环境各自 GetBucketVersioning 返回 Enabled，读取另一环境桶均 403 AccessDenied；ESA 额度与层级读取成功；两个 `esa:deploy:* --check` 均通过。
 - 非 `stupig-` 用户及角色的名称和 ID 均保留，包含 `tmp`、其他项目身份和 `AliyunESAAccessingPrivateOSSRole`。旧 `acr-admin` / `dypns-admin` 未纳入删除范围；短信应用本机配置已切到新身份。
-- 新个人版仅允许一个 RAM 子账号设置 Registry 密码，用户确认此前一直使用主账号 Tangenty 的 Registry 密码，因此已按用户要求撤回双 RAM 方案。CI 与主机共用 `ACR_USERNAME/PASSWORD`，保留 SSH stdin 传递及 Docker `--password-stdin`；本轮通过服务器既有 Registry 登录完成镜像推拉，未修改 GitHub Secrets 或 Registry 密码。见 [ACR](github-acr.md#推拉身份)。
+- 新个人版仅允许一个 RAM 子账号设置 Registry 密码，用户确认此前一直使用主账号 Tangenty 的 Registry 密码，因此已按用户要求撤回双 RAM 方案。CI 与主机共用 `ACR_USERNAME/PASSWORD`，保留 SSH stdin 传递及 Docker `--password-stdin`；本轮通过服务器既有 Registry 登录完成镜像推拉，未修改 GitHub Secrets 或 Registry 密码。见 [ACR](github-acr.md)。
 
 上述身份验证不代替上传/替换/删除或短信发送验收。删除旧身份后，任何仍运行并缓存旧凭据的外部进程都需改用新配置；本次已重新部署生产应用并核对环境，未重启整台服务器或修改 GitHub Secrets。
 

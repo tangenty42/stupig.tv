@@ -47,7 +47,7 @@ NFC／大小写重名、文件作为父目录、非法路径、缺失档案、�
 
 ## 分阶段执行
 
-以下命令适用于已经选择正确环境的源码工作区；生产推荐使用[维护容器入口](./migrations.md#生产产物与维护容器)。阶段顺序相同，只替换命令前缀。
+以下命令适用于已经选择正确环境的源码工作区；生产推荐使用[维护容器入口](./migrations.md)。阶段顺序相同，只替换命令前缀。
 
 ```sh
 pnpm migrate --status
@@ -99,4 +99,4 @@ pnpm migrate --status
 
 旧源退役是独立显式阶段。确认保留窗口结束、无回滚需求后再按精确对象清单处理并释放 pin，不能清空迁移表或递归删除桶前缀。当前日常退役负责正式替换／删除的对象及 ESA 刷新，不是业务回收站。`storage:cleanup --delete` 已停用；上线前停掉旧清理 cron。
 
-隔离演练入口见[测试说明](../development/testing.md#迁移演练)。旧 `content:workspace:plan`、`content:storage:migrate`、`content:private:migrate`、`content:refs:migrate` 均已退休，统一使用上述版本链。
+隔离演练入口见[测试说明](../development/testing.md)。旧 `content:workspace:plan`、`content:storage:migrate`、`content:private:migrate`、`content:refs:migrate` 均已退休，统一使用上述版本链。

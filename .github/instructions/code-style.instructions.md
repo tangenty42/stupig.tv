@@ -22,19 +22,19 @@ ESLint (`eslint.config.mjs`, Antfu flat config) is the sole formatter. Do not in
 
 - Search existing utilities, shared modules and composables before adding helpers or parallel formatting/parsing logic. Extend the owning implementation.
 - Keep `app/utils/` pure: capture composable values in setup and pass them explicitly.
-- Follow the [global configuration rules](../copilot-instructions.md#configuration-and-secrets): stable browser settings, server deployment configuration and secrets have separate owners. Generated settings are not hand-edited.
+- Follow the [global configuration rules](../copilot-instructions.md): stable browser settings, server deployment configuration and secrets have separate owners. Generated settings are not hand-edited.
 - Documentation must describe current behavior, link to the authoritative code/config/policy, and distinguish unimplemented work or unverified external settings. Keep normative detail in one owning document.
 
 ## Comments and prose
 
 - Explain non-obvious reasons, invariants, compatibility constraints and failure boundaries close to the code they govern. Avoid narrating obvious statements or adding boilerplate comments to every declaration.
 - Update technical claims when behavior changes; do not leave obsolete contracts beside new code. Use JSDoc for useful API contracts and ordinary comments for local reasoning, without repeating inferred types.
-- Preserve existing language and the author's personal expressions; follow the [author-voice rule](../copilot-instructions.md#workflow-and-runtime). Humor and debugging anecdotes are not stale documentation merely because they are informal. Add factual corrections separately when needed.
+- Preserve existing language and the author's personal expressions; follow the [author-voice rule](../copilot-instructions.md). Humor and debugging anecdotes are not stale documentation merely because they are informal. Add factual corrections separately when needed.
 - Keep TODOs actionable: state the remaining work and relevant constraint or issue, rather than a completed-work log. Do not invent personal anecdotes or imitate the author's voice in new comments.
 
 ### Protected content markers
 
-The [global approval rule](../copilot-instructions.md#protected-author-content) applies to these literal, case-sensitive markers:
+The [global approval rule](../copilot-instructions.md) applies to these literal, case-sensitive markers:
 
 - `THIS IS A GOOD COMMENT BEGIN` / `THIS IS A GOOD COMMENT END`: enclose the protected comment or adjacent comment blocks, using the language's native comment syntax. Runtime code outside the markers is not protected by this comment marker.
 - `THIS IS A GOOD SECTION BEGIN` / `THIS IS A GOOD SECTION END`: enclose a protected document passage, including its headings and image references. Markdown uses HTML comments so the markers do not appear in rendered prose.
@@ -67,5 +67,5 @@ Original prose and images stay here.
 
 - `pnpm lint` checks; `pnpm lint:fix` fixes. Hooks use lint-staged; VS Code can apply ESLint fixes on save. Use focused fixes to preserve unrelated working changes.
 - Test files obey the same style. Fix lint errors without weakening assertions or exempting whole files; use a narrow, justified disable only when a rule cannot apply.
-- Follow the [global testing rules](../copilot-instructions.md#testing) and [testing guide](../../docs/development/testing.md). Type/import changes require typecheck; pure documentation changes require lint and link/command/source consistency checks.
+- Follow the [global testing rules](../copilot-instructions.md) and [testing guide](../../docs/development/testing.md). Type/import changes require typecheck; pure documentation changes require lint and link/command/source consistency checks.
 - Intentional exceptions use `eslint-disable-next-line` with a `-- reason` suffix.

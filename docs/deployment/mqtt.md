@@ -136,7 +136,7 @@ location /mqtt {
 
 MQTT 5 可以观察 Not authorized（135）、Bad User Name or Password（134）等原因；本应用 MQTT.js 默认 MQTT 3.1.1，不能要求它返回 MQTT 5 原因码。以 broker 拒绝记录、连接状态、SUBACK 和实际接收共同判断，不能仅凭 publish 回调未报错宣称授权成功。
 
-本次本地验收：从 5.10.5 停机备份并升级到 6.2.2，保留原卷与节点，读回认证、listener、ACL 和 durable_sessions 状态；MQTT 3.1.1 与 MQTT 5 各 10 项连接/收发/拒绝测试全部通过。没有生产 WSS 验收，证据范围不能扩展为『生产权限已配置』。本机升级与备份说明见[本地开发](../development/README.md#emqx-版本与升级)。broker 中断后 Content outbox 会保留重试，恢复后检查[后台任务](../modules/background-jobs.md)，不要清空积压掩盖问题。
+本次本地验收：从 5.10.5 停机备份并升级到 6.2.2，保留原卷与节点，读回认证、listener、ACL 和 durable_sessions 状态；MQTT 3.1.1 与 MQTT 5 各 10 项连接/收发/拒绝测试全部通过。没有生产 WSS 验收，证据范围不能扩展为『生产权限已配置』。本机升级与备份说明见[本地开发](../development/README.md)。broker 中断后 Content outbox 会保留重试，恢复后检查[后台任务](../modules/background-jobs.md)，不要清空积压掩盖问题。
 
 ## 常见故障定位
 

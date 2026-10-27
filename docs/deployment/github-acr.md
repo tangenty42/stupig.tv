@@ -23,7 +23,7 @@ GitHub Ruleset 应要求 `check` 与 `migrations` 检查通过。仓库中的注
 
 首次上线确认 GitHub runner 可登录/推送，服务器可登录/拉取同一仓库。当前流程维护应用 `:latest` 和 EMQX `:mqtt`，没有每次 SHA tag，也不由 ACR 自动构建。构建成功后推送；后续 SSH 部署失败只恢复服务器本地镜像标签，不会把远端 ACR 标签改回旧版本。
 
-2026-10-25 已通过个人版 API 重新确认目标仓库 PRIVATE/NORMAL、仅一个 latest、无自动构建规则；未验证 GitHub 中的登录凭据和服务器拉取。推拉共用一组 Registry 凭据，固定发布 tag/digest 尚未实现；实际资源与云端状态见[ACR 台账](aliyun.md#acr-已确认状态)。
+2026-10-25 已通过个人版 API 重新确认目标仓库 PRIVATE/NORMAL、仅一个 latest、无自动构建规则；未验证 GitHub 中的登录凭据和服务器拉取。推拉共用一组 Registry 凭据，固定发布 tag/digest 尚未实现；实际资源与云端状态见[ACR 台账](aliyun.md)。
 
 ## 推拉身份
 
