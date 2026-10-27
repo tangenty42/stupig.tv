@@ -11,6 +11,8 @@ export async function run_development(args: string[] = []) {
   const config = load_dev_auth_config()
   if (args.some(arg => arg === '--port' || arg === '-p' || arg.startsWith('--port=')))
     throw new Error('Set APP_PORT through the development environment so the app and authorization proxy use the same port')
+  if (args.some(arg => arg === '--host' || arg.startsWith('--host=') || arg.startsWith('-h') || arg === '--public' || arg.startsWith('--public=')))
+    throw new Error('The development app listens on 127.0.0.1; do not override the listening host')
   // Do not start Nuxt's alternate-port fallback: the proxy must reach this app.
   await new Promise<void>((resolve, reject) => {
     const socket = createConnection({ port: config.proxy.targetPort, host: config.proxy.targetHost })
@@ -36,7 +38,7 @@ export async function run_development(args: string[] = []) {
   let app_env: NodeJS.ProcessEnv
   try {
     app_env = load_environment({ node_env: 'development' })
-    app = spawn(process.execPath, [fileURLToPath(new URL('../../node_modules/nuxt/bin/nuxt.mjs', import.meta.url)), 'dev', '--dotenv', '.env.dev', '--host', '0.0.0.0', ... args, '--port', String(config.proxy.targetPort)], { stdio: 'inherit', windowsHide: true, env: app_env })
+    app = spawn(process.execPath, [fileURLToPath(new URL('../../node_modules/nuxt/bin/nuxt.mjs', import.meta.url)), 'dev', '--dotenv', '.env.dev', '--host', config.proxy.targetHost, ... args, '--port', String(config.proxy.targetPort)], { stdio: 'inherit', windowsHide: true, env: app_env })
   }
   catch (error) {
     stop_tunnel()

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -12,6 +13,11 @@ vi.mock('./esa-notice', () => ({ start_dev_esa_notice: mocks.notice }))
 vi.mock('../../config/lib/environment.mjs', () => ({ load_environment: () => ({ NODE_ENV: 'development' }) }))
 const { run_development } = await import('./cli')
 afterEach(() => vi.resetAllMocks())
+
+it('starts the standalone app on loopback by default', () => {
+  const scripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts as Record<string, string>
+  expect(scripts['dev:app']).toContain('--host 127.0.0.1')
+})
 
 async function reserve_port(host = '127.0.0.1') {
   const server = createServer()
@@ -49,6 +55,7 @@ it.each(['exit', 'error', 'stop'] as const)('releases owned tunnel and app on %s
   const [executable, args, options] = mocks.spawn.mock.calls[0]!
   expect(executable).toBe(process.execPath)
   expect(args).toEqual(expect.arrayContaining([resolve('node_modules/nuxt/bin/nuxt.mjs'), 'dev', '--port', String(reservation.port)]))
+  expect(args[args.indexOf('--host') + 1]).toBe('127.0.0.1')
   expect(options.windowsHide).toBe(true)
   if (event === 'stop')
     session.stop()
@@ -61,6 +68,13 @@ it.each(['exit', 'error', 'stop'] as const)('releases owned tunnel and app on %s
   expect(stop_tunnel).toHaveBeenCalledOnce()
   expect(stop_notice).toHaveBeenCalledOnce()
   expect(app.kill).toHaveBeenCalledOnce()
+})
+
+it.each([['--host', '0.0.0.0'], ['--host=0.0.0.0'], ['-h', '0.0.0.0'], ['-h=0.0.0.0'], ['-h0.0.0.0'], ['--public']])('rejects host overrides before starting services: %j', async (... args) => {
+  mocks.config.mockReturnValue({ proxy: { targetHost: '127.0.0.1', targetPort: 3042 } })
+  await expect(run_development(args)).rejects.toThrow('do not override the listening host')
+  expect(mocks.spawn).not.toHaveBeenCalled()
+  expect(mocks.tunnel).not.toHaveBeenCalled()
 })
 
 it('does not launch the app if tunnel setup fails', async () => {
