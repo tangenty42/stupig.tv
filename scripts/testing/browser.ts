@@ -12,6 +12,7 @@ import bcrypt from 'bcryptjs'
 import mysql from 'mysql2/promise'
 import { load_environment } from '../../config/lib/environment.mjs'
 import { run_migrations } from '../migration/local'
+import { e2e_target } from './e2e-target'
 
 export default async function setup(_playwright: FullConfig) {
   const root = process.cwd()
@@ -23,17 +24,18 @@ export default async function setup(_playwright: FullConfig) {
   const run = randomUUID().replaceAll('-', '')
   const database = `stupig_e2e_${run}`
   const directory = resolve('.dev/e2e', run)
-  const base_url = 'http://localhost:3142'
+  // 与 playwright.config.ts 的 baseURL 同源，分片各占一个端口。
+  const { port, baseUrl: base_url } = e2e_target(process.argv.slice(2))
   // Never attach browser tests to an existing app backed by someone else's data.
   await new Promise<void>((accept, reject) => {
     const probe = createServer()
-    probe.once('error', () => reject(new Error('Port 3142 is unavailable; stop its owner before running E2E')))
-    probe.listen(3142, 'localhost', () => probe.close(error => error ? reject(error) : accept()))
+    probe.once('error', () => reject(new Error(`Port ${port} is unavailable; stop its owner before running E2E`)))
+    probe.listen(port, 'localhost', () => probe.close(error => error ? reject(error) : accept()))
   })
   const environment = {
     ... local, NODE_ENV: 'development',
     MYSQL_USER: 'root', MYSQL_PASSWORD: local.MYSQL_DEV_ROOT_PASSWORD, MYSQL_DATABASE: database,
-    APP_PORT: '3142', NUXT_OTP_DEBUG: 'true', NUXT_CAPTCHA_DEBUG: 'true',
+    APP_PORT: String(port), NUXT_OTP_DEBUG: 'true', NUXT_CAPTCHA_DEBUG: 'true',
     ALIYUN_OSS_ACCESS_KEY_ID: 'e2e-local-only', ALIYUN_OSS_ACCESS_KEY_SECRET: 'e2e-local-only',
     ALIYUN_DYPNS_ACCESS_KEY_ID: 'e2e-local-only', ALIYUN_DYPNS_ACCESS_KEY_SECRET: 'e2e-local-only',
     ALIYUN_DYPNS_CAPTCHA_APP_KEY: 'e2e-local-only', JWT_SECRET: randomUUID().repeat(2),
@@ -148,7 +150,7 @@ export default defineNuxtConfig({
     const launch = (args: string[]) => {
       const process_child = spawn(process.execPath, args, {
         cwd: root, windowsHide: true, detached: process.platform !== 'win32',
-        env: { ... process.env, ... environment, STUPIG_E2E_RUNTIME: runtime_path, STUPIG_E2E_URL: base_url, PORT: '3142', HOST: 'localhost' },
+        env: { ... process.env, ... environment, STUPIG_E2E_RUNTIME: runtime_path, STUPIG_E2E_URL: base_url, PORT: String(port), HOST: 'localhost' },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       process_child.stdout!.on('data', capture)
