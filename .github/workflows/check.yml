@@ -34,6 +34,11 @@ concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
 
+# 默认令牌只读（这些 job 会执行 PR 代码）；changes job 需要读取 Actions 与 PR
+# 上下文，在 job 级别单独声明更宽的读取权限
+permissions:
+  contents: read
+
 # 迁移只需要数据库变量；单测在各自边界提供夹具，不依赖其他部署密钥。
 env:
   MYSQL_HOST: 127.0.0.1
@@ -57,7 +62,7 @@ jobs:
       tree: ${{ steps.classify.outputs.tree }}
       reuse: ${{ steps.classify.outputs.reuse }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # 需要 base commit 才能算出 PR 实际改了什么；仓库不大，全量克隆更省事。
           fetch-depth: 0
@@ -94,16 +99,16 @@ jobs:
     # 仅跳过纯文档 PR 或已确认与 PR 测试代码树一致的 main；检测失败时退回全量。
     if: "!cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true'"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # 版本在这里显式指定，不写进 package.json 的 packageManager 字段：
       # 该字段会让 pnpm 尝试把 packageManagerDependencies 同步进 lockfile，
       # 与 --frozen-lockfile 冲突（Dockerfile 的 corepack 路径同理）
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 12.10.1
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: pnpm
@@ -132,11 +137,11 @@ jobs:
     needs: changes
     if: "!cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true'"
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 12.10.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: pnpm
@@ -194,11 +199,11 @@ jobs:
           - 1883:1883
           - 8083:8083
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 12.10.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: pnpm
@@ -212,7 +217,7 @@ jobs:
           version=$(node -p "require('./node_modules/@playwright/test/package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
@@ -223,7 +228,7 @@ jobs:
       # 端口冲突，也不会共享数据库或 MQTT 主题。
       - run: pnpm test:e2e --shard=${{ matrix.shard }}/3
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: browser-test-diagnostics-${{ matrix.shard }}
@@ -255,13 +260,13 @@ jobs:
           --health-retries 20
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 12.10.1
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: pnpm

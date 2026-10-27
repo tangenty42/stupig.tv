@@ -27,9 +27,26 @@ describe('documentation-only CI and deployment', () => {
     expect(push_starts_check(['docker-compose.yml'])).toBe(true)
   })
 
-  it('starts deployment only from completed main Check runs', () => {
+  it('starts deployment only from completed main Check runs pushed to this repository', () => {
     expect(deploy.on.workflow_run).toEqual({ workflows: ['Check'], types: ['completed'], branches: ['main'] })
-    expect(deploy.jobs['build-and-deploy'].if).toBe('github.event.workflow_run.conclusion == \'success\'')
+    // branches: [main] 过滤的是触发 run 的 head 分支名，fork 的默认分支也叫 main；
+    // 只有 push 事件且来源为本仓库的成功 Check 才能触发部署。
+    expect(deploy.jobs['build-and-deploy'].if).toBe(
+      'github.event.workflow_run.conclusion == \'success\''
+      + ' && github.event.workflow_run.event == \'push\''
+      + ' && github.event.workflow_run.head_repository.full_name == github.repository',
+    )
+  })
+
+  it.each([
+    { event: 'push', owner: 'owner/repo', conclusion: 'success', allow: true },
+    { event: 'pull_request', owner: 'fork/repo', conclusion: 'success', allow: false },
+    { event: 'pull_request', owner: 'owner/repo', conclusion: 'success', allow: false },
+    { event: 'push', owner: 'fork/repo', conclusion: 'success', allow: false },
+    { event: 'push', owner: 'owner/repo', conclusion: 'failure', allow: false },
+  ])('rejects untrusted workflow events %#', ({ event, owner, conclusion, allow }) => {
+    const github = { repository: 'owner/repo', event: { workflow_run: { event, conclusion, head_repository: { full_name: owner } } } }
+    expect(runInNewContext(deploy.jobs['build-and-deploy'].if, { github })).toBe(allow)
   })
 
   it('uses a fixed verification job label and records the tree in a step', () => {
