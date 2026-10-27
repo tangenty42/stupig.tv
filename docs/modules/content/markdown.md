@@ -64,6 +64,8 @@ time: 2026/10/24
 
 编辑器汇总元数据／引用、HTML 结构和 markdownlint 诊断。附件或档案目标不存在属于 warning，不因悬空引用本身升级成 error；其他结构或业务校验仍可能阻止保存。全屏和非全屏复用同一诊断列表。
 
+正文标题按层级吸顶，低级标题停在上级标题下方，同级或上级标题到来时推走旧标题；不透明背景阻止下级标题透过上级标题。全屏时编辑器与预览双向同步滚动，编辑器顶部对应预览中最下方吸顶标题下沿的正文位置；标题交接时对齐位置平滑过渡，两侧滚动到顶部时均回到各自的起点。
+
 引用目标改写保留标签、title、定义 ID、换行和缩进，只产生必要的目标补丁。解析位置映射回原始 UTF-16 字符位置，中文、emoji 和 CRLF 不应导致偏移。删除保护、改名／移动、标题更新及草稿历史重放使用同一套引用语义。
 
 编辑预览将纯渲染与 DOM 增强分开：图片加载、轮播、灯箱和标题定位在 DOM 生命周期中安装／清理，未变化媒体节点尽量保留。『天子上朝』使用当前用户实际可读表示，『微服私访』生成无机密权限的预览，不提升真实读取授权。
@@ -73,6 +75,6 @@ time: 2026/10/24
 - 语法和元数据：[`content-markdown.ts`](../../../server/shared/content-markdown.ts)、[`content-markdown-syntax.ts`](../../../server/shared/content-markdown-syntax.ts)。
 - 引用：[`content-reference-definitions.ts`](../../../server/shared/content-reference-definitions.ts)、[`content-reference-replay.ts`](../../../server/shared/content-reference-replay.ts)。
 - 渲染：[`app/utils/content/markdown/`](../../../app/utils/content/markdown/)，预览编排：[`useStoryPreview.ts`](../../../app/composables/useStoryPreview.ts)、[`useStoryPreviewBody.ts`](../../../app/composables/useStoryPreviewBody.ts)。
-- 自动测试覆盖语法、引用定义、原始 HTML 边界、文字／卡片分支、权限表示和引用改写。浏览器需验证布局、caption、图片加载和连续输入时的媒体复用。
+- 自动测试覆盖语法、引用定义、原始 HTML 边界、文字／卡片分支、权限表示、引用改写、标题吸顶及全屏双向滚动。浏览器需验证其他布局、caption、图片加载和连续输入时的媒体复用。
 
 已知差异：渲染器支持的 Setext 标题和表格扩展，并未全部对应 CodeMirror 的着色／语法树；当前不为此统一重写所有解析器。
