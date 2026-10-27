@@ -156,7 +156,13 @@ describe('部署的健康检查与自愈接线', () => {
     const workflow = parse(read('.github/workflows/deploy.yml'))
 
     expect(workflow.on.workflow_run).toEqual({ workflows: ['Check'], types: ['completed'], branches: ['main'] })
-    expect(workflow.jobs['build-and-deploy'].if).toBe('github.event.workflow_run.conclusion == \'success\'')
+    // fork 的默认分支也叫 main，仅靠 branches 过滤挡不住 fork PR 的成功 Check；
+    // 部署只接受本仓库 push 触发的 Check run。
+    expect(workflow.jobs['build-and-deploy'].if).toBe(
+      'github.event.workflow_run.conclusion == \'success\''
+      + ' && github.event.workflow_run.event == \'push\''
+      + ' && github.event.workflow_run.head_repository.full_name == github.repository',
+    )
     expect(workflow.jobs['build-and-deploy'].steps[0].with.ref).toBe('$' + '{{ github.event.workflow_run.head_sha }}')
   })
 
