@@ -188,15 +188,14 @@ function on_preview_keydown(event: KeyboardEvent) {
    them. JS nests sections by heading level and measures stacked offsets, so a
    subsection title docks below its pinned chapter title and only a
    same-or-higher-level heading pushes it away. Higher levels paint above
-   lower ones, so an exiting heading dissolves under its pinned ancestor's
-   background instead of veiling it. The padding sits inside the background,
-   doubling as part of the vertical spacing. Like the app header, the
-   background is translucent with a backdrop blur, so content scrolling
-   underneath blurs out fluently instead of being clipped mid-glyph. */
+   lower ones, so an exiting heading passes under its pinned ancestor's
+   background instead of veiling it. The backgrounds are opaque so an
+   exiting lower-level title cannot show through a higher-level title. The
+   padding sits inside the background, doubling as vertical spacing. */
 .story-body :deep(:is(h1, h2, h3, h4, h5, h6)) {
-  @apply sticky z-10 mb-2 bg-white/80 py-2 font-bold text-slate-800 backdrop-blur-md dark:bg-slate-900/80 dark:text-slate-100;
+  @apply sticky z-10 mb-2 bg-white py-2 font-bold text-slate-800 dark:bg-slate-900 dark:text-slate-100;
   top: var(--app-header-height, 0px);
-  /* Full-bleed: the frosted bar spans the viewport while the compensating
+  /* Full-bleed: the bar spans the viewport while the compensating
      padding keeps the title text aligned with the content column. */
   margin-inline: calc(50% - 50vw);
   padding-inline: calc(50vw - 50%);
