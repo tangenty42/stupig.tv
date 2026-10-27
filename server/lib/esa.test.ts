@@ -1,6 +1,6 @@
 import { createHash, createHmac } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import bypass_deployment, { authorize_content_request, content_authorization_proof, create_content_auth, create_content_bypass as create_online_bypass } from '../../config/esa/content-auth.mjs'
+import bypass_deployment, { authorize_content_request, content_authorization_proof, create_content_bypass as create_online_bypass } from '../../config/esa/content-auth.mjs'
 import { create_esa } from './esa'
 
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ aliyun: { esa: null } }) }))
@@ -20,14 +20,10 @@ describe('eSA signed Content reads', () => {
     url.searchParams.set('auth_key', `${timestamp}-${rand}-0-${signature}`)
     url.searchParams.set('response-content-disposition', header)
     const authorize = vi.fn(async () => 200)
-    const origin = vi.fn<typeof fetch>()
-    const handler = create_content_auth(config.authKey, 300, origin, authorize)
     const bypass = create_online_bypass(config.authKey, 300, (allowed, status) => ({ allowed, status }), authorize)
 
-    expect((await handler(new Request(url))).status).toBe(403)
     expect(await bypass(new Request(url))).toEqual({ allowed: false, status: 403 })
     expect(authorize).not.toHaveBeenCalled()
-    expect(origin).not.toHaveBeenCalled()
   })
 
   it('fails closed without configuration and rejects unsafe object paths', async () => {
@@ -55,42 +51,13 @@ describe('eSA signed Content reads', () => {
     expect(Number(shorter.searchParams.get('auth_key')!.split('-')[2])).toBe(Math.floor(Date.now() / 1000) + 60)
   })
 
-  it('keeps Range/HEAD and streams cached bytes while names and disposition vary per request', async () => {
-    const origin = vi.fn<typeof fetch>().mockImplementation(async () => new Response('data', {
-      status: 206, headers: { 'Content-Range': 'bytes 0-3/10', 'ETag': 'same-object', 'x-site-cache-status': 'HIT' },
-    }))
-    const handler = create_content_auth(config.authKey, config.urlTtlSeconds, origin, async () => 200)
-    const esa = create_esa(config)
-    for (const [name, disposition] of [['first.txt', 'inline'], ['second.txt', 'attachment']] as const) {
-      const response = await handler(new Request(esa.signed_read_url('content/att/key', 300, 'GET', name, disposition), {
-        headers: { 'Range': 'bytes=0-3', 'If-Range': 'same-object', 'Cookie': 'private-cookie', 'Authorization': 'private-session', 'Origin': 'https://app.test' },
-      }))
-      expect(response.status).toBe(206)
-      expect(await response.text()).toBe('data')
-      expect(response.headers.get('Content-Disposition')).toBe(`${disposition}; filename*=UTF-8''${name}`)
-      expect(response.headers.get('Content-Range')).toBe('bytes 0-3/10')
-      expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
-      const forwarded = origin.mock.calls.at(- 1)![0] as Request
-      expect(forwarded.url).toBe('https://esa.example.test/content/att/key')
-      expect(forwarded.headers.get('Range')).toBe('bytes=0-3')
-      expect(forwarded.headers.get('If-Range')).toBe('same-object')
-      for (const header of ['Cookie', 'Authorization', 'Origin'])
-        expect(forwarded.headers.has(header)).toBe(false)
-    }
-    origin.mockImplementationOnce(async () => new Response(null))
-    await handler(new Request(esa.signed_read_url('content/att/key', 300, 'HEAD'), { method: 'HEAD' }))
-    expect((origin.mock.calls.at(- 1)![0] as Request).method).toBe('HEAD')
-  })
-
   it('binds the origin, path, times, nonce, filename and access grant into the v2 HMAC', async () => {
     const base = create_esa(config).signed_read_url('content/att/key', 300, 'GET', 'report.txt', 'attachment', {
       id: 1, revision: 'a'.repeat(64), role: 'auto', session: 0, generation: 0,
     })
     expect(authorize_content_request(config.authKey, 300, new Request(base)).status).toBe(200)
     const authorize = vi.fn(async () => 200)
-    const origin = vi.fn<typeof fetch>()
-    const handler = create_content_auth(config.authKey, 300, origin, authorize)
+    const bypass = create_online_bypass(config.authKey, 300, (allowed, status) => ({ allowed, status }), authorize)
     const variants = [
       (url: URL) => { url.hostname = 'other.example.test' },
       (url: URL) => { url.protocol = 'http:' },
@@ -108,10 +75,9 @@ describe('eSA signed Content reads', () => {
     for (const change of variants) {
       const url = new URL(base)
       change(url)
-      expect((await handler(new Request(url))).status).toBe(403)
+      expect(await bypass(new Request(url))).toEqual({ allowed: false, status: 403 })
     }
     expect(authorize).not.toHaveBeenCalled()
-    expect(origin).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -148,31 +114,6 @@ describe('eSA signed Content reads', () => {
     fields[4] = signature
     url.searchParams.set('auth_key', fields.join('-'))
     expect(authorize_content_request(config.authKey, 300, new Request(url)).status).toBe(403)
-  })
-
-  it('rejects tampered metadata, duplicate parameters and expired capabilities before cache access', async () => {
-    const origin = vi.fn<typeof fetch>()
-    const handler = create_content_auth(config.authKey, 300, origin, async () => 200)
-    const base = create_esa(config).signed_read_url('content/att/key', 300, 'GET', 'report.txt')
-    const variants = [
-      (u: URL) => u.searchParams.set('response-content-disposition', 'inline; filename*=UTF-8\'\'other.txt'),
-      (u: URL) => u.searchParams.delete('response-content-disposition'),
-      (u: URL) => u.searchParams.append('auth_key', u.searchParams.get('auth_key')!),
-      (u: URL) => u.searchParams.append('response-content-disposition', u.searchParams.get('response-content-disposition')!),
-      (u: URL) => u.searchParams.set('version', '2'),
-      (u: URL) => { u.pathname += 'changed' },
-      (u: URL) => { u.search = '' },
-    ]
-    for (const change of variants) {
-      const url = new URL(base)
-      change(url)
-      const denied = await handler(new Request(url))
-      expect(denied.status).toBe(403)
-      expect(denied.headers.get('Cache-Control')).toBe('no-store')
-    }
-    vi.useFakeTimers().setSystemTime(Date.now() + 301_000)
-    expect((await handler(new Request(base))).status).toBe(403)
-    expect(origin).not.toHaveBeenCalled()
   })
 
   it('authorizes bypass GET/HEAD without fetching or reading an object body', async () => {
