@@ -47,7 +47,7 @@ async function main() {
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, run }))
     await checkpoint({})
-    const description = create_commit_description(config.appEnvironment, run)
+    const description = create_commit_description(config.appEnvironment, run, source)
     const version = await publish(config, source, description, { api, commit: commit_source, sleep: setTimeout, now: Date.now, checkpoint })
     console.log(`ESA ${config.appEnvironment}/${config.name}/${config.environment}: version ${version} deployed at 100%`)
     console.log(`Receipt: ${receipt_path}`)

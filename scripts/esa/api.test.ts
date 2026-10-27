@@ -29,6 +29,8 @@ describe('eSA API transport', () => {
     )
     await api('ListRoutineRoutes', { RoutineName: config.name })
     expect(callApi.mock.lastCall?.[1]).toEqual({ query: { RoutineName: config.name } })
+    await api('GetRoutineCodeVersion', { Name: config.name, CodeVersion: '100' })
+    expect(callApi.mock.lastCall?.[1]).toEqual({ body: { Name: config.name, CodeVersion: '100' } })
   })
 
   it('never exposes SDK diagnostics containing the request or secret', async () => {

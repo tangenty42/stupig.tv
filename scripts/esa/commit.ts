@@ -1,14 +1,23 @@
 import type { PublishConfig } from './config'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { PublishError } from './config'
 
-export function create_commit_description(environment: PublishConfig['appEnvironment'], run: string) {
-  // Keep cloud metadata short; the full timestamp and source digest stay in the receipt.
-  return `stupig-${environment}-${run.slice(- 36)}`
+/** A compact, line-ending-independent fingerprint of the published source. */
+export function source_fingerprint(source: Buffer) {
+  return createHash('sha256').update(source.toString('utf8').replace(/\r\n/g, '\n')).digest().subarray(0, 16).toString('base64url')
+}
+
+export function create_commit_description(environment: PublishConfig['appEnvironment'], run: string, source: Buffer) {
+  // Preserve the full run UUID within ESA's 64-character metadata limit.
+  // Production metadata stays unchanged; dev publishes expose a source hint.
+  return environment === 'dev'
+    ? `dev-${source_fingerprint(source)}-${run.slice(- 36)}`
+    : `stupig-${environment}-${run.slice(- 36)}`
 }
 
 export function parse_commit_version(output: string) {
