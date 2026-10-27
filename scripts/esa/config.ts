@@ -1,3 +1,4 @@
+import type { EsaFunctionVariables } from '../../config/esa/content-auth.mjs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { interpolate_config, load_esa_function_layer } from '../../config/lib/loader'
@@ -69,7 +70,8 @@ export function require_publish_credentials(config: PublishConfig) {
     throw new PublishError('Invalid aliyun.esa.authKey: expected 32–128 printable ASCII characters without spaces')
 }
 
-export function publish_variables(config: PublishConfig) {
+/** Names must stay in sync with the `env` contract in config/esa/content-auth.mjs. */
+export function publish_variables(config: PublishConfig): Record<keyof EsaFunctionVariables, { Type: 'secret_text' | 'plain_text', Value: string }> {
   return {
     ALIYUN_ESA_AUTH_KEY: { Type: 'secret_text', Value: config.authKey },
     CONTENT_AUTH_URL: { Type: 'plain_text', Value: config.callbackUrl },

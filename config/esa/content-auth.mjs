@@ -6,6 +6,13 @@ const TTL_SECONDS = 300
 const CLOCK_SKEW_SECONDS = 30
 const DEBUG_BUILD = 'content-bypass-debug-v1'
 
+/**
+ * `env` shape for the variables published by `pnpm esa:deploy:*`; a variable
+ * missing from the deployed function reads as `undefined` and every entry point
+ * below treats that as fail-closed, never as an empty usable value.
+ * @typedef {import('./content-auth.d.mts').EsaFunctionVariables} EsaFunctionVariables
+ */
+
 /** @param {Request} request @param {string} stage @param {boolean | null} allowed @param {number | null} status */
 function trace_bypass(request, stage, allowed = null, status = null) {
   // Only our synthetic QA paths; never log query strings, names or credentials.
@@ -122,47 +129,6 @@ export function create_content_authorizer(privateKey, endpoint, timeoutMs = 5000
   }
 }
 
-/**
- * @param {string} privateKey
- * @param {number} ttlSeconds
- * @param {typeof fetch} originFetch
- */
-export function create_content_auth(privateKey, ttlSeconds = TTL_SECONDS, originFetch = fetch, authorize) {
-  /** @param {Request} request */
-  return async function handleRequest(request) {
-    const { status, url, disposition } = authorize_content_request(privateKey, ttlSeconds, request)
-    if (! url)
-      return new Response('Forbidden', { status, headers: { 'Cache-Control': 'no-store' } })
-    let current = 503
-    try {
-      current = authorize ? await authorize(request) : 503
-    }
-    catch { /* Authorization failures must never reach cached object bytes. */ }
-    if (current !== 200)
-      return new Response('Forbidden', { status: current, headers: { 'Cache-Control': 'no-store' } })
-    // Always validate before fetch. Clean subrequests share the object cache;
-    // filename headers are applied AFTER fetch and never enter that cache.
-    url.search = ''
-    const headers = new Headers(request.headers)
-    headers.delete('Authorization')
-    headers.delete('Cookie')
-    // Signed URLs are bearer capabilities; anonymous CORS enables editor canvas
-    // reads without caching a response tied to the first request's Origin.
-    headers.delete('Origin')
-    const response = await originFetch(new Request(url.toString(), {
-      method: request.method, headers, redirect: 'manual',
-    }))
-    const output = new Response(response.body, response)
-    output.headers.set('Cache-Control', 'private, no-store')
-    output.headers.set('Access-Control-Allow-Origin', '*')
-    output.headers.delete('Access-Control-Allow-Credentials')
-    output.headers.set('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Range, Accept-Ranges, ETag')
-    if (disposition !== null && (response.ok || response.status === 304))
-      output.headers.set('Content-Disposition', disposition)
-    return output
-  }
-}
-
 /** @param {boolean} allowed @param {number} status */
 function edge_bypass_response(allowed, status) {
   if (allowed)
@@ -198,10 +164,11 @@ export function create_content_bypass(privateKey, ttlSeconds = TTL_SECONDS, resp
     return response
   }
 }
+
 export default {
   async bypass(request) {
     // ESA encrypted function variable; never embed the shared signing key.
-    const { env } = await import('alibaba:workers')
+    const { env } = /** @type {{ env: EsaFunctionVariables }} */ (await import('alibaba:workers'))
     return create_content_bypass(env.ALIYUN_ESA_AUTH_KEY, TTL_SECONDS, edge_bypass_response,
       create_content_authorizer(env.ALIYUN_ESA_AUTH_KEY, env.CONTENT_AUTH_URL, Number(env.CONTENT_AUTH_TIMEOUT_MS ?? 5000)))(request)
   },
