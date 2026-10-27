@@ -297,11 +297,11 @@ export async function upload_profile_avatar(user_id: number, input: FormData, ge
     throw new ApiError(400, '请先选择头像文件')
   }
 
-  const file_data = Buffer.from(await avatar.arrayBuffer())
   const options = get_options()
-  if (file_data.length > options.max_size_mb * 1024 * 1024) {
+  if (avatar.size > options.max_size_mb * 1024 * 1024) {
     throw new ApiError(413, `头像文件太大了，不能超过 ${options.max_size_mb} MB`)
   }
+  const file_data = Buffer.from(await avatar.arrayBuffer())
 
   const file_name = 'name' in avatar && typeof avatar.name === 'string' ? avatar.name : ''
   const ext_from_name = extname(file_name).toLowerCase()

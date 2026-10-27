@@ -1,5 +1,7 @@
-import { randomInt, randomUUID } from 'node:crypto'
+import { randomBytes, randomInt, randomUUID } from 'node:crypto'
 import { expect } from '@playwright/test'
+import { settings } from '@shared/settings'
+import sharp from 'sharp'
 import { login, logout, ready, test } from '../support/e2e-browser'
 
 test('account lifecycle: registration, birthday, avatar, password and logout', async ({ page }) => {
@@ -47,17 +49,10 @@ test('account lifecycle: registration, birthday, avatar, password and logout', a
   })
 
   await test.step('avatar is cropped, uploaded and decoded after reload', async () => {
-    const png = await page.evaluate(() => {
-      const canvas = document.createElement('canvas')
-      canvas.width = canvas.height = 192
-      const drawing = canvas.getContext('2d')!
-      drawing.fillStyle = '#16a34a'
-      drawing.fillRect(0, 0, 192, 192)
-      drawing.fillStyle = '#facc15'
-      drawing.fillRect(48, 48, 96, 96)
-      return canvas.toDataURL('image/png').split(',')[1]!
-    })
-    await page.locator('input[type="file"]').setInputFiles({ name: 'e2e-avatar.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') })
+    const png = await sharp(randomBytes(800 * 800 * 3), { raw: { width: 800, height: 800, channels: 3 } }).png().toBuffer()
+    const max_size_bytes = settings.app.avatar.maxSizeMb * 1024 * 1024
+    expect(png.length).toBeGreaterThan(max_size_bytes)
+    await page.locator('input[type="file"]').setInputFiles({ name: 'e2e-avatar.png', mimeType: 'image/png', buffer: png })
     const dialog = page.getByRole('dialog', { name: '调整', exact: true })
     await expect(dialog.getByRole('img', { name: '待裁剪头像', exact: true }).first()).toBeVisible()
     await dialog.getByRole('button', { name: '确定', exact: true }).click()
