@@ -7,7 +7,7 @@
 - Node.js 24；CI 使用 pnpm 12.10.1。版本依据是 [Check 工作流](../../.github/workflows/check.yml) 和 [Dockerfile](../../Dockerfile)。
 - Docker 与 Compose：开发 MySQL、Redis、EMQX、phpMyAdmin 由 [docker-compose.dev.yml](../../docker-compose.dev.yml) 启动；Nuxt 在宿主机运行。
 - EMQX 固定 `emqx/emqx:6.2.2`，与当前生产版本一致；认证、listener 和 ACL 见[MQTT 手册](../deployment/mqtt.md)。
-- 当前开发隧道要求 frpc 0.71.0。Windows 默认路径见 [config/dev.yaml](../../config/dev.yaml)，其他平台可自行创建开发专用的 `config/local.yaml` 覆盖可执行文件路径。该本机配置不入库，未创建时不存在是正常情况，见[配置说明](../deployment/configuration.md#2-按表填写)。
+- 当前开发隧道要求 frpc 0.71.0。Windows 默认路径见 [config/dev.yaml](../../config/dev.yaml)，其他平台可自行创建开发专用的 `config/local.yaml` 覆盖可执行文件路径。该本机配置不入库，未创建时不存在是正常情况，见[配置说明](../deployment/configuration.md)。
 - 依赖锁文件为 `pnpm-lock.yaml`。首次 `pnpm install` 会运行仓库已有的 Nuxt prepare 和 Git hooks 安装，不需要反复手动 prepare。
 
 ## 首次启动

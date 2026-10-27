@@ -2,7 +2,7 @@
 
 本页定义当前 Content 交付所需的原生 ESA 规则，与[边缘函数](esa-functions.md)共同生效。规则范围只覆盖对应环境的 Content 域名和 `/content/`；主站 API、旧静态资源域名和 MQTT 不应套用这些缓存设置。
 
-核对日期：2026-10-25。缓存、Range、query 重写及响应头共用精确 dev/prod 两 host；文件名规则已补齐 Content 路径，Content 回源已明确 HTTPS。开发与生产函数均已发布当前回调协议。生产新应用及 Content 迁移已完成，完整下载、HEAD/Range、匿名权限和删减版读取通过；开发另完成会话撤销、回调故障与 Canvas 冒烟。见[资源台账](aliyun.md#esa规则差异与收敛目标)，未执行的生产登录操作需单独验收。
+核对日期：2026-10-25。缓存、Range、query 重写及响应头共用精确 dev/prod 两 host；文件名规则已补齐 Content 路径，Content 回源已明确 HTTPS。开发与生产函数均已发布当前回调协议。生产新应用及 Content 迁移已完成，完整下载、HEAD/Range、匿名权限和删减版读取通过；开发另完成会话撤销、回调故障与 Canvas 冒烟。见[资源台账](aliyun.md)，未执行的生产登录操作需单独验收。
 
 ## 请求链路
 

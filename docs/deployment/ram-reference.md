@@ -1,6 +1,6 @@
 ﻿# RAM 策略范围与依据
 
-实际配置按[操作清单](ram.md)；本页用于审阅权限，不是要求逐项手动勾选的第二套步骤。策略文件只授予当前运行或交付所用动作，云端应用和读回状态见[台账](aliyun.md#ram-与-acr-的收敛)。
+实际配置按[操作清单](ram.md)；本页用于审阅权限，不是要求逐项手动勾选的第二套步骤。策略文件只授予当前运行或交付所用动作，云端应用和读回状态见[台账](aliyun.md)。
 
 ## OSS 应用
 
@@ -50,7 +50,7 @@ Resource `*` 对应接口支持的账号级范围，不能发明函数名 ARN �
 
 上述两份策略及用户保留备用，当前交付不使用它们。按用户决定，CI 与服务器恢复共用 Tangenty 现有的 Registry 固定密码，均读取 GitHub `ACR_USERNAME/PASSWORD`，不调用企业版 GetAuthorizationToken。[个人版推拉](https://help.aliyun.com/zh/acr/user-guide/use-a-container-registry-personal-edition-instance-to-push-and-pull-images)、[仓库授权](https://help.aliyun.com/zh/acr/user-guide/repository-access-control)。
 
-新个人版仅允许一个 RAM 子账号设置 Registry 密码，不能直接采用双 RAM 推拉方案。排查时额外创建的控制台初始化策略已从两个用户解绑并删除，原有仓库策略不变；实际 GitHub 凭据及 Docker 推拉仍待验收，见[推拉身份](github-acr.md#推拉身份)。
+新个人版仅允许一个 RAM 子账号设置 Registry 密码，不能直接采用双 RAM 推拉方案。排查时额外创建的控制台初始化策略已从两个用户解绑并删除，原有仓库策略不变；实际 GitHub 凭据及 Docker 推拉仍待验收，见[推拉身份](github-acr.md)。
 
 ## 云端资源初始化与角色
 

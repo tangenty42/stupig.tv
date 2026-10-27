@@ -44,7 +44,7 @@ docker compose --env-file .env.prod logs --tail 100 app
 docker compose --env-file .env.prod exec app node .output/server/maintenance/migrate.mjs --status
 ```
 
-若容器尚未运行，最后一条不能执行；改用已确认版本的一次性维护容器，见[迁移手册](./migrations.md#生产产物与维护容器)。不要因旧镜像健康就认为新迁移已撤销。新旧应用数据库合同不兼容时，先维持维护状态并选择兼容的恢复方案。
+若容器尚未运行，最后一条不能执行；改用已确认版本的一次性维护容器，见[迁移手册](./migrations.md)。不要因旧镜像健康就认为新迁移已撤销。新旧应用数据库合同不兼容时，先维持维护状态并选择兼容的恢复方案。
 
 首次部署没有旧镜像可恢复；自动恢复失败时也需要人工处理。现行 ACR 流程主要发布 `latest`，因此长期回退不能依赖某个 SHA tag 必然存在；应保存明确 image ID／构建身份，按[GitHub 与 ACR](../deployment/github-acr.md)说明重建匹配版本。
 
