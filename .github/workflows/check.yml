@@ -10,7 +10,7 @@
 #   - changes：识别纯文档 PR，以及可安全复用的 PR 检查结果。
 #   - verified tree：仅在 PR 的所有应用检查通过时记录实际测试的代码树。
 #
-# 跳过只能落在 job 的条件上，不能加 `on.pull_request.paths`：工作流因路径过滤
+# PR 的跳过只能落在 job 的条件上，不能加 `on.pull_request.paths`：工作流因路径过滤
 # 而不触发时，它负责的必需检查会永远停在 "Waiting for status to be reported"，
 # PR 再也合不进去。被 `if` 跳过的 job 在分支保护里按成功上报。
 #
@@ -23,6 +23,10 @@ on:
   push:
     branches:
       - main
+    # 纯文档 push 不启动 Check，也不会触发监听 Check 的 Deploy；PR 不加路径过滤。
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
 
 # 同一分支新提交取消旧的检查运行；部署工作流有自己的 concurrency，不受影响

@@ -30,9 +30,9 @@
 
 ## 浏览器测试的隔离
 
-首次执行 `pnpm exec playwright install chromium`。运行前需要本地开发 MySQL、Redis、支持 TCP 发布及 WebSocket 订阅的 MQTT broker，以及 `MYSQL_DEV_ROOT_PASSWORD`。CI 在独立服务中提供它们，不需要真实云端密钥；浏览器用例按 `--shard` 拆成三个 job 并行，Playwright 浏览器包按版本进 Actions 缓存。只改 `docs/**` 或 Markdown 的 PR 由 `changes` job 识别并跳过应用测试——这个门槛只能放在 job 条件上，加在 `on.pull_request.paths` 会让必需检查永远停在 Pending。
+首次执行 `pnpm exec playwright install chromium`。运行前需要本地开发 MySQL、Redis、支持 TCP 发布及 WebSocket 订阅的 MQTT broker，以及 `MYSQL_DEV_ROOT_PASSWORD`。CI 在独立服务中提供它们，不需要真实云端密钥；浏览器用例按 `--shard` 拆成三个 job 并行，Playwright 浏览器包按版本进 Actions 缓存。只改 `docs/**` 或 Markdown 的 PR 由 `changes` job 识别并跳过应用测试——PR 的门槛只能放在 job 条件上，加在 `on.pull_request.paths` 会让必需检查永远停在 Pending。纯文档提交推送到 `main` 时，push 路径过滤不启动 Check，也不触发依赖它的 Deploy；与代码混合的提交仍执行正常检查流程。
 
-`main` 上的 Check 保留 `check` 和 `migrations`，以便部署继续等待同一提交的验证。若合并 PR 的完整检查和三个浏览器分片均成功，且 PR 实际测试的 Git tree 与合并结果一致，则复用浏览器与 MQTT 结果；找不到完整成功记录、代码树不同、验证规则自身变更或 GitHub 查询失败时，`main` 会重新运行它们。纯文档 PR 跳过应用检查，因此不能用于复用这两项。
+非纯文档提交在 `main` 上的 Check 保留 `check` 和 `migrations`，以便部署继续等待同一提交的验证。若合并 PR 的完整检查和三个浏览器分片均成功，且 PR 实际测试的 Git tree 与合并结果一致，则复用浏览器与 MQTT 结果；找不到完整成功记录、代码树不同、验证规则自身变更或 GitHub 查询失败时，`main` 会重新运行它们。GitHub 的路径过滤只检查变更列表中的前 3,000 个文件；超大推送应拆分，避免代码文件落在过滤范围之外，详见 [GitHub 工作流触发说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。
 
 测试启动器创建随机命名的 `stupig_e2e_*` 数据库，执行完整迁移并创建开发测试账号；复制应用源码到临时目录，构建后在本分片的端口启动独立 Nuxt（未分片为 3142，`--shard=i/n` 使用 `3142 + i - 1`，规则见 `scripts/testing/e2e-target.ts`）。已有端口被占用时拒绝运行，不接管未知服务。结束时停止自己的进程树、删除本轮数据库并清理临时运行凭据。
 
