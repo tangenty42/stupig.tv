@@ -32,7 +32,8 @@
         @change="on_files_picked"
       >
       <Button
-        class="pointer-events-auto w-8 h-auto aspect-square"
+        class="mt-2 pointer-events-auto w-8 h-auto aspect-square"
+        outlined
         aria-label="添加"
         :aria-busy="upload_busy"
         :title="upload_busy ? '正在准备上传' : undefined"

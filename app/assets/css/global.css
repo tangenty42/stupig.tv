@@ -8,9 +8,20 @@
 }
 
 .content-cover > img {
-  @apply block h-auto w-full;
+  @apply h-auto w-full;
+}
+
+/* Shared image state for story covers and Markdown images. */
+.img-frame > img {
+  @apply relative z-[1] block;
   opacity: 0;
-  transition: opacity 200ms ease;
+  transition: opacity 450ms ease, filter 300ms ease;
+}
+
+/* Markdown images are buttons, so their transition must also win over the
+   global control transition without overriding the loaded opacity. */
+html .img-frame > img[role='button'] {
+  transition: opacity 450ms ease, filter 300ms ease;
 }
 
 .content-cover-constrained {
@@ -21,7 +32,7 @@
   @apply max-h-60 w-auto max-w-full;
 }
 
-.content-cover[data-lqip]::before {
+.img-frame[data-lqip]::before {
   content: '';
   @apply pointer-events-none absolute inset-0;
   background: var(--content-lqip) center / cover no-repeat;
@@ -30,42 +41,70 @@
   transition: opacity 200ms ease;
 }
 
-.content-cover > .image-loading-mask {
-  @apply pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
+.img-frame > .image-loading-mask {
+  @apply pointer-events-none absolute inset-0 z-[2] flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
+  transition: opacity 450ms ease, visibility 0s linear 450ms;
 }
 
-.content-cover > .image-loading-mask .iconify {
-  @apply animate-spin motion-reduce:animate-none;
+.img-frame > .image-loading-mask .iconify {
+  animation: image-loading-breathe 2s ease-in-out infinite;
 }
 
-.content-cover:is([data-image-loaded], [data-image-error]) > .image-loading-mask {
-  @apply hidden;
+@keyframes image-loading-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
-.content-cover:is([data-image-loaded], [data-image-error])::before {
+.img-frame[data-image-loaded] > .image-loading-mask {
   opacity: 0;
+  visibility: hidden;
 }
 
-.content-cover[data-image-loaded] > img {
+.img-frame[data-image-error] > .image-loading-mask {
+  @apply invisible opacity-0;
+  transition: none;
+}
+
+/* Keep the placeholder opaque underneath until the image has faded in. */
+.img-frame[data-lqip][data-image-loaded]::before {
+  opacity: 0;
+  transition: opacity 150ms ease 450ms;
+}
+
+.img-frame[data-lqip][data-image-error]::before {
+  opacity: 0;
+  transition: none;
+}
+
+.img-frame[data-image-loaded] > img {
   opacity: 1;
 }
 
-.content-cover > .image-unavailable {
-  @apply hidden aspect-video w-full min-w-32 items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
-}
-
-.content-cover[data-image-error] > img {
+.img-frame > .image-unavailable {
   @apply hidden;
 }
 
-.content-cover[data-image-error] > .image-unavailable {
+.content-cover > .image-unavailable {
+  @apply aspect-video w-full min-w-32 items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
+}
+
+.img-frame[data-image-error] > img {
+  @apply hidden;
+}
+
+.img-frame[data-image-error] > .image-unavailable {
   @apply flex;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .content-cover > img,
-  .content-cover::before {
+  .img-frame > img,
+  html .img-frame > img[role='button'],
+  .img-frame[data-lqip]::before,
+  .img-frame[data-lqip][data-image-loaded]::before,
+  .img-frame > .image-loading-mask,
+  .img-frame > .image-loading-mask .iconify {
     transition: none;
+    animation: none;
   }
 }
 
