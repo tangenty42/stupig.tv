@@ -13,11 +13,18 @@
 | Variable | `DEPLOY_DIR` | 服务器上已经创建、部署账号可写的绝对目录 |
 | Secret | `ACR_USERNAME`、`ACR_PASSWORD` | CI 推送与服务器拉取共用的 Registry 登录凭据；当前沿用 Tangenty 的 ACR 固定密码 |
 | Secret | `SSH_PRIVATE_KEY` | 部署账号对应私钥 |
+| Secret | `SSH_KNOWN_HOSTS` | 经独立渠道核实的 SSH 主机公钥，采用 OpenSSH known_hosts 格式，含主机名和端口 |
 | Secret | `ENV_PASSPHRASE` | 解密已提交 `.env.prod.gpg` 的口令 |
 
-GitHub Ruleset 应要求 `check` 与 `migrations` 检查通过。仓库中的注释记录曾配置过规则，但本轮未在线读取 Ruleset，应在仓库控制台确认当前要求。
+GitHub Ruleset 的必需状态检查：`check`、`changes`、`migrations`、`mqtt` 与三个 `browser (N/3)` 分片共七项，均来自 GitHub Actions；同时启用"合并前分支必须最新"（strict），创建分支/仓库时不强制检查。被 `if` 跳过的 job 在分支保护中按成功上报，因此纯文档 PR 跳过应用检查也能满足全部必需检查；`verified-tree` 未列入必需项。
 
-Actions 策略允许 GitHub 官方 Action 和 `pnpm/action-setup@*`，并要求 Action 固定到完整提交 SHA。工作流使用的 Action 均固定 SHA；更新时应核对上游提交。
+Actions 权限选择 "Allow tangenty42, and select non-tangenty42, actions and reusable workflows"，勾选 "Allow actions created by GitHub"，允许列表加入 `pnpm/action-setup@*`（两个工作流唯一的非 GitHub 官方 action，缺失它 Check 与 Deploy 都会拒绝启动），并启用 "Require actions to be pinned to a full-length commit SHA"；两个工作流的 action 引用已全部固定到完整提交 SHA。
+
+### SSH 主机身份
+
+启用此版本 Deploy 前，先通过服务器控制台等独立可信渠道读取 `/etc/ssh/ssh_host_ed25519_key.pub`，并用 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` 核对指纹。将公钥类型和内容写入 GitHub Repository Secret `SSH_KNOWN_HOSTS`，格式为 `[主机名]:端口 ssh-ed25519 公钥内容`；端口为 22 时使用 `主机名 ssh-ed25519 公钥内容`。可放入多行以支持换钥过渡。主机公钥不是部署账号的公钥或私钥。不要直接信任部署时 `ssh-keyscan` 获得的值；如使用扫描结果，须先与独立渠道取得的指纹比较。
+
+Deploy 在构建前检查该 Secret 含目标主机条目，SSH 和 SCP 强制验证主机密钥；Secret 缺失、主机或端口不匹配、密钥变更均会使部署失败。更换服务器或主机密钥时，先独立核对新公钥并更新 Secret，再进行部署。工作流使用的第三方 Action 固定到提交 SHA，更新版本时应核实上游提交后同步修改。
 
 ## ACR 准备
 
@@ -31,7 +38,9 @@ Actions 策略允许 GitHub 官方 Action 和 `pnpm/action-setup@*`，并要求 
 
 当前按用户决定恢复单套凭据：CI 和生产主机均使用 GitHub `ACR_USERNAME/PASSWORD`，沿用 Tangenty 已有的 ACR Registry 固定密码。用户名从访问凭证页面的 Docker 命令复制；这里不使用阿里云控制台密码或 AccessKey Secret。[官方凭据说明](https://help.aliyun.com/zh/acr/user-guide/configure-access-credentials)。
 
-workflow 在构建前检查两项凭据非空，不再要求独立 pull 身份。服务器获得相同的 Registry 推拉能力。凭据通过 SSH 的加密 stdin 与部署脚本一起传递；base64 只处理 shell 引号，密码通过 Docker `--password-stdin` 输入。本轮没有改动固定密码、GitHub Secrets 或触发实际部署。
+workflow 在构建前检查两项凭据非空，不再要求独立 pull 身份。服务器获得相同的 Registry 推拉能力。凭据通过 SSH 的加密 stdin 与部署脚本一起传递；base64 只处理 shell 引号，密码通过 Docker `--password-stdin` 输入。
+
+当前 GitHub `SSH_USER` 为 `root`，部署密钥可获得宿主机管理权限；服务器还持有可推送的 ACR 凭据，详见 [RAM 权限边界](ram-reference.md)。改为受限部署身份、拆分 ACR 凭据需要配合服务器和凭据交付方式调整，不能仅靠更改工作流认定已实现最小权限。
 
 目标使用新个人版域名，[官方限制](https://help.aliyun.com/zh/acr/user-guide/individual-edition-instance-independent-domain-name-capacity-limit)仅允许一个 RAM 子账号设置 Registry 密码，因此不再推进双 RAM 方案。已创建的 push/pull 用户及仓库策略保留备用，不参与当前交付；额外控制台初始化策略已撤销并删除。
 
@@ -39,14 +48,16 @@ workflow 在构建前检查两项凭据非空，不再要求独立 pull 身份�
 
 1. Pull Request 和非纯文档的 main push 触发 Check。Node 24、pnpm 12.10.1，运行 settings 一致性、lint、Nuxt typecheck、脚本 typecheck、Vitest；纯文档 PR 跳过应用检查，纯文档 main push 不触发 Check 或 Deploy。
 2. 独立 Check jobs 验证真实生产 MQTT 镜像的权限与重启持久化、Chromium 浏览器流程，以及全新 MySQL 8.4 的完整 SQL/TS 迁移、第二遍幂等执行、隔离迁移框架和 Content 转换。main 可在确认 PR 所有检查成功且代码树一致时复用这些结果；否则完整重跑。CI 的存储边界夹具不代表真实生产 OSS/ESA 已验收。
-3. main 的 Check 成功触发 Deploy，检出该次 Check 的 `head_sha`；部署仅接受本仓库 `push` 触发的 Check，拒绝 PR 触发的 run。部署同组串行，不取消正在执行的旧部署。安装发布工具时使用锁文件并禁用安装脚本。
-4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；通过后构建/推送 ACR latest 与 mqtt，并上传 `.env.prod.incoming` 及 `docker-compose.yml.incoming`。明文不会打进镜像。
+3. main 的 Check 成功触发 Deploy，检出该次 Check 的 `head_sha`；部署同组串行，不取消正在执行的旧部署。Deploy 仅接受 `push` 事件且来源为本仓库的 Check run：`workflow_run` 的 `branches` 过滤按触发 run 的 head 分支名匹配，而 fork 的默认分支同样叫 `main`，纯文档 fork PR 的成功 Check 若无事件守卫，就能借默认分支上下文的全部 secrets 与 root SSH 触发部署。安装发布工具时使用锁文件并禁用安装脚本。
+4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；随后从完整配置生成不含 `ALIYUN_ESA_PUBLISH_*` 的 `.env.prod.runtime`，构建/推送 ACR latest 与 mqtt。运行配置先通过 SCP 上传到服务器上权限为 700 的独立临时目录，文件权限设为 600，再原子替换 `.env.prod.incoming`；Compose 另上传为 `docker-compose.yml.incoming`。明文不会打进镜像。
 5. SSH 将 `scripts/deploy/remote.sh` 交给远端 shell，备份旧 env/Compose 和旧运行镜像 ID，校验候选配置，再 pull/up。
 6. 应用依赖 EMQX 凭据健康检查；远端另对两个服务依次执行健康门，默认各最多 72 次、间隔 5 秒。容器退出或重启循环立即失败；两个服务健康后只清理悬空镜像。WSS 反代切换仍需手动完成，见 [MQTT](mqtt.md)。
 7. 健康门成功后运行 `pnpm esa:deploy:prod`，同步函数变量、创建并发布本次代码版本，读回确认。目标统一来自 prod YAML 的 `esaFunction`，无需在工作流中重复函数名或回调。
-8. 无论成功或失败，清理 runner 明文 `.env.prod`，上传不含密钥的 `esa-production-receipt` artifact，保留 30 天。发布详情与首次资源准备见[函数发布](esa-functions.md)。
+8. 无论成功或失败，清理 runner 明文 `.env.prod` 和 `.env.prod.runtime`，上传不含密钥的 `esa-production-receipt` artifact，保留 30 天。发布详情与首次资源准备见[函数发布](esa-functions.md)。
 
 服务器正式文件统一为 `.env.prod`，所有部署 Compose 调用显式使用 `--env-file .env.prod`。首次从旧版 `.env` 升级时，脚本保留旧文件作为回滚来源；新容器健康后才将旧文件移到 `.env.legacy.bak`，失败则恢复旧命名和旧 Compose。
+
+完整生产 env 仍保存在 CI 解密文件与本地加密源中，服务器正式文件只含运行及维护所需变量。首次切换期间旧环境和回滚备份可能仍含发布凭据：成功后脚本尝试从 `.env.prod.bak` 和 `.env.legacy.bak` 删除 `ALIYUN_ESA_PUBLISH_*`；只自动处理可安全识别的单行配置，遇到多行、转义等不支持的格式会保留原文件并在部署日志中警告，需人工检查处理。部署失败回滚时保留原样的旧配置和备份；其他历史备份也不会自动清理。应用原先已经接触过的密钥不会因删除变量而自动失效，如需收回历史访问能力须另外轮换发布凭据。
 
 Docker 构建阶段使用 Node 24、锁文件安装、Nuxt build、maintenance bundle；运行镜像只带 `.output`、config、migrations 和入口脚本。图片迁移需要的 Sharp 原生运行包也包含在 maintenance 产物中，服务器无需 tsx 或整套源码。
 

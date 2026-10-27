@@ -174,7 +174,7 @@ describe('部署的健康检查与自愈接线', () => {
     expect(decrypt_step.env.ENV_PASSPHRASE).toBe('$' + '{{ secrets.ENV_PASSPHRASE }}')
     expect(decrypt_step.run).toContain('gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt')
     expect(decrypt_step.run).toContain('--output .env.prod .env.prod.gpg')
-    expect(deploy_step.run).toContain('.env.prod.incoming')
+    expect(deploy_step.run).toContain('sh scripts/deploy/stage-env.sh .env.prod.runtime')
     // 服务器端只剩闸门，不再跑 build-env
     expect(read('scripts/deploy/remote.sh')).not.toMatch(/build-env/)
   })

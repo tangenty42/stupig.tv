@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { load_environment } from '../../config/lib/environment.mjs'
 import { load_dev_auth_config } from './auth-config'
+import { start_dev_esa_notice } from './esa-notice'
 import { run_dev_tunnel } from './frp'
 
 export async function run_development(args: string[] = []) {
@@ -32,14 +33,17 @@ export async function run_development(args: string[] = []) {
   })
   const stop_tunnel = await run_dev_tunnel()
   let app: ReturnType<typeof spawn>
+  let app_env: NodeJS.ProcessEnv
   try {
-    app = spawn(process.execPath, [fileURLToPath(new URL('../../node_modules/nuxt/bin/nuxt.mjs', import.meta.url)), 'dev', '--dotenv', '.env.dev', '--host', '0.0.0.0', ... args, '--port', String(config.proxy.targetPort)], { stdio: 'inherit', windowsHide: true, env: load_environment({ node_env: 'development' }) })
+    app_env = load_environment({ node_env: 'development' })
+    app = spawn(process.execPath, [fileURLToPath(new URL('../../node_modules/nuxt/bin/nuxt.mjs', import.meta.url)), 'dev', '--dotenv', '.env.dev', '--host', '0.0.0.0', ... args, '--port', String(config.proxy.targetPort)], { stdio: 'inherit', windowsHide: true, env: app_env })
   }
   catch (error) {
     stop_tunnel()
     throw error
   }
   let stopped = false
+  const stop_notice = start_dev_esa_notice(app_env)
   let finish: (code: number) => void
   const completed = new Promise<number>((resolve) => {
     finish = resolve
@@ -48,6 +52,7 @@ export async function run_development(args: string[] = []) {
     if (stopped)
       return
     stopped = true
+    stop_notice()
     stop_tunnel()
     app.kill()
     finish(code)

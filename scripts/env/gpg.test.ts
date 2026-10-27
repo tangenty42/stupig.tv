@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -38,6 +39,29 @@ describe('crypt_env', () => {
     rmSync(join(directory, '.env.prod'))
     crypt_env('decrypt', { cwd: directory, passphrase: 'test-passphrase' })
     expect(readFileSync(join(directory, '.env.prod'), 'utf8')).toBe(original)
+  })
+
+  it_with_gpg('writes a salted, iterated SHA-256 S2K packet with the configured count', { timeout: 60_000 }, () => {
+    writeFileSync(join(directory, '.env.prod'), 'SECRET=value\n')
+    crypt_env('encrypt', { cwd: directory, passphrase: 'test-passphrase' })
+    const packets = spawnSync(gpg!, ['--batch', '--no-symkey-cache', '--pinentry-mode', 'loopback', '--passphrase-fd', '0', '--list-packets', join(directory, '.env.prod.gpg')], { input: 'test-passphrase\n', encoding: 'utf8' })
+    expect(packets.status).toBe(0)
+    expect(packets.stdout).toMatch(/cipher 9,.*s2k 3, hash 8/)
+    expect(packets.stdout).toContain('count 65011712')
+  })
+
+  it_with_gpg('rejects multiline passphrases instead of silently using the first line', () => {
+    writeFileSync(join(directory, '.env.prod'), 'SECRET=value\n')
+    expect(() => crypt_env('encrypt', { cwd: directory, passphrase: 'one\ntwo' })).toThrow(/must not contain/)
+    expect(existsSync(join(directory, '.env.prod.gpg'))).toBe(false)
+  })
+
+  it_with_gpg('preserves spaces, shell metacharacters and unicode in the stdin passphrase', { timeout: 60_000 }, () => {
+    const passphrase = '中 文 $HOME # quote\' " !'
+    writeFileSync(join(directory, '.env.prod'), 'SECRET=value\n')
+    crypt_env('encrypt', { cwd: directory, passphrase })
+    expect(check_env({ cwd: directory, passphrase })).toEqual({ ok: true })
+    expect(() => check_env({ cwd: directory, passphrase: 'different' })).toThrow(/gpg failed/)
   })
 
   it_with_gpg('decrypt with a wrong passphrase fails instead of writing garbage', { timeout: 60_000 }, () => {

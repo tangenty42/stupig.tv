@@ -316,6 +316,30 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
       process.env.HEALTH_ATTEMPTS = saved_attempts
   })
 
+  it('cleans publisher credentials from old backups after a successful deploy', () => {
+    const old = 'APP_PORT=3042\nALIYUN_ESA_PUBLISH_ACCESS_KEY_ID=old-id\nALIYUN_ESA_PUBLISH_ACCESS_KEY_SECRET="old-secret"\nMYSQL_PASSWORD="keep # this"\n'
+    const result = run_deploy({ statuses: ['running'], healths: ['healthy'], env_content: old, files: { '.env.legacy.bak': old } })
+    expect(result.status).toBe(0)
+    expect(result.files['.env.prod.bak']).toBe('APP_PORT=3042\nMYSQL_PASSWORD="keep # this"\n')
+    expect(result.files['.env.legacy.bak']).toBe(result.files['.env.prod.bak'])
+  }, 15_000)
+
+  it('preserves an unsupported multiline backup and warns without breaking a healthy deployment', () => {
+    const old = 'APP_PORT=3042\nOTHER="first\nsecond"\nALIYUN_ESA_PUBLISH_ACCESS_KEY_SECRET=old-secret\n'
+    const result = run_deploy({ statuses: ['running'], healths: ['healthy'], env_content: old })
+    expect(result.status).toBe(0)
+    expect(result.files['.env.prod.bak']).toBe(old)
+    expect(result.output).toContain('无法安全清理 .env.prod.bak')
+  }, 15_000)
+
+  it('keeps the exact old environment available when a deployment rolls back', () => {
+    const old = 'APP_PORT=3042\nALIYUN_ESA_PUBLISH_ACCESS_KEY_SECRET=old-secret\n'
+    const result = run_deploy({ statuses: ['exited', 'running'], healths: ['unhealthy', 'healthy'], previous_image: 'sha256:old', env_content: old })
+    expect(result.status).not.toBe(0)
+    expect(result.files['.env.prod']).toBe(old)
+    expect(result.files['.env.prod.bak']).toBe(old)
+  }, 15_000)
+
   it('restores both images and checks both services when an existing managed deployment fails', () => {
     const result = run_deploy({
       statuses: ['exited', 'running'],

@@ -47,8 +47,10 @@ function run_gpg(args: string[], cwd: string, passphrase: string | undefined) {
   }
   // 交互运行时让 gpg 自己弹 pinentry；CI 里用 ENV_PASSPHRASE 走批处理模式，
   // loopback 是必需的，否则新版 gpg 在 batch 下仍会去等 pinentry 而挂住
-  const batch = passphrase === undefined ? ['--yes'] : ['--batch', '--yes', '--pinentry-mode', 'loopback', '--passphrase', passphrase]
-  const result = spawnSync(gpg, [... batch, ... args], { cwd, stdio: passphrase === undefined ? 'inherit' : 'pipe' })
+  if (passphrase !== undefined && /[\r\n\0]/.test(passphrase))
+    throw new Error('ENV_PASSPHRASE must not contain newlines or NUL')
+  const batch = passphrase === undefined ? ['--yes'] : ['--batch', '--yes', '--no-symkey-cache', '--pinentry-mode', 'loopback', '--passphrase-fd', '0']
+  const result = spawnSync(gpg, [... batch, ... args], { cwd, stdio: passphrase === undefined ? 'inherit' : 'pipe', input: passphrase === undefined ? undefined : `${passphrase}\n` })
   if (result.error) {
     throw result.error
   }
@@ -62,7 +64,7 @@ export function crypt_env(action: 'encrypt' | 'decrypt', { cwd = process.cwd(), 
   const encrypted = resolve(cwd, '.env.prod.gpg')
   const resolved_passphrase = resolve_passphrase(cwd, passphrase)
   const args = action === 'encrypt'
-    ? ['--symmetric', '--cipher-algo', 'AES256', '--output', encrypted, plain]
+    ? ['--symmetric', '--cipher-algo', 'AES256', '--s2k-mode', '3', '--s2k-digest-algo', 'SHA256', '--s2k-count', '65011712', '--output', encrypted, plain]
     : ['--decrypt', '--output', plain, encrypted]
   run_gpg(args, cwd, resolved_passphrase)
 }

@@ -46,6 +46,8 @@ function harness() {
         if (state.deploymentUnknown)
           throw new Error('raw SDK secret must not escape')
         return { DeploymentId: '300' }
+      default:
+        throw new Error(`Unexpected API action: ${action}`)
     }
   })
   const deps: PublishDependencies = {

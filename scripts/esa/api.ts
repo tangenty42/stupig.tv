@@ -10,7 +10,7 @@ function wrapped_default(value: unknown): value is { default: typeof OpenApiClas
 const OpenApi = wrapped_default(OpenApiModule) ? OpenApiModule.default : OpenApiModule as unknown as typeof OpenApiClass
 
 export type Action = 'GetRoutine' | 'ListRoutineRoutes' | 'ListRoutineEnvironmentVariables' | 'SetRoutineEnvironmentVariables'
-  | 'GetRoutineCodeVersionInfo' | 'ListRoutineCodeVersions' | 'CreateRoutineCodeDeployment'
+  | 'GetRoutineCodeVersion' | 'GetRoutineCodeVersionInfo' | 'ListRoutineCodeVersions' | 'CreateRoutineCodeDeployment'
 export type Api = (action: Action, fields: Record<string, string>) => Promise<Record<string, unknown>>
 
 export function create_api(config: PublishConfig): Api {
