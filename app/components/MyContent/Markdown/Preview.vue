@@ -193,7 +193,7 @@ function on_preview_keydown(event: KeyboardEvent) {
    exiting lower-level title cannot show through a higher-level title. The
    padding sits inside the background, doubling as vertical spacing. */
 .story-body :deep(:is(h1, h2, h3, h4, h5, h6)) {
-  @apply sticky z-10 mb-2 bg-white py-2 font-bold text-slate-800 dark:bg-slate-900 dark:text-slate-100;
+  @apply sticky mb-2 bg-white py-2 font-bold text-slate-800 dark:bg-slate-900 dark:text-slate-100;
   top: var(--app-header-height, 0px);
   /* Full-bleed: the bar spans the viewport while the compensating
      padding keeps the title text aligned with the content column. */
