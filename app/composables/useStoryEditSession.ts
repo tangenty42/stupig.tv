@@ -1,6 +1,5 @@
 import type { ContentMarkdownConfig } from '@shared/content-markdown'
 import type { ContentAttachmentWorkspace, ContentStoryBody } from '@shared/types/content'
-import type { ContentReferenceRewriteResult } from '@shared/types/content-reference'
 import type MyContentMarkdownEditor from '~/components/MyContent/Markdown/Editor.vue'
 import type { ContentDraftRecord, useContentDraftStore } from '~/stores/contentDraft'
 import { parse_story_markdown } from '@shared/content-markdown'
@@ -8,7 +7,7 @@ import { parse_application_error } from '@shared/content-reference-error'
 import { has_permission } from '@shared/permissions'
 import { settings } from '@shared/settings'
 import { storeToRefs } from 'pinia'
-import { create_draft_reference_bridge, reference_review_can_confirm } from '~/utils/content/draft-reference-bridge'
+import { create_draft_reference_bridge } from '~/utils/content/draft-reference-bridge'
 import { read_content_resource } from '~/utils/content/read-resource'
 
 interface StoryEditSessionOptions {
@@ -76,12 +75,14 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
   const pending_conflict_draft = ref<ContentDraftRecord | null>(null)
   const discard_draft_pending = ref(false)
   const draft_status_label = computed(() => {
+    if (draft_storage_error.value)
+      return '草稿保存失败'
+    if (! tab_writable.value)
+      return tab_lock_unavailable.value ? '警告！当前浏览器不支持跨标签页安全同步~' : '正在跨标签页同步...'
     if (save_pending.value)
       return is_edit.value ? '正在保存到服务器...' : '正在创建档案...'
     if (reference_rewrite_pending.value)
       return '正在更新正文引用...'
-    if (draft_storage_error.value)
-      return '草稿保存失败'
     if (draft_autosave_pending.value)
       return '正在保存草稿...'
     if (draft_dirty.value && draft_saved_at.value)
@@ -105,10 +106,8 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
       error('获取档案信息失败')
     }
   }
-  const reference_review = ref<ContentReferenceRewriteResult | null>(null)
   const reference_history_warning_visible = ref(false)
   let reference_history_save_snapshot = ''
-  let reference_review_snapshot = ''
   const reference_bridge = create_draft_reference_bridge({
     snapshot: () => is_edit.value && story.value && draft_store.initialized && ! private_blocked.value && (! tab_coordination_active || tab_writable.value)
       ? {
@@ -126,10 +125,6 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
     rewrite: snapshot => content.rewrite_draft_references(snapshot.story_id, snapshot),
     on_pending: pending => reference_request_pending.value = pending,
     apply: (snapshot, result) => {
-      reference_review.value = result.diagnostics.some(item => item.kind === 'story' && item.reason === 'replaced') ? result : null
-      reference_review_snapshot = snapshot.markdown
-      if (result.diagnostics.some(item => item.kind === 'story' && item.reason === 'replaced'))
-        return true
       if (markdown_editor.value && ! markdown_editor.value.apply_reference_changes(snapshot.markdown, result.changes))
         return false
       markdown.value = result.markdown
@@ -159,36 +154,6 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
 
     initialized = true
   }
-  async function confirm_reference_targets(event: Event) {
-    const target = event.currentTarget
-    if (markdown.value !== reference_review_snapshot) {
-      reference_bridge.invalidate()
-      await reference_bridge.request()
-    }
-    if (! reference_review.value || markdown.value !== reference_review_snapshot || (tab_coordination_active && ! tab_writable.value))
-      return
-    confirm_require({ currentTarget: target } as Event, '确认已核对所有引用，并接受当前的引用目标？', () => {
-      const result = reference_review.value
-      if (tab_coordination_active && ! tab_writable.value)
-        return
-      if (result && ! reference_review_can_confirm(result))
-        return
-      if (! result || markdown.value !== reference_review_snapshot) {
-        reference_bridge.invalidate()
-        void reference_bridge.request()
-        return
-      }
-      const reviewed = result.confirmation ?? result
-      if (markdown_editor.value && ! markdown_editor.value.apply_reference_changes(reference_review_snapshot, reviewed.changes))
-        return
-      markdown.value = reviewed.markdown
-      base_namespace_revision.value = result.namespace_revision
-      base_title_revision.value = result.title_revision
-      reference_review.value = null
-      draft_store.persist_now()
-    })
-  }
-
   const synced_story = useSyncedState(computed<ContentStoryBody | null>({
     get: () => story.value,
     set: (latest_story) => {
@@ -199,7 +164,6 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
         draft_store.suspend()
         story.value = null
         reference_bridge.invalidate()
-        reference_review.value = null
         return
       }
       if (story.value?.viewer_key === latest_story.viewer_key && story.value?.id === latest_story.id && latest_story.namespace_revision < story.value.namespace_revision)
@@ -210,7 +174,6 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
         draft_store.initialize(latest_story.markdown, latest_story.revision, latest_story.namespace_revision, latest_story.title_revision ?? null)
         draft_store.suspend()
         story.value = latest_story
-        reference_review.value = null
         return
       }
       if (! draft_store.initialized) {
@@ -424,7 +387,6 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
     pending_conflict_draft.value = null
     draft_conflict_visible.value = false
     reference_bridge.invalidate()
-    reference_review.value = null
     draft_store.discard()
     draft_store.initialize(
       story.value?.markdown ?? initial_markdown,
@@ -588,10 +550,6 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
         reference_history_warning_visible.value = true
         return
       }
-      if (application_error?.code === 'REF_TARGET_REPLACED') {
-        reference_bridge.invalidate(true)
-        return
-      }
       if (get_error_status(ex) === 409 && await show_save_conflict()) {
         return
       }
@@ -630,6 +588,6 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
 
   return { story, private_blocked, page_disposed, draft_storage_error, draft_dirty, draft_status_label,
     save_pending, story_sync_pending, reference_rewrite_pending, tab_writable, tab_lock_unavailable, delete_pending, draft_conflict_visible, pending_conflict_draft, discard_draft_pending,
-    reference_review, reference_history_warning_visible, confirm_reference_history_save, synced_story, fetch_story, load, initialize, confirm_reference_targets, confirm_abandon_draft,
+    reference_history_warning_visible, confirm_reference_history_save, synced_story, fetch_story, load, initialize, confirm_abandon_draft,
     use_database_version, restore_conflicting_draft, on_save_click, confirm_delete_story }
 }

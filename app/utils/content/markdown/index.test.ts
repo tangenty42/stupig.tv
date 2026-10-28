@@ -8,10 +8,9 @@ function render(source: string, story_exists = false) {
     attachments: () => [{ file_name: 'a.txt', is_image: false, mime_type: 'text/plain', file_size: 1, version: 'v1', url: '/objects/a.txt', is_encrypted: false }],
     stories: () => story_exists ? [{ id: 2, title: 'Other', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null, cover: null, cover_label: null, cover_version: null, cover_url: null }] : [],
     static_url: path => path,
-    video_card: () => null,
     folder_card_openable: () => false,
   })
-  return md.render(source, { images: [], bilibili_hrefs: [] })
+  return md.render(source, { images: [] })
 }
 
 describe('story Markdown preset contracts', () => {
@@ -50,7 +49,6 @@ describe('story Markdown preset contracts', () => {
       attachments: () => [],
       stories: () => [],
       static_url: path => path,
-      video_card: () => null,
       folder_card_openable: () => false,
     })
     const html = md.renderInline('<img src="/image.png" onerror="alert(1)"><iframe src="/frame"></iframe><a href="javascript:alert(1)">link</a>')
@@ -106,7 +104,6 @@ describe('story Markdown preset contracts', () => {
       attachments: () => [],
       stories: () => [],
       static_url: path => path,
-      video_card: () => null,
       folder_card_openable: () => false,
     })
     const text_rule = md.renderer.rules.text!
@@ -115,7 +112,7 @@ describe('story Markdown preset contracts', () => {
         throw new Error('nested render failed')
       return text_rule(tokens, idx, ... args)
     }
-    const env = { images: [], bilibili_hrefs: [] }
+    const env = { images: [] }
     expect(() => md.render(source, env)).toThrow('nested render failed')
     md.renderer.rules.text = text_rule
     expect(md.render('# After', env)).toBe('<h1 data-line="0">After</h1>\n')

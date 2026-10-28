@@ -294,14 +294,7 @@ export async function update_story(id: number, markdown: string, base_revision: 
       const replayed = await replay_locked_references(connection, id, markdown, baseline, title_namespace)
       if (! confirm_reference_history && (replayed.baseline_unavailable.namespace || replayed.baseline_unavailable.title))
         throw new ReferenceSafetyError('引用历史不可用，请核对当前引用后再保存', 'REF_HISTORY_UNAVAILABLE')
-      const replaced = replayed.diagnostics.filter(item => item.kind === 'story' && item.reason === 'replaced')
-      if (replaced.length) {
-        throw new ApiError(409, '引用的档案已被删除并同名重建，请确认引用后再保存', {
-          code: 'REF_TARGET_REPLACED',
-          details: { namespace_revision: replayed.namespace_revision, title_revision: replayed.title_revision, references: replaced.map(item => ({ ... item, reason: 'replaced' as const })) },
-        })
-      }
-      markdown = replayed.confirmation?.markdown ?? replayed.markdown
+      markdown = replayed.markdown
       const meta = parse_or_throw(markdown, await existing_story_titles(id, connection))
       // Ordinary saves share the title lock. A rename retries from scratch with
       // an exclusive lock, never upgrading a shared lock while holding scope rows.

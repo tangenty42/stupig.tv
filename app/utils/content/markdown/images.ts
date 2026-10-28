@@ -21,6 +21,19 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
   md.renderer.rules.image = (tokens, idx, options, env, self) => {
     const token = tokens[idx]
     const src = token?.attrGet('src')
+    const carousel_item = (body: string, brand = '') => {
+      const caption = token?.content && token.content !== (src ? local_file_name(src) : null)
+        ? `<span class="carousel-caption">${md.renderInline(token.content, env)}</span>`
+        : ''
+      const content = brand ? `<span class="encrypted-block">${brand}${body}${caption}</span>` : `${body}${caption}`
+      return `<span class="carousel-item${caption ? ' carousel-item-captioned' : ''}">${content}</span>`
+    }
+    if (src?.startsWith('iframe://')) {
+      const url = `https://${src.slice('iframe://'.length)}`
+      const title = token?.content || '嵌入内容'
+      const frame = `<span class="img-frame iframe-frame" aria-busy="true"><iframe src="${md.utils.escapeHtml(url)}" title="${md.utils.escapeHtml(title)}" loading="lazy" allowfullscreen></iframe><span class="image-loading-mask" role="status"><span class="iconify i-lucide:loader-circle" aria-hidden="true"></span><span class="sr-only">内容加载中</span></span><span class="image-unavailable" role="img" aria-label="嵌入内容不可用"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span></span>`
+      return token?.meta?.carousel ? carousel_item(frame) : frame
+    }
     let denied = false
     let invalid = ! src
     /** Plaintext twin an unauthorized viewer gets instead of the ciphertext. */
@@ -105,16 +118,6 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
     // alt (the insertion default) or one repeating the file name is not a
     // real caption — skip it. The caption is rendered as inline markdown (like
     // a link label), so `**bold**` etc. resolve instead of showing literally.
-    const caption = token.content && token.content !== (src ? local_file_name(src) : null)
-      ? `<span class="carousel-caption">${md.renderInline(token.content, env)}</span>`
-      : ''
-    const captioned = caption ? ' carousel-item-captioned' : ''
-    // The encrypted marker is a brand strip above the normal item body;
-    // carousel items must stay spans, so CSS gives the strip its block look.
-    // The caption joins inside the card.
-    const item_content = private_image || abridged
-      ? `<span class="encrypted-block">${brand}${output_image}${caption}</span>`
-      : `${output_image}${caption}`
-    return `<span class="carousel-item${captioned}">${item_content}</span>`
+    return carousel_item(output_image, private_image || abridged ? brand : '')
   }
 }

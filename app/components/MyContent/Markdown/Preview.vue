@@ -288,8 +288,8 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply brightness-90;
 }
 
-.story-body :deep(.link-card:not(.story-card-dead, .video-card, .story-card, .file-card-encrypted):hover),
-.story-body :deep(.link-card:not(.story-card-dead, .video-card, .story-card, .file-card-encrypted):focus-visible) {
+.story-body :deep(.link-card:not(.story-card-dead, .story-card, .file-card-encrypted):hover),
+.story-body :deep(.link-card:not(.story-card-dead, .story-card, .file-card-encrypted):focus-visible) {
   @apply border-primary;
 }
 
@@ -520,17 +520,11 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply ml-1 font-medium text-amber-600 dark:text-amber-400;
 }
 
-/* Video card and story reference card: vertical blocks like Bilibili's own
-   feed card (and our carousel item) — a brand strip on top (pink 哔哩哔哩 /
-   primary 蠢猪档案), then an optional full-width cover, then the title and
-   a muted secondary line. The video card's cover carries play/like stats
-   bottom-left and duration bottom-right; the story card sets its rating
-   badge at the card's bottom right corner instead. Pending/failed fetches
-   and dead references render a muted placeholder cover with an icon.
+/* Story reference cards have a brand strip, optional cover, title and rating.
+   Dead references render a muted placeholder cover with an icon.
    The card is unpadded (.link-card's chrome is the 1px dashed border) and
    clips its sections to its own rounding, so brand/cover/content stack as
    plain flex sections — no negative-margin border compensation. */
-.story-body :deep(.video-card),
 .story-body :deep(.story-card) {
   /* The card itself draws no border: the brand strip and cover bleed to the
      edges, and only the bottom content section carries the dashed frame on
@@ -542,7 +536,6 @@ function on_preview_keydown(event: KeyboardEvent) {
    its bottom rounding; the top corners belong to the brand strip's clip.
    The transition matches the card's 300ms hover timing (it lives on the
    root's transition-all, which this border no longer rides). */
-.story-body :deep(.video-card-content),
 .story-body :deep(.story-card-content) {
   @apply flex min-w-0 flex-1 flex-col gap-0.5 rounded-b-sm border border-t-0 border-dashed border-slate-300 bg-slate-50/60 px-2.5 pb-2 pt-1 transition-colors duration-300 dark:border-slate-600 dark:bg-slate-800/40;
 }
@@ -553,10 +546,6 @@ function on_preview_keydown(event: KeyboardEvent) {
    tracks the theme's primary color (subdued to the 700 shade in dark mode;
    .dark sits on <html>, an ancestor of this component, so the override
    needs :global). */
-.story-body :deep(.video-card) {
-  --card-brand: #fb7299;
-}
-
 .story-body :deep(.story-card) {
   @apply relative;
   --card-brand: theme('colors.primary');
@@ -568,8 +557,6 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* On hover the content section's border reveals the card's brand color; dead
    story cards are not links and stay static. */
-.story-body :deep(.video-card:hover) .video-card-content,
-.story-body :deep(.video-card:focus-visible) .video-card-content,
 .story-body :deep(.story-card:not(.story-card-dead):hover) .story-card-content,
 .story-body :deep(.story-card:not(.story-card-dead):focus-visible) .story-card-content {
   border-color: var(--card-brand);
@@ -577,31 +564,23 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Each card opens with a brand strip; the card's overflow-hidden rounds its
    top corners, and covers keep their own overflow-hidden for the image. */
-.story-body :deep(.video-card-brand),
 .story-body :deep(.story-card-brand) {
   @apply flex items-center gap-1.5 px-2 py-1 text-white;
   background-color: var(--card-brand);
-}
-
-.story-body :deep(.video-card-logo) {
-  @apply h-3.5 w-auto;
 }
 
 .story-body :deep(.story-card-brand .iconify) {
   @apply h-3.5 w-3.5;
 }
 
-.story-body :deep(.video-card-brand-text),
 .story-body :deep(.story-card-brand-text) {
   @apply text-xs font-medium leading-4;
 }
 
-.story-body :deep(.video-card-out),
 .story-body :deep(.story-card-out) {
   @apply ml-auto h-3.5 w-3.5 shrink-0 text-white/70;
 }
 
-.story-body :deep(.video-card-cover),
 .story-body :deep(.story-card-cover) {
   @apply relative shrink-0 overflow-hidden bg-slate-200 dark:bg-slate-700;
 }
@@ -609,33 +588,13 @@ function on_preview_keydown(event: KeyboardEvent) {
 /* Reset the global story-body img rules (max-h cap, min-w floor, zoom
    cursor); the cover keeps its natural aspect ratio at full card width
    instead of being cropped to a fixed frame. */
-.story-body :deep(.video-card-cover img),
 .story-body :deep(.story-card-cover img) {
   @apply m-0 block h-auto max-h-none w-full min-w-0 cursor-pointer rounded-none;
 }
 
 /* The empty placeholder has no image to size it, so it keeps a 16:9 box. */
-.story-body :deep(.video-card-cover-empty),
 .story-body :deep(.story-card-cover-empty) {
   @apply flex aspect-video items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
-}
-
-.story-body :deep(.video-card-stats),
-.story-body :deep(.video-card-duration) {
-  @apply absolute bottom-0 flex items-center gap-1 bg-slate-950/70 px-1.5 py-0.5 text-[10px] leading-4 text-white;
-}
-
-/* gap between stat groups; icon-to-number gap lives on .video-card-stat. */
-.story-body :deep(.video-card-stats) {
-  @apply left-0 gap-2 rounded-tr-lg;
-}
-
-.story-body :deep(.video-card-stat) {
-  @apply flex items-center gap-0.5;
-}
-
-.story-body :deep(.video-card-duration) {
-  @apply right-0 rounded-tl-lg;
 }
 
 /* Rating badge: a large, translucent tier SVG on its own row at the
@@ -662,31 +621,15 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply min-w-0 max-w-full break-words;
 }
 
-.story-body :deep(.video-card-title),
 .story-body :deep(.story-card-title) {
   @apply my-0.5 font-semibold text-slate-800 dark:text-slate-100;
 }
 
-/* Only the video card still centers its text lines. */
-.story-body :deep(.video-card-title) {
-  @apply text-center;
-}
-
-.story-body :deep(.video-card-uploader),
 .story-body :deep(.story-card-desc) {
   @apply mt-1 text-xs text-slate-500 dark:text-slate-400;
 }
 
-.story-body :deep(.video-card-uploader) {
-  @apply flex items-center gap-1;
-}
-
-.story-body :deep(.video-card-up) {
-  @apply shrink-0 rounded-full border border-slate-300 px-[.2rem] text-[10px] leading-3 text-slate-400 dark:border-slate-600 dark:text-slate-500;
-}
-
-/* Dead fetches/references mute the placeholder title. */
-.story-body :deep(.video-card-dead .video-card-title),
+/* Dead references mute the placeholder title. */
 .story-body :deep(.story-card-dead .story-card-title) {
   @apply font-normal text-slate-400 dark:text-slate-500;
 }
@@ -697,8 +640,8 @@ function on_preview_keydown(event: KeyboardEvent) {
    ratio and object-top crops the resulting overflow at the bottom (tall) or
    both sides (wide). The min floors must stay fixed lengths: percentages are
    unresolvable in max-content contexts (carousel items, table cells), where
-   they would silently disable the mechanism. Built-in card images (video /
-   story covers, rating badges) carry .built-in-img and opt out — e.g. the
+   they would silently disable the mechanism. Built-in card images (story
+   covers, rating badges) carry .built-in-img and opt out — e.g. the
    rating badge's h-6 would otherwise lose to the min-h floor. */
 .story-body :deep(img:not(.built-in-img)) {
   /* LQIP width/height attributes reserve the aspect ratio, not a fixed size. */
@@ -751,7 +694,6 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Card covers must not take the img hover dimming: the whole card already
    darkens on hover, a second dimming would double-darken the cover. */
-.story-body :deep(.video-card-cover img:hover),
 .story-body :deep(.story-card-cover img:hover),
 .story-body :deep(.story-card-rating:hover) {
   @apply brightness-100;
@@ -859,6 +801,14 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 .story-body :deep(.carousel-caption) {
   @apply w-0 min-w-full whitespace-normal break-words font-medium text-xs leading-[1.2rem] rounded-b-sm bg-slate-200/80 px-2.5 py-1.5 text-slate-600 dark:bg-slate-800/60 dark:text-slate-300;
+}
+
+.story-body :deep(.img-frame.iframe-frame) {
+  @apply w-[32rem] max-w-full;
+}
+
+.story-body :deep(.iframe-frame iframe) {
+  @apply block aspect-video w-full border-0 bg-slate-200 dark:bg-slate-700;
 }
 
 .story-body :deep(.carousel-caption p) {

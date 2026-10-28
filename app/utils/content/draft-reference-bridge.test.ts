@@ -1,7 +1,7 @@
 import type { ContentReferenceRewriteResult } from '@shared/types/content-reference'
 import type { DraftReferenceSnapshot } from './draft-reference-bridge'
 import { describe, expect, it, vi } from 'vitest'
-import { create_draft_reference_bridge, reference_review_can_confirm } from './draft-reference-bridge'
+import { create_draft_reference_bridge } from './draft-reference-bridge'
 
 const initial: DraftReferenceSnapshot = {
   local_revision: 0,
@@ -62,13 +62,6 @@ describe('draft reference bridge', () => {
     expect(on_error).toHaveBeenCalledTimes(mode === 'failure' ? 1 : 0)
   })
 
-  it('confirms unavailable history and preserves story replacement checks', () => {
-    const replaced = { kind: 'story' as const, target: 'new', from: 0, to: 10, line: 1, reason: 'replaced' as const }
-    expect(reference_review_can_confirm({ ... response, diagnostics: [replaced] })).toBe(true)
-    expect(reference_review_can_confirm({ ... response, diagnostics: [replaced, { ... replaced, target: 'missing.png', reason: 'missing' }] })).toBe(false)
-    expect(reference_review_can_confirm(response)).toBe(false)
-    expect(reference_review_can_confirm({ ... response, baseline_unavailable: { namespace: true, title: false } })).toBe(true)
-  })
   it('discards a response after typing and serializes a retry of the newest snapshot', async () => {
     let current = { ... initial }
     let resolve!: (value: ContentReferenceRewriteResult) => void

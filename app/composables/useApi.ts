@@ -226,10 +226,6 @@ export function useApi() {
       await trpc_call(trpc.content.deleteStory.mutate({ id }))
     },
 
-    async get_bilibili_video_cards(hrefs: string[]) {
-      return trpc_call(trpc.content.getBilibiliVideoCards.query({ hrefs }))
-    },
-
     /** Signs a short-lived object GET that saves the attachment under its row name. */
     async sign_attachment_download(story_id: number, file_name: string, role: 'avif' | 'original' | 'redacted_avif' = 'avif') {
       return trpc_call(trpc.content.signAttachmentDownload.mutate({ story_id, file_name, role }))

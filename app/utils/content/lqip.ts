@@ -2,6 +2,8 @@ import type { ContentStoryAttachment } from '@shared/types/content'
 import { settings } from '@shared/settings'
 import { attachment_can_read } from './attachment'
 
+const loaded_iframes = new WeakSet<HTMLIFrameElement>()
+
 /** Only a bounded inline JPEG may enter CSS; never accept a URL from metadata. */
 export function image_lqip_style(attachment: (Pick<ContentStoryAttachment, 'url' | 'image'> & Partial<ContentStoryAttachment>) | undefined) {
   const image = attachment?.image
@@ -50,6 +52,39 @@ export function observe_image_placeholders(root: HTMLElement) {
       image.removeEventListener('load', loaded)
       image.removeEventListener('error', failed)
     })
+  })
+  root.querySelectorAll<HTMLElement>('.img-frame.iframe-frame').forEach((frame) => {
+    const iframe = frame.querySelector<HTMLIFrameElement>(':scope > iframe')
+    if (! iframe) {
+      frame.dataset.imageError = ''
+      frame.removeAttribute('aria-busy')
+      return
+    }
+    const loaded = () => {
+      loaded_iframes.add(iframe)
+      frame.dataset.imageLoaded = ''
+      delete frame.dataset.imageError
+      frame.removeAttribute('aria-busy')
+    }
+    delete frame.dataset.imageLoaded
+    delete frame.dataset.imageError
+    frame.setAttribute('aria-busy', 'true')
+    iframe.addEventListener('load', loaded)
+    if (loaded_iframes.has(iframe)) {
+      loaded()
+    }
+    else {
+      // A cross-origin player may finish before hydration attaches the load
+      // listener. Once its document is inaccessible, navigation has committed.
+      try {
+        if (iframe.contentWindow && ! iframe.contentDocument)
+          loaded()
+      }
+      catch {
+        loaded()
+      }
+    }
+    cleanups.push(() => iframe.removeEventListener('load', loaded))
   })
   return () => cleanups.forEach(cleanup => cleanup())
 }

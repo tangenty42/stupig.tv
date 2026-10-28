@@ -9,12 +9,10 @@ export interface ContentReferenceDiagnostic {
   from: number
   to: number
   line: number
-  reason: 'missing' | 'replaced'
+  reason: 'missing'
 }
 
 export interface ContentReferenceRewriteResult extends ContentReferenceBaseline {
-  /** Review-only rewrite when a deleted reference keeps the historical baseline pinned. */
-  confirmation?: { markdown: string, changes: { from: number, to: number, insert: string }[] }
   markdown: string
   changes: { from: number, to: number, insert: string }[]
   namespace_revision: number

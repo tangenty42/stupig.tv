@@ -18,6 +18,22 @@
   transition: opacity 450ms ease, filter 300ms ease;
 }
 
+.img-frame.iframe-frame > iframe {
+  @apply relative z-[1] block;
+  opacity: 0;
+  transition: opacity 450ms ease;
+}
+
+.img-frame.iframe-frame::before {
+  content: '';
+  @apply pointer-events-none absolute inset-0 bg-slate-200 dark:bg-slate-700;
+  animation: image-placeholder-breathe 2.4s ease-in-out infinite;
+}
+
+.img-frame.iframe-frame[data-image-loaded]::before {
+  animation: none;
+}
+
 /* Markdown images are buttons, so their transition must also win over the
    global control transition without overriding the loaded opacity. */
 html .img-frame > img[role='button'] {
@@ -85,7 +101,8 @@ html .img-frame > img[role='button'] {
   transition: none;
 }
 
-.img-frame[data-image-loaded] > img {
+.img-frame[data-image-loaded] > img,
+.img-frame.iframe-frame[data-image-loaded] > iframe {
   opacity: 1;
 }
 
@@ -107,6 +124,8 @@ html .img-frame > img[role='button'] {
 
 @media (prefers-reduced-motion: reduce) {
   .img-frame > img,
+  .img-frame.iframe-frame > iframe,
+  .img-frame.iframe-frame::before,
   html .img-frame > img[role='button'],
   .img-frame[data-lqip]::before,
   .img-frame[data-lqip][data-image-loaded]::before,

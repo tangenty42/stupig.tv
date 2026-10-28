@@ -17,9 +17,6 @@ export const story_compiled_icons = [
   // The carousel's prev/next buttons (added by DOM wiring, not md.render).
   'lucide:chevron-left',
   'lucide:chevron-right',
-  'lucide:tv',
-  'lucide:play',
-  'lucide:thumbs-up',
   'lucide:book-open',
   'lucide:book-x',
   'lucide:image-off',

@@ -166,6 +166,17 @@ it('ignores a save shortcut once the story is known to be missing', async () => 
   expect(update).not.toHaveBeenCalled()
 })
 
+it('shows tab synchronization and unsupported-browser states in the draft status', async () => {
+  const f = await open()
+  f.draft.markdown = 'local edits'
+  f.tab_writable.value = false
+  expect(f.draft_status_label.value).toBe('正在跨标签页同步...')
+  f.tab_lock_unavailable.value = true
+  expect(f.draft_status_label.value).toBe('警告！当前浏览器不支持跨标签页安全同步~')
+  f.tab_writable.value = true
+  expect(f.draft_status_label.value).not.toBe('正在跨标签页同步...')
+})
+
 it('sends all three base revisions and preserves edits typed while save is in flight', async () => {
   const f = await open()
   let finish!: (value: object) => void
@@ -251,12 +262,6 @@ it('preserves unsaved private text locally before suspending an unreadable repre
 it.each(['discard', 'conflict'])('restores reference baselines with the database body after %s', async (choice) => {
   const f = await open()
   f.draft.markdown = 'local edits'
-  f.reference_review.value = {
-    markdown: 'local edits', changes: [], diagnostics: [],
-    baseline_unavailable: { namespace: true, title: true },
-    namespace_revision: 3, title_revision: 1,
-    base_namespace_revision: null, base_title_revision: null,
-  }
   const latest = { ... saved, markdown: 'latest database', revision: 5, namespace_revision: 8, title_revision: 6 }
   fetcher.mockResolvedValue(latest)
   if (choice === 'discard') {
@@ -271,7 +276,6 @@ it.each(['discard', 'conflict'])('restores reference baselines with the database
   }
   expect(f.draft.markdown).toBe(latest.markdown)
   expect([f.draft.base_revision, f.draft.base_namespace_revision, f.draft.base_title_revision]).toEqual([5, 8, 6])
-  expect(f.reference_review.value).toBeNull()
   expect(f.draft.dirty).toBe(false)
   expect(f.draft.read_persisted()).toBeNull()
   f.draft.markdown += '\nnext edit'

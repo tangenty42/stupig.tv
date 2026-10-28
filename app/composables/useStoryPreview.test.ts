@@ -1,48 +1,16 @@
-import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import type { ContentStoryAttachment } from '@shared/types/content'
-import { settings } from '@shared/settings'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { computed, createSSRApp, effectScope, h, nextTick, onScopeDispose, onServerPrefetch, ref, watch } from 'vue'
-import { renderToString } from 'vue/server-renderer'
+import { computed, effectScope, nextTick, ref } from 'vue'
 import { useStoryPreview } from './useStoryPreview'
 
-type Cards = Record<string, BilibiliVideoCard | null>
-const boundary = vi.hoisted(() => ({ fetch: vi.fn() }))
-const a = 'https://www.bilibili.com/video/BV1xx411c7mD'
-const b = 'https://www.bilibili.com/video/BV1xx411c7mE'
+const boundary = vi.hoisted(() => ({ api: vi.fn() }))
+const a = 'iframe://player.bilibili.com/player.html?bvid=BV1xx411c7mD'
 const scopes: ReturnType<typeof effectScope>[] = []
-let app: object
-let cache = ref<Cards>({})
-let retry_at = ref<Record<string, number>>({})
-const prefetch: (() => Promise<void>)[] = []
-
-function card(title: string): BilibiliVideoCard {
-  return { bvid: 'BV1xx411c7mD', url: a, title, cover: 'https://i.example/cover.jpg', uploader: 'author', duration: 60, views: 10, likes: 2 }
-}
-
-function deferred() {
-  let resolve!: (cards: Cards) => void
-  let reject!: (reason: Error) => void
-  const promise = new Promise<Cards>((yes, no) => {
-    resolve = yes
-    reject = no
-  })
-  return { promise, resolve, reject }
-}
 
 beforeEach(() => {
-  app = {}
-  cache = ref({})
-  retry_at = ref({})
-  prefetch.length = 0
-  boundary.fetch.mockReset().mockResolvedValue({})
-  for (const [name, value] of Object.entries({ computed, watch, onScopeDispose }))
-    vi.stubGlobal(name, value)
-  vi.stubGlobal('useNuxtApp', () => app)
-  vi.stubGlobal('useState', (key: string) => key === 'content_bilibili_video_retry_at' ? retry_at : cache)
-  vi.stubGlobal('useApi', () => ({ content: { get_bilibili_video_cards: boundary.fetch } }))
-  vi.stubGlobal('onServerPrefetch', (fn: () => Promise<void>) => prefetch.push(fn))
-  vi.stubGlobal('onMounted', vi.fn())
+  boundary.api.mockReset()
+  vi.stubGlobal('computed', computed)
+  vi.stubGlobal('useApi', boundary.api)
 })
 
 afterEach(() => {
@@ -116,15 +84,12 @@ it('switches the whole preview to the public body and attachment representation 
   expect(preview.render_result.value.images).toEqual(['/private-normal', '/private-denied', 'https://static.test/public'])
 })
 
-it('does not fetch video metadata hidden by the public secret-body projection', async () => {
-  const preview = setup(`<good>\n[](${a})\n</good>`, true)
-  await settle()
-  await prefetch[0]!()
-  expect(boundary.fetch).not.toHaveBeenCalled()
-  expect(preview.render_result.value.html).not.toContain(a)
+it('renders visible videos without requesting metadata', () => {
+  const preview = setup(`<good>\n![视频](${a})\n</good>`, true)
+  expect(preview.render_result.value.html).not.toContain('player.bilibili.com')
   preview.public_mode.value = false
-  await settle()
-  expect(boundary.fetch).toHaveBeenCalledExactlyOnceWith([a])
+  expect(preview.render_result.value.html).toContain('player.bilibili.com')
+  expect(boundary.api).not.toHaveBeenCalled()
 })
 
 async function settle() {
@@ -142,212 +107,5 @@ it('renders reactive markdown and references through the existing preset without
   expect(preview.render_result.value.images).toEqual(['https://static.test/a.png'])
   expect(preview.render_result.value.html).toContain('data-folder-card="images"')
   await settle()
-  expect(boundary.fetch).not.toHaveBeenCalled()
-})
-
-it('reuses serialized cards and explicit nulls during hydration', async () => {
-  cache.value = { [a]: card('SSR title'), [b]: null }
-  const preview = setup(`[](${a})\n\n[](${b})`)
-  expect(preview.render_result.value.html).toContain('SSR title')
-  expect(preview.render_result.value.html).not.toContain('正在加载视频信息')
-  await prefetch[0]!()
-  await settle()
-  expect(boundary.fetch).not.toHaveBeenCalled()
-})
-
-it('retries a null after its expiry, joins overlapping consumers, and upgrades their placeholders', async () => {
-  vi.useFakeTimers()
-  vi.stubGlobal('onMounted', (fn: () => void) => fn())
-  boundary.fetch.mockResolvedValueOnce({ [a]: null })
-  const one = setup(`[](${a})`)
-  const two = setup(`[](${a})`)
-  await settle()
-  expect(cache.value[a]).toBeNull()
-  expect(boundary.fetch).toHaveBeenCalledOnce()
-  boundary.fetch.mockResolvedValue({ [a]: card('Recovered') })
-  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
-  await settle()
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-  expect(one.render_result.value.html).toContain('Recovered')
-  expect(two.render_result.value.html).toContain('Recovered')
-  expect(vi.getTimerCount()).toBe(0)
-})
-
-it('keeps a retry cooldown after transport failure and clears timers on link removal or unmount', async () => {
-  vi.useFakeTimers()
-  vi.stubGlobal('onMounted', (fn: () => void) => fn())
-  boundary.fetch.mockResolvedValueOnce({ [a]: null }).mockRejectedValue(new Error('offline'))
-  const preview = setup(`[](${a})`)
-  await settle()
-  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-  await vi.advanceTimersByTimeAsync(100)
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-  preview.markdown.value = 'no links'
-  await settle()
-  expect(vi.getTimerCount()).toBe(0)
-  preview.markdown.value = `[](${a})`
-  await settle()
-  expect(vi.getTimerCount()).toBe(1)
-  preview.unmount()
-  expect(vi.getTimerCount()).toBe(0)
-})
-
-it('lets a surviving preview adopt a negative retry when its initiating consumer unmounts', async () => {
-  vi.useFakeTimers()
-  vi.stubGlobal('onMounted', (fn: () => void) => fn())
-  boundary.fetch.mockResolvedValueOnce({ [a]: null })
-  const first = setup(`[](${a})`)
-  const second = setup(`[](${a})`)
-  await settle()
-  const retry = deferred()
-  boundary.fetch.mockReturnValueOnce(retry.promise)
-  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-  first.unmount()
-  retry.resolve({ [a]: card('Surviving retry') })
-  await settle()
-  expect(second.render_result.value.html).toContain('Surviving retry')
-})
-
-it('gives hydrated legacy nulls an expiry without changing their initial HTML or fetching immediately', async () => {
-  vi.useFakeTimers()
-  cache.value = { [a]: null }
-  let mount!: () => void
-  vi.stubGlobal('onMounted', (fn: () => void) => {
-    mount = fn
-  })
-  const preview = setup(`[](${a})`)
-  const html = preview.render_result.value.html
-  await settle()
-  expect(boundary.fetch).not.toHaveBeenCalled()
-  mount()
-  expect(preview.render_result.value.html).toBe(html)
-  boundary.fetch.mockResolvedValue({ [a]: card('Hydrated recovery') })
-  await vi.advanceTimersByTimeAsync(settings.integrations.bilibili.negativeCacheTtlMs)
-  expect(preview.render_result.value.html).toContain('Hydrated recovery')
-})
-
-it('joins repeated renders and overlapping previews without duplicate requests or cache publications', async () => {
-  const first = deferred()
-  boundary.fetch.mockReturnValueOnce(first.promise)
-  const one = setup(`[](${a})\n\n[](${a})`)
-  setup(`[](${a})`)
-  one.markdown.value += '\n\ntyped'
-  await settle()
-  expect(boundary.fetch).toHaveBeenCalledExactlyOnceWith([a])
-  const published = vi.fn()
-  const stop = watch(cache, published, { flush: 'sync' })
-  first.resolve({ [a]: card('joined') })
-  await settle()
-  expect(one.render_result.value.html).toContain('joined')
-  expect(published).toHaveBeenCalledOnce()
-  stop()
-})
-
-it('requests only new links and displays a fast batch while an older request is still pending', async () => {
-  const first = deferred()
-  const second = deferred()
-  boundary.fetch.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
-  const preview = setup(`[](${a})`)
-  preview.markdown.value += `\n\n[](${b})`
-  await settle()
-  expect(boundary.fetch.mock.calls).toEqual([[[a]], [[b]]])
-  second.resolve({ [b]: card('fast B') })
-  await settle()
-  expect(preview.render_result.value.html).toContain('fast B')
-  preview.markdown.value = `[](${b})`
-  await settle()
-  first.resolve({ [a]: card('late A') })
-  await settle()
-  expect(preview.render_result.value.html).toContain('fast B')
-  expect(preview.render_result.value.html).not.toContain('late A')
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-})
-
-it('releases an unmounted consumer while a surviving preview can still adopt the shared reply', async () => {
-  const flight = deferred()
-  boundary.fetch.mockReturnValueOnce(flight.promise)
-  const first = setup(`[](${a})`)
-  const second = setup(`[](${a})`)
-  first.unmount()
-  flight.resolve({ [a]: card('survivor') })
-  await settle()
-  expect(second.render_result.value.html).toContain('survivor')
-  expect(boundary.fetch).toHaveBeenCalledOnce()
-})
-
-it('does not publish late replies after all consumers unmount, and remount can retry', async () => {
-  const flight = deferred()
-  boundary.fetch.mockReturnValueOnce(flight.promise)
-  const preview = setup(`[](${a})`)
-  preview.unmount()
-  flight.resolve({ [a]: card('abandoned') })
-  await settle()
-  expect(cache.value).toEqual({})
-  boundary.fetch.mockResolvedValueOnce({ [a]: card('remounted') })
-  const next = setup(`[](${a})`)
-  await settle()
-  expect(next.render_result.value.html).toContain('remounted')
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-})
-
-it('keeps placeholders on transport failure and retries on a later render change without a retry loop', async () => {
-  const flight = deferred()
-  boundary.fetch.mockReturnValueOnce(flight.promise)
-  const preview = setup(`[](${a})`)
-  flight.reject(new Error('offline'))
-  await settle()
-  expect(cache.value).toEqual({})
-  expect(preview.render_result.value.html).toContain('正在加载视频信息')
-  expect(boundary.fetch).toHaveBeenCalledOnce()
-  boundary.fetch.mockResolvedValueOnce({ [a]: null })
-  preview.markdown.value += '\n\nretry'
-  await settle()
-  expect(cache.value[a]).toBeNull()
-  preview.markdown.value += '\n\nno retry for null'
-  await settle()
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-})
-
-it('isolates pending requests and payload caches across Nuxt applications', async () => {
-  const first = deferred()
-  const second = deferred()
-  boundary.fetch.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
-  const one = setup(`[](${a})`)
-  const first_cache = cache
-  app = {}
-  cache = ref({})
-  const two = setup(`[](${a})`)
-  expect(boundary.fetch).toHaveBeenCalledTimes(2)
-  second.resolve({ [a]: card('second app') })
-  await settle()
-  expect(first_cache.value).toEqual({})
-  expect(two.render_result.value.html).toContain('second app')
-  first.resolve({ [a]: card('first app') })
-  await settle()
-  expect(one.render_result.value.html).toContain('first app')
-  expect(two.render_result.value.html).not.toContain('first app')
-})
-
-it('awaits the real Vue server-prefetch hook and produces the same HTML from the serialized cache', async () => {
-  vi.stubGlobal('onServerPrefetch', onServerPrefetch)
-  const flight = deferred()
-  boundary.fetch.mockReturnValueOnce(flight.promise)
-  const component = { setup() {
-    const preview = useStoryPreview(() => `[](${a})`, {
-      story_id: () => null, attachments: () => [], stories: () => [], static_url: path => path, folder_card_openable: () => false,
-    })
-    return () => h('div', { innerHTML: preview.render_result.value.html })
-  } }
-  const rendered = renderToString(createSSRApp(component))
-  flight.resolve({ [a]: card('server title') })
-  const html = await rendered
-  expect(html).toContain('server title')
-  // Mirror the payload transfer, including the explicit null representation.
-  cache = ref(JSON.parse(JSON.stringify(cache.value)))
-  vi.stubGlobal('onServerPrefetch', () => {})
-  const client = setup(`[](${a})`)
-  expect(`<div>${client.render_result.value.html}</div>`).toBe(html)
-  expect(boundary.fetch).toHaveBeenCalledOnce()
+  expect(boundary.api).not.toHaveBeenCalled()
 })

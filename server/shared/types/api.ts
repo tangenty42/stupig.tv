@@ -1,5 +1,4 @@
 export type { AuthResult } from './auth'
-export type { BilibiliVideoCard } from './bilibili'
 export type {
   ContentEventPrecision,
   ContentStoryAttachment,

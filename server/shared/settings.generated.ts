@@ -135,13 +135,5 @@ export const settings: Settings = {
       clientIdPrefixWeb: 'web',
       publishQueueSize: 100,
     },
-    bilibili: {
-      fetchTimeoutMs: 5000,
-      cacheTtlMs: 86400000,
-      negativeCacheTtlMs: 1800000,
-      fetchFailureCooldownMs: 1800000,
-      fetchFailureMaxCooldownMs: 21600000,
-      retryJitterRatio: 0.2,
-    },
   },
 }

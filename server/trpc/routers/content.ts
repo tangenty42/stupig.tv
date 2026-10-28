@@ -1,7 +1,6 @@
 import type { ContentWorkspaceCommandResult } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
 import { require_auth_user } from '@server/services/auth-guards.service'
-import { get_bilibili_video_cards } from '@server/services/bilibili.service'
 import {
   create_story,
   delete_story,
@@ -121,9 +120,5 @@ export const content_router = router({
       }
       return sign_attachment_download(input.story_id, input.file_name, viewer, input.role)
     }),
-
-  getBilibiliVideoCards: public_procedure
-    .input(api_schema.content.get_bilibili_video_cards)
-    .query(({ input }) => get_bilibili_video_cards(input.hrefs)),
 
 })

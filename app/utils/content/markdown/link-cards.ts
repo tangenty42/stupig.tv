@@ -1,13 +1,9 @@
-import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import type { ContentStorySummary } from '@shared/types/content'
 import type MarkdownIt from 'markdown-it'
-import type { FileCardData, RenderEnvironment, StoryCardMeta, StoryMarkdownContext, StoryMarkdownPlugin } from './types'
-import { parse_bilibili_href } from '@shared/bilibili'
+import type { FileCardData, StoryCardMeta, StoryMarkdownContext, StoryMarkdownPlugin } from './types'
 import { attachment_base_name, CONTENT_ATTACHMENT_DENIED_TEXT, decrypted_attachment_name, folder_file_count, is_attachment_folder } from '@shared/content-markdown'
 import { parse_content_ref } from '@shared/content-reference'
 import { story_rating, story_rating_rank } from '@shared/types/content'
-import { format_bilibili_count, format_bilibili_duration } from '~/utils/bilibili'
-import { bilibili_logo_svg } from '~/utils/bilibili-logo'
 import { attachment_can_read, attachment_display_url, attachment_is_restricted, cover_alt, file_icon, redacted_version_of, story_front_cover_url } from '~/utils/content/attachment'
 import { render_story_cover } from '~/utils/content/story-cover'
 import { format_bytes } from '~/utils/size'
@@ -26,23 +22,7 @@ function file_card_body_close(card: FileCardData) {
 }
 
 /**
- * Inner HTML of a video card link, laid out like Bilibili's own card: a
- * pink 哔哩哔哩 brand strip on top, then the full-width cover (stats and
- * duration overlaid), title and uploader below. Covers live on hdslb.com,
- * which 403s requests carrying a foreign Referer, hence
- * referrerpolicy="no-referrer".
- */
-function video_card_inner(md: MarkdownIt, href: string, card: BilibiliVideoCard | null | undefined) {
-  const brand = `<span class="video-card-brand">${bilibili_logo_svg}<span class="video-card-brand-text">哔哩哔哩</span><span class="video-card-out iconify i-lucide:external-link" aria-hidden="true"></span></span>`
-  if (! card) {
-    const title = card === undefined ? '正在加载视频信息……' : href
-    return `${brand}<span class="video-card-cover video-card-cover-empty"><span class="iconify i-lucide:tv" aria-hidden="true"></span></span><span class="video-card-content"><span class="video-card-title video-card-pending">${md.utils.escapeHtml(title)}</span></span>`
-  }
-  return `${brand}<span class="video-card-cover"><img class="built-in-img" src="${md.utils.escapeHtml(card.cover)}" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="video-card-stats"><span class="video-card-stat"><span class="iconify i-lucide:play" aria-hidden="true"></span><span class="video-card-stat-value">${format_bilibili_count(card.views)}</span></span><span class="video-card-stat"><span class="iconify i-lucide:thumbs-up" aria-hidden="true"></span><span class="video-card-stat-value">${format_bilibili_count(card.likes)}</span></span></span><span class="video-card-duration">${format_bilibili_duration(card.duration)}</span></span><span class="video-card-content"><span class="video-card-title">${md.utils.escapeHtml(card.title)}</span><span class="video-card-uploader"><span class="video-card-up">UP</span>${md.utils.escapeHtml(card.uploader)}</span></span>`
-}
-
-/**
- * Inner HTML of a story reference card, laid out like the video card: a
+ * Inner HTML of a story reference card: a
  * primary 蠢猪档案 brand strip on top, then an optional full-width cover,
  * then the title and an optional description line. The rating shows as a
  * large, translucent tier SVG badge on its own line at the bottom right of
@@ -105,8 +85,7 @@ function folder_card_open_tag(md: MarkdownIt, ctx: StoryMarkdownContext, folder_
 }
 
 // Label-off links (`[](dest)`) render as cards — story reference cards for
-// `@title`, file cards for story-relative file names, video cards for
-// Bilibili links; a labeled `[text](dest)` keeps the normal-link rendering.
+// `@title` and file cards for story-relative file names.
 export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
   const default_link_rule = md.renderer.rules.link_open
     ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
@@ -249,30 +228,6 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
           closing.meta = { ... closing.meta, file_card: token?.meta.file_card }
         }
       }
-
-      // Label-off Bilibili video links (`[](https://www.bilibili.com/video/BV…)`)
-      // render as video cards; labeled links keep the normal-link rendering, the
-      // same split as story cards. The href is recorded so the caller can fetch
-      // cover/title metadata; until it arrives a placeholder card renders.
-      const video_target = parse_bilibili_href(href)
-      if (video_target && label === null && close_index !== - 1) {
-        (env as RenderEnvironment).bilibili_hrefs.push(href)
-        const card = ctx.options.video_card(href)
-        if (card) {
-          token!.attrSet('href', card.url)
-        }
-        token!.attrJoin('class', 'link-card video-card')
-        if (! card) {
-          token!.attrJoin('class', 'video-card-dead')
-        }
-        apply_chip_gaps(token!, tokens, idx, close_index, 'card')
-        token!.meta = { ... token?.meta, video_card: true }
-        const closing = tokens[close_index]
-        if (closing?.type === 'link_close') {
-          closing.meta = { ... closing.meta, video_card: true }
-        }
-        return `${default_link_rule(tokens, idx, options, env, self)}${video_card_inner(md, href, card)}`
-      }
     }
     const file_card = token?.meta?.file_card as FileCardData | undefined
     // A plain link renders in the same dashed chip chrome as the cards, so it
@@ -312,14 +267,9 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
     }
     const story_card = tokens[idx]?.meta?.story_card as StoryCardMeta | undefined
     if (story_card) {
-      // Vertical block card like the video card: no trailing out icon; the
+      // Vertical block card: no trailing out icon; the
       // dead placeholder replaced the link with a span.
       return story_card.dead ? '</span>' : default_link_close_rule(tokens, idx, options, env, self)
-    }
-    if (tokens[idx]?.meta?.video_card) {
-      // No trailing out icon: the card is a vertical block and the pink brand
-      // strip already marks the destination.
-      return default_link_close_rule(tokens, idx, options, env, self)
     }
     const file_card = tokens[idx]?.meta?.file_card as FileCardData | undefined
     if (! file_card) {
