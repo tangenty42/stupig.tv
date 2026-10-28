@@ -27,7 +27,7 @@
 .img-frame.iframe-frame::before {
   content: '';
   @apply pointer-events-none absolute inset-0 bg-slate-200 dark:bg-slate-700;
-  animation: image-placeholder-breathe 2.4s ease-in-out infinite;
+  animation: image-placeholder-breathe 1.5s ease-in-out infinite;
 }
 
 .img-frame.iframe-frame[data-image-loaded]::before {
@@ -55,7 +55,7 @@ html .img-frame > img[role='button'] {
   filter: blur(0.5rem);
   transform: scale(1.05);
   transition: opacity 200ms ease;
-  animation: image-placeholder-breathe 2.4s ease-in-out infinite;
+  animation: image-placeholder-breathe 1.5s ease-in-out infinite;
 }
 
 .img-frame[data-lqip][data-image-loaded]::before {
@@ -63,7 +63,7 @@ html .img-frame > img[role='button'] {
 }
 
 @keyframes image-placeholder-breathe {
-  0%, 100% { filter: blur(0.5rem) opacity(0.65); }
+  0%, 100% { filter: blur(0.5rem) opacity(0.35); }
   50% { filter: blur(0.5rem) opacity(1); }
 }
 
