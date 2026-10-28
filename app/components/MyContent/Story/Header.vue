@@ -42,7 +42,7 @@
         <button
           v-if="cover"
           type="button"
-          class="mt-4 w-fit cursor-zoom-in transition-[filter] duration-300 hover:brightness-90"
+          class="story-cover-button mt-4 w-fit cursor-zoom-in hover:brightness-90"
           :aria-label="`预览：${cover_alt_text}`"
           @click="preview_visible = true"
         >
@@ -128,3 +128,15 @@ const watermark_style = computed(() => rating_rank.value
   ? { '--watermark-url': `url("${static_url(`imgs/ratings/${6 - rating_rank.value}.svg`)}")` }
   : {})
 </script>
+
+<style scoped>
+html .story-cover-button {
+  transition: filter 300ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html .story-cover-button {
+    transition: none;
+  }
+}
+</style>

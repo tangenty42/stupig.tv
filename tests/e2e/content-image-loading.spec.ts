@@ -39,7 +39,7 @@ test('image placeholders breathe and stay behind the image during its fade', asy
     spinner.currentTime = 0
     const dim = getComputedStyle(element, '::before').filter
     const start = getComputedStyle(icon).transform
-    placeholder.currentTime = 1200
+    placeholder.currentTime = 750
     spinner.currentTime = 250
     const bright = getComputedStyle(element, '::before').filter
     const quarter_turn = getComputedStyle(icon).transform
@@ -47,7 +47,7 @@ test('image placeholders breathe and stay behind the image during its fade', asy
     spinner.play()
     return { dim, bright, start, quarter_turn }
   })
-  expect(motion.dim).toContain('opacity(0.65)')
+  expect(motion.dim).toContain('opacity(0.35)')
   expect(motion.bright).toContain('opacity(1)')
   expect(motion.quarter_turn).not.toBe(motion.start)
   await frame.evaluate(async (element) => {
