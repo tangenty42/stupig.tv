@@ -47,32 +47,15 @@
           @files-pasted="on_editor_files_pasted"
           @attachment-drop-outside="on_attachment_drop_outside"
         >
-          <template #diagnostics>
-            <p v-if="! tab_writable" class="rounded-sm bg-slate-50 p-2 text-xs text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
-              {{ tab_lock_unavailable ? '当前浏览器不支持安全的多标签页草稿同步，请使用支持 Web Locks 的浏览器。' : '正在同步其他标签页的草稿；切回此页面后即可继续编辑。' }}
-            </p>
-            <div v-if="reference_review" class="shrink-0 rounded-sm border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
-              <p v-if="reference_review.diagnostics.some(item => item.kind === 'story' && item.reason === 'replaced')">
-                以下档案已被删除并同名重建，保存前需要确认：
-              </p>
-              <p v-for="item in reference_review.diagnostics.filter(item => item.kind === 'story' && item.reason === 'replaced')" :key="`${item.from}:${item.kind}`">
-                第 {{ item.line }} 行：{{ item.target }}（目标已变更）
-              </p>
-              <p v-for="item in reference_review.diagnostics.filter(item => item.reason === 'missing')" :key="`${item.from}:${item.kind}`">
-                第 {{ item.line }} 行：{{ item.target }}（目标不存在）
-              </p>
-              <Button label="确认当前引用目标" :disabled="! tab_writable || ! reference_review_can_confirm(reference_review)" size="small" text @click="confirm_reference_targets" />
-            </div>
-          </template>
           <template #toolbar-start>
             <div
               class="flex text-xs items-center gap-1"
-              :class="draft_storage_error ? 'text-red-500 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'"
+              :class="draft_storage_error || (! tab_writable && tab_lock_unavailable) ? 'text-red-500 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'"
             >
               <MyIcon
-                :name="save_pending || reference_rewrite_pending ? 'lucide:loader-circle' : draft_storage_error ? 'lucide:circle-alert' : 'lucide:cloud-check'"
+                :name="draft_storage_error || (! tab_writable && tab_lock_unavailable) ? 'lucide:circle-alert' : save_pending || reference_rewrite_pending || ! tab_writable ? 'lucide:loader-circle' : 'lucide:cloud-check'"
                 class="mr-1 align-text-bottom"
-                :class="{ 'animate-spin': save_pending || reference_rewrite_pending }"
+                :class="{ 'animate-spin': ! draft_storage_error && ! tab_lock_unavailable && (save_pending || reference_rewrite_pending || ! tab_writable) }"
               />
               <span>{{ draft_status_label }}</span>
               <Button
@@ -184,7 +167,6 @@ import { sync_resource } from '@shared/types/sync'
 import { storeToRefs } from 'pinia'
 import { useContentDraftStore } from '~/stores/contentDraft'
 import { content_attachment_drag_file_names, content_attachment_markdown, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/utils/content/attachment-drag'
-import { reference_review_can_confirm } from '~/utils/content/draft-reference-bridge'
 import { format_event_range } from '~/utils/content/event'
 
 definePageMeta({
@@ -289,7 +271,7 @@ const editing = useStoryEditSession({
 })
 const { story, private_blocked, page_disposed, draft_storage_error, draft_dirty,
   draft_status_label, save_pending, reference_rewrite_pending, tab_writable, tab_lock_unavailable, delete_pending, draft_conflict_visible, pending_conflict_draft, discard_draft_pending,
-  reference_review, reference_history_warning_visible, confirm_reference_history_save, confirm_reference_targets, confirm_abandon_draft, use_database_version, restore_conflicting_draft,
+  reference_history_warning_visible, confirm_reference_history_save, confirm_abandon_draft, use_database_version, restore_conflicting_draft,
   on_save_click, confirm_delete_story } = editing
 
 await editing.load()

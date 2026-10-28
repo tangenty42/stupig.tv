@@ -12,6 +12,7 @@ import { StateEffect } from '@codemirror/state'
 import { parse_story_markdown } from '@shared/content-markdown'
 import { build_html_diagnostics } from '@shared/html-lint'
 import { lint as markdownlint } from 'markdownlint/sync'
+import { iframe_link_diagnostics, outer_refs_source } from './iframe-lint'
 
 export interface LintListItem {
   from: number
@@ -68,7 +69,7 @@ export function build_diagnostics(doc_text: string, doc: Text, content_markdown_
       to: fix?.to ?? line.to,
       severity: issue.severity,
       message: issue.message,
-      source: issue.source,
+      source: issue.source === 'at-story' || issue.source === 'content-ref' ? outer_refs_source : issue.source,
       actions: fix
         ? [{
             name: '修复引用',
@@ -80,7 +81,7 @@ export function build_diagnostics(doc_text: string, doc: Text, content_markdown_
     })
   }
 
-  diagnostics.push(... build_html_diagnostics(doc_text))
+  diagnostics.push(... iframe_link_diagnostics(doc_text, doc), ... build_html_diagnostics(doc_text))
 
   try {
     const results = markdownlint({

@@ -10,12 +10,6 @@ export interface DraftReferenceSnapshot extends ContentReferenceBaseline {
   saving: boolean
 }
 
-export function reference_review_can_confirm(result: ContentReferenceRewriteResult) {
-  const story_replaced = result.diagnostics.some(item => item.kind === 'story' && item.reason === 'replaced')
-  const story_missing = result.diagnostics.some(item => item.kind === 'story' && item.reason === 'missing')
-  return (result.baseline_unavailable.namespace || result.baseline_unavailable.title || story_replaced) && ! (story_replaced && story_missing)
-}
-
 /** Serialize requests; apply only to exactly the snapshot the server inspected. */
 export function create_draft_reference_bridge(options: {
   snapshot: () => DraftReferenceSnapshot | null

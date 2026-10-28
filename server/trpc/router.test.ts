@@ -3,6 +3,7 @@ import type { H3Event } from 'h3'
 import { ApiError } from '@server/errors/ApiError'
 import { ReferenceSafetyError } from '@server/errors/ReferenceSafetyError'
 import { public_procedure, router } from '@server/trpc/init'
+import { workspace_issue } from '@shared/content-workspace'
 import { getTRPCErrorShape, TRPCError } from '@trpc/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -73,6 +74,12 @@ function create_event() {
 }
 
 describe('tRPC router contracts', () => {
+  it('rejects the retired Bilibili metadata endpoint', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    const content = caller.content as unknown as { getBilibiliVideoCards: (input: { hrefs: string[] }) => Promise<unknown> }
+    await expect(content.getBilibiliVideoCards({ hrefs: ['https://www.bilibili.com/video/BV1Pvnd6JEVD'] })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
   it('waits for commit and the current viewer workspace before acknowledging a command, including receipt replay', async () => {
     const caller = app_router.createCaller({ event: create_event() })
     const command = { request_id: crypto.randomUUID(), scope_id: 24, operation: 'rename' as const, target: { id: 3, version: 'v1' }, name: 'next.txt' }
@@ -215,8 +222,8 @@ describe('tRPC router contracts', () => {
       error: new TRPCError({ code: 'BAD_REQUEST', message: 'error', cause }),
       type: 'mutation', path: 'content.updateStory', input: undefined, ctx: { event: create_event() },
     })
-    const public_data = { code: 'REF_TARGET_REPLACED' as const, details: { namespace_revision: 2, title_revision: 3, references: [{ kind: 'attachment' as const, target: 'a.txt', from: 5, to: 10, line: 2, reason: 'replaced' as const }] } }
-    expect(shape(new ApiError(409, '引用目标已变更', public_data)).data.applicationError).toEqual(public_data)
+    const public_data = { code: 'BATCH_REJECTED' as const, details: { items: [workspace_issue('a.txt', 'name_conflict', 'NAME_CONFLICT', '同名文件已存在')], valid_count: 0 } }
+    expect(shape(new ApiError(409, '整批未执行', public_data)).data.applicationError).toEqual(public_data)
     expect(shape(new ApiError(409, '上传会话已过期', { code: 'UPLOAD_SESSION_EXPIRED' })).data.applicationError).toEqual({ code: 'UPLOAD_SESSION_EXPIRED' })
     expect(shape(new ReferenceSafetyError('历史不可用', 'REF_HISTORY_UNAVAILABLE')).data.applicationError).toEqual({ code: 'REF_HISTORY_UNAVAILABLE' })
     // A lookalike internal error cannot smuggle its SQL/metadata through the formatter.

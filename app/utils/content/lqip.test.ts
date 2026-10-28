@@ -53,3 +53,33 @@ it.each([0, 120])('settles already-complete images before hydration with natural
   expect(attributes.has('aria-busy')).toBe(false)
   cleanup()
 })
+
+it('tracks iframe loading across preview rebindings and resets for a new player', () => {
+  const attributes = new Map<string, string>()
+  let iframe = Object.assign(new EventTarget(), { contentWindow: null, contentDocument: null })
+  const frame = { dataset: {} as Record<string, string>, setAttribute: (key: string, value: string) => attributes.set(key, value), removeAttribute: (key: string) => attributes.delete(key), querySelector: () => iframe }
+  const root = { querySelectorAll: (selector: string) => selector === '.img-frame.iframe-frame' ? [frame] : [] } as unknown as HTMLElement
+  let cleanup = observe_image_placeholders(root)
+  expect(attributes.get('aria-busy')).toBe('true')
+  iframe.dispatchEvent(new Event('load'))
+  expect(frame.dataset.imageLoaded).toBe('')
+  expect(attributes.has('aria-busy')).toBe(false)
+  cleanup()
+  cleanup = observe_image_placeholders(root)
+  expect(frame.dataset.imageLoaded).toBe('')
+  cleanup()
+  iframe = Object.assign(new EventTarget(), { contentWindow: null, contentDocument: null })
+  cleanup = observe_image_placeholders(root)
+  expect(frame.dataset.imageLoaded).toBeUndefined()
+  expect(attributes.get('aria-busy')).toBe('true')
+  cleanup()
+})
+
+it('settles a cross-origin iframe that loaded before observation', () => {
+  const iframe = Object.assign(new EventTarget(), { contentWindow: {}, contentDocument: null })
+  const frame = { dataset: {} as Record<string, string>, setAttribute: () => {}, removeAttribute: () => {}, querySelector: () => iframe }
+  const root = { querySelectorAll: (selector: string) => selector === '.img-frame.iframe-frame' ? [frame] : [] } as unknown as HTMLElement
+  const cleanup = observe_image_placeholders(root)
+  expect(frame.dataset.imageLoaded).toBe('')
+  cleanup()
+})

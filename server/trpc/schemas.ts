@@ -114,8 +114,5 @@ export const api_schema = {
       file_name: z.string().min(1).max(255),
       role: z.enum(['avif', 'original', 'redacted_avif']).default('avif'),
     }),
-    get_bilibili_video_cards: z.object({
-      hrefs: z.array(z.string().max(2048)).min(1).max(20),
-    }),
   },
 }

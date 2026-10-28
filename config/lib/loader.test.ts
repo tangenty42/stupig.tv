@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parse as parse_yaml } from 'yaml'
 import { settings } from '../../server/shared/settings'
 import { interpolate_config, load_aliyun_oss_config, load_config, load_content_migration_options, load_database_config, load_development_tunnel_layer, load_migration_image_profile, load_migration_source_config, merge_config_layers, public_config_from } from './loader'
-import { aliyun_oss_config_schema, deployment_config_schema, public_config_defaults, settings_schema } from './schema'
+import { aliyun_oss_config_schema, deployment_config_schema, public_config_defaults } from './schema'
 
 const database_env = { MYSQL_HOST: 'db', MYSQL_PORT: '3306', MYSQL_PASSWORD: 'placeholder', MYSQL_USER: 'stupig_tv', MYSQL_DATABASE: 'stupig_tv' }
 const public_env = {
@@ -37,12 +37,6 @@ beforeEach(() => vi.stubEnv('NODE_ENV', 'production'))
 afterEach(() => vi.unstubAllEnvs())
 
 describe('deployment configuration', () => {
-  it('validates conservative Bilibili retry budgets and bounded jitter', () => {
-    expect(settings.integrations.bilibili).toMatchObject({ negativeCacheTtlMs: 1800000, fetchFailureCooldownMs: 1800000, fetchFailureMaxCooldownMs: 21600000, retryJitterRatio: 0.2 })
-    for (const invalid of [{ fetchFailureCooldownMs: 0 }, { fetchFailureMaxCooldownMs: 1000 }, { retryJitterRatio: - 0.1 }, { retryJitterRatio: 1.1 }]) {
-      expect(settings_schema.safeParse({ ... settings, integrations: { ... settings.integrations, bilibili: { ... settings.integrations.bilibili, ... invalid } } }).success).toBe(false)
-    }
-  })
   it('excludes ESA publisher credentials from application and browser configuration', () => {
     const config = load_config({ ... deployment_env, ALIYUN_ESA_PUBLISH_ACCESS_KEY_ID: 'publisher-id', ALIYUN_ESA_PUBLISH_ACCESS_KEY_SECRET: 'publisher-secret' })
     expect(config).not.toHaveProperty('esaFunction')

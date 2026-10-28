@@ -1,11 +1,8 @@
-import type { BilibiliVideoCard } from '@shared/types/bilibili'
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import type MarkdownIt from 'markdown-it'
 
 export interface RenderEnvironment {
   images: string[]
-  /** Bilibili video hrefs seen while rendering, collected for the metadata fetch. */
-  bilibili_hrefs: string[]
 }
 
 export interface FileCardData {
@@ -37,8 +34,6 @@ export interface StoryMarkdownOptions {
   /** Known stories so `[](content://title)` references render as story cards. */
   stories: () => ContentStorySummary[]
   static_url: (path: string) => string
-  /** href -> card metadata; undefined = not fetched yet, null = fetch failed. */
-  video_card: (href: string) => BilibiliVideoCard | null | undefined
   /**
    * Whether a folder card can be activated. False leaves it inert: a card whose
    * host has nowhere to open the folder must not look or behave like a button.

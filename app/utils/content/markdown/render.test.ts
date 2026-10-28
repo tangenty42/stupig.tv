@@ -23,10 +23,10 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
 
 it('uses the shared cover renderer for story references, including dimensions and LQIP', () => {
   const image = { revision: 2, width: 120, height: 80, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: false }
-  const md = create_story_markdown({ story_id: () => 1, attachments: () => [], static_url: path => path, video_card: () => undefined, folder_card_openable: () => false,
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [], static_url: path => path, folder_card_openable: () => false,
     stories: () => [{ id: 2, title: 'Other', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null,
       cover: 'cover.png', cover_label: null, cover_url: '/cover', cover_version: 'v2', cover_image: image }] })
-  const html = md.render('[](content://Other)', { images: [], bilibili_hrefs: [] })
+  const html = md.render('[](content://Other)', { images: [] })
   expect(html).toContain(sanitize_story_html(render_story_cover('/cover', 'cover.png', image)))
 })
 
@@ -48,10 +48,9 @@ function render(markdown: string, list: ContentStoryAttachment[] = attachments, 
     folders: () => folders,
     stories: () => [],
     static_url: path => path,
-    video_card: () => null,
     folder_card_openable: () => folder_openable,
   })
-  const environment = { images: [] as string[], bilibili_hrefs: [] as string[] }
+  const environment = { images: [] as string[] }
   const html = md.render(markdown, environment)
   return { html, images: environment.images }
 }
@@ -60,6 +59,59 @@ function render(markdown: string, list: ContentStoryAttachment[] = attachments, 
 function image_sources(html: string) {
   return [... html.matchAll(/<img[^>]*src="([^"]*)"/g)].map(match => match[1])
 }
+
+describe('bilibili embeds', () => {
+  it('preserves the shared player parameters and uses a non-clickable Markdown caption', () => {
+    const { html } = render('![我的 **视频**](iframe://player.bilibili.com/player.html?isOutside=true&aid=117506496860624&bvid=BV1Pvnd6JEVD&cid=43069541932&p=1)')
+    expect(html).toContain('src="https://player.bilibili.com/player.html?isOutside=true&amp;aid=117506496860624&amp;bvid=BV1Pvnd6JEVD&amp;cid=43069541932&amp;p=1"')
+    expect(html).toContain('我的 <strong>视频</strong>')
+    expect(html).toContain('<span class="carousel-caption">')
+    expect(html).not.toContain('<a ')
+  })
+
+  it('omits an empty caption', () => {
+    const { html } = render('![](iframe://player.bilibili.com/player.html?bvid=BV1Pvnd6JEVD)')
+    expect(html).toContain('<iframe')
+    expect(html).not.toContain('carousel-caption')
+  })
+
+  it('supports reference definitions without modifying the player query', () => {
+    const { html } = render('![说明][video]\n\n[video]: iframe://player.bilibili.com/player.html?cid=12&custom=hello')
+    expect(html).toContain('player.html?cid=12&amp;custom=hello')
+    expect(html).toContain('<span class="carousel-caption">说明</span>')
+  })
+
+  it('shares a carousel with images without adding the iframe to the lightbox', () => {
+    const { html, images } = render('![图片](att://solo.png)\n![视频](iframe://player.bilibili.com/player.html?bvid=BV1Pvnd6JEVD)')
+    expect(html.match(/class="carousel-item carousel-item-captioned"/g)).toHaveLength(2)
+    expect(html).toContain('class="image-carousel"')
+    expect(html).toContain('class="img-frame iframe-frame"')
+    expect(images).toEqual(['/objects/solo.png'])
+  })
+
+  it('does not embed iframe destinations in ordinary links', () => {
+    expect(render('[视频](iframe://player.bilibili.com/player.html?bvid=BV1Pvnd6JEVD)').html).not.toContain('<iframe')
+  })
+
+  it('leaves normal Bilibili links as ordinary links', () => {
+    const { html } = render('[视频](https://www.bilibili.com/video/BV1Pvnd6JEVD) [短链接](https://b23.tv/abc)')
+    expect(html).not.toContain('<iframe')
+    expect(html).toContain('https://b23.tv/abc')
+  })
+
+  it('does not load a disguised or unapproved iframe destination', () => {
+    expect(render('![bad](iframe://player.bilibili.com.evil.test/player.html?x=1)').html).not.toContain('<iframe')
+    expect(render('![bad](iframe://evil.test/player.html?x=1)').html).not.toContain('<iframe')
+  })
+
+  it('rejects arbitrary iframe origins and dangerous attributes', () => {
+    const html = sanitize_story_html('<iframe src="https://evil.test/player.html?bvid=x"></iframe><iframe src="https://player.bilibili.com/player.html?bvid=x" srcdoc="<script>alert(1)</script>" onload="alert(1)"></iframe>')
+    expect(html).not.toContain('evil.test')
+    expect(html).not.toContain('srcdoc')
+    expect(html).not.toContain('onload')
+    expect(html).toContain('player.bilibili.com')
+  })
+})
 
 describe('version-bound JPEG placeholders', () => {
   const image = { revision: 1, width: 80, height: 60, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: true }
@@ -153,8 +205,8 @@ describe('private bucket rendering during release A', () => {
   const private_image = { ... attachment('secret.png.good', true), is_private: true, url: '/api/content/attachments/11?version=v1' }
 
   it('uses same-origin authorized addresses without a ciphertext decoder or static host prefix', () => {
-    const md = create_story_markdown({ story_id: () => 1, attachments: () => [private_image], stories: () => [], static_url: path => `https://static.test${path}`, video_card: () => null, folder_card_openable: () => false })
-    const html = md.render('![](att://secret.png.good) [](att://secret.png.good)', { images: [], bilibili_hrefs: [] })
+    const md = create_story_markdown({ story_id: () => 1, attachments: () => [private_image], stories: () => [], static_url: path => `https://static.test${path}`, folder_card_openable: () => false })
+    const html = md.render('![](att://secret.png.good) [](att://secret.png.good)', { images: [] })
     expect(html).toContain('src="/api/content/attachments/11?version=v1"')
     expect(html).toContain('href="/api/content/attachments/11?version=v1"')
     expect(html).toContain('data-private')
@@ -197,7 +249,7 @@ describe('explicit reference rendering', () => {
     const md = create_story_markdown({
       story_id: () => 1, attachments: () => [], static_url: path => path,
       stories: () => [{ id: 2, title: '其他档案', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null, cover: null, cover_label: null, cover_version: null, cover_url: null }],
-      video_card: () => null, folder_card_openable: () => false,
+      folder_card_openable: () => false,
     })
     expect(md.render('[](content://其他档案) [说明](content://其他档案)')).toContain('href="/content/2"')
     expect(md.render('[](@其他档案) [说明](@其他档案)')).not.toContain('href="/content/2"')
@@ -659,16 +711,6 @@ describe('compiled icons', () => {
         cover_url: null,
       }],
       static_url: path => path,
-      video_card: () => ({
-        bvid: 'BV1',
-        url: 'https://www.bilibili.com/video/BV1',
-        title: '视频',
-        cover: 'https://i0.hdslb.com/x.jpg',
-        uploader: 'UP主',
-        duration: 61,
-        views: 100,
-        likes: 10,
-      }),
       folder_card_openable: () => true,
     })
     const markdown = [
@@ -695,7 +737,7 @@ describe('compiled icons', () => {
       '[](att://twin.png.good)\n',
     ].join('\n')
 
-    const html = md.render(markdown, { images: [], bilibili_hrefs: [] })
+    const html = md.render(markdown, { images: [] })
     // Rendered classes are the `i-lucide:*` form; the bundle list uses names.
     const used = new Set([... html.matchAll(/i-lucide:[a-z0-9-]+/g)].map(match => match[0].slice(2)))
 

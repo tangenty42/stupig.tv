@@ -17,9 +17,9 @@ describe('reference journal replay', () => {
       ],
     })
     expect(result.markdown).toBe('[](att://new.png)')
-    expect(result.diagnostics[0]).toMatchObject({ target: 'new.png', reason: 'replaced' })
+    expect(result.diagnostics).toEqual([])
   })
-  it('replays live definition destinations with disjoint patches and detects replacement at the definition', () => {
+  it('replays live definition destinations and silently resolves a same-name replacement', () => {
     const markdown = '[picture][p] [story][s]\r\n\r\n[p]: att://A/a.png "keep"\r\n[s]: content://Old\r\n[unused]: att://A/a.png'
     const result = replay_content_references(markdown, {
       attachment_targets: [{ id: 1, name: 'B/a.png' }], title_targets: [{ id: 2, name: 'New' }],
@@ -34,7 +34,7 @@ describe('reference journal replay', () => {
       attachment_targets: [{ id: 99, name: 'old' }], title_targets: [], titles: [],
       attachments: [{ revision: 1, changes: [{ node_id: 1, from: 'old', to: null }] }],
     })
-    expect(deleted.diagnostics).toEqual([{ kind: 'attachment', target: 'old', from: 10, to: 19, line: 3, reason: 'replaced' }])
+    expect(deleted.diagnostics).toEqual([])
   })
   it('replays simultaneous batches in order, including cover and folder cards, preserving unrelated text', () => {
     const markdown = '---\ntitle: 本文\ncover: att://A/a.png\n---\n[A/a.png](att://A/a.png) [](att://B/b.png) [](att://A/) [](content://旧标题)\n`[](att://A/a.png)`\n<div data-ref="att://A/a.png">正文</div>'
@@ -56,7 +56,7 @@ describe('reference journal replay', () => {
     expect(result.changes).toHaveLength(4)
   })
 
-  it('follows a recreated attachment while preserving story replacement diagnostics', () => {
+  it('silently follows recreated attachment and story names', () => {
     const result = replay_content_references('[](att://old) [](content://旧标题)', {
       attachment_targets: [{ id: 77, name: 'new' }], title_targets: [{ id: 88, name: '旧标题' }],
       attachments: [
@@ -66,10 +66,19 @@ describe('reference journal replay', () => {
       titles: [{ revision: 1, changes: [{ node_id: 4, from: '旧标题', to: null }] }],
     })
     expect(result.markdown).toBe('[](att://new) [](content://旧标题)')
-    expect(result.diagnostics).toEqual([
-      { kind: 'attachment', target: 'new', from: 3, to: 12, line: 1, reason: 'replaced' },
-      { kind: 'story', target: '旧标题', from: 17, to: 30, line: 1, reason: 'replaced' },
-    ])
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it('follows a recreated story after it is renamed', () => {
+    const result = replay_content_references('[](content://旧标题)', {
+      attachment_targets: [], title_targets: [{ id: 2, name: '新标题' }], attachments: [],
+      titles: [
+        { revision: 1, changes: [{ node_id: 1, from: '旧标题', to: null }] },
+        { revision: 2, changes: [{ node_id: 2, from: '旧标题', to: '新标题' }] },
+      ],
+    })
+    expect(result.markdown).toBe('[](content://新标题)')
+    expect(result.diagnostics).toEqual([])
   })
 
   it('reports unresolved deletions as missing and matches title renames case insensitively', () => {
