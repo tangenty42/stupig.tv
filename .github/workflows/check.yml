@@ -346,7 +346,9 @@ jobs:
           REDIS_PORT: '6379'
           MQTT_HOST: 127.0.0.1
           MQTT_TCP_PORT: '1883'
+          MQTT_WS_PORT: '8083'
           MQTT_WEB_URL: ws://localhost:8083/mqtt
+          APP_PORT: '3042'
         run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt
 
   verified-tree:

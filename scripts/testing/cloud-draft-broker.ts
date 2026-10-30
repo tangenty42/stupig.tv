@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -14,8 +14,14 @@ const execute = promisify(execFile)
 export async function start_cloud_draft_broker(directory: string, credentials: { username: string, password: string }, authorize: (input: { username?: string, password?: string }) => Promise<object>) {
   await mkdir(directory, { recursive: true })
   const name = `stupig-draft-qa-${randomBytes(8).toString('hex')}`
-  const bootstrap = resolve(directory, 'mqtt-bootstrap.json')
-  await writeFile(bootstrap, JSON.stringify([{ user_id: credentials.username, password: credentials.password, is_superuser: true }]), { mode: 0o600 })
+  const private_directory = resolve(directory, name)
+  await mkdir(private_directory, { mode: 0o700 })
+  await chmod(private_directory, 0o700)
+  const bootstrap = resolve(private_directory, 'mqtt-bootstrap.json')
+  // Docker's daemon can bind-mount the file into the unprivileged EMQX user,
+  // while the host directory still protects these disposable credentials.
+  await writeFile(bootstrap, JSON.stringify([{ user_id: credentials.username, password: credentials.password, is_superuser: true }]), { mode: 0o644 })
+  await chmod(bootstrap, 0o644)
   const relay = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json')
     try {
@@ -50,6 +56,7 @@ export async function start_cloud_draft_broker(directory: string, credentials: {
     relay.closeAllConnections()
     await new Promise<void>(accept => relay.close(() => accept()))
     await unlink(bootstrap).catch(() => {})
+    await rmdir(private_directory).catch(() => {})
     if (cleanup_failed)
       throw new Error(`Disposable broker cleanup failed: ${name}`)
   }
@@ -89,8 +96,11 @@ export async function start_cloud_draft_broker(directory: string, credentials: {
       }
       catch { await delay(500) }
     }
-    if (! ready)
-      throw new Error('Disposable EMQX did not become ready')
+    if (! ready) {
+      const state = await execute(docker, ['inspect', '--format', '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}', name], { windowsHide: true }).then(result => result.stdout.trim()).catch(() => 'unavailable')
+      const readable = await execute(docker, ['exec', name, 'test', '-r', '/tmp/draft-auth.json'], { windowsHide: true }).then(() => true, () => false)
+      throw new Error(`Disposable EMQX did not become ready: ${state}, bootstrap_readable=${readable}`)
+    }
     console.log('cloud-draft broker ready')
     return { tcp_port, public_url: `ws://127.0.0.1:${port('8083/tcp')}/mqtt`, private_url: `ws://127.0.0.1:${port('8086/tcp')}/mqtt`, stop }
   }
