@@ -1,3 +1,4 @@
+import type { SyncResourceType } from '@shared/types/sync'
 import { createHmac } from 'node:crypto'
 import { runtime_config } from '@config/loader'
 
@@ -17,18 +18,19 @@ import { runtime_config } from '@config/loader'
 // on their next fetch. Keep this file out of the frozen TS-migration closure
 // (scripts/migration/frozen.test.ts); it must stay server-side regardless,
 // because the key may never reach the browser bundle.
-const channel_key = createHmac('sha256', runtime_config().app.auth.jwt.secret)
-  .update('stupig:sync-channel:v1')
-  .digest()
+let channel_key: Buffer | undefined
+function get_channel_key() {
+  return channel_key ??= createHmac('sha256', runtime_config().app.auth.jwt.secret)
+    .update('stupig:sync-channel:v1')
+    .digest()
+}
 
 const secret_id_types = new Set<string>([
   'otp_cooldown',
   'otp_cooldown_by_identity',
-  'user_login_sessions_by_identity',
-  'user_login_sessions_by_phone',
-  'user_login_sessions_by_username',
-  'user_login_sessions_by_email',
-])
+  'content_draft',
+  'content_drafts',
+] satisfies SyncResourceType[])
 
 /** Leave non-sensitive and malformed resources untouched; only MAC secret ids. */
 export function wire_resource(resource: string) {
@@ -40,7 +42,7 @@ export function wire_resource(resource: string) {
   if (! secret_id_types.has(type)) {
     return resource
   }
-  const id = createHmac('sha256', channel_key).update(resource).digest('base64url').slice(0, 22)
+  const id = createHmac('sha256', get_channel_key()).update(resource).digest('base64url').slice(0, 22)
   return `${type}:v1.${id}`
 }
 

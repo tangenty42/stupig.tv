@@ -30,9 +30,9 @@ Deploy 在构建前检查该 Secret 含目标主机条目，SSH 和 SCP 强制�
 
 创建命名空间与私有镜像仓库，从该实例的访问凭证页面取得实际 registry 和登录名。ACR 新旧个人版地址不同，不能从旧示例猜 registry；按[官方推送/拉取指南](https://help.aliyun.com/zh/acr/user-guide/use-a-container-registry-personal-edition-instance-to-push-and-pull-images)取得地址。企业版也使用实例提供的访问入口和凭据。
 
-首次上线确认 GitHub runner 可登录/推送，服务器可登录/拉取同一仓库。当前流程维护应用 `:latest` 和 EMQX `:mqtt`，没有每次 SHA tag，也不由 ACR 自动构建。构建成功后推送；后续 SSH 部署失败只恢复服务器本地镜像标签，不会把远端 ACR 标签改回旧版本。
+首次上线确认 GitHub runner 可登录/推送，服务器可登录/拉取同一仓库。云端草稿版本起流程额外发布应用 `:<checkout SHA>` 和 EMQX `:mqtt-<checkout SHA>`，保留 latest/mqtt 别名，不由 ACR 自动构建。push 后读取实际 RepoDigest，运行 env 的 APP_IMAGE/MQTT_IMAGE 固定到 digest；SSH 失败不会把远端 ACR 标签改回旧版本。
 
-2026-10-25 已通过个人版 API 重新确认目标仓库 PRIVATE/NORMAL、仅一个 latest、无自动构建规则；未验证 GitHub 中的登录凭据和服务器拉取。推拉共用一组 Registry 凭据，固定发布 tag/digest 尚未实现；实际资源与云端状态见[ACR 台账](aliyun.md)。
+2026-10-25 的 API 历史核对为仓库 PRIVATE/NORMAL、仅一个 latest、无自动构建规则；当时未验证 GitHub 登录凭据或服务器拉取，也未实现固定 tag/digest。2026-10-30 的工作区改动不能替代云端读回；实际资源见[ACR 台账](aliyun.md)。
 
 ## 推拉身份
 
@@ -49,7 +49,7 @@ workflow 在构建前检查两项凭据非空，不再要求独立 pull 身份�
 1. Pull Request 和非纯文档的 main push 触发 Check。Node 24、pnpm 12.10.1，运行 settings 一致性、lint、Nuxt typecheck、脚本 typecheck、Vitest；纯文档 PR 跳过应用检查，纯文档 main push 不触发 Check 或 Deploy。
 2. 独立 Check jobs 验证真实生产 MQTT 镜像的权限与重启持久化、Chromium 浏览器流程，以及全新 MySQL 8.4 的完整 SQL/TS 迁移、第二遍幂等执行、隔离迁移框架和 Content 转换。main 可在确认 PR 所有检查成功且代码树一致时复用这些结果；否则完整重跑。CI 的存储边界夹具不代表真实生产 OSS/ESA 已验收。
 3. main 的 Check 成功触发 Deploy，检出该次 Check 的 `head_sha`；部署同组串行，不取消正在执行的旧部署。Deploy 仅接受 `push` 事件且来源为本仓库的 Check run：`workflow_run` 的 `branches` 过滤按触发 run 的 head 分支名匹配，而 fork 的默认分支同样叫 `main`，纯文档 fork PR 的成功 Check 若无事件守卫，就能借默认分支上下文的全部 secrets 与 root SSH 触发部署。安装发布工具时使用锁文件并禁用安装脚本。
-4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；随后从完整配置生成不含 `ALIYUN_ESA_PUBLISH_*` 的 `.env.prod.runtime`，构建/推送 ACR latest 与 mqtt。运行配置先通过 SCP 上传到服务器上权限为 700 的独立临时目录，文件权限设为 600，再原子替换 `.env.prod.incoming`；Compose 另上传为 `docker-compose.yml.incoming`。明文不会打进镜像。
+4. runner 用 GPG 解密 `.env.prod.gpg`，先运行 `pnpm esa:deploy:prod --check` 核对函数、路由和凭据；从完整配置生成不含 `ALIYUN_ESA_PUBLISH_*` 的 `.env.prod.runtime`，推送应用 SHA 与 broker mqtt-SHA tag 及兼容别名，再写入实际 digest 和协议标记。运行 env 先通过 SCP 上传到权限为 700 的临时目录，文件权限 600，再原子替换 `.env.prod.incoming`；Compose 另上传为 `docker-compose.yml.incoming`。明文不会打进镜像。
 5. SSH 将 `scripts/deploy/remote.sh` 交给远端 shell，备份旧 env/Compose 和旧运行镜像 ID，校验候选配置，再 pull/up。
 6. 应用依赖 EMQX 凭据健康检查；远端另对两个服务依次执行健康门，默认各最多 72 次、间隔 5 秒。容器退出或重启循环立即失败；两个服务健康后只清理悬空镜像。WSS 反代切换仍需手动完成，见 [MQTT](mqtt.md)。
 7. 健康门成功后运行 `pnpm esa:deploy:prod`，同步函数变量、创建并发布本次代码版本，读回确认。目标统一来自 prod YAML 的 `esaFunction`，无需在工作流中重复函数名或回调。
@@ -76,12 +76,12 @@ pnpm env:check
 
 ## 部署失败与回退
 
-远端脚本在候选切换后的失败路径恢复 `.env.prod.bak`、`docker-compose.yml.bak` 和 pull 前的应用/broker 镜像 ID，并再次检查旧容器。首次引入托管 broker 失败时移除本次新增容器但保留卷，不操作旧 1Panel broker；无旧应用镜像的首次部署仍需人工处理。自动恢复成功后 workflow 仍报告失败，便于追查原因。
+同为 cloud-v1 的兼容版本，远端脚本在候选切换失败后恢复 `.env.prod.bak`、`docker-compose.yml.bak` 和 pull 前的应用/broker 镜像，重新检查旧容器。恢复的 digest 引用不重新打 tag。首次跨入 cloud-v1 且新进程可能已迁移／服务请求后，失败改为停应用、保留新数据库和配置，禁止重启旧的无租约写者。首次引入 broker 的其他失败路径只移除新增容器并保留卷，不操作旧 1Panel；无旧镜像仍需人工处理。
 
 数据库迁移是前向步骤，自动回退不会撤销 schema 或外部对象变更。维护迁移必须先在受控窗口执行，不能让 Deploy 的健康门替代切换计划。回退旧应用须先确认它能兼容当前数据库，必要时使用[备份恢复](../operations/backup-recovery.md)。
 
 上述自动回退只覆盖远端 Compose 部署失败，不修改外部反代。若应用已经健康、随后 ESA 发布失败，工作流报错但应用保持新版本；检查 artifact 的阶段与版本，修正后可单独运行生产 ESA 命令。应用与函数不是原子事务，密钥轮换或不兼容协议变更需要协调窗口，不能自动回滚另一侧来掩盖问题。
 
-当前工作流没有 `workflow_dispatch`。需要重新交付旧提交时，使用与目标提交相符的可重跑 workflow，并复核其实际 checkout SHA；不要假定重跑最新 workflow 会自动选择旧代码。历史镜像没有永久 SHA tag，服务器成功后还会清理悬空镜像。
+当前工作流没有 `workflow_dispatch`。重新交付旧提交须核实其实际 checkout SHA、schema 与草稿协议；旧流程没有 SHA tag，不能假定重跑最新 workflow 会选旧代码。新流程的 `application-production-receipt` artifact 记录 commit、应用（含 maintenance 包）和 broker digest、schema、共享 settings 摘要及 cloud-v1 标记，保留 30 天；须另备长期恢复材料并核验镜像仍存在。该记录证明构建身份，不证明生产健康或外部反代已验收。
 
 共享宿主机只允许脚本现有的 `docker image prune -f`。不要改为 `-a`，它可能清理其他站点保留但暂未运行的镜像。生产 Compose 的源在仓库，服务器手改会在下一次部署被覆盖。

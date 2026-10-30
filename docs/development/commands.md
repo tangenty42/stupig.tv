@@ -144,4 +144,6 @@ scripts/
 
 ## 本次核对范围
 
+共享草稿的新增一次性验证入口是 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt --capacity`，复用现有迁移工具与随机本地库；没有新增常驻任务或 pnpm 别名。`--mqtt` 启动自己的临时 broker，`--capacity` 记录有界负载；作用域及外部服务替身见[测试手册](testing.md)。
+
 已读取源码及仓库调用关系，未执行数据库导出、清理/重置、迁移或云端发布。仓库外的定时任务、1Panel 手工命令和个人终端历史不在搜索范围；上述“未发现调用方”仅指仓库内部。

@@ -2,6 +2,8 @@
 
 日期：2026-10-29。承接[生产产物一致性验收](css-production-parity-2026-10-29.md)，本轮安装并运行真实历史引擎，使用同一个隔离生产构建入口，不改写 User-Agent，也不注入兼容补丁。
 
+后续工作区已接入云端草稿并以服务端租约替换 Web Locks；旧引擎编辑流程的隔离复验和生产边界见[实施记录](../designs/shared-cloud-draft-implementation-2026-10-30.md)。下文保留 CSS 独立 PR 的当时证据。
+
 ## 安装与复跑
 
 浏览器和驱动解包到被 Git 忽略的 `.dev/tools/legacy-browsers/`，使用临时测试 profile。当前主机为 Windows ARM64，运行 x64 历史浏览器；没有替换系统浏览器。

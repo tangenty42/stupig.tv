@@ -2,20 +2,19 @@ import type { ContentWorkspaceCommandResult } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
 import { require_auth_user } from '@server/services/auth-guards.service'
 import {
-  create_story,
-  delete_story,
   get_story_body,
   list_stories,
   sign_attachment_download,
-  update_story,
 } from '@server/services/content.service'
 import { image_editor_source } from '@server/services/content/attachment-access.service'
 import { get_attachment_workspace } from '@server/services/content/attachment-workspace.service'
+import { get_delete_impact } from '@server/services/content/delete-impact.service'
+import { acquire_draft, command_draft, create_draft, get_draft, list_drafts } from '@server/services/content/draft.service'
 import { get_title_reference_version, rewrite_draft_references } from '@server/services/content/reference-history.service'
 import { adopt_upload_session, begin_upload_batch, list_upload_sessions, operate_upload_session, sign_upload_session_part } from '@server/services/content/upload-api.service'
 import { execute_workspace_command } from '@server/services/content/workspace-command.service'
 import { permission_procedure, public_procedure, router } from '@server/trpc/init'
-import { api_schema } from '@server/trpc/schemas'
+import { api_schema, draft_schema } from '@server/trpc/schemas'
 import { upload_batch_schema } from '@shared/content-upload'
 import { workspace_command_schema } from '@shared/content-workspace'
 import { has_permission } from '@shared/permissions'
@@ -23,6 +22,13 @@ import { has_permission } from '@shared/permissions'
 const content_admin_procedure = permission_procedure('content_manage', 'full')
 
 export const content_router = router({
+  createDraft: content_admin_procedure.input(draft_schema.create).mutation(({ ctx, input }) => create_draft(ctx.auth_user, input.request_id)),
+  listDrafts: content_admin_procedure.input(draft_schema.list).query(({ ctx, input }) => list_drafts(ctx.auth_user, input.after, input.limit)),
+  getDraft: content_admin_procedure.input(draft_schema.get).mutation(({ ctx, input }) => get_draft(ctx.auth_user, input)),
+  acquireDraft: content_admin_procedure.input(draft_schema.acquire).mutation(({ ctx, input }) => acquire_draft(ctx.auth_user, input)),
+  commandDraft: content_admin_procedure.input(draft_schema.command).mutation(({ ctx, input }) => command_draft(ctx.auth_user, input)),
+  getDeleteImpact: content_admin_procedure.input(api_schema.content.delete_impact)
+    .query(({ ctx, input }) => get_delete_impact(input, has_permission(ctx.auth_user, 'content_private', 'read'))),
   imageEditorSource: content_admin_procedure.input(api_schema.content.image_editor_source)
     .query(({ ctx, input }) => image_editor_source(input.id, input.version, ctx.auth_user, input.redacted)),
   executeWorkspaceCommand: content_admin_procedure.input(workspace_command_schema)
@@ -80,26 +86,15 @@ export const content_router = router({
 
   createStory: content_admin_procedure
     .input(api_schema.content.create_story)
-    .mutation(async ({ ctx, input }) => ({
-      id: await create_story(ctx.auth_user.id, input.markdown, has_permission(ctx.auth_user, 'content_private', 'read')),
-    })),
+    .mutation((): { id: number } => { throw new ApiError(409, '编辑协议已升级，请刷新页面后使用云端草稿') }),
 
   updateStory: content_admin_procedure
     .input(api_schema.content.update_story)
-    .mutation(async ({ ctx, input }) => {
-      return update_story(
-        input.id,
-        input.markdown,
-        input.base_revision,
-        has_permission(ctx.auth_user, 'content_private', 'read'),
-        { base_namespace_revision: input.base_namespace_revision, base_title_revision: input.base_title_revision },
-        input.confirm_reference_history,
-      )
-    }),
+    .mutation(() => { throw new ApiError(409, '编辑协议已升级，请刷新页面后使用云端草稿') }),
 
   deleteStory: content_admin_procedure
     .input(api_schema.content.delete_story)
-    .mutation(({ ctx, input }) => delete_story(input.id, ctx.auth_user.id)),
+    .mutation(() => { throw new ApiError(409, '编辑协议已升级，请刷新页面后使用云端草稿') }),
 
   rewriteDraftReferences: content_admin_procedure
     .input(api_schema.content.rewrite_draft_references)

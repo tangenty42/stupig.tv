@@ -27,16 +27,34 @@ function valid_segment(segment: string) {
 
 /** Parse the original string: URL() would incorrectly treat the first path segment as a host. */
 export function parse_content_ref(destination: string): ContentRef | null {
-  const decoded = decode_content_destination(destination)
-  if (decoded.startsWith(attachment_ref_scheme)) {
+  const decoded = decode_content_destination(destination.split(/[?#]/, 1)[0]!)
+  if (decoded.toLowerCase().startsWith(attachment_ref_scheme)) {
     const path = decoded.slice(attachment_ref_scheme.length).replace(/\/$/, '')
     return path.split('/').every(valid_segment) ? { kind: 'attachment', path } : null
   }
-  if (decoded.startsWith(story_ref_scheme)) {
+  if (decoded.toLowerCase().startsWith(story_ref_scheme)) {
     const title = decoded.slice(story_ref_scheme.length)
     return valid_segment(title) ? { kind: 'story', title } : null
   }
   return null
+}
+
+/** Query/fragment belong to the link presentation, not the referenced identity. */
+export function content_ref_suffix(destination: string) {
+  const start = destination.search(/[?#]/)
+  return start < 0 ? '' : destination.slice(start)
+}
+
+export function content_name_key(name: string) {
+  return name.normalize('NFC').toLowerCase()
+}
+
+/** Scope is supplied separately: attachment names are local, story titles global. */
+export function content_reference_key(destination: string) {
+  const ref = parse_content_ref(destination)
+  if (! ref)
+    return null
+  return 'path' in ref ? format_attachment_ref(content_name_key(ref.path)) : format_story_ref(content_name_key(ref.title))
 }
 
 /** Offline migration and rejection diagnostics only; never resolves runtime links. */
@@ -65,5 +83,5 @@ export function format_story_ref(title: string) {
 
 /** The same comparison is used by lint, rendering, extraction and title cascades. */
 export function content_title_key(title: string) {
-  return title.normalize('NFC').toLowerCase()
+  return content_name_key(title)
 }

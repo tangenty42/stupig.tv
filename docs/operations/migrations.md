@@ -31,6 +31,8 @@ pnpm migrate --dry-run
 
 已冻结的 Content v1 产物使用 `migrations/lib/content-v1/config-loader.ts.snapshot`、`config-schema.ts.snapshot` 和 `settings.generated.ts.snapshot` 保留旧配置实现及生成设置，构建器在原模块身份下加载快照，确保既有摘要不变。当前迁移入口先加载所选环境再运行这些产物；不得修改快照或冻结清单来适配新环境。运行时公共设置可以继续由当前 YAML 生成，不改变历史迁移的依赖产物。
 
+引用统一后，旧 Content v1 产物的 `content-markdown.ts`、`content-reference.ts`、`content-workspace.ts`、同步通道及同步类型同样固定到该目录的 `.snapshot` 文件，在原模块身份下加载；旧脚本摘要保持不变，新行为仅由新迁移及运行时代码采用。
+
 开发源码入口将脚本产物放在 `.nuxt/migration-scripts/`；生产源码入口使用 `.nuxt/migration-runtime/`，同时打包 Sharp 原生依赖及 `native-manifest.json`，执行与生产镜像相同的版本/文件摘要校验。仅设置 `NODE_ENV=production` 而缺少该清单会被拒绝。CI 空库重放使用专用假 OSS 身份满足历史脚本的目标配置校验，不使用真实云密钥或复制对象。
 
 ## 命令语义
@@ -70,6 +72,16 @@ TS 流程为 `plan → apply → verify → completed`：
 
 ## 编写新 TS 迁移
 
+### 2026-10-28 引用历史升级
+
+升级顺序为 `20261028210000_reference_journal_entries.sql` → `20261028210100_reference_journal_entries.ts` → `20261028210200_reference_journal_contract.sql`。先备份数据库并停止应用、worker 和旧引用清理定时器，再运行 `pnpm migrate --maintenance`；全部完成后启动新代码。第一步展开表结构，第二步逐批转换 JSON 为 URI 事件行并按作用域保留 200 批，第三步删除旧 JSON 列及不再使用的反向索引列。不可让旧应用与转换步骤并行写入。
+
+转换保持 scope/revision；每批转换在事务中完成，中断后按尚未转换的行继续。被裁剪历史通过 floor 明确失效，不能恢复已丢失历史，也不猜测修复历史上已漏改的 main。回滚需要恢复备份及旧应用，仅回退代码不足以恢复旧 schema。
+
+隔离验证：`pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/reference-history.ts`。此命令限定 development 与回环 MySQL，使用本地 root 创建随机测试库，验证空库完整迁移、存量批次转换、中断重跑、批次上限与事务回滚，最后清理自己创建的库；不对业务库执行迁移。
+
+### 新迁移约定
+
 入口调用 [define_migration](../../scripts/migration/contract.ts)，提供 `plan`、`apply`、`verify`。execution 默认 maintenance；只有短小且与在线版本兼容的步骤才显式标为 automatic。
 
 - 模块顶层无副作用。plan／verify 只查询，返回安全的计数、问题码及摘要，不泄露正文、密钥、签名 URL 或检查点内容。
@@ -98,6 +110,14 @@ docker compose --env-file .env.prod run --rm --no-deps app node .output/server/m
 普通容器启动会先 migrate 再启动应用。维护门禁是预期行为，遇到它应安排维护步骤，不能删除门禁或改成 baseline。
 
 ## checksum 不一致
+
+### 共享云端草稿切换
+
+`20261030120000_shared_content_drafts.sql` 新增独立当前草稿表，将所有 main 原文字节、namespace/title 基线及发布 revision 回填为一对一 draft，不导入浏览器数据。先在维护窗口停旧写者、核对目标库和完整备份，执行同版本 maintenance 包，再核对数量、BINARY 文本相等及基线；检查 `migration_runs` 的成功回执后才启动 cloud-v1 应用。旧客户端的 main 直写被拒绝，无双写回退。
+
+原迁移及已开始 TS bundle 的 digest 保持冻结；历史 outbox 等依赖通过对应快照固定，不把当前运行时的草稿逻辑带进旧 bundle。隔离演练入口为 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt --capacity`，生产执行不包含在开发验收授权内。首次跨协议失败停止应用并保留 draft/main，不能自动重启旧写者；恢复边界见[备份恢复](backup-recovery.md)。
+
+### 摘要核对
 
 先比较冻结清单、数据库回执、部署产物和原始文件，不直接更新账本。
 

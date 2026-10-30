@@ -77,7 +77,7 @@ it.each([true, false])('offers a separate redacted preview to an unprivileged re
     attachment_action_item, attachment_menu_context,
     model: {
       readonly: true, selected_rows: [row],
-      capabilities: (item: WorkspaceListRow) => workspace_capabilities(item, { readonly: true, can_private: false, pending: false, references: [] }),
+      capabilities: (item: WorkspaceListRow) => workspace_capabilities(item, { readonly: true, can_private: false, pending: false }),
       preview: (... args: unknown[]) => calls.push(args),
     },
   }) as (row: WorkspaceListRow) => ReturnType<typeof attachment_action_item>[]
@@ -168,7 +168,7 @@ it.each(['file', 'folder', 'image', 'image_copy', 'replacement', 'upload', 'read
     model: {
       selected_rows: selected, readonly,
       uploads: { active: new Set(), queued: new Set() },
-      capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly, can_private: true, pending: false, references: [] }),
+      capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly, can_private: true, pending: false }),
     },
   }) as (row: WorkspaceListRow) => ReturnType<typeof attachment_action_item>[]
   const expected: Record<string, string[]> = {
@@ -197,17 +197,21 @@ it('confirms redacted deletion before executing and keeps ordinary deletion inde
   } } }
   const requests: unknown[] = []
   const delete_visible = { value: false }
+  const redacted_delete_visible = { value: false }
+  const delete_impact = { value: { targets: [], sources: [] } }
+  const delete_impact_loading = { value: false }
+  const delete_impact_failure = { value: false }
   const delete_rows = { value: [] as WorkspaceListRow[] }
   const deleting_redacted = { value: false }
   const model = {
-    selected: new Set([row.key]), selected_rows: [row], readonly: false, references: [],
-    capabilities: (item: WorkspaceListRow) => workspace_capabilities(item, { readonly: false, can_private: true, pending: false, references: [] }),
+    selected: new Set([row.key]), selected_rows: [row], readonly: false,
+    capabilities: (item: WorkspaceListRow) => workspace_capabilities(item, { readonly: false, can_private: true, pending: false }),
     target: (item: WorkspaceListRow) => ({ id: item.node!.id, version: item.node!.version }),
     execute: (command: unknown) => requests.push(command),
   }
   const context = runInNewContext(`${ts.transpile(`${builder}\n${submit}`)}; ({ menu_for, submit_delete })`, {
     model, attachment_action_item, attachment_batch_action, attachment_menu_context, attachment_privacy_actions,
-    delete_visible, delete_rows, deleting_redacted,
+    delete_visible, redacted_delete_visible, delete_impact, delete_impact_loading, delete_impact_failure, delete_rows, deleting_redacted,
   }) as { menu_for: (row: WorkspaceListRow) => ReturnType<typeof attachment_action_item>[], submit_delete: () => void }
   const request = () => {
     const action = context.menu_for(row).find(item => item.label === '删除删减版')!
@@ -215,20 +219,20 @@ it('confirms redacted deletion before executing and keeps ordinary deletion inde
   }
   request()
   expect(requests).toEqual([])
-  expect(delete_visible.value).toBe(true)
+  expect(redacted_delete_visible.value).toBe(true)
   expect(delete_rows.value).toEqual([row])
-  delete_visible.value = false
+  redacted_delete_visible.value = false
   context.submit_delete()
   expect(requests).toEqual([])
   request()
   context.submit_delete()
-  expect(delete_visible.value).toBe(false)
+  expect(redacted_delete_visible.value).toBe(false)
   expect(requests).toEqual([{ operation: 'delete_redacted', target: model.target(row) }])
   const normal = context.menu_for(row).find(item => item.label === '删除')!
   normal.command!({ originalEvent: new Event('click'), item: normal })
   expect(deleting_redacted.value).toBe(false)
   context.submit_delete()
-  expect(requests[1]).toEqual({ operation: 'delete', targets: [model.target(row)], draft_references: [] })
+  expect(requests[1]).toEqual({ operation: 'delete', targets: [model.target(row)] })
 })
 
 it('plans shared file/folder privacy states and excludes unchanged or denied targets', () => {
@@ -255,7 +259,7 @@ it('keeps inherited privacy immutable at the leaf while allowing independent fil
 })
 
 it('reports only applicable, unique reasons when no privacy target is eligible', () => {
-  const capabilities = (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: true, pending: false, references: [] })
+  const capabilities = (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: true, pending: false })
   expect(attachment_privacy_actions([rows[0]!], capabilities)).toEqual([{ private: true, targets: [rows[0]!], disabled: false, reasons: [] }])
   const private_folder = { ... rows[0]!, path: 'docs.good', name: 'docs.good' }
   expect(attachment_privacy_actions([private_folder], capabilities)).toEqual([{ private: false, targets: [private_folder], disabled: false, reasons: [] }])
@@ -292,7 +296,7 @@ it.each([true, false].flatMap(desired => ['file', 'folder', 'mixed'].map(kind =>
     readonly: false,
     target: (row: WorkspaceListRow) => ({ id: row.node!.id, version: row.node!.version }),
     execute: (command: unknown) => requests.push(command),
-    capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: true, pending: false, references: [] }),
+    capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: true, pending: false }),
   }
   const context = runInNewContext(`${ts.transpile(`${builder}\n${submit}`)}; ({menu_for, submit_private})`, {
     attachment_action_item, attachment_batch_action, attachment_menu_context, attachment_privacy_actions,
@@ -319,7 +323,7 @@ it.each(['delete', 'move'] as const)('filters ineligible rows before opening the
   const busy = { ... rows[1]!, session: { id: 'pending' } } as WorkspaceListRow
   const denied = { ... rows[3]!, node: { ... rows[3]!.node!, attachment: { is_private: true } } } as WorkspaceListRow
   const selected = [rows[0]!, busy, rows[2]!, denied]
-  const retained = operation === 'delete' ? [rows[0]!] : [rows[0]!, rows[2]!]
+  const retained = [rows[0]!, rows[2]!]
   const action_rows = { value: [] as WorkspaceListRow[] }
   const visible = { value: false }
   const requests: { command: unknown, selection: string[] }[] = []
@@ -328,15 +332,16 @@ it.each(['delete', 'move'] as const)('filters ineligible rows before opening the
     selected_rows: selected,
     readonly: false,
     root_id: 1,
-    references: ['b.txt'],
     target: (row: WorkspaceListRow) => ({ id: row.node!.id, version: row.node!.version }),
     execute: (command: unknown) => requests.push({ command, selection: [... model.selected] }),
-    capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: false, pending: false, references: ['b.txt'] }),
+    capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: false, pending: false }),
   }
   const context = runInNewContext(`${ts.transpile(`${builder}\n${submit}`)}; ({menu_for, submit: submit_${operation}})`, {
     attachment_action_item, attachment_batch_action, attachment_menu_context, attachment_privacy_actions,
     [`${operation}_rows`]: action_rows, [`${operation}_visible`]: visible,
     deleting_redacted: { value: false },
+    redacted_delete_visible: { value: false }, delete_impact: { value: { targets: [], sources: [] } },
+    delete_impact_loading: { value: false }, delete_impact_failure: { value: false },
     move_ready: { value: true }, move_parent: { value: 9 }, move_selected: { value: new Set() }, move_expanded: { value: new Set() }, move_anchor: null,
     model,
   }) as { menu_for: (row: WorkspaceListRow) => ReturnType<typeof attachment_action_item>[], submit: () => void }
@@ -350,7 +355,7 @@ it.each(['delete', 'move'] as const)('filters ineligible rows before opening the
   expect(requests).toEqual([])
   context.submit()
   expect(requests).toEqual([{
-    command: { operation, targets: retained.map(model.target), ... (operation === 'delete' ? { draft_references: ['b.txt'] } : { parent_id: 9 }) },
+    command: { operation, targets: retained.map(model.target), ... (operation === 'delete' ? {} : { parent_id: 9 }) },
     selection: retained.map(row => row.key),
   }])
   expect(visible.value).toBe(false)
@@ -369,7 +374,7 @@ it.each(['dialog', 'drag'])('deselects no-op moves before submitting from %s', a
     selected: new Set(selected.map(row => row.key)),
     get selected_rows() { return selected.filter(row => this.selected.has(row.key)) },
     drag_ids: selected.map(row => row.node!.id),
-    capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: true, pending: false, references: [] }),
+    capabilities: (row: WorkspaceListRow) => workspace_capabilities(row, { readonly: false, can_private: true, pending: false }),
     catalog: { data: { nodes: rows.filter(row => row.node).map(row => row.node!) } },
     target: (row: WorkspaceListRow) => ({ id: row.node!.id, version: row.node!.version }),
     execute: (command: unknown) => { requests.push({ command, selection: [... model.selected] }) },

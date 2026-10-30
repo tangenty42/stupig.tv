@@ -39,9 +39,13 @@ export const settings_schema = z.strictObject({
         markdownMaxBytes: positive_integer.max(16777215),
       }),
       link: z.strictObject({ fileNameMaxBytes: positive_integer.max(255) }),
-      draft: z.strictObject({ schemaVersion: positive_integer, storagePrefix: identifier, autosaveDelayMs: positive_integer }),
-      reference: z.strictObject({ journalRetentionDays: positive_integer, sweepIntervalSeconds: positive_integer }),
-      workspace: z.strictObject({ batchLimit: positive_integer, draftReferenceLimit: positive_integer, suffixAttempts: positive_integer, receiptHours: positive_integer, sessionHours: positive_integer, leaseSeconds: positive_integer, heartbeatSeconds: positive_integer, parallelUploads: positive_integer }),
+      draft: z.strictObject({
+        saveThrottleMs: positive_integer.max(60_000), keepaliveIntervalMs: positive_integer.max(120_000),
+        requestTimeoutMs: positive_integer.max(120_000), leaseMarginMs: positive_integer.max(60_000),
+        notificationCredentialSeconds: positive_integer.max(300),
+      }).refine(value => value.saveThrottleMs < value.keepaliveIntervalMs, '草稿保存间隔必须小于保活间隔'),
+      reference: z.strictObject({ journalBatchLimit: positive_integer }),
+      workspace: z.strictObject({ batchLimit: positive_integer, suffixAttempts: positive_integer, receiptHours: positive_integer, sessionHours: positive_integer, leaseSeconds: positive_integer, heartbeatSeconds: positive_integer, parallelUploads: positive_integer }),
       name: z.strictObject({ suffixSeparator: z.literal('_') }),
       upload: z.strictObject({
         requestTimeoutSeconds: positive_integer,
@@ -60,11 +64,12 @@ export const settings_schema = z.strictObject({
     }),
   }),
   integrations: z.strictObject({
-    mqtt: z.strictObject({ qos: z.union([z.literal(0), z.literal(1), z.literal(2)]), topicPrefix: identifier, clientIdPrefixServer: identifier, clientIdPrefixWeb: identifier, publishQueueSize: positive_integer }),
+    mqtt: z.strictObject({ qos: z.union([z.literal(0), z.literal(1), z.literal(2)]), topicPrefix: identifier, privateTopicPrefix: identifier, clientIdPrefixServer: identifier, clientIdPrefixWeb: identifier, publishQueueSize: positive_integer }),
   }),
-}).superRefine(({ app }, context) => {
+}).superRefine(({ app, integrations }, context) => {
   const { auth, content } = app
   const checks = [
+    [integrations.mqtt.privateTopicPrefix !== integrations.mqtt.topicPrefix && ! integrations.mqtt.privateTopicPrefix.startsWith(`${integrations.mqtt.topicPrefix}/`), ['integrations', 'mqtt', 'privateTopicPrefix']],
     [auth.jwt.renewBeforeDays < auth.jwt.expiresInDays, ['app', 'auth', 'jwt', 'renewBeforeDays']],
     [auth.cookie.maxAgeDays >= auth.jwt.expiresInDays, ['app', 'auth', 'cookie', 'maxAgeDays']],
     [auth.session.maxAgeDays > auth.jwt.renewBeforeDays, ['app', 'auth', 'session', 'maxAgeDays']],
@@ -94,7 +99,8 @@ const site_config_schema = z.object({
   url: z.url({ protocol: /^https?$/ }),
   indexable: boolean_value,
 })
-const mqtt_web_config_schema = z.object({ wsUrl: z.url({ protocol: /^wss?$/ }) })
+const mqtt_web_config_schema = z.object({ wsUrl: z.url({ protocol: /^wss?$/ }), draftWsUrl: z.union([z.url({ protocol: /^wss?$/ }), z.literal('')]).optional() })
+  .transform(value => ({ wsUrl: value.wsUrl, ... (value.draftWsUrl ? { draftWsUrl: value.draftWsUrl } : {}) }))
 const redis_config_schema = z.object({ host: required_string, port, password: z.string() })
 const mqtt_config_schema = z.object({
   host: required_string,
@@ -272,7 +278,7 @@ export const public_config_schema = z.object({
 export const public_config_defaults = {
   site: { url: '', indexable: false },
   oss: { buckets: { public: { publicBaseUrl: '' } } },
-  mqtt: { web: { wsUrl: '' } },
+  mqtt: { web: { wsUrl: '', draftWsUrl: '' } },
   aliyun: { captcha: { appId: '' } },
   app: { captcha: { debug: false } },
 } satisfies z.input<typeof public_config_schema>

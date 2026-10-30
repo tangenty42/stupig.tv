@@ -34,7 +34,7 @@ export const workspace_command_schema = z.discriminatedUnion('operation', [
   z.strictObject({ ... base, operation: z.literal('create_folder'), parent_id: z.number().int().positive(), name: z.string() }),
   z.strictObject({ ... base, operation: z.literal('rename'), target: workspace_target_schema, name: z.string() }),
   z.strictObject({ ... base, operation: z.literal('move'), targets: z.array(workspace_target_schema).min(1).max(settings.app.content.workspace.batchLimit), parent_id: z.number().int().positive() }),
-  z.strictObject({ ... base, operation: z.literal('delete'), targets: z.array(workspace_target_schema).min(1).max(settings.app.content.workspace.batchLimit), draft_references: z.array(z.string()).max(settings.app.content.workspace.draftReferenceLimit) }),
+  z.strictObject({ ... base, operation: z.literal('delete'), targets: z.array(workspace_target_schema).min(1).max(settings.app.content.workspace.batchLimit) }),
   z.strictObject({ ... base, operation: z.literal('delete_redacted'), target: workspace_target_schema }),
   z.strictObject({ ... base, operation: z.literal('set_private'), targets: z.array(workspace_target_schema).min(1).max(settings.app.content.workspace.batchLimit), private: z.boolean() }),
 ])

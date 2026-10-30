@@ -43,7 +43,26 @@ export function subtree(rows: WorkspaceRow[], root: WorkspaceRow) {
   return rows.filter(row => row.id === root.id || (root.is_folder && (! root.file_name || row.file_name.startsWith(`${root.file_name}/`))))
 }
 export function node_version(rows: WorkspaceRow[], node: WorkspaceRow) {
-  return createHash('sha256').update(JSON.stringify(subtree(rows, node).map(row => [Number(row.id), Number(row.parent_id), row.name, Number(row.node_revision), row.object_key, row.version, Number(row.is_private)]))).digest('hex')
+  return hash_nodes(node.is_folder ? subtree(rows, node) : [node])
+}
+function hash_nodes(rows: WorkspaceRow[]) {
+  return createHash('sha256').update(JSON.stringify(rows.map(row => [Number(row.id), Number(row.parent_id), row.name, Number(row.node_revision), row.object_key, row.version, Number(row.is_private)]))).digest('hex')
+}
+
+/** Preserve the exact version bytes while constructing each folder's members once. */
+export function workspace_node_versions(rows: WorkspaceRow[]) {
+  const folders = new Map(rows.filter(row => row.is_folder).map(row => [row.file_name, row]))
+  const members = new Map(rows.map(row => [Number(row.id), [] as WorkspaceRow[]]))
+  for (const row of rows) {
+    members.get(Number(row.id))!.push(row)
+    const segments = row.file_name.split('/')
+    for (let depth = 0; depth < segments.length; depth ++) {
+      const folder = folders.get(segments.slice(0, depth).join('/'))
+      if (folder && folder.id !== row.id)
+        members.get(Number(folder.id))!.push(row)
+    }
+  }
+  return new Map([... members].map(([id, nodes]) => [id, hash_nodes(nodes)]))
 }
 export async function ensure_workspace_root(connection: Connection, scope: number) {
   const rows = await workspace_rows(connection, scope)

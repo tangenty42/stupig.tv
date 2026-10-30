@@ -30,7 +30,7 @@ beforeEach(() => {
     if (sql.includes('FROM content_stories'))
       return [[mocks.story].filter(row => row.id)]
     if (sql.includes('FROM content_story_attachments')) {
-      return [[{ story_id: 1, file_name: 'cover.png', object_key: mocks.cover_key, avif_key: mocks.cover_key, jpeg_key: 'jpeg',
+      return [[{ id: 4, story_id: 1, file_name: 'cover.png', object_key: mocks.cover_key, avif_key: mocks.cover_key, jpeg_key: 'jpeg',
         image_revision: 1, image_metadata: { width: 60, height: 40 }, lqip_jpeg: Buffer.from([255, 216, 255, 217]) }]]
     }
     throw new Error(`Unexpected body query: ${sql}`)
@@ -53,8 +53,10 @@ describe('independent viewer-specific story body', () => {
       expect(body).not.toHaveProperty(field)
     expect(mocks.execute.mock.calls.every(([sql]) => String(sql).startsWith('SELECT'))).toBe(true)
     expect(mocks.execute.mock.calls.some(([sql]) => /content_tasks|SELECT[^F]*encryption_key/.test(String(sql)))).toBe(false)
-    expect(mocks.execute.mock.calls.filter(([sql]) => String(sql).includes('content_story_attachments'))).toHaveLength(1)
-    expect(mocks.execute.mock.calls.find(([sql]) => String(sql).includes('content_story_attachments'))?.[1]).toEqual([1, 'cover.png'])
+    const cover_queries = mocks.execute.mock.calls.filter(([sql]) => String(sql).includes('content_story_attachments'))
+    expect(cover_queries).toHaveLength(2)
+    expect(cover_queries[0]?.[1]).toEqual([1])
+    expect(cover_queries[1]?.[1]).toEqual([4])
     expect(mocks.commit).toHaveBeenCalledOnce()
     expect(mocks.release).toHaveBeenCalledOnce()
   })

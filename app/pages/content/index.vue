@@ -3,91 +3,99 @@
     <MyHeightSection tag="section" class="section-card-collapse">
       <div class="flex flex-wrap items-center justify-between gap-4">
         <h1 class="flex flex-wrap items-baseline gap-x-4">
-          <span class="font-normal text-[60%]">{{ stories?.length ?? 0 }} 份の</span>
+          <span v-if="selected_view === 'published'" class="font-normal text-[60%]">{{ stories?.length ?? 0 }} 份の</span>
           <span>蠢猪档案！</span>
         </h1>
-        <Button
-          v-if="can_manage_content"
-          size="small"
-          label="新建"
-          @click="navigateTo('/content/new/edit')"
-        >
-          <template #icon>
-            <MyIcon name="lucide:plus" />
-          </template>
-        </Button>
+        <div v-if="can_manage_content" class="flex flex-wrap items-center gap-3">
+          <SelectButton v-model="selected_view" :options="view_options" option-label="label" option-value="value" :allow-empty="false" aria-label="档案类型">
+            <template #option="{ option }">
+              <span class="whitespace-nowrap">
+                <MyIcon :name="option.icon" class="mr-1.5" />
+                <span>{{ option.label }}</span>
+              </span>
+            </template>
+          </SelectButton>
+          <Button size="small" label="新建" @click="navigateTo('/content/new/edit')">
+            <template #icon>
+              <MyIcon name="lucide:plus" />
+            </template>
+          </Button>
+        </div>
       </div>
     </MyHeightSection>
 
     <MyHeightSection tag="section" class="section-card-collapse mt-12">
-      <div v-if="all_labels.length" class="mb-4 flex flex-wrap items-center gap-1.5">
-        <MyBadge
-          v-for="label in all_labels"
-          :key="label"
-          type="info"
-          :outlined="! active_labels.has(label)"
-          button
-          @click="toggle_label(label)"
-        >
-          {{ label }}
-        </MyBadge>
-        <MyBadge
-          v-if="active_labels.size"
-          button
-          @click="active_labels.clear()"
-        >
-          清除
-        </MyBadge>
-        <MyBadge
-          button
-          class="ml-auto"
-          @click="sort_by_rating = ! sort_by_rating"
-        >
-          {{ sort_by_rating ? '按评分排序' : '按时间顺序排序' }}
-        </MyBadge>
-      </div>
-
-      <div v-if="loading && ! stories" class="space-y-3">
-        <Skeleton v-for="i in 3" :key="i" height="3.5rem" />
-      </div>
-
-      <div v-else-if="visible_stories.length">
-        <div class="flex flex-col gap-4 sm:hidden">
-          <MyContentStoryCard
-            v-for="story in visible_stories"
-            :key="story.id"
-            :story="story"
-            :active_labels="active_labels"
-          />
-        </div>
-        <!-- Two independent flex columns filled alternately, so the waterfall
-             reads row-major (1|2, 3|4, …) instead of CSS columns' 1|4, 2|5. -->
-        <div class="hidden items-start gap-4 sm:grid sm:grid-cols-2">
-          <div
-            v-for="(column, index) in story_columns"
-            :key="index"
-            class="flex min-w-0 flex-col gap-4"
+      <template v-if="selected_view === 'published'">
+        <div v-if="all_labels.length" class="mb-4 flex flex-wrap items-center gap-1.5">
+          <MyBadge
+            v-for="label in all_labels"
+            :key="label"
+            type="info"
+            :outlined="! active_labels.has(label)"
+            button
+            @click="toggle_label(label)"
           >
+            {{ label }}
+          </MyBadge>
+          <MyBadge
+            v-if="active_labels.size"
+            button
+            @click="active_labels.clear()"
+          >
+            清除
+          </MyBadge>
+          <MyBadge
+            button
+            class="ml-auto"
+            @click="sort_by_rating = ! sort_by_rating"
+          >
+            {{ sort_by_rating ? '按评分排序' : '按时间顺序排序' }}
+          </MyBadge>
+        </div>
+
+        <div v-if="loading && ! stories" class="space-y-3">
+          <Skeleton v-for="i in 3" :key="i" height="3.5rem" />
+        </div>
+
+        <div v-else-if="visible_stories.length">
+          <div class="flex flex-col gap-4 sm:hidden">
             <MyContentStoryCard
-              v-for="story in column"
+              v-for="story in visible_stories"
               :key="story.id"
               :story="story"
               :active_labels="active_labels"
             />
           </div>
+          <!-- Two independent flex columns filled alternately, so the waterfall
+             reads row-major (1|2, 3|4, …) instead of CSS columns' 1|4, 2|5. -->
+          <div class="hidden items-start gap-4 sm:grid sm:grid-cols-2">
+            <div
+              v-for="(column, index) in story_columns"
+              :key="index"
+              class="flex min-w-0 flex-col gap-4"
+            >
+              <MyContentStoryCard
+                v-for="story in column"
+                :key="story.id"
+                :story="story"
+                :active_labels="active_labels"
+              />
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div v-else class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-        {{ stories?.length ? '没有符合筛选条件的档案~' : '还没有档案~' }}
-      </div>
+        <div v-else class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+          {{ stories?.length ? '没有符合筛选条件的档案~' : '还没有档案~' }}
+        </div>
+      </template>
+      <MyContentStoryDraftList v-else />
     </MyHeightSection>
 
-    <MyDivider class="mt-24">
+    <MyDivider v-if="selected_view === 'published'" class="mt-24">
       事件日历
     </MyDivider>
 
-    <MyHeightSection tag="section" class="section-card-collapse mt-6">
+    <MyHeightSection v-if="selected_view === 'published'" tag="section" class="section-card-collapse mt-6">
       <MyContentStoryCalendar :stories="stories ?? []" />
     </MyHeightSection>
   </div>
@@ -101,8 +109,15 @@ import { sync_resource } from '@shared/types/sync'
 
 const { content } = useApi()
 const { user } = useAuth()
+const route = useRoute()
+const router = useRouter()
 
-const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full'))
+const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full') && has_permission(user.value, 'content_private', 'read'))
+const view_options = [{ label: '已发布', value: 'published', icon: 'lucide:book-open' }, { label: '未发布草稿', value: 'drafts', icon: 'lucide:pencil' }]
+const selected_view = computed({
+  get: () => can_manage_content.value && route.query.view === 'drafts' ? 'drafts' : 'published',
+  set: (value: string) => { void router.replace({ query: { ... route.query, view: value === 'drafts' ? 'drafts' : undefined } }) },
+})
 
 const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
 const loading = useState('content_stories_loading', () => false)

@@ -31,7 +31,7 @@ flowchart TB
   Proxy[站点 HTTPS 反向代理]
   App[Nuxt Nitro：API / SSR / 授权回调]
   DB[(MySQL：业务与持久化账本)]
-  Redis[(Redis：缓存)]
+  Redis[(Redis：保留基础设施，无当前业务消费者)]
   MQTT[EMQX：变更通知]
   Edge[ESA 边缘函数：签名与在线授权]
   Delivery[ESA 原生缓存与回源]
@@ -56,7 +56,7 @@ flowchart TB
   Browser -->|公开静态资源| Delivery
 ```
 
-此图表示逻辑职责。生产 Compose 当前只编排应用容器，MySQL、Redis、EMQX 由外部 Docker 网络中的服务提供；开发 Compose 提供这些依赖。runner 默认随应用运行；独立 worker 当前可在源码工作区启动，生产镜像和 Compose 尚未提供对应交付产物，不能仅切换模式配置。详细步骤见[部署总流程](deployment/README.md)。
+此图表示逻辑职责。生产 Compose 编排应用及专用 EMQX，MySQL、Redis 通过外部 Docker 网络接入；开发 Compose 提供这些依赖。runner 默认随应用运行；独立 worker 当前可在源码工作区启动，生产镜像和 Compose 尚未提供对应交付产物，不能仅切换模式配置。私有草稿通知另经授权 WS listener；生产外部反代须单独验收，见[部署总流程](deployment/README.md)。
 
 Content 读取链路中，边缘函数先验证请求并调用应用授权接口，放行后由 ESA 原生缓存/OSS 交付对象。函数不代理大文件字节流。缓存命中仍需经过授权；回调故障按拒绝读取处理。具体匹配条件、缓存键、响应头及回源规则见 [ESA](deployment/esa.md) 和[函数部署](deployment/esa-functions.md)。
 
@@ -88,6 +88,7 @@ MySQL 是业务事实源。迁移链描述实际结构，不能单独看初始 S
 | --- | --- |
 | 用户与登录会话 | 身份、权限、会话有效性和活动时间；在线状态从会话数据推导 |
 | 档案正文与附件节点 | 正文版本、目录父子关系、稳定节点身份、名字和对象指针 |
+| 共享云端草稿 | `content_story_drafts` 保存当前 draft、引用基线、独占租约和最后命令回执；客户端仅有内存会话 |
 | 上传会话与预约 | 限定本次操作目标、临时对象和发布条件，支持续传与取消 |
 | 引用历史与工作区版本 | 改名/移动后的引用重放、草稿同步和过期基线检查 |
 | 图片任务 | 从受控输入产生原图/AVIF/JPEG/LQIP，完成后发布指针 |
@@ -113,7 +114,7 @@ Content 变更把通知写入业务事务内的 outbox，后台确认 MQTT 投�
 
 ### 引用与草稿
 
-正文中的 `att://`、`content://` 通过统一解析与当前工作区上下文确定目标。重命名、移动、机密切换等操作涉及路径变化时，通过版本化记录更新正文和本地草稿。历史不足或并发版本冲突不能静默套用；上传替换与正文更新也必须协调，见[引用](modules/content/markdown.md)和[草稿](modules/content/drafts.md)。
+正文中的 `att://`、`content://` 按当前名称解析。路径或标题变化在同一事务中更新 main、持久化共享 draft、基线及 outbox，客户端未上传输入另按基线重放。MySQL 租约和单调命令回执约束独占编辑；Pinia 只保留页面内存，停止正文的浏览器持久化。历史不足必须核对，见[引用](modules/content/markdown.md)和[草稿](modules/content/drafts.md)。
 
 ### 读取、撤销与回收
 
@@ -125,7 +126,7 @@ Content 变更把通知写入业务事务内的 outbox，后台确认 MQTT 投�
 
 统一 runner 管理六类有界扫描：图片、上传生命周期、对象退役/刷新、预热、Content 通知、OSS 全桶对账。领域服务继续拥有自己的表、租约和检查点。资源槽限制每进程扫描并发，不能当作云端 QPS 或集群容量；当前没有通用 job/attempt/step 调度内核。对账默认只报告；可显式开启受连续周期、对象身份和发布互斥保护的 Content 孤立对象退役，见[对账手册](operations/storage-audit.md)。
 
-引用历史清理由独立 Nitro 插件维护，不在这六类适配器内。SQL/TS 迁移是显式维护工具，也不由后台 runner 自动接管。
+引用历史在追加事务内按作用域保留 200 个完整批次，没有独立清理插件或时间 TTL。SQL/TS 迁移是显式维护工具，也不由后台 runner 自动接管。
 
 `/healthz` 检查数据库查询及当前迁移回执表可读性，返回已完成数量；它不证明每个外部服务可用，也不替代版本链检查或端到端验收。
 
@@ -142,7 +143,7 @@ Content 变更把通知写入业务事务内的 outbox，后台确认 MQTT 投�
 | CodeMirror、markdown-it | 正文编辑、方言编译与预览 | [Markdown](modules/content/markdown.md) |
 | CropperJS、ViewerJS、Sharp | 浏览器编辑/预览和服务端图片转换 | [图片](modules/content/images.md) |
 | MySQL、mysql2 | 事务、业务数据、持久化工作与迁移回执 | [数据库部署](deployment/mysql-redis.md) |
-| Redis、ioredis | 外部信息等缓存；调用方处理缓存故障 | [集成](modules/integrations.md) |
+| Redis、ioredis | 保留连接、配置和退出接线；当前无业务读写 | [MySQL/Redis](deployment/mysql-redis.md) |
 | EMQX、mqtt | 服务端发布及浏览器 WSS 通知 | [MQTT 部署](deployment/mqtt.md) |
 | ali-oss、Aliyun SDK、ESA CLI | OSS、分片签名上传、短信/CAPTCHA、边缘部署与云任务 | [部署总流程](deployment/README.md) |
 | AWS S3 SDK | 仅历史存储兼容、盘点和迁移；当前业务使用阿里云 OSS | [Content 切换](operations/content-cutover.md) |

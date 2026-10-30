@@ -45,13 +45,15 @@ resolve 对话框按理由分组，标题行可展开／折叠，默认折叠；
 - 批量动作根据适用项筛选选择；不把已被自动排除的项目继续算入禁用理由。
 - 替换进行时，用上传任务行占据旧文件的位置，并采用任务菜单；取消后恢复旧文件行。发布时同步接受新工作区，避免任务和文件同时出现或暂时都不出现。
 - 机密文件显示锁与颜色；机密目录只变色。有删减版的机密文件显示蓝色，未有删减版时使用机密色；错误、活动任务等状态有自己的优先级。
-- 删除检查已保存引用和当前草稿引用；删除目录还检查其后代。删除删减版有单独确认，保留原附件行。
+- 删除允许留下已保存正文和草稿中的悬空引用；编辑器显示 warning，原链接不被清空。权限、目标版本及目录后代的上传预约仍会阻止不允许的删除。删除删减版有单独确认，保留原附件行。
+- 附件和档案删除前检查引用：附件检查所属 main、云端 draft 及当前页未上传输入；档案检查其他 main 和全部云端 draft，包含未发布草稿；目录包括后代。确认框只提示正文、云端草稿或未上传修改是否引用，不展示具体位置。云端摘要仅向具备草稿双权限者返回；其他页面未上传的输入无法检查。查询失败须重试，确认不构成锁或阻删依据。
 
 ## 源码与验证
 
 - 命令合同：[`content-workspace.ts`](../../../server/shared/content-workspace.ts)。
 - 事务与回执：[`workspace.repository.ts`](../../../server/services/content/workspace.repository.ts)、[`workspace-command.service.ts`](../../../server/services/content/workspace-command.service.ts)。
 - UI 编排：[`useAttachmentPanel.ts`](../../../app/composables/useAttachmentPanel.ts)、[`Attachment/Workspace.vue`](../../../app/components/MyContent/Attachment/Workspace.vue)。
+- 删除影响：[`content-delete-impact.ts`](../../../server/shared/content-delete-impact.ts)、[`delete-impact.service.ts`](../../../server/services/content/delete-impact.service.ts)、[`DeleteImpact.vue`](../../../app/components/MyContent/DeleteImpact.vue)。
 - 共享菜单／列表：[`attachment-list.ts`](../../../app/utils/content/attachment-list.ts)、[`workspace.ts`](../../../app/utils/content/workspace.ts)、[`Attachment/Resolve.vue`](../../../app/components/MyContent/Attachment/Resolve.vue)。
 
 同目录测试覆盖名称、继承机密、子树、预约交叠、批量拒绝、回执和版本。浏览器需检查混合选择、上传任务多选右键、冲突树展开及窄屏布局；这些交互不能只由纯状态测试证明。

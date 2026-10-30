@@ -1,5 +1,5 @@
 import { html_no_markdown_tags, html_void_tags } from './content-html'
-import { content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref, parse_migration_ref } from './content-reference'
+import { content_name_key, content_ref_suffix, content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref, parse_migration_ref } from './content-reference'
 import { scan_reference_definitions } from './content-reference-definitions'
 
 export { link_file_name_illegal_chars } from './content-reference'
@@ -667,7 +667,7 @@ export interface ImageAttachment extends NamedAttachment {
 
 /** Destinations may be written with a trailing slash (`[](cards/)`). */
 function normalize_folder_path(folder_path: string) {
-  return folder_path.replace(/\/+$/, '').trim()
+  return content_name_key(folder_path.replace(/\/+$/, '').trim())
 }
 
 /**
@@ -680,10 +680,10 @@ export function is_attachment_folder(attachments: readonly NamedAttachment[], fo
   const folder = normalize_folder_path(folder_path)
   if (! folder)
     return false
-  if (attachments.some(item => item.file_name === folder))
+  if (attachments.some(item => content_name_key(item.file_name) === folder))
     return false
   const prefix = `${folder}/`
-  return folders.some(path => path === folder || path.startsWith(prefix)) || attachments.some(item => item.file_name.startsWith(prefix))
+  return folders.some(path => content_name_key(path) === folder || content_name_key(path).startsWith(prefix)) || attachments.some(item => content_name_key(item.file_name).startsWith(prefix))
 }
 
 /**
@@ -696,7 +696,7 @@ export function folder_images<T extends ImageAttachment>(attachments: readonly T
     return null
   const folder = normalize_folder_path(folder_path)
   return attachments
-    .filter(item => item.is_image && attachment_folder_of(item.file_name) === folder)
+    .filter(item => item.is_image && content_name_key(attachment_folder_of(item.file_name) ?? '') === folder)
     .sort((left, right) => compare_attachment_names(left.file_name, right.file_name))
 }
 
@@ -706,7 +706,7 @@ export function folder_file_count(attachments: readonly NamedAttachment[], folde
   if (! folder)
     return 0
   const prefix = `${folder}/`
-  return attachments.filter(item => item.file_name.startsWith(prefix)).length
+  return attachments.filter(item => content_name_key(item.file_name).startsWith(prefix)).length
 }
 
 /**
@@ -1250,7 +1250,7 @@ function rewrite_ref_step(markdown: string, step: ContentRefRewriteStep): string
     if (ref?.kind === 'attachment' || ref?.kind === 'legacy_attachment') {
       const path = rewrite_attachment_path(ref.path, step)
       if (path !== ref.path) {
-        destination = ref.kind === 'attachment' ? format_attachment_ref(path) : path
+        destination = ref.kind === 'attachment' ? format_attachment_ref(path) + content_ref_suffix(span.destination) : path
         if (span.label === ref.path)
           label = path
       }
@@ -1258,7 +1258,7 @@ function rewrite_ref_step(markdown: string, step: ContentRefRewriteStep): string
     else if (ref?.kind === 'story' || ref?.kind === 'legacy_story') {
       const mapping = step.stories?.find(item => content_title_key(item.from) === content_title_key(ref.title))
       if (mapping) {
-        destination = ref.kind === 'story' ? format_story_ref(mapping.to) : `@${mapping.to}`
+        destination = ref.kind === 'story' ? format_story_ref(mapping.to) + content_ref_suffix(span.destination) : `@${mapping.to}`
         if (span.label === ref.title)
           label = mapping.to
       }
@@ -1365,19 +1365,14 @@ export function upgrade_legacy_refs(markdown: string): string {
 /** Shared reference diagnostics, including exact ranges for safe editor fixes. */
 export function lint_content_refs(markdown: string, config: ContentMarkdownConfig, own_title: string | null = null) {
   const issues: ContentLintIssue[] = []
-  const inspect = (destination: string, start: number, end: number) => {
+  const inspect = (destination: string, start: number, _end: number) => {
     const line = line_number_at(markdown, start)
     const decoded = decode_content_destination(destination)
     const ref = parse_content_ref(destination)
     const source = 'content-ref'
-    const canonical = decoded.replace(/^att:\/\//i, 'att://').replace(/^content:\/\//i, 'content://')
-    if (canonical !== decoded) {
-      issues.push({ line, severity: 'warning', source, message: '引用 scheme 必须使用小写', fix: { from: start, to: end, insert: canonical } })
-      return
-    }
     if (! ref) {
-      if (decoded.startsWith('att://') || decoded.startsWith('content://'))
-        issues.push({ line, severity: 'warning', source, message: decoded.startsWith('content://') ? '档案引用标题不合法，不能包含 /' : '附件引用路径不合法' })
+      if (/^(?:att|content):\/\//i.test(decoded))
+        issues.push({ line, severity: 'warning', source, message: decoded.toLowerCase().startsWith('content://') ? '档案引用标题不合法，不能包含 /' : '附件引用路径不合法' })
       return
     }
     if ('title' in ref) {
@@ -1387,7 +1382,7 @@ export function lint_content_refs(markdown: string, config: ContentMarkdownConfi
       else if (! config.existing_titles?.some(item => content_title_key(item.title) === key))
         issues.push({ line, severity: 'warning', source: 'at-story', message: `档案『${ref.title}』不可引用` })
     }
-    else if (config.attachment_paths && ! config.attachment_paths.includes(ref.path)) {
+    else if (config.attachment_paths && ! config.attachment_paths.some(path => content_name_key(path) === content_name_key(ref.path))) {
       issues.push({ line, severity: 'warning', source, message: `附件『${ref.path}』不存在` })
     }
   }

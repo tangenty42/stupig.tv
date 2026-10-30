@@ -41,6 +41,7 @@
 <script setup lang="ts">
 import type { ContentStoryBody, ContentStorySummary } from '@shared/types/content'
 import { attachment_ancestor_folders } from '@shared/content-markdown'
+import { content_name_key } from '@shared/content-reference'
 import { has_permission } from '@shared/permissions'
 import { sync_resource } from '@shared/types/sync'
 import { story_front_cover_url } from '~/utils/content/attachment'
@@ -57,7 +58,7 @@ const attachment_panel = await useAttachmentPanel(story_id.value, () => '', true
 const attachment_workspace = attachment_panel.catalog
 const workspace_attachments = computed(() => attachment_workspace.data.value?.attachments ?? [])
 const workspace_folders = computed(() => attachment_workspace.data.value?.folders ?? [])
-const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full'))
+const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full') && has_permission(user.value, 'content_private', 'read'))
 
 const story = useSyncedState<ContentStoryBody | null>(`content_story_view_${String(route.params.id)}`, () => null)
 const loading = useState(`content_story_view_loading_${String(route.params.id)}`, () => false)
@@ -88,10 +89,10 @@ await useSyncedData<ContentStorySummary[]>(
 
 const attachment_section = ref<{ el: HTMLElement | null } | null>(null)
 function open_attachment_folder(folder: string) {
-  const paths = new Set([folder, ... attachment_ancestor_folders(folder)])
+  const paths = new Set([folder, ... attachment_ancestor_folders(folder)].map(content_name_key))
   const next = new Set(attachment_panel.expanded.value)
   for (const node of attachment_workspace.data.value?.nodes ?? []) {
-    if (node.kind === 'folder' && paths.has(node.path))
+    if (node.kind === 'folder' && paths.has(content_name_key(node.path)))
       next.add(node.id)
   }
   attachment_panel.expanded.value = next

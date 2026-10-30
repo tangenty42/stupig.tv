@@ -1,5 +1,8 @@
+import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
+
+const nuxt_require = createRequire(import.meta.resolve('nuxt/package.json'))
 
 export default defineConfig({
   resolve: {
@@ -10,6 +13,8 @@ export default defineConfig({
       '@config': resolve(import.meta.dirname, './config/lib'),
       '@server': resolve(import.meta.dirname, './server'),
       '@shared': resolve(import.meta.dirname, './server/shared'),
+      // Use Nuxt's installed H3 for real adapter tests without a second version.
+      'h3': nuxt_require.resolve('h3'),
     },
   },
   test: {

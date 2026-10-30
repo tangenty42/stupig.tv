@@ -45,6 +45,7 @@ OSS、CAPTCHA 和短信在测试专用 Nuxt 配置中替换供应商边界。浏
 - 账号生命周期：一次性用户发送验证码、错误码拒绝、注册、刷新保留会话、修改生日、裁剪上传及删除头像、修改密码时拒绝错误旧密码、退出后拒绝原密码并接受新密码；另测手机验证码登录和服务端发送冷却。资料通过刷新回读，头像检查真实图片解码。
 - 权限：匿名和普通用户访问控制台、新建及编辑页被重定向，不能看到他人资料编辑控件；直接请求管理接口和越权资料修改分别返回 401 或 403。
 - 档案：创建和编辑持久化、普通附件上传、在途上传取消并收到服务端确认、两个隔离浏览器上下文间的正文同步（排除 BroadcastChannel 旁路）。
+- 引用：独立浏览器上下文中的标题和附件目录改名、main 与草稿重放、新建草稿、删除影响确认及悬空 warning、同名重建，以及附件／全局标题各自的 200 批次窗口。窗口测试在随机测试库用历史仓库准备批次，再经实际 API 或编辑器触发变更、裁剪和保存；验证 floor 边界与 250 行批次完整保留。
 
 该流程不证明真实 OSS、ESA 缓存交付、短信供应商、CAPTCHA 供应商或原生文件权限正常。默认夹具只面向 Chromium，禁用 legacy 构建；服务器复用已安装的 SDK，不验证独立部署镜像依赖收集。MQTT 主题按本轮标识隔离；浏览器连接使用已验证的本地 broker 主机地址，需确保其 WebSocket 端口可达。日志和 Playwright 产物位于被 Git 忽略的 `.dev/`；CI 只上传服务器日志、trace、截图和报告，不上传临时运行配置。真实云端与操作系统行为继续按下面矩阵验收。
 
@@ -92,6 +93,12 @@ pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.
 CI 的 [Check 工作流](../../.github/workflows/check.yml) 包含 lint、生成检查、应用／工具／浏览器测试类型检查、三组 Vitest、MySQL 8.4 空库完整链和隔离演练，以及独立的 Chromium 工作流测试。Content 云存储边界为内存，不会自动验证真实 OSS、ESA 或短信。
 
 ## 浏览器验收矩阵
+
+临时草稿 broker 限制为 2 CPU／768MiB，使用随机测试发布凭据；清理包括其匿名卷，Docker 不响应时限时报告精确容器身份，不无限等待。完整生产编译与历史浏览器验证可运行 `pnpm exec playwright test --config tests/cloud-drafts-production.config.ts`：复用现有 legacy 夹具、生产 SSR/CSS/JS 编译，执行草稿／引用场景。须先按既有 legacy 手册准备本地浏览器二进制，不在验收时自动安装。此 profile 使用同样的随机数据库与供应商替身。
+
+共享草稿的隔离协议／通知／有界负载验证使用 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt --capacity`。仅接受本地开发 MySQL，创建随机 `stupig_cloud_draft_qa_<随机值>`，完整迁移并在 finally 删除；`--mqtt` 使用临时 EMQX 容器、随机回环端口和仅认证用途的 relay，结束时清理自己的容器与凭据。`--capacity` 记录深目录快照、两个写者／四个后台 SQL 占位和全局标题引用更新的延迟；单独运行，避免把同时构建造成的主机争用误当作目标规模基线。不会测试真实 OSS／短信，也不迁移业务库。
+
+`content-cloud-draft`、`content-draft-history`、`content-draft-tabs`、`content-draft-lost-response`、`content-draft-expiry` 浏览器场景分别验证云端自动保存／main 不变、快照核对、隐藏交接、真实提交后响应丢失、释放不可达时到期接管。跨浏览器使用独立 context；同浏览器 headless 标签页通常均保持 visible，测试明确驱动 document visibility 边界，不能把 focus 当作租约释放。网络失败用实际 route 阻断或提交后丢包，不用本地 offline 事件代替。
 
 每次只使用本轮明确创建或获准操作的数据，记录入口、身份、动作和结果。删除测试对象前核对其精确 key／版本，避免把清理变成前缀擦除。
 

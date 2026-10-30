@@ -4,6 +4,7 @@ const state = vi.hoisted(() => ({
   story: { id: 1, title: '本文', markdown: '---\ntitle: 本文\ntime: 2026/10/14\ncover: att://old.png\n---\n[](att://old.png)', revision: 7, namespace_revision: 0, namespace_floor: 0, cover: 'old.png', cover_version: 'v1' },
   nodes: [{ id: 11, file_name: 'old.png', is_folder: 0, object_key: 'key', version: 'v1' }],
   journals: [] as { scope_id: number, revision: number, changes: unknown }[],
+  other_stories: [] as { id: number, markdown: string }[],
   title_revision: 0,
   title_floor: 0,
   committed: 0,
@@ -16,6 +17,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@server/lib/db', () => {
   const execute = vi.fn(async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('FROM content_story_drafts'))
+      return [[]]
     if (sql.includes('FOR UPDATE') || sql.includes('FOR SHARE'))
       state.locks.push(sql)
     if (! sql.startsWith('SELECT'))
@@ -26,16 +29,25 @@ vi.mock('@server/lib/db', () => {
     }
     if (sql.includes('FROM content_title_namespace'))
       return [[{ revision: state.title_revision, revision_floor: state.title_floor }]]
-    if (sql.includes('FROM content_reference_journals'))
-      return [state.journals.filter(row => row.scope_id === params[0] && row.revision > Number(params[1]))]
+    if (sql.startsWith('SELECT DISTINCT revision'))
+      return [state.journals.filter(row => row.scope_id === params[0]).sort((a, b) => b.revision - a.revision).slice(Number(params[1]), Number(params[1]) + 1)]
+    if (sql.includes('FROM content_reference_journals') && sql.startsWith('SELECT')) {
+      return [state.journals.filter(row => row.scope_id === params[0] && row.revision > Number(params[1]) && row.revision <= Number(params[2])).flatMap((row) => {
+        const changes = row.changes as { node_id: number, from: string | null, to: string | null, is_folder?: boolean }[]
+        const ref = (name: string | null) => name === null ? null : name.includes('://') ? name : `${row.scope_id === 0 ? 'content' : 'att'}://${name}`
+        return changes.length
+          ? changes.map(change => ({ revision: row.revision, node_id: change.node_id, from_ref: ref(change.from), to_ref: ref(change.to), is_folder: Number(change.is_folder ?? false) }))
+          : [{ revision: row.revision, node_id: 0, from_ref: null, to_ref: null, is_folder: 0 }]
+      })]
+    }
     if (sql.includes('FROM content_story_attachments'))
       return [structuredClone(state.nodes)]
     if (sql.startsWith('SELECT id, title FROM content_stories'))
       return [[{ id: 1, title: state.story.title }, { id: 2, title: '新标题' }].filter(row => ! sql.includes('WHERE id !=') || row.id !== params[0])]
     if (sql.startsWith('SELECT id FROM content_stories'))
       return [[]]
-    if (sql.includes('JSON_CONTAINS(related_story_ids'))
-      return [[]]
+    if (sql.startsWith('SELECT id, markdown FROM content_stories'))
+      return [[{ ... state.story }, ... structuredClone(state.other_stories)]]
     if (sql.includes('FROM content_stories'))
       return [[{ ... state.story }]]
     if (sql.startsWith('UPDATE content_stories SET namespace_revision')) {
@@ -43,14 +55,17 @@ vi.mock('@server/lib/db', () => {
       return [{ affectedRows: 1 }]
     }
     if (sql.startsWith('UPDATE content_stories SET markdown')) {
-      state.story.markdown = String(params[0])
-      state.story.cover = String(params[1])
-      state.story.cover_version = String(params[2])
+      const target = params.at(- 1) === 1 ? state.story : state.other_stories.find(row => row.id === params.at(- 1))!
+      target.markdown = String(params[0])
+      if (sql.includes('cover =')) {
+        state.story.cover = String(params[1])
+        state.story.cover_version = String(params[2])
+      }
       return [{ affectedRows: 1 }]
     }
     if (sql.startsWith('UPDATE content_stories SET title')) {
       state.story.title = String(params[0])
-      state.story.markdown = String(params[9])
+      state.story.markdown = String(params[8])
       state.story.revision ++
       return [{ affectedRows: 1 }]
     }
@@ -59,8 +74,12 @@ vi.mock('@server/lib/db', () => {
       return [{ affectedRows: 1 }]
     }
     if (sql.startsWith('INSERT INTO content_reference_journals')) {
-      const global = sql.includes('VALUES (0,')
-      state.journals.push({ scope_id: global ? 0 : Number(params[0]), revision: Number(params[global ? 0 : 1]), changes: JSON.parse(String(params[global ? 1 : 2])) })
+      const changes = []
+      for (let index = 0; index < params.length; index += 9) {
+        if (params[index + 4] !== null || params[index + 5] !== null)
+          changes.push({ node_id: params[index + 3], from: params[index + 4], to: params[index + 5], is_folder: Boolean(params[index + 8]) })
+      }
+      state.journals.push({ scope_id: Number(params[0]), revision: Number(params[1]), changes })
       return [{ affectedRows: 1 }]
     }
     throw new Error(`Unhandled fixture SQL: ${sql}`)
@@ -89,6 +108,24 @@ beforeEach(() => {
 })
 
 describe('transactional reference history', () => {
+  it('rewrites every saved title reference without relying on a pre-existing reverse index or a 200-link limit', async () => {
+    state.other_stories = [{ id: 3, markdown: `${Array.from({ length: 205 }, (_, index) => `[](content://missing${index})`).join(' ')} [](CONTENT://本文?view=card#top)` }]
+    const renamed = state.story.markdown.replace('title: 本文', 'title: 改标题')
+    await update_story(1, renamed, 7, true, { base_namespace_revision: 0, base_title_revision: 0 })
+    expect(state.other_stories[0]!.markdown).toContain('[](content://改标题?view=card#top)')
+    expect(state.other_stories[0]!.markdown).toContain('content://missing204')
+    expect(state.events).toContainEqual(expect.objectContaining({ resource: 'content_story:3' }))
+    expect(state.journals).toContainEqual(expect.objectContaining({ scope_id: 0, changes: [{ node_id: 1, from: 'content://本文', to: 'content://改标题', is_folder: false }] }))
+  })
+
+  it('replays global title history for a not-yet-created story without an attachment scope', async () => {
+    state.title_revision = 1
+    state.journals = [{ scope_id: 0, revision: 1, changes: [{ node_id: 2, from: 'content://旧标题', to: 'content://新标题' }] }]
+    const result = await rewrite_draft_references(0, '[](CONTENT://旧标题#part)', { base_namespace_revision: null, base_title_revision: 0 }, true)
+    expect(result).toMatchObject({ markdown: '[](content://新标题#part)', base_namespace_revision: 0, base_title_revision: 1, baseline_unavailable: { namespace: false, title: false } })
+    expect(state.writes).toEqual([])
+  })
+
   it('distinguishes namespace-only changes from saved references and list ordering changes', async () => {
     const connection = await db.getConnection()
     const before = await begin_namespace_change(connection, 1)
@@ -133,7 +170,7 @@ describe('transactional reference history', () => {
       state.nodes[0]!.file_name = 'new.png'
     })
     expect(state.story).toMatchObject({ markdown: expect.stringContaining('[](att://new.png)'), cover: 'new.png', revision: 7, namespace_revision: 1 })
-    expect(state.journals).toEqual([{ scope_id: 1, revision: 1, changes: [{ node_id: 11, from: 'old.png', to: 'new.png', is_folder: false }] }])
+    expect(state.journals).toEqual([{ scope_id: 1, revision: 1, changes: [{ node_id: 11, from: 'att://old.png', to: 'att://new.png', is_folder: false }] }])
     expect(state.committed).toBe(1)
     expect(state.locks[0]).toContain('FROM content_stories')
   })
@@ -178,19 +215,26 @@ describe('transactional reference history', () => {
   it('refuses to save when the reference history is unavailable', async () => {
     state.story.namespace_revision = 5
     state.story.namespace_floor = 3
-    await expect(update_story(1, state.story.markdown, 7, true, { base_namespace_revision: 0, base_title_revision: 0 }))
-      .rejects.toMatchObject({ statusCode: 409, reference_code: 'REF_HISTORY_UNAVAILABLE' })
+    const baseline = { base_namespace_revision: 0, base_title_revision: 0 }
+    const failure = await update_story(1, state.story.markdown, 7, true, baseline).catch(error => error)
+    expect(failure).toMatchObject({ statusCode: 409, reference_code: 'REF_HISTORY_UNAVAILABLE', review_token: expect.any(String) })
     expect(state.writes).toEqual([])
     expect(state.rolled_back).toBe(1)
-    await expect(update_story(1, state.story.markdown, 7, true, { base_namespace_revision: 0, base_title_revision: 0 }, true))
+    await expect(update_story(1, `${state.story.markdown}\nchanged`, 7, true, baseline, failure.review_token))
+      .rejects.toMatchObject({ statusCode: 409, reference_code: 'REF_HISTORY_UNAVAILABLE' })
+    state.title_revision ++
+    await expect(update_story(1, state.story.markdown, 7, true, baseline, failure.review_token))
+      .rejects.toMatchObject({ statusCode: 409, reference_code: 'REF_HISTORY_UNAVAILABLE' })
+    state.title_revision --
+    await expect(update_story(1, state.story.markdown, 7, true, baseline, failure.review_token))
       .resolves.toMatchObject({ revision: 8, baseline_unavailable: { namespace: true, title: false } })
   })
 
   it('keeps revision and private-content checks when history is confirmed', async () => {
     const baseline = { base_namespace_revision: null, base_title_revision: null }
-    await expect(update_story(1, state.story.markdown, 6, true, baseline, true)).rejects.toMatchObject({ statusCode: 409 })
+    await expect(update_story(1, state.story.markdown, 6, true, baseline, 'a'.repeat(64))).rejects.toMatchObject({ statusCode: 409 })
     state.story.markdown += '\n<good>secret</good>'
-    await expect(update_story(1, state.story.markdown, 7, false, baseline, true)).rejects.toMatchObject({ statusCode: 403 })
+    await expect(update_story(1, state.story.markdown, 7, false, baseline, 'a'.repeat(64))).rejects.toMatchObject({ statusCode: 403 })
     expect(state.writes).toEqual([])
   })
 

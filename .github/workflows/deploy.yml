@@ -88,6 +88,7 @@ jobs:
 
       - name: Build and push image
         env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
           ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
@@ -96,12 +97,26 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           printf '%s' "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" \
             -u "$ACR_USERNAME" --password-stdin
+          # 以下保留原发布策略说明；共享云端草稿切换起，额外交付不可变 SHA tag，
+          # 运行配置固定到 SHA，latest/mqtt 仅保留为兼容别名。
           # 只推 :latest / :mqtt：个人项目的历史版本回退仍靠重跑旧 commit 的 workflow，
           # 免得 ACR 里积一堆 :sha tag
-          docker build --target mqtt -t "$IMAGE:mqtt" .
+          docker build --target mqtt -t "$IMAGE:mqtt" -t "$IMAGE:mqtt-$RELEASE_SHA" .
           docker push "$IMAGE:mqtt"
-          docker build -t "$IMAGE:latest" .
+          docker push "$IMAGE:mqtt-$RELEASE_SHA"
+          docker build -t "$IMAGE:latest" -t "$IMAGE:$RELEASE_SHA" .
           docker push "$IMAGE:latest"
+          docker push "$IMAGE:$RELEASE_SHA"
+          APP_REF=$(docker image inspect "$IMAGE:$RELEASE_SHA" --format '{{index .RepoDigests 0}}')
+          MQTT_REF=$(docker image inspect "$IMAGE:mqtt-$RELEASE_SHA" --format '{{index .RepoDigests 0}}')
+          [[ "$APP_REF" =~ ^"${IMAGE}"@sha256:[a-f0-9]{64}$ ]]
+          [[ "$MQTT_REF" =~ ^"${IMAGE}"@sha256:[a-f0-9]{64}$ ]]
+          printf '\nAPP_IMAGE=%s\nMQTT_IMAGE=%s\nCONTENT_DRAFT_PROTOCOL=cloud-v1\n' "$APP_REF" "$MQTT_REF" >> .env.prod.runtime
+          mkdir -p .data/releases
+          SCHEMA=$(find migrations -maxdepth 1 -type f \( -name '*.sql' -o -name '*.ts' \) -printf '%f\n' | sort | tail -n 1)
+          SETTINGS_SHA=$(sha256sum config/app-settings.yaml | cut -d ' ' -f 1)
+          printf '{"commit":"%s","app":"%s","mqtt":"%s","schema":"%s","settings_sha256":"%s","draft_protocol":"cloud-v1"}\n' \
+            "$RELEASE_SHA" "$APP_REF" "$MQTT_REF" "$SCHEMA" "$SETTINGS_SHA" > .data/releases/production.json
 
       # 只能 prune -f（清悬空镜像）。严禁改成 -a：这台主机与 1panel 共用，
       # -a 会删掉其他站点正在用的镜像（它们对 docker 而言"未使用"，却是别的
@@ -157,6 +172,16 @@ jobs:
         with:
           name: esa-production-receipt
           path: .data/esa-deploy/*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload application release receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: application-production-receipt
+          path: .data/releases/*.json
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 30

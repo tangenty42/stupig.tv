@@ -1,6 +1,9 @@
 import type { Page } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import { test as base, expect } from '@playwright/test'
+import { settings } from '@shared/settings'
+
+export const draft_timeout = 2 * settings.app.content.draft.keepaliveIntervalMs + 2 * settings.app.content.draft.requestTimeoutMs + settings.app.content.draft.leaseMarginMs
 
 export const test = base.extend({
   page: async ({ page, baseURL }, use) => {
@@ -56,7 +59,11 @@ export async function login(page: Page, username = 'admin', password = 'AaAaAaAa
   await form.locator('input[type="password"]').fill(password)
   await form.locator('input[type="password"]').press('Tab')
   await expect(form.locator('input[type="password"]')).toHaveValue(password)
-  await page.getByRole('button', { name: '立即登录', exact: true }).click()
+  const [response] = await Promise.all([
+    page.waitForResponse(response => response.url().includes('auth.loginWithPassword')),
+    page.getByRole('button', { name: '立即登录', exact: true }).click(),
+  ])
+  expect(response.ok()).toBe(true)
   await expect(page.getByRole('button', { name: /^用户菜单：/ })).toBeVisible()
   await expect(page.getByRole('button', { name: '登录 / 注册', exact: true })).toHaveCount(0)
 }
@@ -66,10 +73,12 @@ export async function create_story(page: Page) {
   await page.goto('/content/new/edit')
   await ready(page)
   const editor = page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true })
-  await expect(editor).toBeVisible()
+  await expect(editor).toBeVisible({ timeout: draft_timeout })
   await editor.fill(markdown(title, 'E2E initial body'))
   await page.getByRole('button', { name: '创建', exact: true }).click()
-  await expect(page).toHaveURL(/\/content\/\d+(?:\/edit)?$/)
+  await expect(page).toHaveURL(/\/content\/\d+(?:\/edit)?$/, { timeout: draft_timeout })
+  await expect(page.getByRole('button', { name: '保存', exact: true })).toBeVisible()
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
   return { title, id: /\/content\/(\d+)/.exec(page.url())![1] }
 }
 
@@ -84,6 +93,33 @@ export async function logout(page: Page) {
 
 export function markdown(title: string, body: string) {
   return `---\ntitle: ${title}\nlabel: #人上人\ntime: 2026/01/01\n---\n\n${body}\n`
+}
+
+/** Exercise the real tRPC boundary for test setup and persisted-state checks. */
+export async function content_query<T>(page: Page, operation: string, input: object): Promise<T> {
+  const response = await page.request.get(`/api/trpc/content.${operation}?input=${encodeURIComponent(JSON.stringify(input))}`)
+  expect(response.ok(), `${operation}: HTTP ${response.status()}`).toBe(true)
+  const payload = await response.json()
+  return payload.result.data as T
+}
+
+export async function content_mutation<T>(page: Page, operation: string, input: object): Promise<T> {
+  const response = await page.request.post(`/api/trpc/content.${operation}`, { data: input })
+  expect(response.ok(), `${operation}: HTTP ${response.status()}`).toBe(true)
+  const payload = await response.json()
+  return payload.result.data as T
+}
+
+export async function editor_text(page: Page) {
+  return (await page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true }).locator('.cm-line').allTextContents()).join('\n').trimEnd()
+}
+
+/** Headless Chromium keeps tabs visible; drive the document lifecycle boundary. */
+export async function set_page_visibility(page: Page, state: 'visible' | 'hidden') {
+  await page.evaluate((state) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }, state)
 }
 
 export async function local_storage(page: Page) {

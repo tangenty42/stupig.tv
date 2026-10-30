@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@server/lib/db', () => {
   const execute = async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('FROM content_story_drafts'))
+      return [[]]
     if (sql.includes('GET_LOCK'))
       return [[{ acquired: Number(state.lock) }]]
     if (sql.includes('IS_USED_LOCK'))

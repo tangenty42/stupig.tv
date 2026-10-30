@@ -12,6 +12,7 @@ import bcrypt from 'bcryptjs'
 import mysql from 'mysql2/promise'
 import { load_environment } from '../../config/lib/environment.mjs'
 import { run_migrations } from '../migration/local'
+import { start_cloud_draft_broker } from './cloud-draft-broker'
 import { e2e_target } from './e2e-target'
 
 export default async function setup(playwright: FullConfig) {
@@ -55,6 +56,8 @@ export default async function setup(playwright: FullConfig) {
     throw new Error('Browser tests require a local MQTT broker')
   config.mqtt.host = local.MQTT_HOST!
   config.mqtt.port = Number(local.MQTT_TCP_PORT)
+  config.mqtt.username = `e2e_${run}`
+  config.mqtt.password = randomUUID().repeat(2)
   config.mqtt.web.wsUrl = `ws://${config.mqtt.host}:${local.MQTT_WS_PORT}/mqtt`
   config.app.auth.jwt.secret = environment.JWT_SECRET
   config.app.otp.debug = config.app.captcha.debug = true
@@ -73,8 +76,11 @@ export default async function setup(playwright: FullConfig) {
   const admin = await mysql.createConnection({ host: config.db.host, port: config.db.port, user: 'root', password: environment.MYSQL_PASSWORD })
   let created = false
   let child: ReturnType<typeof spawn> | undefined
+  let draft_broker: Awaited<ReturnType<typeof start_cloud_draft_broker>> | undefined
   const logs: string[] = []
   const cleanup = async () => {
+    await draft_broker?.stop()
+    draft_broker = undefined
     if (child && child.exitCode === null && child.signalCode === null) {
       if (process.platform === 'win32' && child.pid)
         await promisify(execFile)('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
@@ -99,6 +105,16 @@ export default async function setup(playwright: FullConfig) {
     await admin.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
     created = true
     await run_migrations({ maintenance: true, database_config: config.db })
+    draft_broker = await start_cloud_draft_broker(directory, { username: config.mqtt.username, password: config.mqtt.password }, async (input) => {
+      const response = await fetch(`${base_url}/api/content-draft-sync/authenticate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(5000) })
+      if (! response.ok)
+        return { result: 'deny' }
+      return response.json()
+    })
+    config.mqtt.host = '127.0.0.1'
+    config.mqtt.port = draft_broker.tcp_port
+    config.mqtt.web.wsUrl = draft_broker.public_url
+    config.mqtt.web.draftWsUrl = draft_broker.private_url
     const hash = await bcrypt.hash('AaAaAaAa888', 4)
     await admin.query(`INSERT INTO \`${database}\`.users (username, phone, password_hash, is_admin) VALUES (?, ?, ?, 1), (?, ?, ?, 0)`, ['admin', '19999999999', hash, 'user', '19000000000', hash])
     await mkdir(resolve(directory, 'config'), { recursive: true })

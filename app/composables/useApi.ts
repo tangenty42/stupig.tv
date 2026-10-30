@@ -2,6 +2,7 @@ import type { AppRouter } from '@server/trpc/router'
 import type { PermissionGrant } from '@shared/permissions'
 import type { ContentStoryBody } from '@shared/types/content'
 import type { inferRouterInputs } from '@trpc/server'
+import { settings } from '@shared/settings'
 
 type RouterInputs = inferRouterInputs<AppRouter>
 type AuthInputs = RouterInputs['auth']
@@ -167,7 +168,29 @@ export function useApi() {
     },
   }
 
+  async function draft_call<T>(request: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        trpc_call(request(controller.signal)),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort()
+            reject(new Error('连接超时，已暂停编辑'))
+          }, settings.app.content.draft.requestTimeoutMs)
+        }),
+      ])
+    }
+    finally { clearTimeout(timer) }
+  }
+
   const content = {
+    create_draft: (request_id: string) => draft_call(signal => trpc.content.createDraft.mutate({ request_id }, { signal })),
+    get_draft: (input: RouterInputs['content']['getDraft']) => draft_call(signal => trpc.content.getDraft.mutate(input, { signal })),
+    list_drafts: (after = '', limit = 30) => draft_call(signal => trpc.content.listDrafts.query({ after, limit }, { signal })),
+    acquire_draft: (input: RouterInputs['content']['acquireDraft']) => draft_call(signal => trpc.content.acquireDraft.mutate(input, { signal })),
+    command_draft: (input: RouterInputs['content']['commandDraft']) => draft_call(signal => trpc.content.commandDraft.mutate(input, { signal })),
     async execute_workspace_command(payload: Parameters<typeof trpc.content.executeWorkspaceCommand.mutate>[0]) {
       return trpc_call(trpc.content.executeWorkspaceCommand.mutate(payload))
     },
@@ -180,11 +203,11 @@ export function useApi() {
 
     get_story_body,
 
-    async create_story(markdown: string) {
-      return trpc_call(trpc.content.createStory.mutate({ markdown }))
+    async create_story(markdown: string, base_title_revision: number | null, confirm_reference_history?: string) {
+      return trpc_call(trpc.content.createStory.mutate({ markdown, base_title_revision, confirm_reference_history }))
     },
 
-    async update_story(id: number, payload: { markdown: string, base_revision: number, base_namespace_revision?: number | null, base_title_revision?: number | null, confirm_reference_history?: boolean }) {
+    async update_story(id: number, payload: { markdown: string, base_revision: number, base_namespace_revision?: number | null, base_title_revision?: number | null, confirm_reference_history?: string }) {
       return trpc_call(trpc.content.updateStory.mutate({ id, ... payload }))
     },
 
@@ -220,6 +243,10 @@ export function useApi() {
     },
     async sign_upload_session_part(session_id: string, part: number, md5: string) {
       return trpc_call(trpc.content.signUploadSessionPart.mutate({ session_id, part, md5 }))
+    },
+
+    async get_delete_impact(input: { kind: 'story', id: number } | { kind: 'attachment', id: number, targets: number[] }) {
+      return trpc_call(trpc.content.getDeleteImpact.query(input))
     },
 
     async delete_story(id: number) {

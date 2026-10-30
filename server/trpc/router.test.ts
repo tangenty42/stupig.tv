@@ -5,6 +5,7 @@ import { ReferenceSafetyError } from '@server/errors/ReferenceSafetyError'
 import { public_procedure, router } from '@server/trpc/init'
 import { workspace_issue } from '@shared/content-workspace'
 import { getTRPCErrorShape, TRPCError } from '@trpc/server'
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const auth_mocks = vi.hoisted(() => ({
@@ -17,6 +18,8 @@ vi.mock('@server/services/auth-guards.service', () => auth_mocks)
 const upload_mocks = vi.hoisted(() => ({ begin_upload_session: vi.fn(), operate_upload_session: vi.fn(), sign_upload_session_part: vi.fn(), list_upload_sessions: vi.fn(), adopt_upload_session: vi.fn() }))
 vi.mock('@server/services/content/upload-api.service', () => upload_mocks)
 const workspace_mocks = vi.hoisted(() => ({ execute_workspace_command: vi.fn(), get_attachment_workspace: vi.fn() }))
+const delete_impact_mocks = vi.hoisted(() => ({ get_delete_impact: vi.fn() }))
+vi.mock('@server/services/content/delete-impact.service', () => delete_impact_mocks)
 vi.mock('@server/services/content/workspace-command.service', () => workspace_mocks)
 vi.mock('@server/services/content/attachment-workspace.service', () => workspace_mocks)
 const background_mocks = vi.hoisted(() => ({ get_background_status: vi.fn() }))
@@ -74,6 +77,14 @@ function create_event() {
 }
 
 describe('tRPC router contracts', () => {
+  it('returns an actual HTTP 503 response for service-unavailable API errors', async () => {
+    const error_router = router({ fail: public_procedure.query(() => {
+      throw new ApiError(503, 'temporarily unavailable')
+    }) })
+    const response = await fetchRequestHandler({ endpoint: '/api/trpc', req: new Request('http://localhost/api/trpc/fail'), router: error_router, createContext: () => ({ event: create_event() }) })
+    expect(response.status).toBe(503)
+    expect((await response.json()).error.data.httpStatus).toBe(503)
+  })
   it('rejects the retired Bilibili metadata endpoint', async () => {
     const caller = app_router.createCaller({ event: create_event() })
     const content = caller.content as unknown as { getBilibiliVideoCards: (input: { hrefs: string[] }) => Promise<unknown> }
@@ -179,6 +190,18 @@ describe('tRPC router contracts', () => {
     expect(upload_mocks.sign_upload_session_part).not.toHaveBeenCalled()
   })
 
+  it('authorizes delete impact previews and derives private visibility from the actor', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [] })
+    await expect(caller.content.getDeleteImpact({ kind: 'story', id: 3 })).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(delete_impact_mocks.get_delete_impact).not.toHaveBeenCalled()
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'content_manage', level: 'full' }] })
+    delete_impact_mocks.get_delete_impact.mockResolvedValue({ targets: [], sources: [] })
+    await caller.content.getDeleteImpact({ kind: 'story', id: 3 })
+    expect(delete_impact_mocks.get_delete_impact).toHaveBeenCalledWith({ kind: 'story', id: 3 }, false)
+    await expect(caller.content.getDeleteImpact({ kind: 'attachment', id: 3, targets: [] })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
   it('serves public procedures without authentication', async () => {
     const caller = app_router.createCaller({ event: create_event() })
 
@@ -226,6 +249,7 @@ describe('tRPC router contracts', () => {
     expect(shape(new ApiError(409, '整批未执行', public_data)).data.applicationError).toEqual(public_data)
     expect(shape(new ApiError(409, '上传会话已过期', { code: 'UPLOAD_SESSION_EXPIRED' })).data.applicationError).toEqual({ code: 'UPLOAD_SESSION_EXPIRED' })
     expect(shape(new ReferenceSafetyError('历史不可用', 'REF_HISTORY_UNAVAILABLE')).data.applicationError).toEqual({ code: 'REF_HISTORY_UNAVAILABLE' })
+    expect(shape(new ReferenceSafetyError('历史不可用', 'REF_HISTORY_UNAVAILABLE', 'a'.repeat(64))).data.applicationError).toEqual({ code: 'REF_HISTORY_UNAVAILABLE', details: { review_token: 'a'.repeat(64) } })
     // A lookalike internal error cannot smuggle its SQL/metadata through the formatter.
     expect(shape(Object.assign(new Error('internal'), { public_data })).data.applicationError).toBeUndefined()
     const unsafe = Object.assign(new ApiError(400, 'expected'), { public_data: { ... public_data, details: { ... public_data.details, sql: 'private SQL' } } })
@@ -242,6 +266,7 @@ describe('tRPC router contracts', () => {
     [415, 'UNSUPPORTED_MEDIA_TYPE'],
     [429, 'TOO_MANY_REQUESTS'],
     [502, 'BAD_GATEWAY'],
+    [503, 'SERVICE_UNAVAILABLE'],
   ] as const)('maps ApiError status %i to %s', async (status, code) => {
     const error_router = router({
       fail: public_procedure.query(() => {

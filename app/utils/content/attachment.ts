@@ -1,5 +1,6 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { is_encrypted_attachment } from '@shared/content-markdown'
+import { content_name_key } from '@shared/content-reference'
 
 export function attachment_is_restricted(attachment: Pick<ContentStoryAttachment, 'is_private'>) {
   return !! attachment.is_private
@@ -30,7 +31,7 @@ export function attachment_for_link<T>(attachments: ReadonlyMap<string, T>, link
 
 /** A redacted presentation belongs to this row; other attachments are independent. */
 export function redacted_version_of(attachments: ContentStoryAttachment[], file_name: string) {
-  const source = attachments.find(item => item.file_name === file_name)
+  const source = attachments.find(item => content_name_key(item.file_name) === content_name_key(file_name))
   if (source?.redacted_url && source.redacted_image)
     return { ... source, url: source.redacted_url, image: source.redacted_image, is_private: false }
   return null

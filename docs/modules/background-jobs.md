@@ -15,7 +15,7 @@
 
 六个 Nitro 插件只登记适配器，共用同一 app 作用域 runner 和 close hook。每个适配器自己的 enabled 开关、扫描批量、租约和错误恢复仍然有效。全桶对账的覆盖范围、默认节奏和查看方式见[操作手册](../operations/storage-audit.md)。
 
-引用历史清理仍由 `server/plugins/reference-journals.ts` 的独立 Nitro 定时器执行，不在上述六类适配器内。runner 的模式开关不会自动控制这项维护；规则见[草稿与引用基线](content/drafts.md)。
+引用历史在追加事务中按作用域保留最近 200 个完整批次并推进 floor，不使用后台定时器或 runner 适配器；规则见[草稿与引用基线](content/drafts.md)。
 
 ## 运行模式
 

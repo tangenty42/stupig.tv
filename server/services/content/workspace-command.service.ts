@@ -1,7 +1,7 @@
 import type { WorkspaceCommand, WorkspaceIssue, WorkspaceReport } from '@shared/content-workspace'
 import type { WorkspaceRow } from './workspace.repository'
 import { ApiError } from '@server/errors/ApiError'
-import { attachment_base_name, attachment_inherits_private, attachment_path_is_private, decrypted_attachment_name, extract_attachment_names, is_encrypted_attachment, link_file_name_byte_length, split_attachment_editable_name } from '@shared/content-markdown'
+import { attachment_base_name, attachment_inherits_private, attachment_path_is_private, decrypted_attachment_name, is_encrypted_attachment, link_file_name_byte_length, split_attachment_editable_name } from '@shared/content-markdown'
 import { attachment_name_key, resolve_workspace_name, workspace_issue } from '@shared/content-workspace'
 import { settings } from '@shared/settings'
 import { attachment_owned_object_keys } from './attachment-objects'
@@ -28,9 +28,6 @@ export async function execute_workspace_command(actor: number, command: Workspac
     const issues: WorkspaceIssue[] = []
     const report: WorkspaceReport = { succeeded: [], skipped: [], renamed: [] }
     const plans: { node: WorkspaceRow, path: string | null, parent: number, private?: boolean }[] = []
-    const [stories] = await connection.execute<WorkspaceRow[]>('SELECT markdown, cover FROM content_stories WHERE id = ?', [command.scope_id])
-    const references = new Set([... extract_attachment_names(String(stories[0]!.markdown)), String(stories[0]!.cover ?? ''), ... (command.operation === 'delete' ? command.draft_references : [])])
-    const referenced = (node: WorkspaceRow) => [... references].some(path => path === node.file_name || (node.is_folder && path.startsWith(`${node.file_name}/`)) || rows.some(folder => folder.is_folder && folder.file_name === path && node.file_name.startsWith(`${path}/`)))
     const record = (issue: WorkspaceIssue) => {
       if (command.on_error[issue.category] === 'skip')
         report.skipped.push({ target: issue.target, code: issue.code, reason: issue.reason })
@@ -100,8 +97,6 @@ export async function execute_workspace_command(actor: number, command: Workspac
       const protected_source = (id: unknown) => command.operation === 'delete' ? ids.has(Number(id)) : Number(id) === Number(node.id)
       if (reservations.some(item => protected_source(item.source_attachment_id) || protected_source(item.replacement_attachment_id) || (command.operation === 'delete' && ids.has(Number(item.target_parent_id)))))
         issue = workspace_issue(label, 'source_busy', 'SOURCE_BUSY', '目标仍有未完成上传或替换')
-      if (command.operation === 'delete' && referenced(node))
-        issue = workspace_issue(label, 'other', 'REFERENCED', '正文、封面或当前草稿仍引用此文件或目录')
       if (command.operation === 'move' && ids.has(Number(parent!.id)))
         issue = workspace_issue(label, 'other', 'MOVE_INTO_SELF', '不能移动到自身或子目录')
       if (issue) {

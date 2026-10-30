@@ -21,6 +21,16 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
   }
 }
 
+it('resolves normalized attachment and title references and retains link options', () => {
+  const file = { ... attachment('Docs/É.png', true), url: '/api/content/attachments/7?version=server-version' }
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [file], static_url: path => path, folders: () => [], folder_card_openable: () => false,
+    stories: () => [{ id: 2, title: 'Other', labels: [], desc: null, cover: null }] as never })
+  const html = md.render('![image](ATT://docs/E%CC%81.PNG?version=wrong&download=1#page2) [story](CONTENT://OTHER?view=card#top)', { images: [] })
+  expect(html).toContain('/api/content/attachments/7?version=server-version&amp;download=1#page2')
+  expect(html).not.toContain('version=wrong')
+  expect(html).toContain('/content/2?view=card#top')
+})
+
 it('uses the shared cover renderer for story references, including dimensions and LQIP', () => {
   const image = { revision: 2, width: 120, height: 80, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: false }
   const md = create_story_markdown({ story_id: () => 1, attachments: () => [], static_url: path => path, folder_card_openable: () => false,

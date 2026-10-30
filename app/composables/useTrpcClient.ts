@@ -3,7 +3,7 @@ import type { ApplicationError } from '@shared/content-reference-error'
 import type { inferRouterOutputs } from '@trpc/server'
 import { parse_application_error } from '@shared/content-reference-error'
 import { settings } from '@shared/settings'
-import { createTRPCClient, httpBatchLink } from '@trpc/client'
+import { createTRPCClient, httpBatchLink, httpLink, splitLink } from '@trpc/client'
 
 type RouterOutputs = inferRouterOutputs<AppRouter>
 interface UploadOutputByPath {
@@ -87,20 +87,33 @@ export function useTrpcClient() {
     }
   }
 
+  const transport_options = {
+    url: trpc_url,
+    headers: get_headers,
+    fetch: async (input, init) => {
+      stamp_request_activity()
+      let release = false
+      if (String(input).includes('content.commandDraft') && typeof init?.body === 'string' && new TextEncoder().encode(init.body).byteLength < 64 * 1024) {
+        try {
+          release = JSON.parse(init.body).kind === 'release'
+        }
+        catch {}
+      }
+      return globalThis.fetch(input, {
+        ... init,
+        credentials: 'include',
+        ... (release ? { keepalive: true } : {}),
+      })
+    },
+  } satisfies Parameters<typeof httpBatchLink<AppRouter>>[0]
   const client = createTRPCClient<AppRouter>({
-    links: [
-      httpBatchLink({
-        url: trpc_url,
-        headers: get_headers,
-        fetch: async (input, init) => {
-          stamp_request_activity()
-          return globalThis.fetch(input, {
-            ... init,
-            credentials: 'include',
-          })
-        },
-      }),
-    ],
+    links: [splitLink({
+      // A release must start immediately during pagehide, before timers freeze.
+      // Large final snapshots still rely on normal requests and lease expiry.
+      condition: operation => /^content\.(?:createDraft|listDrafts|getDraft|acquireDraft|commandDraft)$/.test(operation.path),
+      true: httpLink(transport_options),
+      false: httpBatchLink(transport_options),
+    })],
   })
 
   async function normalize_error(error: unknown): Promise<never> {

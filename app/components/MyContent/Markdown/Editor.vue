@@ -166,6 +166,7 @@ const props = withDefaults(defineProps<{
   attachments?: ContentStoryAttachment[]
   placeholder?: string
   readonly?: boolean
+  allowWrite?: () => boolean
   /** Known stories for `@story` completion, dead-reference linting and preview cards. */
   stories?: ContentStorySummary[]
   /** Folder paths in scope, offered alongside the attachments in the destination completion. */
@@ -277,6 +278,7 @@ function start_divider_drag(event: MouseEvent) {
 const editor = useStoryEditor({
   model, host: editor_host, preview_pane, fullscreen, mode: editor_mode,
   readonly: () => props.readonly,
+  allow_write: () => props.allowWrite?.() !== false,
   sources: { stories: () => props.stories, story_id: () => props.storyId, attachments: () => props.attachments, folders: () => props.folders },
   on_lint: items => emit('lint', items),
   on_files_pasted: (files, position) => emit('files-pasted', files, position),

@@ -12,5 +12,7 @@ export function runtime_config(): AppConfig {
   const config = JSON.parse(readFileSync(path, 'utf8')) as AppConfig
   if (! /^stupig_e2e_[a-f\d]{32}$/.test(config.db.name))
     throw new Error('E2E database identity is invalid')
+  if (! ['127.0.0.1', 'localhost'].includes(config.db.host) || ! Number.isInteger(config.db.port) || config.db.port < 1)
+    throw new Error('E2E database connection must remain on the validated local endpoint')
   return config
 }

@@ -14,6 +14,8 @@
 
 `${VAR}` 缺失会报错；`${VAR:-fallback}` 在缺失或空值时用默认值。不存在任意 env 自动覆盖任意 YAML 字段的规则。`runtime_config()` 缓存进程快照，修改后重启应用/worker。迁移只验证其需要的 DB/OSS/图片子树，不要求无关 JWT/短信参数。
 
+共享草稿的稳定时序位于 `app.content.draft`：`saveThrottleMs=1000`、`keepaliveIntervalMs=10000`、`requestTimeoutMs=5000`、`leaseMarginMs=3000`，服务端租约按 M+2T+S 推导为 23 秒；`notificationCredentialSeconds=30` 控制 MQTT 票期。schema 要求 N<M 并限制正整数上界，私有通知前缀不能被公开前缀覆盖。旧 localStorage schema／prefix／autosave 配置已退出，正文不再本地持久化。
+
 ## 环境文件选择
 
 运行时 NODE_ENV 必须为 development 或 production，对应 .env.dev / .env.prod，不读取旧 .env，也不跨环境兜底。本地工具按 `--env=dev|prod` → NODE_ENV → development 选择；消费后移除 --env，保留其他参数如 --environment。
@@ -31,6 +33,7 @@ Nuxt dev/build/preview 显式指定 --dotenv。Compose 插值单独通过 `--env
 | redis | REDIS_HOST/PORT/PASSWORD | 密码允许空，开发为空 |
 | mqtt | MQTT_HOST/TCP_PORT/USERNAME/PASSWORD | 服务端可信内网 TCP 与发布身份 |
 | mqtt.web.wsUrl | MQTT_WEB_URL；开发 MQTT_WS_PORT | 浏览器 WS/WSS 完整 URL，含 /mqtt |
+| mqtt.web.draftWsUrl | MQTT_DRAFT_WEB_URL；开发 MQTT_DRAFT_WS_PORT | 草稿授权 WS URL；省略时由公开 URL 推导同源 /mqtt-drafts，生产反代须接到专用 8086 listener |
 | oss.buckets.public/private | ALIYUN_OSS_* | public 与 aliyun.oss 指向同一新桶，提供静态 URL；private 默认 null，仅历史恢复时显式配置 |
 | aliyun.oss | ALIYUN_OSS_ACCESS_KEY_ID/SECRET | 新 Content OSS 应用身份 |
 | aliyun.esa.authKey | ALIYUN_ESA_AUTH_KEY | URL 签名/回调证明，32–128 个无空格可打印 ASCII 字符 |
@@ -41,6 +44,7 @@ Nuxt dev/build/preview 显式指定 --dotenv。Compose 插值单独通过 `--env
 | app.auth.jwt.secret | JWT_SECRET | 至少 32 字符，轮换影响既有令牌 |
 | app.otp / captcha | NUXT_OTP_DEBUG、NUXT_CAPTCHA_DEBUG | 开发默认 true；生产必须 false，loader 会拒绝生产 debug |
 | Compose | ACR_IMAGE、EXTERNAL_DOCKER_NETWORK | 镜像地址不带 tag；外部网络须存在 |
+| Compose / 发布回执 | APP_IMAGE、MQTT_IMAGE、CONTENT_DRAFT_PROTOCOL | Deploy 推送提交 SHA tag 并固定到实际 RepoDigest；cloud-v1 阻止跨回旧正文协议的自动恢复 |
 | 开发依赖 | MYSQL_DEV_ROOT_PASSWORD、PHPMYADMIN_DEV_PORT、EMQX_DEV_DASHBOARD_PORT | 本地容器和诊断 |
 | devAuthTunnel | DEV_FRP_TOKEN | 仅开发 launcher，不下发浏览器 |
 | 本地 / CI 工具 | ENV_PASSPHRASE | env 密文口令，不是生产应用参数 |

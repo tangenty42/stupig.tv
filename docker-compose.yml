@@ -9,7 +9,7 @@
 
 services:
   app:
-    image: ${ACR_IMAGE}:latest
+    image: ${APP_IMAGE:-${ACR_IMAGE}:latest}
     # 固定容器名：1panel 定时任务靠它 docker exec 跑维护脚本
     container_name: stupig-tv
     restart: unless-stopped
@@ -46,7 +46,7 @@ services:
       start_period: 120s
 
   emqx:
-    image: ${ACR_IMAGE}:mqtt
+    image: ${MQTT_IMAGE:-${ACR_IMAGE}:mqtt}
     restart: unless-stopped
     environment:
       EMQX_NODE__NAME: stupig@127.0.0.1
@@ -59,6 +59,16 @@ services:
       EMQX_AUTHENTICATION__1__BOOTSTRAP_TYPE: plain
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__NAME: sha256
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__SALT_POSITION: suffix
+      EMQX_AUTHENTICATION__2__MECHANISM: password_based
+      EMQX_AUTHENTICATION__2__BACKEND: http
+      EMQX_AUTHENTICATION__2__METHOD: post
+      EMQX_AUTHENTICATION__2__URL: http://app:${APP_PORT}/api/content-draft-sync/authenticate
+      EMQX_AUTHENTICATION__2__HEADERS: '{"content-type":"application/json"}'
+      EMQX_AUTHENTICATION__2__BODY: '{"username":"$${username}","password":"$${password}"}'
+      EMQX_AUTHENTICATION__2__REQUEST_TIMEOUT: 3s
+      EMQX_LISTENERS__WS__DRAFTS__BIND: '0.0.0.0:8086'
+      EMQX_LISTENERS__WS__DRAFTS__ENABLE_AUTHN: 'true'
+      EMQX_LISTENERS__WS__DRAFTS__ZONE: default
       EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN: 'true'
       EMQX_LISTENERS__TCP__DEFAULT__ZONE: default
       EMQX_LISTENERS__WS__DEFAULT__ENABLE_AUTHN: 'false'
@@ -73,6 +83,7 @@ services:
       EMQX_AUTHORIZATION__SOURCES__1__PATH: /opt/emqx/etc/acl.conf
     ports:
       - '127.0.0.1:${MQTT_WS_PORT:-8085}:8083'
+      - '127.0.0.1:${MQTT_DRAFT_WS_PORT:-8086}:8086'
     networks:
       - mqtt
     volumes:

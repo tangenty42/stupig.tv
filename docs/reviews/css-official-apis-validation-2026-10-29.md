@@ -2,6 +2,8 @@
 
 更新日期：2026-10-30。当前状态：**CSS 独立 PR 已从 main 拆出，Tailwind 关闭全局 selector important，使用官方主题入口与局部 `!`；Chromium 80 的真实编辑页暗色背景、管理页控件、媒体与浮层通过，现代共享表单与管理页验收通过。Segmenter、静态 Unicode 正则及窄屏修复保留。Firefox 78 编辑仍被 Web Locks 保护设为只读，草稿协议未改。尚未部署。**
 
+以上是 CSS 独立 PR 的验收状态。后续工作区已实现共享云端草稿及服务端租约，Firefox 78 编辑流程的隔离复验见[实施记录](../designs/shared-cloud-draft-implementation-2026-10-30.md)；生产切换仍待单独验收。
+
 这是[动态转换公开 API 可行性评估](css-layer-public-api-feasibility-2026-10-29.md)之后采用的路线：通过各库支持的接口定制样式，保留生产 CSS 转换与懒加载。自定义分层插件仍暂停；本路线不提供完整 layer 等价保证。旧浏览器交互与动画等价的要求保留。
 
 本文集中维护当前范围、证据索引和发布门槛；后文的隔离实验及开发接入记录保留其当时范围。

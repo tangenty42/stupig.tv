@@ -1,316 +1,276 @@
-import { story_markdown_template } from '@shared/content-markdown'
+import type { ContentDraftSnapshot, DraftCommand, DraftResult } from '@shared/types/content-draft'
 import { settings } from '@shared/settings'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
+import { useContentDraftStore } from './contentDraft'
 
-/**
- * Regression tests for the "a draft of an existing story's edit leaks into the
- * new-story draft" bug.
- *
- * The draft used to live in one global Pinia store whose storage key was derived
- * from a mutable `story_id`, while Vue mounts the INCOMING page before it
- * unmounts the OUTGOING one (vue@3.5 runtime-core `patchSuspense` -> `resolve`:
- * the new branch is patched into `suspense.hiddenContainer`, the old branch is
- * unmounted, then the new page's mount effects are flushed):
- *
- *   1. incoming page setup()           -> draft_store.initialize(...)
- *   2. outgoing page onBeforeUnmount() -> draft_store.persist_now()
- *   3. incoming page onMounted()       -> read_persisted() + restore()
- *
- * Any async continuation still in flight on the OUTGOING page (the
- * `content_story` sync subscriber -> mark_saved, do_save completing, attachment
- * ops rewriting markdown) therefore ran after step 1 and wrote the old story's
- * markdown through the incoming page's key.
- *
- * The store is now instantiated per edit target, so each of those steps can only
- * touch the instance that owns it. Every test below drives two page instances
- * through that real ordering.
- */
-
-const DRAFT_PREFIX = settings.app.content.draft.storagePrefix
-const SCHEMA_VERSION = settings.app.content.draft.schemaVersion
-const AUTOSAVE_DELAY_MS = settings.app.content.draft.autosaveDelayMs
-const STORY_ID = 24
-const STORY_KEY = `${DRAFT_PREFIX}${STORY_ID}`
-const NEW_KEY = `${DRAFT_PREFIX}new`
-
-const STORY_24_MARKDOWN = [
-  '---',
-  'title: 币战·三国',
-  `label: ${'#人上人'} 桌游`,
-  'time: 2026/8/23',
-  '---',
-  '',
-  '《币战·三国》大体上以《币战·经典》的『各自为战』模式为基础~',
-  '',
-].join('\n')
-const NEW_TEMPLATE = story_markdown_template('2026/9/14')
-
-const mocks = vi.hoisted(() => {
-  const storage = new Map<string, string>()
-  return {
-    storage,
-    localStorage: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => void storage.set(key, value),
-      removeItem: (key: string) => void storage.delete(key),
-    },
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
+}
+function head(overrides: Partial<ContentDraftSnapshot> = {}): ContentDraftSnapshot {
+  return { id: 'a'.repeat(32), story_id: 7, markdown: 'main', draft_revision: 1, namespace_revision: 0, title_revision: 0,
+    published_main_revision: 1, unpublished_changes: false, lease_epoch: 0, occupied: false, owned: false, lease_remaining_ms: 23000,
+    updated_at: '2026-10-30T00:00:00Z', channel: 'content_draft:opaque', ... overrides }
+}
+const stores: ReturnType<typeof useContentDraftStore>[] = []
+async function fixture() {
+  let snapshot = head()
+  const get = vi.fn(async () => ({ snapshot: { ... snapshot } }))
+  const acquire = vi.fn(async (_input: { id: string, expected_epoch: number, page_id: string, token: string }) => {
+    snapshot = { ... snapshot, owned: true, occupied: true, lease_epoch: 1 }
+    return { snapshot: { ... snapshot } }
+  })
+  const command = vi.fn(async (input: DraftCommand): Promise<DraftResult> => {
+    snapshot = { ... snapshot, ... (input.markdown === undefined ? {} : { markdown: input.markdown, draft_revision: snapshot.draft_revision + 1, unpublished_changes: true }),
+      ... (input.kind === 'release' ? { owned: false, occupied: false } : {}), ... (input.kind === 'publish' ? { unpublished_changes: false } : {}) }
+    return { snapshot: { ... snapshot }, receipt: { seq: input.seq, kind: input.kind, ok: true } }
+  })
+  const rewrite = vi.fn(async (_id: number, input: { markdown: string }) => ({ markdown: input.markdown, changes: [], diagnostics: [], namespace_revision: snapshot.namespace_revision, title_revision: snapshot.title_revision,
+    base_namespace_revision: snapshot.namespace_revision, base_title_revision: snapshot.title_revision, baseline_unavailable: { namespace: false, title: false } }))
+  const store = useContentDraftStore('a'.repeat(32))
+  stores.push(store)
+  const api = { get, acquire, command, rewrite }
+  const owner = store.configure(api, () => true)
+  store.set_cycle_trigger(async () => {})
+  await store.open({ id: snapshot.id })
+  store.set_visible(true)
+  await store.cycle()
+  return { store, api, owner, head: () => snapshot, change: (value: Partial<ContentDraftSnapshot>) => {
+    snapshot = { ... snapshot, ... value }
+  } }
+}
+beforeEach(() => {
+  setActivePinia(createPinia())
+  vi.useFakeTimers()
+  for (const [name, value] of Object.entries({ ref, computed, watch, shallowRef })) {
+    vi.stubGlobal(name, value)
   }
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(() => {
+      throw new Error('Must not read local drafts')
+    }),
+    setItem: vi.fn(() => {
+      throw new Error('Must not persist drafts')
+    }),
+    removeItem: vi.fn(() => {
+      throw new Error('User owns legacy cleanup')
+    }),
+  })
+})
+afterEach(() => {
+  for (const store of stores.splice(0)) store.clear()
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
-vi.stubGlobal('localStorage', mocks.localStorage)
-// The store relies on Nuxt auto-imports; in a plain Node test they are globals.
-vi.stubGlobal('ref', ref)
-vi.stubGlobal('computed', computed)
-vi.stubGlobal('watch', watch)
-
-const { useContentDraftStore } = await import('~/stores/contentDraft')
-
-interface StoredDraft {
-  schema_version: number
-  story_id: number | null
-  markdown: string
-  base_revision: number | null
-  saved_at: string
-}
-
-function stored(key: string) {
-  const raw = mocks.storage.get(key)
-  return raw ? JSON.parse(raw) as StoredDraft : null
-}
-
-function seed_draft(key: string, draft: Partial<StoredDraft>) {
-  mocks.storage.set(key, JSON.stringify({
-    schema_version: SCHEMA_VERSION,
-    story_id: null,
-    markdown: '',
-    base_revision: null,
-    saved_at: '2026-09-14T08:31:14.548Z',
-    ... draft,
-  }))
-}
-
-/** One page instance for one edit target, exactly as `setup()` creates it. */
-function open_page(target: number | null) {
-  return useContentDraftStore(target)
-}
-
-describe('content draft store: per-page draft ownership', () => {
-  /** Let the `markdown` watcher flush (microtask) and the autosave timer fire. */
-  async function flush_autosave() {
-    await nextTick()
-    vi.advanceTimersByTime(AUTOSAVE_DELAY_MS + 1)
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    mocks.storage.clear()
-    setActivePinia(createPinia())
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('control: a create page that only edits itself persists and restores its own draft', async () => {
-    const page = open_page(null)
-    page.initialize(NEW_TEMPLATE, null)
-    page.markdown = `${NEW_TEMPLATE}新建档案的正文\n`
-    await flush_autosave()
-
-    expect(stored(NEW_KEY)).toMatchObject({ story_id: null, markdown: `${NEW_TEMPLATE}新建档案的正文\n` })
-    expect(stored(STORY_KEY)).toBeNull()
-
-    setActivePinia(createPinia())
-    const reopened = open_page(null)
-    expect(reopened.read_persisted()?.markdown).toBe(`${NEW_TEMPLATE}新建档案的正文\n`)
-  })
-
-  it('rejects a record whose story_id does not match the page target', () => {
-    seed_draft(NEW_KEY, { story_id: STORY_ID, markdown: STORY_24_MARKDOWN, base_revision: 6 })
-
-    expect(open_page(null).read_persisted()).toBeNull()
-    expect(mocks.storage.has(NEW_KEY)).toBe(false)
-  })
-
-  it('upgrades a v2 draft without losing content, saved time or revision', () => {
-    seed_draft(STORY_KEY, { schema_version: 2, story_id: STORY_ID, markdown: `${STORY_24_MARKDOWN}[](file.pdf) [](@其他档案)`, base_revision: 6 })
-    const page = open_page(STORY_ID)
-    const recovered = page.read_persisted()!
-    expect(recovered).toMatchObject({
-      schema_version: 3, story_id: STORY_ID, base_revision: 6, base_namespace_revision: null, base_title_revision: null,
-      markdown: `${STORY_24_MARKDOWN}[](att://file.pdf) [](content://其他档案)`, saved_at: '2026-09-14T08:31:14.548Z',
+describe('shared cloud draft session', () => {
+  it('recovers a lost acquire response using the same page, token and expected epoch', async () => {
+    const f = await fixture()
+    f.store.configure(f.api, () => true)
+    f.change({ owned: false, occupied: false, lease_epoch: 1 })
+    await f.store.open({ id: f.head().id })
+    f.api.acquire.mockImplementationOnce(async () => {
+      f.change({ occupied: true, lease_epoch: 2 })
+      throw new Error('Acquire response lost')
     })
-    expect(page.read_persisted()).toEqual(recovered)
-    page.restore(recovered, STORY_24_MARKDOWN)
-    expect(page.markdown).toBe(recovered.markdown)
-    expect(page.base_namespace_revision).toBeNull()
-    expect(page.base_title_revision).toBeNull()
+    f.store.set_visible(true)
+    await expect(f.store.cycle()).rejects.toThrow('Acquire response lost')
+    const first = f.api.acquire.mock.calls.at(- 1)
+    f.api.acquire.mockImplementationOnce(async () => ({ snapshot: head({ owned: true, occupied: true, lease_epoch: 2 }) }))
+    await f.store.cycle()
+    expect(f.api.acquire.mock.calls.at(- 1)).toEqual(first)
+    expect(f.store.writable).toBe(true)
   })
-
-  it('rejects the leak fingerprint: a create draft carrying a database revision', () => {
-    // The contaminated record from DevTools: `story_id: null` (written while the
-    // create page was current) together with a real base revision (the previous
-    // story's). No create page can produce that pair, so it is dropped on read.
-    seed_draft(NEW_KEY, { story_id: null, base_revision: 642, markdown: STORY_24_MARKDOWN })
-
-    expect(open_page(null).read_persisted()).toBeNull()
-    expect(mocks.storage.has(NEW_KEY)).toBe(false)
+  it('keeps trailing input while continuous typing is throttled and refresh notifications cannot bypass N', async () => {
+    const f = await fixture()
+    f.store.set_cycle_trigger(() => f.store.cycle())
+    for (let index = 0; index < 12; index ++) {
+      f.store.markdown = `input${index}`
+      await f.store.cycle()
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    expect(f.api.command.mock.calls.filter(([input]) => input.markdown !== undefined)).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.api.command.mock.calls.filter(([input]) => input.markdown !== undefined)).toHaveLength(3)
+    expect(f.api.command.mock.calls.at(- 1)![0].markdown).toBe('input11')
   })
-
-  it('edit -> create: the outgoing page\'s teardown leaves the incoming draft and state alone', async () => {
-    seed_draft(NEW_KEY, { markdown: '上次没写完的新档案' })
-    const edit_page = open_page(STORY_ID)
-    edit_page.initialize(STORY_24_MARKDOWN, 6)
-    edit_page.markdown = `${STORY_24_MARKDOWN}\n最后一行没保存`
-
-    // 1. incoming page setup()
-    const create_page = open_page(null)
-    create_page.initialize(NEW_TEMPLATE, null)
-    expect(create_page.markdown).toBe(NEW_TEMPLATE)
-
-    // 2. outgoing page onBeforeUnmount()
-    edit_page.persist_now()
-
-    // 3. incoming page onMounted()
-    const draft = create_page.read_persisted()
-    expect(draft?.markdown).toBe('上次没写完的新档案')
-    create_page.restore(draft!, NEW_TEMPLATE)
-    await flush_autosave()
-
-    expect(create_page.markdown).toBe('上次没写完的新档案')
-    expect(create_page.base_revision).toBeNull()
-    expect(stored(NEW_KEY)?.markdown).toBe('上次没写完的新档案')
-    // The outgoing page's own last edits survived its teardown.
-    expect(stored(STORY_KEY)?.markdown).toContain('最后一行没保存')
+  it('starts read only, acquires a server lease, and never touches local persistence', async () => {
+    const f = await fixture()
+    expect(f.store.writable).toBe(true)
+    expect(f.api.acquire).toHaveBeenCalledOnce()
+    f.store.markdown = 'input'
+    await f.store.cycle()
+    expect(f.store.markdown).toBe('input')
+    expect(localStorage.getItem).not.toHaveBeenCalled()
+    expect(localStorage.setItem).not.toHaveBeenCalled()
+    expect(localStorage.removeItem).not.toHaveBeenCalled()
   })
-
-  it('persists accepted reference baselines and does not advance them on an unrelated body refresh', async () => {
-    const page = useContentDraftStore(STORY_ID)
-    page.initialize(STORY_24_MARKDOWN, 6, 10, 20)
-    page.markdown += '草稿'
-    page.advance_base(STORY_24_MARKDOWN, 7)
-    page.persist_now()
-    expect(JSON.parse(mocks.storage.get(STORY_KEY)!)).toMatchObject({ base_revision: 7, base_namespace_revision: 10, base_title_revision: 20 })
-    page.mark_saved(STORY_24_MARKDOWN, 8, 11, 21)
-    expect(page.base_namespace_revision).toBe(11)
-    expect(page.base_title_revision).toBe(21)
-    expect(mocks.storage.has(STORY_KEY)).toBe(false)
+  it('keeps ordinary relative links and incomplete private tags verbatim during autosave', async () => {
+    const f = await fixture()
+    f.store.markdown = '[file](relative.pdf) <good>unfinished'
+    await f.store.cycle()
+    expect(f.api.command.mock.calls[0]![0].markdown).toBe('[file](relative.pdf) <good>unfinished')
   })
-
-  it('edit -> create: a late mark_saved() from the outgoing page stays on the outgoing page', async () => {
-    const edit_page = open_page(STORY_ID)
-    edit_page.initialize(STORY_24_MARKDOWN, 6)
-
-    const create_page = open_page(null)
-    create_page.initialize(NEW_TEMPLATE, null)
-
-    // The outgoing page's `content_story` subscriber (or do_save) completing
-    // after the create page took over: `await fetch_story()` then mark_saved().
-    edit_page.mark_saved(`${STORY_24_MARKDOWN}\n别人刚保存的版本`, 7)
-
-    expect(create_page.markdown).toBe(NEW_TEMPLATE)
-    expect(create_page.base_revision).toBeNull()
-    expect(create_page.dirty).toBe(false)
-
-    await flush_autosave()
-    expect(stored(NEW_KEY)).toBeNull()
+  it('only publishes after the latest input has been acknowledged', async () => {
+    const f = await fixture()
+    f.store.markdown = 'new text'
+    await f.store.action('publish')
+    expect(f.api.command.mock.calls.map(([input]) => input.kind)).toEqual(['sync', 'publish'])
+    expect(f.api.command.mock.calls[1]![0]).toMatchObject({ expected_revision: 2, seq: 2 })
   })
-
-  it('edit -> create: a late markdown rewrite from the outgoing page saves under its own key', async () => {
-    const edit_page = open_page(STORY_ID)
-    edit_page.initialize(STORY_24_MARKDOWN, 6)
-
-    const create_page = open_page(null)
-    create_page.initialize(NEW_TEMPLATE, null)
-
-    // In-flight attachment work on the outgoing page (move/rename rewriting
-    // references, an upload inserting its reference, the old editor instance
-    // pushing its document back through v-model).
-    edit_page.markdown = `${STORY_24_MARKDOWN}\n![](/content/${STORY_ID}/cover.png)`
-    await flush_autosave()
-
-    expect(stored(NEW_KEY)).toBeNull()
-    expect(stored(STORY_KEY)?.markdown).toContain(`/content/${STORY_ID}/cover.png`)
+  it('reports an action complete only from its matching successful receipt', async () => {
+    const f = await fixture()
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ lease_epoch: 2, occupied: true }), receipt: { seq: 1, kind: 'publish', ok: false, error: 'lease_lost' } })
+    expect(await f.store.action('publish')).toBe(false)
+    expect(f.store.writable).toBe(false)
   })
-
-  it('edit -> create: the incoming page\'s initialize() no longer cancels the outgoing autosave', async () => {
-    const edit_page = open_page(STORY_ID)
-    edit_page.initialize(STORY_24_MARKDOWN, 6)
-    edit_page.markdown = `${STORY_24_MARKDOWN}\n没来得及保存的最后一行`
-    await nextTick()
-    expect(mocks.storage.has(STORY_KEY)).toBe(false)
-
-    const create_page = open_page(null)
-    create_page.initialize(NEW_TEMPLATE, null)
-    vi.advanceTimersByTime(AUTOSAVE_DELAY_MS + 1)
-
-    expect(stored(STORY_KEY)?.markdown).toContain('没来得及保存的最后一行')
+  it('recognizes an absent target after a committed delete reply was lost', async () => {
+    const f = await fixture()
+    f.api.command.mockRejectedValueOnce(Object.assign(new Error('Draft no longer exists'), { status: 404 }))
+    expect(await f.store.action('delete')).toBe(true)
+    expect(f.store.cloud).toBeNull()
+    expect(f.store.markdown).toBe('')
   })
-
-  it('create -> edit: a discarded create page cannot write anything on teardown', async () => {
-    const create_page = open_page(null)
-    create_page.initialize(NEW_TEMPLATE, null)
-    create_page.markdown = `${NEW_TEMPLATE}刚创建的内容\n`
-
-    // do_create() -> discard() then navigateTo(`/content/${result.id}/edit`)
-    create_page.discard()
-    const edit_page = open_page(99)
-    edit_page.initialize('新故事', 1)
-
-    create_page.persist_now()
-
-    expect(mocks.storage.has(NEW_KEY)).toBe(false)
-    expect(mocks.storage.has(`${DRAFT_PREFIX}99`)).toBe(false)
+  it('retains input typed after a save snapshot was sent', async () => {
+    const f = await fixture()
+    const response = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(response.promise)
+    f.store.markdown = 'sent'
+    const pending = f.store.cycle()
+    f.store.markdown = 'sent and more'
+    response.resolve({ snapshot: head({ owned: true, occupied: true, lease_epoch: 1, markdown: 'sent', draft_revision: 2 }), receipt: { kind: 'sync', seq: 1, ok: true } })
+    await pending
+    expect(f.store.markdown).toBe('sent and more')
+    expect(f.store.dirty).toBe(true)
   })
-
-  it('edit -> edit: each story keeps its own draft', async () => {
-    const story_24_page = open_page(STORY_ID)
-    story_24_page.initialize(STORY_24_MARKDOWN, 6)
-    story_24_page.markdown = `${STORY_24_MARKDOWN}\n24 的未保存修改`
-
-    const story_25_page = open_page(25)
-    story_25_page.initialize('故事 25 的原文', 3)
-    story_25_page.markdown = '25 的未保存修改'
-
-    story_24_page.persist_now()
-    story_25_page.persist_now()
-
-    expect(stored(STORY_KEY)?.markdown).toContain('24 的未保存修改')
-    expect(stored(`${DRAFT_PREFIX}25`)?.markdown).toBe('25 的未保存修改')
+  it('retries a lost response with the exact sequence and original payload before new text', async () => {
+    const f = await fixture()
+    f.api.command.mockRejectedValueOnce(new Error('Response lost'))
+    f.store.markdown = 'first'
+    await expect(f.store.cycle()).rejects.toThrow('Response lost')
+    expect(f.store.writable).toBe(false)
+    f.store.markdown = 'first plus newer input'
+    await f.store.cycle()
+    expect(f.api.command.mock.calls[1]![0]).toEqual(f.api.command.mock.calls[0]![0])
+    expect(f.store.markdown).toBe('first plus newer input')
+    await vi.advanceTimersByTimeAsync(settings.app.content.draft.saveThrottleMs)
+    await f.store.cycle()
+    expect(f.api.command.mock.calls[2]![0]).toMatchObject({ seq: 2, markdown: 'first plus newer input' })
   })
-
-  it('preserves a persisted private draft while a denied editor is suspended', async () => {
-    const page = open_page(STORY_ID)
-    page.initialize(STORY_24_MARKDOWN, 6, 2, 4)
-    page.markdown = `${STORY_24_MARKDOWN}\nprivate unsaved edit`
-    page.persist_now()
-    const original = mocks.storage.get(STORY_KEY)
-    page.initialize('redacted body', 6, 2, 4)
-    page.suspend()
-    await nextTick()
-    vi.advanceTimersByTime(AUTOSAVE_DELAY_MS + 1)
-    page.persist_now()
-    expect(mocks.storage.get(STORY_KEY)).toBe(original)
-    expect(page.initialized).toBe(false)
-    const draft = page.read_persisted()!
-    page.initialize(STORY_24_MARKDOWN, 6, 2, 4)
-    page.restore(draft, STORY_24_MARKDOWN)
-    expect(page.markdown).toContain('private unsaved edit')
-    expect(page.base_namespace_revision).toBe(2)
-    expect(page.dirty).toBe(true)
+  it('blocks old callbacks when the same store is reopened', async () => {
+    const f = await fixture()
+    const response = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(response.promise)
+    f.store.markdown = 'old input'
+    const old = f.store.cycle()
+    f.store.configure(f.api, () => true)
+    response.resolve({ snapshot: head({ owned: true, markdown: 'old result' }), receipt: { seq: 1, kind: 'sync', ok: true } })
+    await old
+    expect(f.store.markdown).toBe('')
+    expect(f.store.cloud).toBeNull()
+    expect(f.store.owns(f.owner)).toBe(false)
   })
-
-  it('an instance only ever writes its own key', async () => {
-    const edit_page = open_page(STORY_ID)
-    edit_page.initialize(STORY_24_MARKDOWN, 6)
-    edit_page.markdown = `${STORY_24_MARKDOWN}\n编辑`
-    const create_page = open_page(null)
-    create_page.initialize(NEW_TEMPLATE, null)
-    create_page.markdown = `${NEW_TEMPLATE}新建`
-    await flush_autosave()
-
-    expect([... mocks.storage.keys()].sort()).toEqual([NEW_KEY, STORY_KEY].sort())
+  it('moves unconfirmed input to a read only recovery area after takeover', async () => {
+    const f = await fixture()
+    f.store.markdown = 'unconfirmed'
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ markdown: 'other editor', lease_epoch: 2, occupied: true }), receipt: { seq: 1, kind: 'sync', ok: false, error: 'lease_lost' } })
+    await f.store.cycle()
+    expect(f.store.recovery).toBe('unconfirmed')
+    expect(f.store.markdown).toBe('other editor')
+    expect(f.store.writable).toBe(false)
+    f.store.clear()
+    expect(f.store.recovery).toBe('')
+  })
+  it('preserves a reverted input if editing rights are lost before its pending save resolves', async () => {
+    const f = await fixture()
+    const response = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(response.promise)
+    f.store.markdown = 'sent'
+    const saving = f.store.cycle()
+    f.store.markdown = 'main'
+    response.resolve({ snapshot: head({ markdown: 'other editor', lease_epoch: 2, occupied: true }), receipt: { seq: 1, kind: 'sync', ok: false, error: 'lease_lost' } })
+    await saving
+    expect(f.store.recovery).toBe('main')
+    expect(f.store.markdown).toBe('other editor')
+    expect(f.store.writable).toBe(false)
+  })
+  it('does not let a late upload insert after the same page acquires a new epoch', async () => {
+    const f = await fixture()
+    const may_insert = f.store.capture_write_permit()
+    expect(may_insert()).toBe(true)
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ lease_epoch: 2, occupied: true }), receipt: { seq: 1, kind: 'sync', ok: false, error: 'lease_lost' } })
+    await f.store.cycle()
+    expect(may_insert()).toBe(false)
+    f.change({ lease_epoch: 2, occupied: false, owned: false })
+    f.api.acquire.mockResolvedValueOnce({ snapshot: head({ lease_epoch: 3, owned: true, occupied: true }) })
+    await f.store.cycle()
+    expect(f.store.can_write_now()).toBe(true)
+    expect(may_insert()).toBe(false)
+    expect(f.store.capture_write_permit()()).toBe(true)
+  })
+  it('does not overwrite review-required input or automatically retry the rejected text', async () => {
+    const f = await fixture()
+    f.store.markdown = 'needs review'
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ owned: true, occupied: true, lease_epoch: 1 }), receipt: { seq: 1, kind: 'sync', ok: false, error: 'reference_review_required', review_token: 'e'.repeat(64) } })
+    await f.store.cycle()
+    expect(f.store.markdown).toBe('needs review')
+    expect(f.store.review?.text).toBe('needs review')
+    await f.store.cycle()
+    expect(f.api.command.mock.calls[1]![0].markdown).toBeUndefined()
+  })
+  it('lets a recovered lease confirm history review even when local input cannot be replayed', async () => {
+    const f = await fixture()
+    f.store.markdown = 'old in-flight input'
+    f.api.command.mockRejectedValueOnce(new Error('Disconnected'))
+    await expect(f.store.cycle()).rejects.toThrow('Disconnected')
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ owned: true, occupied: true, lease_epoch: 1, namespace_revision: 300 }), receipt: {
+      seq: 1, kind: 'sync', ok: false, error: 'reference_review_required', review_token: 'e'.repeat(64),
+    } })
+    f.api.rewrite.mockResolvedValueOnce({ markdown: f.store.markdown, changes: [], diagnostics: [], namespace_revision: 300, title_revision: 0,
+      base_namespace_revision: 0, base_title_revision: 0, baseline_unavailable: { namespace: true, title: false } })
+    await f.store.cycle()
+    expect(f.store.writable).toBe(true)
+    expect(f.store.markdown).toBe('old in-flight input')
+    expect(f.store.review).not.toBeNull()
+    await f.store.confirm_review()
+    expect(f.api.command.mock.calls.at(- 1)![0]).toMatchObject({ seq: 2, confirm_reference_history: 'e'.repeat(64) })
+  })
+  it('reuses a review only for the exact text and sends a new command sequence', async () => {
+    const f = await fixture()
+    f.store.markdown = 'needs review'
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ owned: true, occupied: true, lease_epoch: 1 }), receipt: { seq: 1, kind: 'sync', ok: false, error: 'reference_review_required', review_token: 'e'.repeat(64) } })
+    await f.store.cycle()
+    await f.store.confirm_review()
+    expect(f.api.command.mock.calls[1]![0]).toMatchObject({ seq: 2, markdown: 'needs review', confirm_reference_history: 'e'.repeat(64) })
+  })
+  it('closes input before sending the final snapshot and release together', async () => {
+    const f = await fixture()
+    f.store.markdown = 'last input'
+    f.store.set_visible(false)
+    expect(f.store.writable).toBe(false)
+    await f.store.cycle()
+    expect(f.api.command.mock.calls.at(- 1)![0]).toMatchObject({ kind: 'release', markdown: 'last input' })
+  })
+  it('stops editing at the conservative deadline even with no network event', async () => {
+    const f = await fixture()
+    await vi.advanceTimersByTimeAsync(23000 - settings.app.content.draft.leaseMarginMs + 1)
+    expect(f.store.check_writable()).toBe(false)
+  })
+  it('merges simultaneous refreshes into one request', async () => {
+    const f = await fixture()
+    const response = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(response.promise)
+    const first = f.store.cycle()
+    const second = f.store.cycle()
+    expect(f.api.command).toHaveBeenCalledOnce()
+    response.resolve({ snapshot: head({ owned: true, occupied: true, lease_epoch: 1 }), receipt: { seq: 1, kind: 'sync', ok: true } })
+    await Promise.all([first, second])
   })
 })

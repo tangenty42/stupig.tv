@@ -1,6 +1,6 @@
 import type { StoryMarkdownPlugin } from './types'
 import { folder_images } from '@shared/content-markdown'
-import { format_attachment_ref } from '@shared/content-reference'
+import { content_ref_suffix, format_attachment_ref } from '@shared/content-reference'
 import { local_file_name } from './links'
 
 /**
@@ -27,7 +27,7 @@ export const folder_images_plugin: StoryMarkdownPlugin = (md, ctx) => {
     function image_token(source: InstanceType<typeof state.Token>, file_name: string) {
       const token = new state.Token('image', 'img', 0)
       token.attrs = source.attrs?.map(attribute => [... attribute]) ?? []
-      token.attrSet('src', format_attachment_ref(file_name))
+      token.attrSet('src', format_attachment_ref(file_name) + content_ref_suffix(source.attrGet('src') ?? ''))
       token.children = source.children ? [... source.children] : []
       token.content = source.content
       return token

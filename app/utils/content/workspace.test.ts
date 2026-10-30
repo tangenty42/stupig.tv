@@ -3,6 +3,7 @@ import type { ContentUploadReservation, ContentUploadSession } from '@shared/typ
 import type { WorkspaceListRow } from './workspace'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
+import { find_delete_references } from '@shared/content-delete-impact'
 import { decrypted_attachment_name, split_attachment_editable_name } from '@shared/content-markdown'
 import ts from 'typescript'
 import { expect, it, vi } from 'vitest'
@@ -18,7 +19,7 @@ it.each([true, false])('protects both subtrees when folder privacy changes to %s
 it('allows folder privacy through the normal capability and blocks descendant upload reservations', () => {
   const node: ContentWorkspaceNode = { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v' }
   const row = { key: 'folder', name: node.name, path: node.path, parent_id: 1, depth: 0, node }
-  const options = { readonly: false, can_private: true, pending: false, references: [] }
+  const options = { readonly: false, can_private: true, pending: false }
   expect(workspace_capabilities(row, options)).toMatchObject({ private: true, reasons: { private: [] } })
   expect(workspace_capabilities(row, { ... options, can_private: false })).toMatchObject({ private: false, reasons: { private: ['没有机密附件权限'] } })
   const reservation: ContentUploadReservation = { id: 'child-upload', parent_id: 2, path: 'docs/new.txt' }
@@ -35,7 +36,7 @@ it('keeps an inherited private file rename at its actual path without adding an 
   const footprint = workspace_command_footprint({ operation: 'rename', target: { id: 3, version: 'v' }, name: 'new.png' }, nodes)
   expect(footprint.paths).toEqual([{ path: 'docs.good/photo.png', subtree: false }, { path: 'docs.good/new.png', subtree: false }])
   const folder = nodes[0]!
-  expect(workspace_capabilities({ key: 'folder', path: folder.path, name: folder.name, parent_id: 1, depth: 0, node: folder }, { readonly: false, can_private: false, pending: false, references: [] })).toMatchObject({ rename: false, move: false, delete: false })
+  expect(workspace_capabilities({ key: 'folder', path: folder.path, name: folder.name, parent_id: 1, depth: 0, node: folder }, { readonly: false, can_private: false, pending: false })).toMatchObject({ rename: false, move: false, delete: false })
 })
 
 it('limits upload reservation fences to source files, target names and deletion of containing folders', () => {
@@ -48,7 +49,7 @@ it('limits upload reservation fences to source files, target names and deletion 
   const reservations: ContentUploadReservation[] = [{ id: 'foreign-upload', parent_id: 2, path: 'Docs/NEW.png', source_id: 3 }]
   const cap = (id: number) => {
     const node = nodes.find(node => node.id === id)!
-    return workspace_capabilities({ key: `node:${id}`, name: node.name, path: node.path, node, parent_id: node.parent_id, depth: 0 }, { readonly: false, can_private: true, pending: false, references: [], nodes, reservations })
+    return workspace_capabilities({ key: `node:${id}`, name: node.name, path: node.path, node, parent_id: node.parent_id, depth: 0 }, { readonly: false, can_private: true, pending: false, nodes, reservations })
   }
   expect(cap(3)).toMatchObject({ rename: false, move: false, delete: false, replace: false })
   expect(cap(2)).toMatchObject({ rename: true, move: true, delete: false })
@@ -125,8 +126,8 @@ it('merges a published create into its exclusively reserved target while complet
 
 it('uses the same capability projection for menu, selection and drag fences', () => {
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: 'a.txt', path: 'a.txt', node: { id: 3, parent_id: 1, name: 'a.txt', path: 'a.txt', kind: 'file' as const, version: 'v1' } }
-  expect(workspace_capabilities(row, { readonly: false, can_private: true, pending: false, references: ['a.txt'] })).toMatchObject({ delete: false, rename: true, replace: true })
-  expect(workspace_capabilities({ ... row, session: { id: 'pending' } as ContentUploadSession }, { readonly: false, can_private: true, pending: false, references: [] })).toMatchObject({ delete: false, rename: false, replace: false })
+  expect(workspace_capabilities(row, { readonly: false, can_private: true, pending: false })).toMatchObject({ delete: true, rename: true, replace: true })
+  expect(workspace_capabilities({ ... row, session: { id: 'pending' } as ContentUploadSession }, { readonly: false, can_private: true, pending: false })).toMatchObject({ delete: false, rename: false, replace: false })
 })
 
 it('opens the public variant without granting any private owner mutation', () => {
@@ -134,17 +135,18 @@ it('opens the public variant without granting any private owner mutation', () =>
     url: null, is_image: true, is_private: true, is_encrypted: false, has_redacted: true, is_redacted_view: true, redacted_url: '/read?role=redacted' }
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file' as const, version: 'v1', attachment } }
-  const options = { readonly: false, can_private: false, pending: false, references: [] }
+  const options = { readonly: false, can_private: false, pending: false }
   const cap = workspace_capabilities(row, options)
   expect(cap).toMatchObject({ open: true, preview: false, preview_redacted: true, rename: false, replace: false, delete: false, image_edit: false, private: false })
   expect(cap.reasons.open).toEqual([])
   expect(workspace_capabilities({ ... row, node: { ... row.node, attachment: { ... attachment, redacted_url: null } } }, options).open).toBe(false)
 })
 
-it('keeps reference restrictions specific to deletion and reports independent redaction restrictions', () => {
+it('allows deleting referenced targets and reports independent redaction restrictions', () => {
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: 'a.txt', path: 'a.txt', node: { id: 3, parent_id: 1, name: 'a.txt', path: 'a.txt', kind: 'file' as const, version: 'v1' } }
-  const result = workspace_capabilities(row, { readonly: false, can_private: true, pending: false, references: ['a.txt'] })
-  expect(result.reasons.delete).toEqual(['当前草稿仍有引用'])
+  expect(find_delete_references('[](att://a.txt)', [{ path: row.path, kind: 'file' }])).toHaveLength(1)
+  const result = workspace_capabilities(row, { readonly: false, can_private: true, pending: false })
+  expect(result.reasons.delete).toEqual([])
   expect(result.reasons.rename).toEqual([])
   expect(result.reasons.replace).toEqual([])
   expect(result.reasons.redact).toEqual(['仅支持机密附件', '格式不支持'])
@@ -154,7 +156,7 @@ it('keeps reference restrictions specific to deletion and reports independent re
 it('reports permission, pending and unfinished session reasons without changing capability rules', () => {
   const file = { file_name: 'a.png.good', mime_type: 'image/png', file_size: 1, is_image: true, version: 'v1', url: null, is_private: true, is_encrypted: false }
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: file.file_name, path: file.file_name, node: { id: 3, parent_id: 1, name: file.file_name, path: file.file_name, kind: 'file' as const, version: 'v1', attachment: file }, session: { id: 'pending' } as ContentUploadSession }
-  const result = workspace_capabilities(row, { readonly: false, can_private: false, pending: true, references: [] })
+  const result = workspace_capabilities(row, { readonly: false, can_private: false, pending: true })
   expect(result).toMatchObject({ open: false, rename: false, replace: false, private: false, redact: false })
   expect(result.reasons.rename).toEqual(['正在提交操作', '没有机密附件权限', '上传会话尚未结束'])
   expect(result.reasons.open).toEqual(['没有机密附件权限'])
@@ -166,7 +168,7 @@ it.each([true, false])('reports only the root read restriction when private perm
     url: null, is_image: true, is_private: true, is_encrypted: false }
   const row: WorkspaceListRow = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file', version: 'v1', attachment } }
-  const cap = workspace_capabilities(row, { readonly: true, can_private, pending: false, references: [] })
+  const cap = workspace_capabilities(row, { readonly: true, can_private, pending: false })
   const reasons = [can_private ? '附件暂不可读取' : '没有机密附件权限']
   expect(cap.open).toBe(false)
   expect(cap.preview).toBe(false)
@@ -178,7 +180,7 @@ it.each(['image/gif', 'image/svg+xml', 'image/tiff', 'image/x-other'])('keeps or
   const attachment = { id: 3, file_name: 'kept-name.jpg.good', mime_type: mime, file_size: 10, version: 'v1', url: '/read', is_image: true, is_private: true, is_encrypted: false }
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file' as const, version: 'v1', attachment } }
-  const result = workspace_capabilities(row, { readonly: false, can_private: true, pending: false, references: [] })
+  const result = workspace_capabilities(row, { readonly: false, can_private: true, pending: false })
   expect(result).toMatchObject({ open: true, replace: true, image_edit: false, redact: false })
   expect(result.reasons.image_edit).toEqual(['此图片格式不支持编辑'])
 })

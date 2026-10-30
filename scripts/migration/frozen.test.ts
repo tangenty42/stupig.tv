@@ -30,6 +30,9 @@ import { build_migration_scripts } from './build'
  * existed, and that copy's hash is not what any deployment sees.
  */
 const frozen_migrations: Record<string, string> = {
+  '20261030120000_shared_content_drafts.sql': 'ec633da3528bcb143cfbd8ed80705a263fa6f11542424df220ee051e912dd014',
+  '20261028210200_reference_journal_contract.sql': 'ae2c641af8dd68f32e522c870a53d91ef916bc296895d82ed7073490892f07c4',
+  '20261028210000_reference_journal_entries.sql': '1db9b34deaaa07df3e141c685a84a15d44cccca5015592a853e471f28ce3d078',
   '20261025170000_storage_audit_cleanup.sql': '3ea30a8d20f889e6098c0105c82dec99b015c450be3860101063e9307120e6c7',
   '20261025160000_storage_audit.sql': '452beb5ba23456116f66ceaafe99d6c0dbcca4a77fc68a4b4c3c6f545b0376f5',
   '20261024210000_content_cutover_state.sql': 'e72b758a45935243c34aa45e12cdd435fb02967a507fd5e1e2f7e8b14c52db11',
@@ -59,6 +62,7 @@ const frozen_migrations: Record<string, string> = {
 const migrations_dir = resolve(import.meta.dirname, '../../migrations')
 // Pin the bundled dependency closure, not just the entry file. Add each TS artifact digest here.
 const frozen_scripts: Record<string, string> = {
+  '20261028210100_reference_journal_entries.ts': 'c03f27cc348baf8f3ea47b44039681e518d2eee818afa2838c1749350424dba7',
   '20261024210100_content_references.ts': '46a3187bb96e7ecc1a91130cbed3372d76364fde873060cb92d0205f8c668018',
   '20261024210200_content_workspace.ts': '89b4db2f71b225500ef1bcedbf8ef859819ca41755ef0f2cf46284095f1a8bc1',
 }

@@ -42,6 +42,8 @@ beforeEach(() => {
   const root = { id: 1, story_id: 1, parent_id: 0, name: '', name_key: '', file_name: '', is_folder: 1, node_revision: 1, read_revision: 1, object_key: null, version: '', is_private: 0, storage_provider: 'aliyun', encryption_key: null, file_size: 0, mime_type: null, oss_version_id: null }
   rows = [root, { ... root, id: 2, parent_id: 1, name: 'docs', name_key: 'docs', file_name: 'docs' }, ... ['a.txt', 'b.txt'].map((name, i) => ({ ... root, id: i + 3, parent_id: 1, name, name_key: name, file_name: name, is_folder: 0, object_key: `key-${i}`, version: 'v1' }))] as WorkspaceRow[]
   mocks.execute.mockImplementation(async (sql: string, args: unknown[] = []) => {
+    if (sql.includes('FROM content_story_drafts'))
+      return [[]]
     if (sql.startsWith('INSERT INTO content_sync_outbox'))
       pending.push(JSON.parse(String(args[2])))
     if (sql.includes('FROM users'))
@@ -52,8 +54,12 @@ beforeEach(() => {
       receipts.set(String(args[1]), { fingerprint: String(args[3]), result: String(args[4]) })
     if (sql.includes('FROM content_stories'))
       return [[{ id: 1, namespace_revision: 1, ... story }]]
-    if (sql.includes('FROM content_story_attachments'))
-      return [structuredClone(rows)]
+    if (sql.includes('FROM content_story_attachments')) {
+      if (sql.startsWith('SELECT'))
+        return [structuredClone(rows)]
+    }
+    if (sql.startsWith('DELETE FROM content_story_attachments'))
+      rows = rows.filter(row => row.id !== args[0])
     if (sql.startsWith('INSERT INTO content_story_attachments')) {
       const id = Math.max(... rows.map(row => row.id)) + 1
       rows.push({ ... rows[0]!, id, parent_id: Number(args[1]), name: String(args[2]), name_key: String(args[3]), file_name: String(args[4]), is_private: Number(args[5]) })
@@ -321,7 +327,7 @@ it('commits deletion and its retirement without depending on a post-commit clean
     return execute(sql, args)
   })
   const input = workspace_command_schema.parse({ operation: 'delete', scope_id: 1, request_id: crypto.randomUUID(),
-    targets: [{ id: 4, version: node_version(rows, rows[3]!) }], draft_references: [] })
+    targets: [{ id: 4, version: node_version(rows, rows[3]!) }] })
   const result = await execute_workspace_command(7, input)
   expect(result).toMatchObject({ succeeded: ['b.txt'], skipped: [], renamed: [] })
   expect(result).not.toHaveProperty('cleanup_pending')
@@ -332,14 +338,15 @@ it('commits deletion and its retirement without depending on a post-commit clean
   expect(mocks.execute.mock.calls.filter(([sql]) => String(sql).startsWith('INSERT IGNORE INTO content_object_retirements'))).toHaveLength(1)
 })
 
-it.each(['[label][f]', '[f][]', '[f]', '![f]'])('rejects deletion referenced by a saved definition: %s', async (usage) => {
+it.each(['[label][f]', '[f][]', '[f]', '![f]'])('deletes a referenced target while preserving the saved definition: %s', async (usage) => {
   story.markdown = `${usage}\n\n[f]: att://b.txt`
   const input = workspace_command_schema.parse({ operation: 'delete', scope_id: 1, request_id: crypto.randomUUID(),
-    targets: [{ id: 4, version: node_version(rows, rows[3]!) }], draft_references: [] })
-  await expect(execute_workspace_command(7, input)).rejects.toMatchObject({ statusCode: 409, public_data: { code: 'BATCH_REJECTED', details: { items: [expect.objectContaining({ code: 'REFERENCED' })] } } })
-  expect(mocks.execute.mock.calls.some(([sql]) => String(sql).startsWith('DELETE FROM content_story_attachments'))).toBe(false)
-  expect(mocks.execute.mock.calls.some(([sql]) => String(sql).startsWith('INSERT IGNORE INTO content_object_retirements'))).toBe(false)
-  expect(resources()).toEqual([])
+    targets: [{ id: 4, version: node_version(rows, rows[3]!) }] })
+  await expect(execute_workspace_command(7, input)).resolves.toMatchObject({ succeeded: ['b.txt'] })
+  expect(rows.some(row => row.id === 4)).toBe(false)
+  expect(story.markdown).toBe(`${usage}\n\n[f]: att://b.txt`)
+  expect(mocks.execute.mock.calls.some(([sql]) => String(sql).startsWith('INSERT IGNORE INTO content_object_retirements'))).toBe(true)
+  expect(resources()).toContain('content_attachments:1')
 })
 
 it('rewrites a saved definition on rename and enqueues document and list refresh', async () => {

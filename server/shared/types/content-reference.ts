@@ -21,10 +21,10 @@ export interface ContentReferenceRewriteResult extends ContentReferenceBaseline 
   diagnostics: ContentReferenceDiagnostic[]
 }
 
-/** One transaction's simultaneous changes. Deletion records retain the old identity. */
+/** URI destinations, without query/fragment. Null from creates; null to deletes. */
 export interface ContentReferenceChange {
   node_id: number
-  from: string
+  from: string | null
   to: string | null
   is_folder?: boolean
 }

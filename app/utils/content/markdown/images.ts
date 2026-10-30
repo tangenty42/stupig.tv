@@ -1,6 +1,7 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { RenderEnvironment, StoryMarkdownPlugin } from './types'
 import { attachment_base_name, CONTENT_IMAGE_DENIED_TEXT } from '@shared/content-markdown'
+import { content_name_key } from '@shared/content-reference'
 import { attachment_can_read, attachment_display_url, attachment_is_restricted, redacted_version_of } from '~/utils/content/attachment'
 import { image_lqip_style } from '~/utils/content/lqip'
 import { local_file_name, resolve_content_url } from './links'
@@ -41,7 +42,7 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
     let image_attachment: ContentStoryAttachment | undefined
     if (src && token) {
       const file_name = local_file_name(src)
-      const attachment = file_name ? ctx.options.attachments().find(item => item.file_name === file_name) : undefined
+      const attachment = file_name ? ctx.options.attachments().find(item => content_name_key(item.file_name) === content_name_key(file_name)) : undefined
       image_attachment = attachment
       if (attachment && attachment_is_restricted(attachment)) {
         const twin = redacted_version_of(ctx.options.attachments(), attachment.file_name)
