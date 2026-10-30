@@ -48,6 +48,7 @@ describe('data sync transport', () => {
     vi.stubGlobal('ref', ref)
     vi.stubGlobal('readonly', readonly)
     vi.stubGlobal('watch', watch)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ username: 'draft-reader', password: 'test-only' }) })))
     mocks.connect.mockReset().mockImplementation(() => {
       const client = new Client()
       clients.push(client)
@@ -63,9 +64,11 @@ describe('data sync transport', () => {
     vi.unstubAllGlobals()
   })
 
-  async function start() {
-    const transport = create_data_sync_transport('ws://broker')
+  async function start(private_mode = false, resources: string[] = []) {
+    const transport = create_data_sync_transport('ws://broker', private_mode)
     transports.push(transport)
+    for (const resource of resources)
+      transport.subscribe(resource, vi.fn())
     const user = ref<unknown>(null)
     const identity_changed = vi.fn()
     const handle_remote_logout = vi.fn()
@@ -80,6 +83,36 @@ describe('data sync transport', () => {
   function event(id: string): DataSyncEvent {
     return { id, type: 'refresh', resource: 'profile:1', timestamp: Date.now() }
   }
+
+  it.each([false, true])('keeps the topic prefix across initial, dynamic and reconnect subscriptions, private=%s', async (private_mode) => {
+    const prefix = private_mode ? settings.integrations.mqtt.privateTopicPrefix : settings.integrations.mqtt.topicPrefix
+    const first = private_mode ? 'content_drafts:v1.first' : 'profile:1'
+    const second = private_mode ? 'content_draft:v1.second' : 'profile:2'
+    const { transport, client } = await start(private_mode, [first])
+    expect(client.subscribe).toHaveBeenCalledWith([`${prefix}/${first}`], { qos: settings.integrations.mqtt.qos }, expect.any(Function))
+    const drop = transport.subscribe(second, vi.fn())
+    expect(client.subscribe).toHaveBeenLastCalledWith([`${prefix}/${second}`], { qos: settings.integrations.mqtt.qos }, expect.any(Function))
+    drop()
+    expect(client.unsubscribe).toHaveBeenCalledWith([`${prefix}/${second}`], expect.any(Function))
+    client.connected = false
+    client.emit('close')
+    await vi.advanceTimersByTimeAsync(settings.app.client.sync.reconnectDelayMs)
+    const reconnected = clients.at(- 1)!
+    reconnected.connected = true
+    reconnected.emit('connect', { sessionPresent: false })
+    expect(reconnected.subscribe).toHaveBeenCalledWith([`${prefix}/${first}`], { qos: settings.integrations.mqtt.qos }, expect.any(Function))
+  })
+
+  it.each([false, true])('uses the same topic prefix for resources owned by another tab, private=%s', async (private_mode) => {
+    const prefix = private_mode ? settings.integrations.mqtt.privateTopicPrefix : settings.integrations.mqtt.topicPrefix
+    const first = private_mode ? 'content_drafts:v1.first' : 'profile:1'
+    const remote = private_mode ? 'content_draft:v1.remote' : 'profile:2'
+    const { client, channel } = await start(private_mode, [first])
+    channel.receive({ type: 'report_resources', tab_id: 'remote-tab', resources: [remote] })
+    expect(client.subscribe).toHaveBeenLastCalledWith([`${prefix}/${remote}`], { qos: settings.integrations.mqtt.qos }, expect.any(Function))
+    channel.receive({ type: 'release_resources', tab_id: 'remote-tab' })
+    expect(client.unsubscribe).toHaveBeenCalledWith([`${prefix}/${remote}`], expect.any(Function))
+  })
 
   it('tracks remote owners so one tab cannot unsubscribe another tab resource', async () => {
     const { client, channel } = await start()

@@ -155,7 +155,11 @@ export function useContentDraftStore(target: string | number | null) {
         return
       }
       const previous = cloud.value
-      const unchanged = ! previous || (sent?.text !== undefined
+      // Reset deliberately discards local input. Editing stays blocked until its
+      // matching receipt is known, including retries after a lost response.
+      const reset = sent?.command.kind === 'reset' && result.receipt?.kind === 'reset'
+        && result.receipt.seq === sent.command.seq && result.receipt.ok
+      const unchanged = ! previous || reset || (sent?.text !== undefined
         ? result.receipt?.ok === true && markdown.value === sent.text
         : markdown.value === previous.markdown)
       if (unchanged && previous && markdown.value !== snapshot.markdown && apply_editor) {

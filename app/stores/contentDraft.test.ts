@@ -20,8 +20,8 @@ function head(overrides: Partial<ContentDraftSnapshot> = {}): ContentDraftSnapsh
     updated_at: '2026-10-30T00:00:00Z', channel: 'content_draft:opaque', ... overrides }
 }
 const stores: ReturnType<typeof useContentDraftStore>[] = []
-async function fixture() {
-  let snapshot = head()
+async function fixture(overrides: Partial<ContentDraftSnapshot> = {}) {
+  let snapshot = head(overrides)
   const get = vi.fn(async () => ({ snapshot: { ... snapshot } }))
   const acquire = vi.fn(async (_input: { id: string, expected_epoch: number, page_id: string, token: string }) => {
     snapshot = { ... snapshot, owned: true, occupied: true, lease_epoch: 1 }
@@ -124,6 +124,70 @@ describe('shared cloud draft session', () => {
     await f.store.action('publish')
     expect(f.api.command.mock.calls.map(([input]) => input.kind)).toEqual(['sync', 'publish'])
     expect(f.api.command.mock.calls[1]![0]).toMatchObject({ expected_revision: 2, seq: 2 })
+  })
+  it.each([
+    { story_id: 7, restored: 'published main' },
+    { story_id: null, restored: 'new draft template' },
+  ])('discards unsaved input on reset without uploading it again, story=$story_id', async ({ story_id, restored }) => {
+    const f = await fixture({ story_id, markdown: 'cloud draft', unpublished_changes: true })
+    f.store.set_cycle_trigger(() => f.store.cycle())
+    f.store.markdown = 'discard this unsaved input'
+    const response = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(response.promise)
+    const resetting = f.store.action('reset', 1)
+    expect(f.store.writable).toBe(false)
+    expect(f.api.command.mock.calls[0]![0]).toMatchObject({ kind: 'reset', seq: 1, expected_revision: 1 })
+    expect(f.api.command.mock.calls[0]![0].markdown).toBeUndefined()
+    f.change({ markdown: restored, draft_revision: 2, namespace_revision: 3, title_revision: 4, unpublished_changes: false })
+    response.resolve({ snapshot: f.head(), receipt: { kind: 'reset', seq: 1, ok: true } })
+    expect(await resetting).toBe(true)
+    expect(f.store.markdown).toBe(restored)
+    expect(f.store.unconfirmed_changes).toBe(false)
+    expect(f.store.unpublished_changes).toBe(false)
+    expect(f.api.rewrite).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(settings.app.content.draft.saveThrottleMs)
+    await f.store.cycle()
+    expect(f.api.command).toHaveBeenCalledTimes(2)
+    expect(f.api.command.mock.calls[1]![0]).toMatchObject({ kind: 'sync', seq: 2, base_namespace_revision: 3, base_title_revision: 4 })
+    expect(f.api.command.mock.calls[1]![0].markdown).toBeUndefined()
+  })
+  it('retains local input when reset is rejected because the snapshot changed', async () => {
+    const f = await fixture()
+    f.store.markdown = 'keep this unsaved input'
+    f.api.command.mockResolvedValueOnce({ snapshot: { ... f.head(), markdown: 'new cloud draft', draft_revision: 2 },
+      receipt: { kind: 'reset', seq: 1, ok: false, error: 'snapshot_changed' } })
+    expect(await f.store.action('reset', 1)).toBe(false)
+    expect(f.store.markdown).toBe('keep this unsaved input')
+    expect(f.store.dirty).toBe(true)
+  })
+  it('applies a successful reset receipt after retrying a lost response', async () => {
+    const f = await fixture()
+    f.store.markdown = 'discard after confirmation'
+    f.api.command.mockRejectedValueOnce(new Error('Reset reply lost'))
+    await expect(f.store.action('reset')).rejects.toThrow('Reset reply lost')
+    expect(f.store.markdown).toBe('discard after confirmation')
+    expect(f.store.writable).toBe(false)
+    f.api.command.mockResolvedValueOnce({ snapshot: { ... f.head(), draft_revision: 2 }, receipt: { kind: 'reset', seq: 1, ok: true } })
+    await f.store.cycle()
+    expect(f.api.command.mock.calls[1]![0]).toEqual(f.api.command.mock.calls[0]![0])
+    expect(f.store.markdown).toBe('main')
+    expect(f.store.dirty).toBe(false)
+    await f.store.cycle()
+    expect(f.api.command.mock.calls[2]![0].markdown).toBeUndefined()
+  })
+  it('ignores a reset response from an earlier page session', async () => {
+    const f = await fixture()
+    f.store.markdown = 'old page input'
+    const response = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(response.promise)
+    const resetting = f.store.action('reset')
+    f.store.configure(f.api, () => true)
+    await f.store.open({ id: f.head().id })
+    f.store.markdown = 'new page input'
+    response.resolve({ snapshot: { ... f.head(), draft_revision: 2 }, receipt: { kind: 'reset', seq: 1, ok: true } })
+    await resetting
+    expect(f.store.markdown).toBe('new page input')
+    expect(f.store.cloud?.draft_revision).toBe(1)
   })
   it('reports an action complete only from its matching successful receipt', async () => {
     const f = await fixture()

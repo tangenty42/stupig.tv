@@ -170,4 +170,20 @@ describe('cloud edit page adapter', () => {
     f.confirm()
     expect(f.content.command_draft).not.toHaveBeenCalled()
   })
+  it('replaces unsaved input and renews the editor session after a confirmed reset', async () => {
+    const f = await fixture()
+    await f.editing.load()
+    f.store.set_visible(true)
+    await f.store.cycle()
+    f.store.markdown = 'discard this input'
+    const editor_session = f.editing.editor_session_key.value
+    f.editing.confirm_abandon_draft(new Event('click'))
+    f.confirm()
+    await vi.waitFor(() => expect(f.editing.editor_session_key.value).toBeGreaterThan(editor_session))
+    expect(f.store.markdown).toBe(initial.markdown)
+    expect(f.store.dirty).toBe(false)
+    await f.store.cycle()
+    expect(f.content.command_draft.mock.calls.map(([command]) => command.kind)).toEqual(['reset', 'sync'])
+    expect(f.content.command_draft.mock.calls.every(([command]) => command.markdown === undefined)).toBe(true)
+  })
 })

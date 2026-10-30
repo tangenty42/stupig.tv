@@ -19,6 +19,8 @@
 
 草稿事件 `content_draft`、`content_drafts` 在入队时统一映射 HMAC resource，topic 与 payload 使用相同值；派发器不会再次映射。它们通过独立 `integrations.mqtt.privateTopicPrefix` 及授权 WS 连接，不属于匿名 `stupig/sync/#`。凭据经当前账号／会话双权限校验后签发，仅存在内存，最长 30 秒；broker 连接时重新授权并按期断开，客户端重连领取新凭据。公开与私有连接复用同一 transport 实现，BroadcastChannel 使用独立通道。真实 ACL、撤权时限和反代配置见 [MQTT](../deployment/mqtt.md)。
 
+每个 transport 统一选择主题前缀，初始订阅、运行中新增／取消订阅及重连均使用该前缀；代其他标签页订阅的资源遵循相同规则。
+
 | 业务 | 提交与发布方式 | 保证与边界 |
 | --- | --- | --- |
 | 账号、资料、管理 | 变更后调用 `publish_refresh()` | 通知用于提示重读；不具备 Content outbox 的数据库事务保证 |

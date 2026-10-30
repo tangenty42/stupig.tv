@@ -44,6 +44,7 @@ export function useDataSync() {
 }
 
 export function create_data_sync_transport(broker_url: string, private_mode = false) {
+  const topic_prefix = private_mode ? settings.integrations.mqtt.privateTopicPrefix : settings.integrations.mqtt.topicPrefix
   const listeners = new Map<string, Set<SyncListener>>()
   const seen_ids = new Set<string>()
   const remote_resources = new Map<string, Set<string>>()
@@ -341,7 +342,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     }
 
     const all_resources = Array.from(new Set([... listeners.keys(), ... collected_resources]))
-    const topics = all_resources.map(resource => `${private_mode ? settings.integrations.mqtt.privateTopicPrefix : settings.integrations.mqtt.topicPrefix}/${resource}`)
+    const topics = all_resources.map(resource => `${topic_prefix}/${resource}`)
     if (topics.length) {
       const client = mqtt_client
       try {
@@ -366,7 +367,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
 
     if (added.length) {
       const client = mqtt_client
-      const topics = added.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
+      const topics = added.map(resource => `${topic_prefix}/${resource}`)
       try {
         client.subscribe(topics, { qos: settings.integrations.mqtt.qos }, (err: any) => {
           if (err && ! err.message?.includes('Connection closed')) {
@@ -380,7 +381,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
 
     if (removed.length) {
       const client = mqtt_client
-      const topics = removed.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
+      const topics = removed.map(resource => `${topic_prefix}/${resource}`)
       try {
         client.unsubscribe(topics, (err: any) => {
           if (err && ! err.message?.includes('Connection closed')) {

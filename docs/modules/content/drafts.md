@@ -18,7 +18,7 @@
 
 页面隐藏或销毁时先关输入，尽力把最后快照与 release 一起提交。草稿 RPC 直接发送，小于 64KiB 的 release 使用 fetch keepalive；大快照、强关页面、浏览器冻结和网络故障仍靠租约到期兜底。焦点变化不等于页面隐藏；没有 Web Locks 也可编辑。重新可见时立即核对，不能凭本地事件解锁。
 
-“舍弃草稿”绑定确认时的文本与 draft revision，恢复为当前 main 或新建模板。发布只接受已确认的当前 draft revision；无效 Markdown 能自动保存但不能发布。旧 `createStory/updateStory/deleteStory` 写入协议返回升级提示，不得绕过租约。
+“舍弃草稿”绑定确认时的文本与 draft revision，恢复为当前 main 或新建模板。匹配的成功 reset 回执同时替换本地未保存文本和引用基线，后续自动保存不再上传已舍弃的内容；响应丢失时保持只读，重试原命令并在确认成功后应用结果，拒绝重置则保留本地输入。发布只接受已确认的当前 draft revision；无效 Markdown 能自动保存但不能发布。旧 `createStory/updateStory/deleteStory` 写入协议返回升级提示，不得绕过租约。
 
 事务锁顺序为标题作用域 → story/scope → draft，随后同连接锁定读取当前用户、会话和请求所携带 token generation。草稿与 story 的绑定先在事务外定位，取得锁后重新核对；期间首次发布导致绑定变化时，回滚并重新定位，不能倒序补锁。业务快照在作用域锁之后建立，确保等待附件改名提交后能同时读到新版本和对应历史。等待锁之后读取数据库时间，最终受保护写入前再次核对权限及到期；有效的旧 token generation 正常轮换仍可用，退出或复用 session row 不会复活旧请求。main、draft、引用和 outbox 同事务提交。
 
