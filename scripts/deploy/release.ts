@@ -70,7 +70,7 @@ async function verify_data(plan: ReleasePlan, after: DeploymentPreflight, check_
         CROSS JOIN content_title_namespace t WHERE t.id = 1 AND
         (d.id IS NULL OR NOT (BINARY d.markdown <=> BINARY s.markdown)
         OR d.namespace_revision != s.namespace_revision OR d.title_revision != t.revision
-        OR d.published_main_revision != s.revision OR d.unpublished_changes != 0)) AS mismatches`)
+        OR NOT (d.published_main_revision <=> s.revision) OR d.unpublished_changes != 0)) AS mismatches`)
     const row = rows[0]!
     if (Number(row.title_baselines) !== 1 || Number(row.stories) !== Number(row.drafts) || Number(row.mismatches))
       throw new Error('Cloud draft backfill verification failed')

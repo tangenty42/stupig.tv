@@ -81,7 +81,7 @@ async function verify() {
     phase = 'schema'
     await root.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
     created = true
-    await run_migrations({ database_config: { ... config, name, user: 'root', password }, through: '20261024210000_content_cutover_state.sql' })
+    await run_migrations({ database_config: { ... config, name, user: 'root', password }, maintenance: true, through: '20261024210000_content_cutover_state.sql' })
     db = await mysql.createConnection({ host: config.host, port: config.port, user: 'root', password, database: name, timezone: 'Z' })
     await db.query('SET time_zone=\'+00:00\'')
     await db.query('CREATE TABLE qa_checkpoints(n INT NOT NULL)')
