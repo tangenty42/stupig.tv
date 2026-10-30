@@ -25,12 +25,17 @@ test('late production CSS preserves lazy overlays and their animations', async (
   try {
     await page.getByRole('link', { name: '打开生产样式验收页' }).click()
     await route_request
+    const indicator = page.locator('header [class~="i-lucide:loader-circle"]')
+    await expect(indicator).toBeVisible()
+    await expect(indicator).toHaveCSS('width', '40px')
+    await expect(indicator).toHaveCSS('height', '40px')
     await expect(page.getByTestId('css-hydration')).toHaveCount(0)
   }
   finally {
     route_css.resolve()
   }
   await expect(page.getByTestId('css-hydration')).toHaveText('client')
+  await expect(page.locator('header [class~="i-lucide:loader-circle"]')).toBeHidden()
   await page.unroute('**/_nuxt/*.css')
 
   const lazy_css = Promise.withResolvers<void>()

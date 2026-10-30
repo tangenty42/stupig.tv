@@ -30,7 +30,7 @@
             class="absolute left-3 top-[0.6rem] z-20 size-10"
             :style="indicator_shift_style"
           >
-            <MyIcon name="lucide:loader-circle" class="size-10 animate-spin text-slate-400" />
+            <MyIcon name="lucide:loader-circle" size="2.5rem" class="animate-spin text-slate-400" />
           </span>
         </Transition>
 
