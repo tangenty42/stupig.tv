@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 
@@ -25,15 +26,16 @@ const workflow_steps = parse(readFileSync(join(repo_root, '.github/workflows/dep
 }[]
 
 /** `sh` is not on PATH on Windows, but Git for Windows ships one. */
-function find_shell(): string | null {
-  const candidates = [
-    'sh',
-    'C:/Program Files/Git/usr/bin/sh.exe',
-    'C:/Program Files/Git/bin/sh.exe',
-    'C:/Program Files (x86)/Git/usr/bin/sh.exe',
+function find_shell(program = 'sh'): string | null {
+  const git_shells = [
+    `C:/Program Files/Git/usr/bin/${program}.exe`,
+    `C:/Program Files/Git/bin/${program}.exe`,
+    `C:/Program Files (x86)/Git/usr/bin/${program}.exe`,
   ]
+  // Windows may expose WSL's bash.exe on PATH, which uses a different filesystem.
+  const candidates = process.platform === 'win32' ? [... git_shells, program] : [program, ... git_shells]
   for (const candidate of candidates) {
-    if (candidate !== 'sh' && ! existsSync(candidate))
+    if (candidate !== program && ! existsSync(candidate))
       continue
     const probe = spawnSync(candidate, ['-c', 'exit 0'])
     if (! probe.error && probe.status === 0)
@@ -43,6 +45,8 @@ function find_shell(): string | null {
 }
 
 const shell = find_shell()
+// Actions run blocks use Bash; the deployed POSIX script is still tested with sh.
+const workflow_shell = find_shell('bash')
 
 const stub_docker = `#!/bin/sh
 # 替身 docker：把"容器现在的状态"按队列逐个吐给脚本，并记录所有有副作用的调用。
@@ -298,7 +302,7 @@ function run_deploy(scenario: Scenario): RunResult {
 const needs_shell = shell ? describe : describe.skip
 
 describe('registry identity workflow wiring', () => {
-  it.skipIf(! shell)('allows documentation-only main advances and rejects superseded runtime code', () => {
+  it.skipIf(! workflow_shell)('allows documentation-only main advances and rejects superseded runtime code', () => {
     const dir = mkdtempSync(join(tmpdir(), 'deploy-source-'))
     const origin = join(dir, 'origin')
     const checkout = join(dir, 'checkout')
@@ -317,14 +321,14 @@ describe('registry identity workflow wiring', () => {
       git(['add', '.'])
       git(['commit', '-m', 'test(deploy): seed source fixture'])
       const source = git(['rev-parse', 'HEAD'])
-      git(['clone', '--no-local', '--depth=1', origin, checkout], dir)
+      git(['clone', '--no-local', '--depth=1', pathToFileURL(origin).href, checkout], dir)
       writeFileSync(join(origin, 'README.md'), 'documentation update\n')
       mkdirSync(join(origin, 'docs'))
       writeFileSync(join(origin, 'docs', 'notes.txt'), 'notes\n')
       git(['add', '.'])
       git(['commit', '-m', 'docs(deploy): update fixture notes'])
       const script = workflow_steps.find(step => step.name === 'Reject superseded release sources')!.run!
-      const probe = () => spawnSync(shell!, ['-c', script], { cwd: checkout, encoding: 'utf8', env: { ... process.env, RELEASE_SHA: source } })
+      const probe = () => spawnSync(workflow_shell!, ['-c', script], { cwd: checkout, encoding: 'utf8', env: { ... process.env, RELEASE_SHA: source } })
       const same_runtime = probe()
       expect(same_runtime.status, same_runtime.stderr).toBe(0)
       writeFileSync(join(origin, 'runtime.js'), 'export default 2\n')
@@ -339,10 +343,10 @@ describe('registry identity workflow wiring', () => {
     }
   }, 20000)
 
-  it.skipIf(! shell)('parses every ordinary and maintenance shell step', () => {
+  it.skipIf(! workflow_shell)('parses every ordinary and maintenance shell step', () => {
     const maintenance = parse(readFileSync(join(repo_root, '.github/workflows/maintenance-deploy.yml'), 'utf8')).jobs.maintenance.steps as typeof workflow_steps
     for (const step of [... workflow_steps, ... maintenance].filter(step => step.run)) {
-      const result = spawnSync(shell!, ['-n'], { input: step.run, encoding: 'utf8' })
+      const result = spawnSync(workflow_shell!, ['-n'], { input: step.run, encoding: 'utf8' })
       expect(result.status, `${step.name}: ${result.stderr}`).toBe(0)
     }
   })
