@@ -42,13 +42,28 @@ describe('bounded reference journals', () => {
       await append_reference_journal(db.connection, scope, batch * 2, Array.from({ length: batch === 2 ? 300 : 1 }, (_, index) => ({ node_id: index + 1, from: `${scheme}Old${index}`, to: `${scheme}New${index}` })))
     }
     expect(db.floors.get(scope)).toBe(2)
-    const retained = await reference_journals_since(db.connection, scope, 2, 402, 2)
-    expect(retained.unavailable).toBe(false)
-    expect(retained.journals).toHaveLength(200)
-    expect(retained.journals[0]).toMatchObject({ revision: 4 })
-    expect(retained.journals[0]!.changes).toHaveLength(300)
+    const retained = db.entries().filter(row => row.scope_id === scope)
+    expect(new Set(retained.map(row => row.revision)).size).toBe(200)
+    expect(retained[0]).toMatchObject({ revision: 4 })
+    expect(retained.filter(row => row.revision === 4)).toHaveLength(300)
+    if (scope === 0)
+      expect((await reference_journals_since(db.connection, scope, 2, 402, 2)).journals).toHaveLength(200)
+    else
+      await expect(reference_journals_since(db.connection, scope, 2, 402, 2)).rejects.toMatchObject({ statusCode: 503 })
     expect((await reference_journals_since(db.connection, scope, 0, 402, 2)).unavailable).toBe(true)
     expect(db.entries().filter(row => row.scope_id === 9)).toHaveLength(1)
+  })
+
+  it.each([[2, 3], [1, 3], [1, 2], []])('rejects incomplete attachment history with retained revisions %j', async (... revisions) => {
+    const db = database()
+    for (const revision of revisions)
+      await append_reference_journal(db.connection, 3, revision, [])
+    await expect(reference_journals_since(db.connection, 3, 0, 3, 0)).rejects.toMatchObject({ statusCode: 503 })
+  })
+
+  it('allows an already current baseline without reading any older batches', async () => {
+    const db = database()
+    expect(await reference_journals_since(db.connection, 3, 3, 3, 0)).toEqual({ unavailable: false, journals: [] })
   })
 
   it('records canonical keys while retaining actual target spelling, and reads empty batches', async () => {

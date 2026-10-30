@@ -20,7 +20,7 @@
 
 “舍弃草稿”绑定确认时的文本与 draft revision，恢复为当前 main 或新建模板。发布只接受已确认的当前 draft revision；无效 Markdown 能自动保存但不能发布。旧 `createStory/updateStory/deleteStory` 写入协议返回升级提示，不得绕过租约。
 
-事务锁顺序为标题作用域 → story/scope → draft，随后同连接锁定读取当前用户、会话和请求所携带 token generation。等待锁之后读取数据库时间，最终受保护写入前再次核对权限及到期；有效的旧 token generation 正常轮换仍可用，退出或复用 session row 不会复活旧请求。main、draft、引用和 outbox 同事务提交。
+事务锁顺序为标题作用域 → story/scope → draft，随后同连接锁定读取当前用户、会话和请求所携带 token generation。草稿与 story 的绑定先在事务外定位，取得锁后重新核对；期间首次发布导致绑定变化时，回滚并重新定位，不能倒序补锁。业务快照在作用域锁之后建立，确保等待附件改名提交后能同时读到新版本和对应历史。等待锁之后读取数据库时间，最终受保护写入前再次核对权限及到期；有效的旧 token generation 正常轮换仍可用，退出或复用 session row 不会复活旧请求。main、draft、引用和 outbox 同事务提交。
 
 ## 三类版本
 
@@ -67,6 +67,8 @@ store 串行处理确认快照和未上传输入的引用重放；结果只在�
 `content_reference_journals` 一行记录一个目标变化，以 `(scope_id, revision, entry_index)` 标识；`scope_id = 0` 为全局标题，其余为附件所属 story。创建的 `from_ref` 为 null，删除的 `to_ref` 为 null；空映射批次用两者均为 null 的一行记录目录／表示版本变化。
 
 `app.content.reference.journalBatchLimit` 当前为 **200 个完整批次／作用域**。一次批量操作即使包含超过 200 行，也不会被拆开。追加历史、裁剪最旧批次、推进 floor、保存 main 及 outbox 在同一事务提交；不再叠加 30 天 TTL，也不需要独立清理定时器。floor 等于最后被裁剪批次的 revision：baseline 等于 floor 仍可重放，早于 floor 则提示历史不足，不能冒充已同步。
+
+附件历史在有效基线到当前版本之间必须逐批连续；缺批返回 503 并回滚保存，不推进草稿基线。旧版标题创建曾只推进版本、不记录空批次，因此标题历史保留合法跳号兼容。
 
 升级通过三步维护迁移展开表、转换旧 JSON 批次并收紧结构；旧 scope/revision 保持不变，已有有效草稿基线可继续使用。操作要求与隔离验证命令见[迁移手册](../../operations/migrations.md)。
 

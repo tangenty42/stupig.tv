@@ -18,6 +18,11 @@ import { enqueue_content_refresh } from './sync-outbox.repository'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 
+interface DraftBinding extends RowDataPacket { id: string, story_id: number | null }
+class DraftBindingChanged extends ApiError {
+  constructor() { super(409, '云端草稿已变化，请重新连接') }
+}
+
 function same_holder(row: DraftRow, actor: AuthUser, lease?: DraftLease) {
   return !! lease && Number(row.lease_actor_id) === actor.id && Number(row.lease_session_id) === actor.session_id
     && row.lease_page_id === lease.page_id && Number(row.lease_epoch) === lease.epoch && row.lease_token_hash === hash(lease.token)
@@ -44,10 +49,11 @@ async function read_row(connection: Connection, id: string, read_only = false) {
 }
 
 /** Deadlock retries retain the exact command identity and payload. */
-async function transaction<T>(action: (connection: Connection) => Promise<T>): Promise<T> {
+async function transaction<T>(action: (connection: Connection) => Promise<T>, prepare?: (connection: Connection) => Promise<void>): Promise<T> {
   for (let attempt = 0; ; attempt ++) {
     const connection = await db.getConnection()
     try {
+      await prepare?.(connection)
       await connection.beginTransaction()
       const result = await action(connection)
       await connection.commit()
@@ -55,7 +61,7 @@ async function transaction<T>(action: (connection: Connection) => Promise<T>): P
     }
     catch (error) {
       await connection.rollback()
-      if (attempt < 2 && (error as { code?: string }).code === 'ER_LOCK_DEADLOCK')
+      if (attempt < 2 && (error instanceof DraftBindingChanged || (error as { code?: string }).code === 'ER_LOCK_DEADLOCK'))
         continue
       throw error
     }
@@ -63,30 +69,33 @@ async function transaction<T>(action: (connection: Connection) => Promise<T>): P
   }
 }
 
-async function lock_draft(connection: Connection, id: string, exclusive: boolean, lightweight = false, read_only = false) {
-  // The id->story binding is immutable except first publication; the title lock
-  // stabilizes that transition before deciding which content rows to lock.
+async function lock_draft(connection: Connection, binding: DraftBinding, exclusive: boolean, lightweight = false, read_only = false) {
   const title = lightweight ? null : await lock_title_namespace(connection, exclusive)
-  const [bindings] = await connection.execute<RowDataPacket[]>('SELECT story_id FROM content_story_drafts WHERE id = ?', [id])
-  if (! bindings[0])
-    throw new ApiError(404, '云端草稿不存在或已被删除')
-  const story_id = bindings[0].story_id
+  const story_id = binding.story_id
   if (! lightweight && story_id !== null)
     await connection.execute(`SELECT id FROM content_stories WHERE id = ? FOR ${read_only ? 'SHARE' : 'UPDATE'}`, [story_id])
-  return { row: await read_row(connection, id, read_only), title }
+  const row = await read_row(connection, binding.id, read_only)
+  // First publication can bind a story after the routing read. Retry rather
+  // than acquiring a story lock after the draft lock.
+  if (row.story_id !== binding.story_id)
+    throw new DraftBindingChanged()
+  return { row, title }
+}
+
+function draft_transaction<T>(target: { id?: string, story_id?: number }, options: { exclusive?: boolean, lightweight?: boolean, read_only?: boolean }, action: (connection: Connection, locked: Awaited<ReturnType<typeof lock_draft>>) => Promise<T>) {
+  let binding: DraftBinding
+  return transaction(async connection => action(connection, await lock_draft(connection, binding, options.exclusive ?? false, options.lightweight, options.read_only)), async (connection) => {
+    // Autocommit ends this routing snapshot before BEGIN. The first business
+    // snapshot must follow the title/story/draft locks, including lock waits.
+    const [rows] = await connection.execute<DraftBinding[]>(`SELECT id, story_id FROM content_story_drafts WHERE ${target.id ? 'id' : 'story_id'} = ?`, [target.id ?? target.story_id ?? null])
+    if (! rows[0])
+      throw new ApiError(404, target.id ? '云端草稿不存在或已被删除' : '云端草稿不存在，请先核对数据库迁移')
+    binding = rows[0]
+  })
 }
 
 export async function get_draft(actor: AuthUser, input: { id?: string, story_id?: number, lease?: DraftLease }): Promise<DraftResult> {
-  return transaction(async (connection) => {
-    let id = input.id
-    if (! id) {
-      await lock_title_namespace(connection)
-      const [rows] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_drafts WHERE story_id = ?', [input.story_id ?? null])
-      id = rows[0]?.id
-    }
-    if (! id)
-      throw new ApiError(404, '云端草稿不存在，请先核对数据库迁移')
-    const { row } = await lock_draft(connection, id, false, false, true)
+  return draft_transaction(input, { read_only: true }, async (connection, { row }) => {
     await require_draft_actor(connection, actor)
     return { snapshot: await snapshot(connection, row, actor, input.lease) }
   })
@@ -118,8 +127,7 @@ export async function create_draft(actor: AuthUser, request_id: string): Promise
 }
 
 export async function acquire_draft(actor: AuthUser, input: { id: string, expected_epoch: number, page_id: string, token: string }): Promise<DraftResult> {
-  return transaction(async (connection) => {
-    const { row } = await lock_draft(connection, input.id, false)
+  return draft_transaction(input, {}, async (connection, { row }) => {
     await require_draft_actor(connection, actor)
     const now = await database_now(connection)
     const candidate = { page_id: input.page_id, token: input.token, epoch: input.expected_epoch + 1 }
@@ -134,9 +142,8 @@ export async function acquire_draft(actor: AuthUser, input: { id: string, expect
 }
 
 export async function command_draft(actor: AuthUser, input: DraftCommand): Promise<DraftResult> {
-  return transaction(async (connection) => {
-    const lightweight = input.kind === 'sync' && input.markdown === undefined
-    const { row, title } = await lock_draft(connection, input.id, ['publish', 'delete', 'reset'].includes(input.kind), lightweight)
+  const options = { exclusive: ['publish', 'delete', 'reset'].includes(input.kind), lightweight: input.kind === 'sync' && input.markdown === undefined }
+  return draft_transaction(input, options, async (connection, { row, title }) => {
     await require_draft_actor(connection, actor)
     const fingerprint = hash(JSON.stringify(input))
     const holder = same_holder(row, actor, input.lease)

@@ -296,6 +296,8 @@ async function verify() {
       assert(! JSON.stringify(event).includes(token_a))
     }
     check('outbox topic and payload use the same opaque resource and contain no draft id/body/token')
+    const { verify_draft_concurrency } = await import('./cloud-draft-concurrency')
+    await verify_draft_concurrency(owner)
     if (process.argv.includes('--mqtt')) {
       const { verify_draft_mqtt } = await import('./cloud-draft-mqtt')
       await verify_draft_mqtt(owner)

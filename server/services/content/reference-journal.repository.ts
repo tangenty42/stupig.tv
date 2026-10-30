@@ -1,5 +1,6 @@
 import type { ContentReferenceChange, ContentReferenceJournal } from '@shared/types/content-reference'
 import type { Connection, RowDataPacket } from 'mysql2/promise'
+import { ApiError } from '@server/errors/ApiError'
 import { content_reference_key } from '@shared/content-reference'
 import { settings } from '@shared/settings'
 
@@ -53,5 +54,9 @@ export async function reference_journals_since(connection: Connection, scope_id:
     if (row.from_ref !== null || row.to_ref !== null)
       batch.changes.push({ node_id: Number(row.node_id), from: row.from_ref, to: row.to_ref, is_folder: Boolean(row.is_folder) })
   }
+  // Attachment mutations have always journaled every revision, including empty
+  // batches. Legacy title creation advanced revisions without a journal entry.
+  if (scope_id !== 0 && (batches.size !== current - baseline || [... batches.keys()].some((revision, index) => revision !== baseline + index + 1)))
+    throw new ApiError(503, '附件引用历史不完整，请核对数据库状态后重试')
   return { unavailable, journals: [... batches.values()] }
 }
