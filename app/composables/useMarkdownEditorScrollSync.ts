@@ -1,4 +1,5 @@
 import type { EditorView } from '@codemirror/view'
+import { story_heading_selector } from '~/utils/content/sticky-headings'
 
 // VSCode-style scroll sync between the CodeMirror editor and the markdown
 // preview pane: preview blocks carry data-line anchors (their body line), and
@@ -169,7 +170,7 @@ export function useMarkdownEditorScrollSync(
   function pinned_heading_offset(pane: HTMLElement) {
     const pane_top = pane.getBoundingClientRect().top + pane.clientTop
     let bottom = pane_top
-    for (const heading of pane.querySelectorAll<HTMLElement>('.story-section > :is(h1, h2, h3, h4, h5, h6)')) {
+    for (const heading of pane.querySelectorAll<HTMLElement>(story_heading_selector)) {
       const rect = heading.getBoundingClientRect()
       const dock = Number.parseFloat(getComputedStyle(heading).top)
       if (! Number.isFinite(dock))

@@ -228,6 +228,12 @@ jobs:
       # 端口冲突，也不会共享数据库或 MQTT 主题。
       - run: pnpm test:e2e --shard=${{ matrix.shard }}/3
 
+      # The focused CSS suite retains legacy and production compiler settings,
+      # while reusing the isolated database and fake supplier boundaries.
+      - name: Verify production CSS and lazy styles
+        if: matrix.shard == 1
+        run: pnpm exec playwright test --config tests/css-production.config.ts
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
@@ -235,7 +241,9 @@ jobs:
           include-hidden-files: true
           path: |
             .dev/playwright/
+            .dev/css-production/
             .dev/e2e/**/server.log
+            .dev/e2e/**/css-build.json
 
   migrations:
     runs-on: ubuntu-24.04

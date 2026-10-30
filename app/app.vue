@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen overflow-x-clip" :style="header_height_var">
+  <div class="min-h-screen overflow-x-clip" :style="app_layout_vars">
     <Toast position="center" />
     <ConfirmPopup :pt="{ transition: confirm_popup_transition }">
       <template #accepticon>
@@ -373,7 +373,9 @@ const breadcrumb_row_style = computed(() => ({
 // is only the SSR / pre-measurement fallback.
 const app_header = useTemplateRef<HTMLElement>('app_header')
 const app_header_height = ref<number | null>(null)
-const header_height_var = computed(() => ({
+const app_half_viewport_width = ref('50vw')
+const app_layout_vars = computed(() => ({
+  '--app-half-viewport': app_half_viewport_width.value,
   '--app-header-height': app_header_height.value === null
     ? `${3.4 * (1 - header_shift_progress.value) + 2.25 + 1.25 * header_shift_progress.value}rem`
     : `${app_header_height.value}px`,
@@ -387,7 +389,16 @@ function on_escape_key(event: KeyboardEvent) {
     clear_toasts()
 }
 let header_observer: ResizeObserver | null = null
+let viewport_observer: ResizeObserver | null = null
 onMounted(() => {
+  if (! CSS.supports('overflow', 'clip')) {
+    // Full-bleed bands must exclude scrollbar gutters when the app root
+    // cannot clip them. Keep sticky content on the document's scroll root.
+    const measure_viewport = () => app_half_viewport_width.value = `${document.documentElement.clientWidth / 2}px`
+    measure_viewport()
+    viewport_observer = new ResizeObserver(measure_viewport)
+    viewport_observer.observe(document.documentElement)
+  }
   // The first-paint mask is injected by the inline head script in nuxt.config.ts.
   (window as Window & { __hide_app_loading_mask?: () => void }).__hide_app_loading_mask?.()
 
@@ -405,6 +416,7 @@ onUnmounted(() => {
   window.removeEventListener('scroll', on_scroll)
   window.removeEventListener('keydown', on_escape_key)
   header_observer?.disconnect()
+  viewport_observer?.disconnect()
 })
 
 const lor_modal = ref(false)

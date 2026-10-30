@@ -1,7 +1,10 @@
 import { resolve } from 'node:path'
-import Aura from '@primeuix/themes/aura'
+import { production_browser_queries, production_css_targets } from './config/browser-targets'
+import { browser_regexp_plugin } from './config/browser-transforms'
 import { load_settings } from './config/lib/loader'
 import { public_config_defaults } from './config/lib/schema'
+import { primevue_preset } from './config/primevue-preset'
+import { style_root_id } from './config/ui-style'
 
 const settings = load_settings()
 
@@ -134,8 +137,12 @@ export default defineNuxtConfig({
     },
   },
   vite: {
+    plugins: [browser_regexp_plugin()],
     build: {
       sourcemap: true,
+      cssTarget: production_css_targets,
+      cssMinify: 'lightningcss',
+      cssCodeSplit: true,
     },
     server: {
       allowedHosts: true,
@@ -172,6 +179,8 @@ export default defineNuxtConfig({
     '@nuxtjs/robots',
   ],
   icon: {
+    // Runtime icon CSS bypasses Vite's static selector lowering.
+    cssWherePseudo: false,
     clientBundle: {
       // Scan bundles every icon named as a literal in source (the regex also
       // catches `lucide:*` strings inside dynamic bindings), so first-use
@@ -338,7 +347,7 @@ export default defineNuxtConfig({
         },
       },
       theme: {
-        preset: Aura,
+        preset: primevue_preset,
         options: {
           cssLayer: false,
           darkModeSelector: '.dark',
@@ -357,7 +366,7 @@ export default defineNuxtConfig({
   },
   legacy: {
     vite: {
-      targets: ['chrome >= 80'],
+      targets: production_browser_queries,
       modernPolyfills: true,
     },
   },
@@ -366,6 +375,9 @@ export default defineNuxtConfig({
       title: 'Stupig 蠢猪小组 - 官方网站',
       htmlAttrs: {
         lang: 'zh-CN',
+      },
+      bodyAttrs: {
+        id: style_root_id,
       },
       style: [
         { key: 'app-loading-mask-style', textContent: app_loading_mask_css },

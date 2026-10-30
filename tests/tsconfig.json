@@ -1,5 +1,5 @@
 {
   "extends": "../scripts/tsconfig.json",
-  "include": ["./e2e/**/*.ts", "./support/**/*.ts"],
+  "include": ["./e2e/**/*.ts", "./support/**/*.ts", "./fixtures/css-official-apis/**/*.ts", "./css.config.ts", "./css-production.config.ts", "./css-legacy.config.ts", "./css-legacy-utilities.config.ts"],
   "exclude": []
 }

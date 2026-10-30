@@ -1,4 +1,6 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import { production_browser_queries, production_css_targets } from '../../config/browser-targets'
+import { style_root_id } from '../../config/ui-style'
 
 // This standalone Node harness supplies the same identity function at runtime.
 // Nuxt's generated workspace context checks the actual configuration contract.
@@ -43,6 +45,15 @@ afterAll(() => {
 })
 
 describe('production SSR configuration', () => {
+  it('uses the declared browser support for legacy JS and split minified CSS', () => {
+    expect(config.legacy?.vite?.targets).toEqual(production_browser_queries)
+    expect(config.vite?.build?.cssTarget).toEqual(production_css_targets)
+    expect(config.vite?.build?.cssMinify).toBe('lightningcss')
+    expect(config.vite?.build?.cssCodeSplit).toBe(true)
+  })
+  it('renders the shared Tailwind ancestor on body for teleported overlays', () => {
+    expect(config.app?.head?.bodyAttrs?.id).toBe(style_root_id)
+  })
   it('does not generate settings just by importing configuration', () => {
     expect(generation.generate_settings).not.toHaveBeenCalled()
   })

@@ -7,7 +7,7 @@ import { useStoryPreviewBody } from './useStoryPreviewBody'
 class ElementBoundary extends EventTarget {
   dataset: Record<string, string> = {}
   classList = { add: vi.fn(), remove: vi.fn() }
-  style = {}
+  style = { setProperty: vi.fn() }
   children: ElementBoundary[] = []
   scrollLeft = 0
   scrollWidth = 1000
@@ -67,6 +67,7 @@ beforeEach(() => {
   ObserverBoundary.instances = []
   window_target = new ElementBoundary()
   for (const [name, value] of Object.entries({ watch, window: window_target, ResizeObserver: ObserverBoundary,
+    getComputedStyle: () => ({ getPropertyValue: () => '48px' }),
     requestAnimationFrame: (fn: () => void) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout,
   })) vi.stubGlobal(name, value)
 })
@@ -132,7 +133,7 @@ it('owns each observer, listener and scheduled carousel effect from mount throug
   expect(active_observers()).toBe(0)
   owner.mount()
   expect(active_observers()).toBe(3)
-  expect(owner.fixture.listener_count()).toBe(7)
+  expect(owner.fixture.listener_count()).toBe(11)
   expect(window_target.listener_count()).toBe(1)
   expect(vi.getTimerCount()).toBe(2)
   owner.unmount()
@@ -151,7 +152,7 @@ it('coalesces rapid render changes, releases old content and rewires the same bo
   await nextTick()
   expect(ObserverBoundary.instances).toHaveLength(6)
   expect(active_observers()).toBe(3)
-  expect(owner.fixture.listener_count()).toBe(7)
+  expect(owner.fixture.listener_count()).toBe(11)
   expect(window_target.listener_count()).toBe(1)
   expect(vi.getTimerCount()).toBe(2)
   // An unchanged HTML string must not reinitialize the current v-html subtree.
@@ -171,7 +172,7 @@ it('patches the live body before reacquiring its image and layout effects', asyn
     { body: owner.body.value, html: 'typed', observers: 0 },
   ])
   expect(active_observers()).toBe(3)
-  expect(owner.fixture.listener_count()).toBe(7)
+  expect(owner.fixture.listener_count()).toBe(11)
 })
 
 it('releases the v-if body when empty and attaches to a new body when content returns', async () => {
@@ -187,7 +188,7 @@ it('releases the v-if body when empty and attaches to a new body when content re
   owner.html.value = 'returned'
   await nextTick()
   expect(active_observers()).toBe(3)
-  expect(replacement.listener_count()).toBe(7)
+  expect(replacement.listener_count()).toBe(11)
   owner.unmount()
   expect(replacement.listener_count()).toBe(0)
   expect(active_observers()).toBe(0)

@@ -25,6 +25,11 @@ test('renders an iframe alongside an image and warns when it is used as a link',
   await expect(frame.locator('.image-loading-mask')).toBeVisible()
   await expect(frame.locator('.image-loading-mask .iconify')).toHaveCSS('animation-name', 'image-loading-spin')
   expect(await frame.evaluate(element => getComputedStyle(element, '::before').animationName)).toBe('image-placeholder-breathe')
+  const ratio = await frame.locator('iframe').evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return rect.width / rect.height
+  })
+  expect(ratio).toBeCloseTo(16 / 9, 1)
   release_player()
   await expect(frame).toHaveAttribute('data-image-loaded', '')
   await expect(frame.locator('.image-loading-mask')).toBeHidden()

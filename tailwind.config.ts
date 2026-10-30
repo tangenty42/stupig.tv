@@ -1,5 +1,6 @@
 import type { Config } from 'tailwindcss'
 import PrimeUI from 'tailwindcss-primeui'
+import { border_radius } from './config/ui-style'
 
 export default {
   content: [
@@ -19,14 +20,14 @@ export default {
     'rating-顶级',
     'rating-夯',
   ],
-  darkMode: ['class'],
+  // The built-in class variant emits :is(.dark *), unsupported in Chrome 80.
+  darkMode: ['variant', '.dark &'],
+  // Component tokens/PT own their styles; explicit local ! utilities handle
+  // intentional overrides without wrapping ancestor variants in :is().
+  important: false,
   theme: {
     extend: {
-      borderRadius: {
-        DEFAULT: '0.4rem',
-        sm: '0.4rem',
-        md: '0.8rem',
-      },
+      borderRadius: border_radius,
       colors: {
         brand: {
           50: '#fdf6eb',

@@ -28,7 +28,7 @@
 
       <div
         v-if="! props.invalid"
-        class="watermark -mx-[calc(50vw-50%)] mt-2 flex min-w-0 flex-col items-center gap-3 bg-slate-100 px-[calc(50vw-50%)] py-8 dark:bg-slate-800/50"
+        class="watermark story-header-band mt-2 flex min-w-0 flex-col items-center gap-3 bg-slate-100 py-8 dark:bg-slate-800/50"
         :style="watermark_style"
       >
         <h1 class="min-w-0 break-words">
@@ -130,6 +130,11 @@ const watermark_style = computed(() => rating_rank.value
 </script>
 
 <style scoped>
+.story-header-band {
+  margin-inline: calc(50% - var(--app-half-viewport, 50vw));
+  padding-inline: calc(var(--app-half-viewport, 50vw) - 50%);
+}
+
 html .story-cover-button {
   transition: filter 300ms ease;
 }

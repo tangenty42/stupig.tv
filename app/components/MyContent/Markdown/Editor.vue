@@ -419,7 +419,12 @@ function on_overlay_drop(event: DragEvent) {
    fullscreen pane that would overflow horizontally, so they bleed only into
    the pane's px-3 padding (edge-to-edge, scrollbar excluded) with the
    padding keeping the title text on the content column. */
-.editor-fullscreen :deep(.story-body :is(h1, h2, h3, h4, h5, h6)) {
+.editor-fullscreen :deep(.story-body h1),
+.editor-fullscreen :deep(.story-body h2),
+.editor-fullscreen :deep(.story-body h3),
+.editor-fullscreen :deep(.story-body h4),
+.editor-fullscreen :deep(.story-body h5),
+.editor-fullscreen :deep(.story-body h6) {
   margin-inline: -0.75rem;
   padding-inline: 0.75rem;
 }

@@ -9,10 +9,10 @@ import { local_file_name, resolve_content_url } from './links'
 // shared env.images list, and render inside a frame that anchors the
 // "点击查看长图" cover (revealed by data-cropped when the min-w/object-crop
 // rule actually clips a tall image). Carousel images additionally wrap into
-// a .carousel-item with an optional caption. Encrypted attachments render as
-// ciphertext with data-encrypted (the preview swaps in a decrypted blob URL)
-// for permitted viewers; everyone else gets the plaintext 删减版 twin when the
-// author uploaded one (amber brand strip, tag 删减版), or keeps the frame and
+// a .carousel-item with an optional caption. Private attachments use the
+// server-issued readable URL for permitted viewers; everyone else gets the
+// plaintext 删减版 twin when the author uploaded one (amber brand strip, tag
+// 删减版), or keeps the frame and
 // caption with the <img> swapped for a gray denied placeholder when there is
 // none (no name, no lightbox entry).
 export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
@@ -91,15 +91,21 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
       ? `<span class="encrypted-image-denied" role="img"><span class="iconify i-lucide:ban" aria-hidden="true"></span><span>${CONTENT_IMAGE_DENIED_TEXT}</span></span>`
       : invalid ? '' : default_image_rule(tokens, idx, options, env, self)
     const unavailable = denied ? '' : `<span class="image-unavailable" role="img" aria-label="${invalid ? '附件不存在或引用无效' : '图片加载失败'}"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span>`
-    const lqip = denied || invalid ? null : image_lqip_style(abridged ?? image_attachment)
-    const placeholder = lqip ? ` data-lqip style="${md.utils.escapeHtml(lqip)}"` : ''
+    const presentation = abridged ?? image_attachment
+    const lqip = denied || invalid ? null : image_lqip_style(presentation)
+    // The validated metadata also reserves geometry in engines that ignore
+    // width/height aspect hints once CSS sets both dimensions to auto.
+    const dimensions = lqip && presentation?.image
+      ? `;--content-image-width:${presentation.image.width}px;--content-image-ratio:${presentation.image.width / presentation.image.height}`
+      : ''
+    const placeholder = lqip ? ` data-lqip style="${md.utils.escapeHtml(lqip + dimensions)}"` : ''
     const loading = denied || invalid ? '' : '<span class="image-loading-mask" role="status"><span class="iconify i-lucide:loader-circle" aria-hidden="true"></span><span class="sr-only">图片加载中</span></span>'
     const state = invalid ? ' data-image-error' : denied ? '' : ' aria-busy="true"'
     const framed_image = `<span class="img-frame"${placeholder}${state}>${rendered_image}${unavailable}${loading}${denied || invalid ? '' : '<span class="long-img-cover" aria-hidden="true">点击查看长图</span>'}</span>`
 
     // Permitted encrypted image: the normal picture/carousel body, just with
-    // an amber brand strip on top marking it 机密附件. Until the preview swaps
-    // in the decrypted blob, a loader stands in and the ciphertext img hides.
+    // an amber brand strip on top marking it 机密附件. It shares the normal
+    // image loading / error lifecycle; decryption is owned by the server.
     // The abridged twin (unauthorized) renders the same strip with 删减版.
     const private_image = token?.attrGet('data-private') === ''
     const brand_text = private_image ? '机密附件·完整版' : '机密附件·删减版'

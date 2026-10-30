@@ -2,7 +2,7 @@ import type { FullConfig } from '@playwright/test'
 import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -14,8 +14,9 @@ import { load_environment } from '../../config/lib/environment.mjs'
 import { run_migrations } from '../migration/local'
 import { e2e_target } from './e2e-target'
 
-export default async function setup(_playwright: FullConfig) {
+export default async function setup(playwright: FullConfig) {
   const root = process.cwd()
+  const production_css = playwright.metadata.productionCss === true
   const local = load_environment({ node_env: 'development' })
   if (! ['127.0.0.1', 'localhost'].includes(local.MYSQL_HOST ?? ''))
     throw new Error('Browser tests require a local development MySQL')
@@ -33,7 +34,7 @@ export default async function setup(_playwright: FullConfig) {
     probe.listen(port, 'localhost', () => probe.close(error => error ? reject(error) : accept()))
   })
   const environment = {
-    ... local, NODE_ENV: 'development',
+    ... local, NODE_ENV: 'development', BROWSERSLIST_ENV: 'production',
     MYSQL_USER: 'root', MYSQL_PASSWORD: local.MYSQL_DEV_ROOT_PASSWORD, MYSQL_DATABASE: database,
     APP_PORT: String(port), NUXT_OTP_DEBUG: 'true', NUXT_CAPTCHA_DEBUG: 'true',
     ALIYUN_OSS_ACCESS_KEY_ID: 'e2e-local-only', ALIYUN_OSS_ACCESS_KEY_SECRET: 'e2e-local-only',
@@ -41,7 +42,9 @@ export default async function setup(_playwright: FullConfig) {
     ALIYUN_DYPNS_CAPTCHA_APP_KEY: 'e2e-local-only', JWT_SECRET: randomUUID().repeat(2),
   }
   Object.assign(process.env, environment)
-  const config = load_config(environment)
+  // Compiler mode is independent of business deployment configuration. Even
+  // the production-CSS profile uses local development fixtures and fake keys.
+  const config = load_config({ ... environment, NODE_ENV: 'development' })
   // Local YAML overrides may point at a personal environment. Pin the test
   // destinations after loading and give all external integrations fake keys.
   config.db = { host: local.MYSQL_HOST!, port: Number(local.MYSQL_PORT), name: database, user: 'root', password: environment.MYSQL_PASSWORD }
@@ -114,6 +117,9 @@ export default async function setup(_playwright: FullConfig) {
     await writeFile(runtime_path, JSON.stringify(config), { mode: 0o600 })
     const settings_path = resolve(directory, 'settings.ts')
     const unix = (path: string) => path.replaceAll('\\', '/')
+    const css_report_path = resolve(directory, 'css-build.json')
+    if (production_css)
+      process.env.STUPIG_E2E_CSS_REPORT = css_report_path
     await writeFile(settings_path, `import { settings as base } from '${unix(resolve(root, 'server/shared/settings.generated.ts'))}'\nexport const settings = { ...base, integrations: { ...base.integrations, mqtt: { ...base.integrations.mqtt, topicPrefix: '${config.integrations.mqtt.topicPrefix}' } } }\n`)
     const aliases = {
       '@config/loader': unix(resolve(root, 'tests/support/e2e-config.ts')),
@@ -122,7 +128,12 @@ export default async function setup(_playwright: FullConfig) {
       '@server/lib/sms': unix(resolve(root, 'tests/support/e2e-sms.ts')),
       '@shared/settings': unix(settings_path),
     }
-    await writeFile(resolve(directory, 'nuxt.config.ts'), `import base from '${unix(resolve(root, 'nuxt.config'))}'
+    await writeFile(resolve(directory, 'nuxt.config.ts'), `import { writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import base from '${unix(resolve(root, 'nuxt.config'))}'
+const loadTailwind = createRequire(import.meta.url)('tailwindcss/loadConfig.js')
+const tailwind = loadTailwind(${JSON.stringify(unix(resolve(root, 'tailwind.config.ts')))})
+tailwind.content = [...tailwind.content, ${JSON.stringify(unix(resolve(root, 'tests/fixtures/e2e/app/**/*.{vue,ts}')))}]
 export default defineNuxtConfig({
   ...base,
   extends: [${JSON.stringify(unix(resolve(root, 'tests/fixtures/e2e')))}],
@@ -130,8 +141,24 @@ export default defineNuxtConfig({
   plugins: [${JSON.stringify(unix(resolve(root, 'tests/fixtures/e2e/app/plugins/readiness.client.ts')))}],
   serverDir: ${JSON.stringify(unix(resolve(directory, 'server')))},
   dir: { public: ${JSON.stringify(unix(resolve(root, 'public')))} },
-  modules: base.modules.filter(module => module !== '@teages/nuxt-legacy').map(module => typeof module === 'string' && module.startsWith('./') ? ${JSON.stringify(unix(root))} + '/' + module : module),
-  vite: { ...base.vite, optimizeDeps: { ...base.vite?.optimizeDeps, include: [...(base.vite?.optimizeDeps?.include || []), '@noble/hashes/legacy.js', '@noble/hashes/sha2.js', '@noble/hashes/utils.js'] } },
+  modules: base.modules.filter(module => ${production_css} || module !== '@teages/nuxt-legacy').map(module => typeof module === 'string' && module.startsWith('./') ? ${JSON.stringify(unix(root))} + '/' + module : module),
+  postcss: { ...base.postcss, plugins: { ...base.postcss?.plugins, tailwindcss: { config: tailwind } } },
+  vite: {
+    ...base.vite,
+    optimizeDeps: { ...base.vite?.optimizeDeps, include: [...(base.vite?.optimizeDeps?.include || []), '@noble/hashes/legacy.js', '@noble/hashes/sha2.js', '@noble/hashes/utils.js'] },
+    plugins: [
+      ...(base.vite?.plugins || []),
+      { name: 'css-production-evidence', configResolved(config) {
+        if (${production_css} && !config.build.ssr) writeFileSync(${JSON.stringify(unix(css_report_path))}, JSON.stringify({
+          nodeEnv: process.env.NODE_ENV, browserslistEnv: process.env.BROWSERSLIST_ENV,
+          mode: config.mode, isProduction: config.isProduction,
+          cssTarget: config.build.cssTarget, cssMinify: config.build.cssMinify,
+          cssCodeSplit: config.build.cssCodeSplit, minify: config.build.minify,
+          plugins: config.plugins.map(plugin => plugin.name),
+        }, null, 2))
+      } },
+    ],
+  },
   alias: { ...${JSON.stringify(aliases)}, ...base.alias, '@server': ${JSON.stringify(unix(resolve(directory, 'server')))} },
   nitro: {
     ...base.nitro,
@@ -147,21 +174,35 @@ export default defineNuxtConfig({
         logs.shift()
       writeFileSync(resolve(directory, 'server.log'), logs.join(''))
     }
-    const launch = (args: string[]) => {
+    const launch = (args: string[], building = false) => {
       const process_child = spawn(process.execPath, args, {
         cwd: root, windowsHide: true, detached: process.platform !== 'win32',
-        env: { ... process.env, ... environment, STUPIG_E2E_RUNTIME: runtime_path, STUPIG_E2E_URL: base_url, PORT: String(port), HOST: 'localhost' },
+        env: { ... process.env, ... environment, NODE_ENV: production_css && building ? 'production' : 'development', STUPIG_E2E_RUNTIME: runtime_path, STUPIG_E2E_URL: base_url, PORT: String(port), HOST: 'localhost' },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       process_child.stdout!.on('data', capture)
       process_child.stderr!.on('data', capture)
       return process_child
     }
-    child = launch([resolve('node_modules/nuxt/bin/nuxt.mjs'), 'build', directory])
+    child = launch([resolve('node_modules/nuxt/bin/nuxt.mjs'), 'build', directory], true)
     await new Promise<void>((accept, reject) => {
       child!.once('error', reject)
       child!.once('exit', code => code === 0 ? accept() : reject(new Error(`E2E fixture build failed; see ${resolve(directory, 'server.log')}`)))
     })
+    if (production_css) {
+      const report = JSON.parse(await readFile(css_report_path, 'utf8'))
+      const assets = resolve(directory, '.output/public/_nuxt')
+      const files = await readdir(assets)
+      const css = files.filter(name => name.endsWith('.css'))
+      const legacy = files.filter(name => name.includes('legacy') && name.endsWith('.js'))
+      if (report.nodeEnv !== 'production' || ! report.isProduction || ! report.cssCodeSplit || ! report.cssMinify || css.length < 2 || ! legacy.length)
+        throw new Error('CSS production build did not retain production mode, minification, splitting and legacy assets')
+      report.assets = {
+        css: await Promise.all(css.map(async name => ({ name, bytes: (await stat(resolve(assets, name))).size }))),
+        legacy,
+      }
+      await writeFile(css_report_path, JSON.stringify(report, null, 2))
+    }
     child = launch([resolve(directory, '.output/server/index.mjs')])
     const deadline = Date.now() + 60_000
     while (Date.now() < deadline) {

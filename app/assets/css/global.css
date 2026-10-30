@@ -152,14 +152,34 @@ html .img-frame > img[role='button'] {
 }
 
 /* Animate controls in both directions without affecting modal/overlay lifecycles. */
-html :is(button, input, select, textarea, .p-inputwrapper, .p-component[data-p-disabled], .p-slider, .p-listbox, [role='button'], [role='menuitem'], [role='option']) {
+html button,
+html input,
+html select,
+html textarea,
+html .p-inputwrapper,
+html .p-component[data-p-disabled],
+html .p-slider,
+html .p-listbox,
+html [role='button'],
+html [role='menuitem'],
+html [role='option'] {
   transition-property: color, background-color, border-color, outline-color, box-shadow, opacity;
   transition-duration: var(--p-transition-duration, 150ms);
   transition-timing-function: ease;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html :is(button, input, select, textarea, .p-inputwrapper, .p-component[data-p-disabled], .p-slider, .p-listbox, [role='button'], [role='menuitem'], [role='option']) {
+  html button,
+  html input,
+  html select,
+  html textarea,
+  html .p-inputwrapper,
+  html .p-component[data-p-disabled],
+  html .p-slider,
+  html .p-listbox,
+  html [role='button'],
+  html [role='menuitem'],
+  html [role='option'] {
     transition-duration: 0s;
   }
 }
@@ -179,23 +199,33 @@ html :is(button, input, select, textarea, .p-inputwrapper, .p-component[data-p-d
   @apply min-w-0 flex-1 truncate leading-5;
 }
 
-.content-item-muted > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+.content-item-muted > .content-item-icon,
+.content-item-muted > .content-item-title,
+.content-item-muted > .cm-completionLabel {
   @apply text-slate-400 dark:text-slate-500;
 }
 
-.content-item-private > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+.content-item-private > .content-item-icon,
+.content-item-private > .content-item-title,
+.content-item-private > .cm-completionLabel {
   @apply text-amber-600 dark:text-amber-400;
 }
 
-.content-item-redacted > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+.content-item-redacted > .content-item-icon,
+.content-item-redacted > .content-item-title,
+.content-item-redacted > .cm-completionLabel {
   @apply text-sky-600 dark:text-sky-400;
 }
 
-.content-item-active > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+.content-item-active > .content-item-icon,
+.content-item-active > .content-item-title,
+.content-item-active > .cm-completionLabel {
   @apply text-primary;
 }
 
-.content-item-error > :is(.content-item-icon, .content-item-title, .cm-completionLabel) {
+.content-item-error > .content-item-icon,
+.content-item-error > .content-item-title,
+.content-item-error > .cm-completionLabel {
   @apply text-red-500 dark:text-red-400;
 }
 
@@ -331,6 +361,13 @@ html :is(button, input, select, textarea, .p-inputwrapper, .p-component[data-p-d
     @apply relative;
     /* clip keeps the oversized ::before tile layer inside the block's box. */
     overflow: clip;
+  }
+
+  /* A feature query preserves this fallback through CSS minification. */
+  @supports not (overflow: clip) {
+    .watermark {
+      overflow: hidden;
+    }
   }
 
   .watermark::before {

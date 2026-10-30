@@ -11,8 +11,8 @@ import { forceLinting, linter } from '@codemirror/lint'
 import { StateEffect } from '@codemirror/state'
 import { parse_story_markdown } from '@shared/content-markdown'
 import { build_html_diagnostics } from '@shared/html-lint'
-import { lint as markdownlint } from 'markdownlint/sync'
 import { iframe_link_diagnostics, outer_refs_source } from './iframe-lint'
+import { lint as markdownlint } from './markdownlint'
 
 export interface LintListItem {
   from: number
