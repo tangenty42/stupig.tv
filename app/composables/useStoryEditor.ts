@@ -4,7 +4,7 @@ import type { LintListItem } from '~/utils/content/editor/lint'
 import { startCompletion } from '@codemirror/autocomplete'
 import { indentWithTab } from '@codemirror/commands'
 import { lintGutter } from '@codemirror/lint'
-import { Compartment, EditorState, Prec, Transaction } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Prec, Transaction } from '@codemirror/state'
 import { EditorView, keymap, scrollPastEnd } from '@codemirror/view'
 import { front_matter_line_count } from '@shared/content-markdown'
 import { settings } from '@shared/settings'
@@ -24,6 +24,7 @@ interface StoryEditorOptions {
   fullscreen: Ref<boolean>
   mode: Ref<'edit' | 'preview'>
   readonly?: () => boolean
+  allow_write?: () => boolean
   sources: EditorCompletionSources
   on_lint: (items: LintListItem[]) => void
   on_files_pasted: (files: AttachmentUploadPick[], position: number) => void
@@ -40,6 +41,7 @@ export function useStoryEditor(options: StoryEditorOptions) {
   const theme_compartment = new Compartment()
   const overscroll_compartment = new Compartment()
   const readonly_compartment = new Compartment()
+  const external_update = Annotation.define<boolean>()
   const readonly_extensions = () => [EditorState.readOnly.of(!! options.readonly?.()), EditorView.editable.of(! options.readonly?.())]
   const search = useMarkdownSearch(() => view)
   const scroll_sync = useMarkdownEditorScrollSync(() => view, options.preview_pane, () => front_matter_line_count(model.value))
@@ -116,6 +118,9 @@ export function useStoryEditor(options: StoryEditorOptions) {
           theme_compartment.of(theme_extensions(color_mode.value)),
           overscroll_compartment.of(fullscreen.value ? scrollPastEnd() : []),
           readonly_compartment.of(readonly_extensions()),
+          // Check the monotonic deadline at each edit, including undo/redo after
+          // browser suspension. Authorized server patches use an explicit tag.
+          EditorState.transactionFilter.of(transaction => ! transaction.docChanged || transaction.annotation(external_update) || (! options.readonly?.() && options.allow_write?.() !== false) ? transaction : []),
           EditorView.lineWrapping,
           EditorView.domEventHandlers({
             paste: (event, editor_view) => {
@@ -167,7 +172,7 @@ export function useStoryEditor(options: StoryEditorOptions) {
   })
   watch(model, (value) => {
     if (view && value !== view.state.doc.toString())
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } })
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value }, annotations: external_update.of(true) })
   })
   watch([sources.stories, sources.attachments, sources.folders], () => {
     if (view)
@@ -182,7 +187,7 @@ export function useStoryEditor(options: StoryEditorOptions) {
   }
 
   function insert_at_position(text: string, from: number, to = from) {
-    if (! view)
+    if (! view || options.readonly?.() || options.allow_write?.() === false)
       return
     const doc = view.state.doc
     const char_before = from > 0 ? doc.sliceString(from - 1, from) : ''
@@ -198,7 +203,7 @@ export function useStoryEditor(options: StoryEditorOptions) {
     if (disposed || model.value !== snapshot || (view && view.state.doc.toString() !== snapshot))
       return false
     if (view)
-      view.dispatch({ changes, annotations: Transaction.addToHistory.of(false) })
+      view.dispatch({ changes, annotations: [Transaction.addToHistory.of(false), external_update.of(true)] })
     else
       model.value = changes.reduceRight((text, change) => text.slice(0, change.from) + change.insert + text.slice(change.to), snapshot)
     return true

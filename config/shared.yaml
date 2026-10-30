@@ -24,6 +24,7 @@ mqtt:
   # 开发直连本机（ws://localhost:8083/mqtt）
   web:
     wsUrl: ${MQTT_WEB_URL}
+    draftWsUrl: ${MQTT_DRAFT_WEB_URL:-}
 
 oss:
   buckets:

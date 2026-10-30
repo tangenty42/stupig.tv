@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({ execute: vi.fn(), toast: vi.fn(), uploads: {} 
 vi.mock('~/stores/contentUploads', () => ({ useContentUploadsStore: () => mocks.uploads }))
 const { useAttachmentPanel } = await import('./useAttachmentPanel')
 let scope: ReturnType<typeof effectScope>
-const action = { operation: 'delete' as const, targets: [{ id: 3, version: 'v1' }], draft_references: [] }
+const action = { operation: 'delete' as const, targets: [{ id: 3, version: 'v1' }] }
 const nodes: ContentWorkspaceNode[] = [
   { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v1' },
   { id: 3, parent_id: 2, name: 'qa.txt', path: 'docs/qa.txt', kind: 'file', version: 'v1' },
@@ -224,7 +224,7 @@ it('fences intended destinations and related directories without blocking siblin
   const first = panel.execute({ operation: 'rename', target: { id: 3, version: 'v1' }, name: 'next.txt' })
   expect(panel.can_execute({ operation: 'rename', target: { id: 4, version: 'v1' }, name: 'NEXT.txt' })).toBe(false)
   expect(panel.can_execute({ operation: 'rename', target: { id: 4, version: 'v1' }, name: 'unique.txt' })).toBe(true)
-  expect(panel.can_execute({ operation: 'delete', targets: [{ id: 2, version: 'v1' }], draft_references: [] })).toBe(false)
+  expect(panel.can_execute({ operation: 'delete', targets: [{ id: 2, version: 'v1' }] })).toBe(false)
   await panel.execute({ operation: 'rename', target: { id: 4, version: 'v1' }, name: 'NEXT.txt' })
   expect(mocks.execute).toHaveBeenCalledOnce()
   await panel.start([{ file: new File(['x'], 'next.txt'), file_name: 'docs/next.txt' }])

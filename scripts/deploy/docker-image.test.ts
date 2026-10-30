@@ -34,9 +34,9 @@ describe('镜像自带的运行期配置注入', () => {
     const compose = parse(read('docker-compose.yml'))
     const broker = compose.services.emqx
     // eslint-disable-next-line no-template-curly-in-string -- Compose expands this literal placeholder, not JavaScript.
-    expect(broker.image).toBe('${ACR_IMAGE}:mqtt')
+    expect(broker.image).toBe('${MQTT_IMAGE:-${ACR_IMAGE}:mqtt}')
     // eslint-disable-next-line no-template-curly-in-string -- Preserve Compose's literal default-value expression.
-    expect(broker.ports).toEqual(['127.0.0.1:${MQTT_WS_PORT:-8085}:8083'])
+    expect(broker.ports).toEqual(['127.0.0.1:${MQTT_WS_PORT:-8085}:8083', '127.0.0.1:${MQTT_DRAFT_WS_PORT:-8086}:8086'])
     expect(broker.networks).toEqual(['mqtt'])
     expect(compose.networks.mqtt.driver).toBe('bridge')
     expect(compose.networks.mqtt.internal).not.toBe(true)

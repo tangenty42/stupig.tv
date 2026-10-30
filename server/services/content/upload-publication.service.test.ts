@@ -54,6 +54,8 @@ beforeEach(() => {
       target_location: 'aliyun', target_access: 'public', expected_size: 10, sha256: 'c'.repeat(64), purpose: 'create' },
   } as UploadRow
   boundary.execute.mockImplementation(async (sql: string, args: unknown[] = []) => {
+    if (sql.includes('FROM content_story_drafts'))
+      return [[]]
     if (sql.startsWith('INSERT INTO content_sync_outbox'))
       pending.push(JSON.parse(String(args[2])))
     if (sql.startsWith('SELECT 1') || sql.includes('FROM content_object_retirements') || sql.includes('FROM content_upload_images'))

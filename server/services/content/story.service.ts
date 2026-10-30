@@ -2,14 +2,15 @@ import type { AuthUser } from '@server/types/auth'
 import type { ContentMarkdownConfig, ContentStoryMeta } from '@shared/content-markdown'
 import type { ContentStoryAttachment, ContentStoryBody } from '@shared/types/content'
 import type { ContentReferenceBaseline } from '@shared/types/content-reference'
-import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+import type { Connection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { createHash } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
 import { ReferenceSafetyError } from '@server/errors/ReferenceSafetyError'
 import { db } from '@server/lib/db'
 import { delete_story_attachment_rows, get_story_object_keys, list_cover_presentations } from '@server/services/content-attachments.service'
-import { extract_story_reference_titles, parse_story_markdown, rename_story_references } from '@shared/content-markdown'
+import { parse_story_markdown } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
+import { content_name_key, format_story_ref } from '@shared/content-reference'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
 import { has_permission } from '@shared/permissions'
 import { settings } from '@shared/settings'
@@ -19,6 +20,11 @@ import { lock_title_namespace, record_title_change, replay_locked_references } f
 import { enqueue_content_refresh } from './sync-outbox.repository'
 import { require_workspace_actor } from './workspace-auth.service'
 import { active_reservations, ensure_workspace_root } from './workspace.repository'
+
+export interface StoryTransaction {
+  connection: Connection
+  title: { revision: number, floor: number }
+}
 
 interface StoryRow extends RowDataPacket {
   id: number
@@ -40,11 +46,6 @@ interface StoryRow extends RowDataPacket {
   updated_at: string
   revision: number
   namespace_revision: number
-}
-
-interface StoryReferrerRow extends RowDataPacket {
-  id: number
-  markdown: string
 }
 
 const content_markdown_config = {
@@ -75,7 +76,7 @@ function parse_or_throw(markdown: string, existing_titles: ContentMarkdownConfig
   return meta
 }
 
-/** Existing story ids+titles for dead-`@ref` validation, excluding the story being edited. */
+/** Current story catalog for content:// diagnostics, excluding the edited story. */
 async function existing_story_titles(exclude_id: number, executor = db as Pick<typeof db, 'execute'>) {
   const [rows] = await executor.execute<RowDataPacket[]>(
     'SELECT id, title FROM content_stories WHERE id != ?',
@@ -93,22 +94,6 @@ async function ensure_unique_title(title: string, exclude_id: number, executor =
   if (rows.length) {
     throw new ApiError(409, `标题『${title}』已被使用，请换一个标题`)
   }
-}
-
-const max_related_story_refs = 200
-
-/** Resolve `[](@title)` references in the markdown to story ids (excluding self), as a JSON array. */
-async function resolve_related_story_ids(markdown: string, exclude_id: number, executor = db as Pick<typeof db, 'execute'>) {
-  const titles = extract_story_reference_titles(markdown).slice(0, max_related_story_refs)
-  if (! titles.length) {
-    return '[]'
-  }
-  const placeholders = titles.map(() => '?').join(',')
-  const [rows] = await executor.execute<RowDataPacket[]>(
-    `SELECT id FROM content_stories WHERE id != ? AND title IN (${placeholders})`,
-    [exclude_id, ... titles],
-  )
-  return JSON.stringify(rows.map(row => Number(row.id)).sort((a, b) => a - b))
 }
 
 function event_row_date(precision: 'day' | 'month', entry: string) {
@@ -155,7 +140,7 @@ export function cover_version_from(attachments: ContentStoryAttachment[], cover:
     return null
   if (written && cover === written.file_name)
     return written.version
-  return attachments.find(item => item.file_name === cover)?.version ?? null
+  return attachments.find(item => content_name_key(item.file_name) === content_name_key(cover))?.version ?? null
 }
 
 export async function list_stories() {
@@ -237,52 +222,68 @@ function story_event_dates(meta: ContentStoryMeta) {
   return JSON.stringify(dates)
 }
 
-export async function create_story(created_by: number, markdown: string, can_private: boolean) {
+function reference_review_token(story_id: number, markdown: string, body_revision: number | null, baseline: ContentReferenceBaseline, namespace_revision: number, title_revision: number) {
+  return createHash('sha256').update(JSON.stringify([story_id, markdown, body_revision, baseline.base_namespace_revision, baseline.base_title_revision, namespace_revision, title_revision])).digest('hex')
+}
+
+export async function create_story(created_by: number, markdown: string, can_private: boolean, base_title_revision: number | null = null, confirm_reference_history?: string, transaction?: StoryTransaction) {
   if (! can_private && has_private_content(markdown)) {
     throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
   }
-  const connection = await db.getConnection()
+  const owned_connection = transaction ? null : await db.getConnection()
+  const connection = transaction?.connection ?? owned_connection!
   let story_id: number
   try {
-    await connection.beginTransaction()
-    const title = await lock_title_namespace(connection, true)
+    if (! transaction)
+      await connection.beginTransaction()
+    const title = transaction?.title ?? await lock_title_namespace(connection, true)
+    const baseline = { base_namespace_revision: 0, base_title_revision }
+    const replayed = await replay_locked_references(connection, 0, markdown, baseline, title)
+    const review_token = reference_review_token(0, markdown, null, baseline, replayed.namespace_revision, title.revision)
+    if (replayed.baseline_unavailable.title && confirm_reference_history !== review_token)
+      throw new ReferenceSafetyError('引用历史不可用，请核对当前引用后再保存', 'REF_HISTORY_UNAVAILABLE', review_token)
+    markdown = replayed.markdown
     const meta = parse_or_throw(markdown, await existing_story_titles(0, connection))
     await ensure_unique_title(meta.title, 0, connection)
     const [result] = await connection.execute<ResultSetHeader>(
-      'INSERT INTO content_stories (title, label, description, cover, cover_label, event_precision, event_dates, related_story_ids, markdown, created_by) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, ?)',
-      [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', meta.event_precision, story_event_dates(meta), await resolve_related_story_ids(markdown, 0, connection), markdown, created_by],
+      'INSERT INTO content_stories (title, label, description, cover, cover_label, event_precision, event_dates, markdown, created_by) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?)',
+      [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', meta.event_precision, story_event_dates(meta), markdown, created_by],
     )
     story_id = Number(result.insertId)
     await ensure_workspace_root(connection, story_id)
     // Creation advances catalog freshness without remapping an existing title.
-    await record_title_change(connection, title.revision)
+    await record_title_change(connection, title.revision, { node_id: story_id, from: null, to: format_story_ref(meta.title) })
     await enqueue_content_refresh(connection, [sync_resource('content_stories', 'all'), sync_resource('content_titles', 'all')])
-    await connection.commit()
+    if (! transaction)
+      await connection.commit()
   }
   catch (error) {
-    await connection.rollback()
+    if (! transaction)
+      await connection.rollback()
     throw error
   }
   finally {
-    connection.release()
+    owned_connection?.release()
   }
 
   return story_id
 }
 
 /** Save under title then scope locks; mechanical changes never consume body revisions. */
-export async function update_story(id: number, markdown: string, base_revision: number, can_private: boolean, baseline: ContentReferenceBaseline = { base_namespace_revision: null, base_title_revision: null }, confirm_reference_history = false) {
-  const connection = await db.getConnection()
+export async function update_story(id: number, markdown: string, base_revision: number, can_private: boolean, baseline: ContentReferenceBaseline = { base_namespace_revision: null, base_title_revision: null }, confirm_reference_history?: string, transaction?: StoryTransaction) {
+  const owned_connection = transaction ? null : await db.getConnection()
+  const connection = transaction?.connection ?? owned_connection!
   const rewritten_referrers: number[] = []
   let result
   let title_changed = false
-  let exclusive_title_lock = false
+  let exclusive_title_lock = Boolean(transaction)
   const submitted_markdown = markdown
   try {
     while (true) {
       markdown = submitted_markdown
-      await connection.beginTransaction()
-      const title_namespace = await lock_title_namespace(connection, exclusive_title_lock)
+      if (! transaction)
+        await connection.beginTransaction()
+      const title_namespace = transaction?.title ?? await lock_title_namespace(connection, exclusive_title_lock)
       const [rows] = await connection.execute<StoryRow[]>('SELECT * FROM content_stories WHERE id = ? FOR UPDATE', [id])
       const story = rows[0]
       if (! story)
@@ -292,37 +293,32 @@ export async function update_story(id: number, markdown: string, base_revision: 
       if (! can_private && (has_private_content(markdown) || has_private_content(story.markdown)))
         throw new ApiError(403, '内容包含机密内容，你没有机密内容的编辑权限')
       const replayed = await replay_locked_references(connection, id, markdown, baseline, title_namespace)
-      if (! confirm_reference_history && (replayed.baseline_unavailable.namespace || replayed.baseline_unavailable.title))
-        throw new ReferenceSafetyError('引用历史不可用，请核对当前引用后再保存', 'REF_HISTORY_UNAVAILABLE')
+      const review_token = reference_review_token(id, submitted_markdown, base_revision, baseline, replayed.namespace_revision, title_namespace.revision)
+      if ((replayed.baseline_unavailable.namespace || replayed.baseline_unavailable.title) && confirm_reference_history !== review_token)
+        throw new ReferenceSafetyError('引用历史不可用，请核对当前引用后再保存', 'REF_HISTORY_UNAVAILABLE', review_token)
       markdown = replayed.markdown
       const meta = parse_or_throw(markdown, await existing_story_titles(id, connection))
       // Ordinary saves share the title lock. A rename retries from scratch with
       // an exclusive lock, never upgrading a shared lock while holding scope rows.
       if (story.title !== meta.title && ! exclusive_title_lock) {
-        await connection.rollback()
+        if (! transaction)
+          await connection.rollback()
         exclusive_title_lock = true
         continue
       }
       await ensure_unique_title(meta.title, id, connection)
       const [attachments] = await connection.execute<RowDataPacket[]>('SELECT file_name, version FROM content_story_attachments WHERE story_id = ? AND is_folder = 0', [id])
-      const related = await resolve_related_story_ids(markdown, id, connection)
       await connection.execute(
-        'UPDATE content_stories SET title = ?, label = ?, description = ?, cover = ?, cover_label = ?, cover_version = ?, event_precision = ?, event_dates = CAST(? AS JSON), related_story_ids = CAST(? AS JSON), markdown = ?, revision = revision + 1 WHERE id = ?',
-        [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', attachments.find(row => row.file_name === meta.cover)?.version ?? null, meta.event_precision, story_event_dates(meta), related, markdown, id],
+        'UPDATE content_stories SET title = ?, label = ?, description = ?, cover = ?, cover_label = ?, cover_version = ?, event_precision = ?, event_dates = CAST(? AS JSON), markdown = ?, revision = revision + 1 WHERE id = ?',
+        [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', attachments.find(row => content_name_key(String(row.file_name)) === content_name_key(meta.cover ?? ''))?.version ?? null, meta.event_precision, story_event_dates(meta), markdown, id],
       )
       let title_revision = title_namespace.revision
       if (story.title !== meta.title) {
         title_changed = true
-        await record_title_change(connection, title_revision, { node_id: id, from: story.title, to: meta.title })
+        const rewritten = await record_title_change(connection, title_revision, { node_id: id, from: format_story_ref(story.title), to: format_story_ref(meta.title) })
         title_revision ++
-        const [referrers] = await connection.execute<StoryReferrerRow[]>('SELECT id, markdown FROM content_stories WHERE JSON_CONTAINS(related_story_ids, ?) AND id != ? ORDER BY id FOR UPDATE', [String(id), id])
-        for (const referrer of referrers) {
-          const rewritten = rename_story_references(referrer.markdown, story.title, meta.title)
-          if (rewritten !== referrer.markdown) {
-            await connection.execute('UPDATE content_stories SET markdown = ? WHERE id = ?', [rewritten, referrer.id])
-            rewritten_referrers.push(referrer.id)
-          }
-        }
+        rewritten_referrers.push(... rewritten.map(row => row.id))
+        markdown = rewritten.find(row => row.id === id)?.markdown ?? markdown
       }
       result = { markdown, revision: base_revision + 1, namespace_revision: replayed.namespace_revision, title_revision, baseline_unavailable: replayed.baseline_unavailable, diagnostics: replayed.diagnostics }
       await enqueue_content_refresh(connection, [
@@ -330,27 +326,31 @@ export async function update_story(id: number, markdown: string, base_revision: 
         ... (title_changed ? [sync_resource('content_titles', 'all')] : []),
         ... rewritten_referrers.map(referrer_id => sync_resource('content_story', referrer_id)),
       ])
-      await connection.commit()
+      if (! transaction)
+        await connection.commit()
       break
     }
   }
   catch (error) {
-    await connection.rollback()
+    if (! transaction)
+      await connection.rollback()
     throw error
   }
   finally {
-    connection.release()
+    owned_connection?.release()
   }
   return result!
 }
 
 /** Deletes the story row and its attachment directory. */
-export async function delete_story(id: number, actor_id: number) {
-  const connection = await db.getConnection()
+export async function delete_story(id: number, actor_id: number, transaction?: StoryTransaction) {
+  const owned_connection = transaction ? null : await db.getConnection()
+  const connection = transaction?.connection ?? owned_connection!
   let object_keys: Awaited<ReturnType<typeof get_story_object_keys>> = []
   try {
-    await connection.beginTransaction()
-    const titles = await lock_title_namespace(connection, true)
+    if (! transaction)
+      await connection.beginTransaction()
+    const titles = transaction?.title ?? await lock_title_namespace(connection, true)
     const [stories] = await connection.execute<StoryRow[]>('SELECT * FROM content_stories WHERE id = ? FOR UPDATE', [id])
     if (! stories[0])
       throw new ApiError(404, '档案不存在或已被删除')
@@ -359,15 +359,12 @@ export async function delete_story(id: number, actor_id: number) {
     const { rows: active, expired_sessions } = await active_reservations(connection, id)
     if (active.length)
       throw new ApiError(409, '档案还有未完成的上传，请先取消或完成')
-    const [referrers] = await connection.execute<RowDataPacket[]>('SELECT id, title FROM content_stories WHERE JSON_CONTAINS(related_story_ids, ?) AND id != ? ORDER BY id FOR UPDATE', [String(id), id])
-    if (referrers.length)
-      throw new ApiError(409, `仍有档案引用本档案：${referrers.map(row => String(row.title)).join('、')}`)
     object_keys = await get_story_object_keys(id, connection)
     if (object_keys.some(object => object.provider !== 'aliyun'))
       throw new ApiError(503, '档案附件尚未完成迁移')
     for (const object of object_keys)
       await enqueue_object_retirement(connection, object.key, id, 'story-delete')
-    await record_title_change(connection, titles.revision, { node_id: id, from: stories[0].title, to: null })
+    await record_title_change(connection, titles.revision, { node_id: id, from: format_story_ref(stories[0].title), to: null })
     await delete_story_attachment_rows(id, connection)
     await connection.execute('DELETE FROM content_stories WHERE id = ?', [id])
     await connection.execute('DELETE FROM content_reference_journals WHERE scope_id = ?', [id])
@@ -376,13 +373,15 @@ export async function delete_story(id: number, actor_id: number) {
       sync_resource('content_titles', 'all'), sync_resource('content_attachments', id),
       ... (expired_sessions.length ? [sync_resource('content_uploads', id), ... expired_sessions.map(session => sync_resource('content_upload_session', session))] : []),
     ])
-    await connection.commit()
+    if (! transaction)
+      await connection.commit()
   }
   catch (error) {
-    await connection.rollback()
+    if (! transaction)
+      await connection.rollback()
     throw error
   }
   finally {
-    connection.release()
+    owned_connection?.release()
   }
 }

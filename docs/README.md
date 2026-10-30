@@ -50,7 +50,7 @@
 | [上传](modules/content/uploads.md) | 预约、分片、续传、替换、取消及发布 |
 | [图片](modules/content/images.md) | 格式、编辑、原图、另存为与删减版 |
 | [Markdown](modules/content/markdown.md) | 方言、引用、卡片、预览与诊断 |
-| [草稿](modules/content/drafts.md) | 本地持久化、正文替换、历史重放与版本冲突 |
+| [草稿](modules/content/drafts.md) | 云端共享、独占租约、断线交接、发布与引用历史 |
 | [读取权限](modules/content/access.md) | 机密继承、普通/删减版本、下载和授权撤销 |
 | [对象生命周期](modules/content/object-lifecycle.md) | 预热、退役、刷新和对象清理 |
 
@@ -64,7 +64,13 @@
 
 ## 部署状态与能力边界
 
-CSS 当前采用[官方主题 API 与 Tailwind 选择器策略](reviews/css-official-apis-validation-2026-10-29.md)，该页集中维护改动范围、最新证据和发布门槛：轮播交互与动画等价改写、生产构建、Chromium 80 / Firefox 78 限定样式场景及现代对照已有验证，尚未部署。Firefox 78 编辑因缺少 Web Locks 保持只读，随共享云端草稿改造处理；剩余浏览器和发布交付仍待验收。[自定义 CSS 分层兼容插件设计](designs/css-layer-compat-plugin-2026-10-29.md)因公开扩展点不足保持暂停，作为历史提案保留，不是当前运行方案。
+2026-10-28 的[架构与文档一致性审查](reviews/architecture-and-documentation-audit-2026-10-28.md)独立记录架构评估、已发现的说明偏差及逐项决策选项；它是审查记录，不替代下列手册或线上验收。
+
+2026-10-29 的[共享云端草稿与编辑租约设计](designs/shared-cloud-draft-2026-10-29.md)记录 A02 的协议与选择。2026-10-30 工作区已接入共享云端 draft、服务端租约及内存编辑会话，旧 localStorage 由管理员自行处理；代码落地不代表生产已切换。
+
+2026-10-30 的[共享云端草稿实现方案与记录](designs/shared-cloud-draft-implementation-2026-10-30.md)按 P0–P6 对应审计 A01–A10、D01–D20，记录实际落点、隔离验证、容量边界和未完成的独立审计项；该记录不作为生产上线回执。
+
+CSS 当前采用[官方主题 API 与 Tailwind 选择器策略](reviews/css-official-apis-validation-2026-10-29.md)，该页保留样式改造证据和发布门槛。此前 Firefox 78 因缺少 Web Locks 而只读；工作区已改用服务端租约，旧引擎编辑流程的隔离验证见[共享云端草稿实施记录](designs/shared-cloud-draft-implementation-2026-10-30.md)。剩余浏览器和生产交付仍待验收。[自定义 CSS 分层兼容插件设计](designs/css-layer-compat-plugin-2026-10-29.md)因公开扩展点不足保持暂停，作为历史提案保留，不是当前运行方案。
 
 当前生产状态与待验收范围如下，部署回执及镜像身份见相应操作手册：
 

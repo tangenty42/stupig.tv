@@ -17,6 +17,10 @@
 
 ## 两类发布方式
 
+草稿事件 `content_draft`、`content_drafts` 在入队时统一映射 HMAC resource，topic 与 payload 使用相同值；派发器不会再次映射。它们通过独立 `integrations.mqtt.privateTopicPrefix` 及授权 WS 连接，不属于匿名 `stupig/sync/#`。凭据经当前账号／会话双权限校验后签发，仅存在内存，最长 30 秒；broker 连接时重新授权并按期断开，客户端重连领取新凭据。公开与私有连接复用同一 transport 实现，BroadcastChannel 使用独立通道。真实 ACL、撤权时限和反代配置见 [MQTT](../deployment/mqtt.md)。
+
+每个 transport 统一选择主题前缀，初始订阅、运行中新增／取消订阅及重连均使用该前缀；代其他标签页订阅的资源遵循相同规则。
+
 | 业务 | 提交与发布方式 | 保证与边界 |
 | --- | --- | --- |
 | 账号、资料、管理 | 变更后调用 `publish_refresh()` | 通知用于提示重读；不具备 Content outbox 的数据库事务保证 |
@@ -37,6 +41,8 @@ Content 通过 `enqueue_workspace_change()`／`enqueue_content_refresh()` 指定
 ## 轮询的使用范围
 
 用户在线状态等派生数据会随时间改变，即使没有写操作也会变化。因此用户资料、会话列表和管理员列表保留按 settings 配置的轮询补偿。它只在页面可见且一段时间没有新 fetch 后触发，不替代明确变更的 MQTT 通知。
+
+草稿按独立页面 query 复用相同 M 轮询，租约／命令结果不进入共享资源缓存。store 串行执行自动保存、纯保活及用户动作，输入 N 节流不会被自通知绕过。MQTT 只是核对触发，不能授予编辑权；隐藏即只读并尽力释放，消息丢失靠轮询与服务端到期恢复。
 
 上传客户端需要查询自己会话的完成／图片处理状态；后台 runner 需要有界扫描领域账本。这两类轮询有各自生命周期，不应混入全站页面刷新定时器。
 

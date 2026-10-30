@@ -68,7 +68,7 @@ describe('production SSR configuration', () => {
   })
 
   it('declares only public deployment fields without reading runtime secrets', () => {
-    expect(config.runtimeConfig?.public?.mqtt).toEqual({ web: { wsUrl: '' } })
+    expect(config.runtimeConfig?.public?.mqtt).toEqual({ web: { wsUrl: '', draftWsUrl: '' } })
     expect(config.runtimeConfig?.public?.site).toEqual({ url: '', indexable: false })
     expect(config.runtimeConfig?.public?.oss).toEqual({ buckets: { public: { publicBaseUrl: '' } } })
     expect(config.runtimeConfig?.public?.aliyun).toEqual({ captcha: { appId: '' } })

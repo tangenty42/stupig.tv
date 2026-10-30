@@ -9,6 +9,8 @@ const state = vi.hoisted(() => ({
 }))
 vi.mock('@server/lib/db', () => {
   const execute = async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('FROM content_story_drafts'))
+      return [[]]
     if (sql.includes('UNION SELECT attachment_id'))
       return [[... [state.row], ... state.backups].some(row => row.object_key === params[0] || row.private_object_key === params[0] || row.old_object_key === params[0]) ? [{ id: 11 }] : []]
     if (sql.startsWith('SELECT') && sql.includes('content_attachment_encryption_backup'))

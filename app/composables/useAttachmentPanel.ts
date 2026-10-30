@@ -3,7 +3,7 @@ import type { ErrorPolicy, WorkspaceCommand, WorkspaceIssue } from '@shared/cont
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { UploadEntry } from '~/composables/useContentUploadAdmission'
 import type { WorkspaceAction, WorkspaceCommandFootprint, WorkspaceListRow } from '~/utils/content/workspace'
-import { attachment_folder_of, attachment_path_join, decrypted_attachment_name, extract_attachment_names, normalized_attachment_extension, split_attachment_editable_name } from '@shared/content-markdown'
+import { attachment_folder_of, attachment_path_join, decrypted_attachment_name, normalized_attachment_extension, split_attachment_editable_name } from '@shared/content-markdown'
 import { error_policy_schema } from '@shared/content-workspace'
 import { has_permission } from '@shared/permissions'
 import { useContentUploadsStore } from '~/stores/contentUploads'
@@ -57,13 +57,14 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
   }, { flush: 'sync' })
   const root_id = computed(() => catalog.data.value?.root_id ?? 0)
   const can_private = computed(() => has_permission(user.value, 'content_private', 'read'))
-  const references = computed(() => extract_attachment_names(markdown()))
+  const draft_markdown = computed(markdown)
+  const get_delete_impact = (targets: number[]) => content.get_delete_impact({ kind: 'attachment', id: scope, targets })
   const affected_operation = (row: WorkspaceListRow) => operations.value.find(operation => workspace_footprints_overlap(operation.footprint, workspace_row_footprint(row)))
   const command_pending = (row: WorkspaceListRow) => operations.value.some(operation => operation.pending && workspace_footprints_overlap(operation.footprint, workspace_row_footprint(row)))
   const command_moving = (row: WorkspaceListRow) => operations.value.some(operation => operation.pending && operation.command.operation === 'move' && row.node && operation.footprint.ids.includes(row.node.id))
   const capabilities = (row: WorkspaceListRow) => {
     const operation = affected_operation(row)
-    return workspace_capabilities(row, { readonly, can_private: can_private.value, pending: !! operation, pending_reason: operation?.pending ? '正在提交操作' : '此项操作结果待处理', references: references.value, nodes: catalog.data.value?.nodes, reservations: uploads.reservations })
+    return workspace_capabilities(row, { readonly, can_private: can_private.value, pending: !! operation, pending_reason: operation?.pending ? '正在提交操作' : '此项操作结果待处理', nodes: catalog.data.value?.nodes, reservations: uploads.reservations })
   }
   function toggle_folder(row: WorkspaceListRow) {
     if (row.node?.kind !== 'folder')
@@ -223,6 +224,6 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     operations.value = []
   })
   await Promise.all([catalog.ready, sync_pending])
-  return { catalog, uploads, selected, selected_rows, expanded, drag_ids, preview_visible, preview_images, rows, root_id, readonly, can_private, references, pending, resolution, request_error,
+  return { catalog, uploads, selected, selected_rows, expanded, drag_ids, preview_visible, preview_images, rows, root_id, readonly, can_private, draft_markdown, get_delete_impact, pending, resolution, request_error,
     resolution_pending, command_pending, command_moving, can_execute, target, capabilities, toggle_folder, select, submit, execute, dismiss_resolution, start, open, preview, download, replace, edit_image }
 }

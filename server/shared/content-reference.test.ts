@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { content_reference_dialect } from './content-dialect'
 import { extract_attachment_names, extract_story_reference_titles, lint_content_refs, parse_story_markdown, rewrite_content_refs, upgrade_legacy_refs } from './content-markdown'
-import { format_attachment_ref, format_story_ref, parse_content_ref } from './content-reference'
+import { content_reference_key, format_attachment_ref, format_story_ref, parse_content_ref } from './content-reference'
 
 const config = {
   title_max_length: 60, label_max_bytes: 255, desc_max_bytes: 500, cover_max_bytes: 255, markdown_max_bytes: 1048576,
@@ -15,12 +15,14 @@ describe('content reference dialect', () => {
     ['att://%E5%9B%BE%E7%89%87/a.png', { kind: 'attachment', path: '图片/a.png' }],
     ['att://cards/', { kind: 'attachment', path: 'cards' }],
     ['content://其他档案', { kind: 'story', title: '其他档案' }],
+    ['ATT://Docs/A.png?download=1#page2', { kind: 'attachment', path: 'Docs/A.png' }],
+    ['Content://其他档案?view=card#section', { kind: 'story', title: '其他档案' }],
     ['@其他档案', null],
     ['图片/a.png', null],
   ])('parses %s without treating a path segment as a host', (destination, expected) => {
     expect(parse_content_ref(destination)).toEqual(expected)
   })
-  it.each(['att:///a', 'att://a//b', 'att://', 'att://a//', 'att://a%20b', 'att://a%ZZ', 'content://a/b', 'content://', 'ATT://a', 'Content://b', '#a', 'https://example.test', 'mailto:a@b', '/absolute'])('rejects invalid or unrelated destinations: %s', (destination) => {
+  it.each(['att:///a', 'att://a//b', 'att://', 'att://a//', 'att://a%20b', 'att://a%ZZ', 'att://a%3Fb', 'content://a/b', 'content://', '#a', 'https://example.test', 'mailto:a@b', '/absolute'])('rejects invalid or unrelated destinations: %s', (destination) => {
     expect(parse_content_ref(destination)).toBeNull()
   })
   it('formats all registered constructs consistently', () => {
@@ -77,13 +79,16 @@ describe('content reference dialect', () => {
       ['warning', '附件『gone』不存在'], ['warning', '不允许自我引用'], ['warning', '档案『不存在』不可引用'], ['warning', '档案引用标题不合法，不能包含 /'],
     ])
   })
-  it('fixes explicit scheme casing without flagging ordinary Markdown targets', () => {
+  it('accepts case-insensitive references without formatting them or ordinary Markdown targets', () => {
     const markdown = document('[](ATT://cards)\n[](cards) [](content://其他档案)\n[](@其他档案)')
     const issues = lint_content_refs(markdown, { ... config })
-    const uppercase = issues.find(item => item.fix?.insert === 'att://cards')!
-    expect(markdown.slice(uppercase.fix!.from, uppercase.fix!.to)).toBe('ATT://cards')
-    expect(issues).toEqual([uppercase])
-    expect(uppercase).toMatchObject({ severity: 'warning', source: 'content-ref' })
+    expect(issues).toEqual([])
+  })
+  it('normalizes only target identity, preserving path and private suffix distinctions', () => {
+    expect(content_reference_key('ATT://Docs/E%CC%81.PNG?x=1#p')).toBe('att://docs/é.png')
+    expect(content_reference_key('content://É?x=1')).toBe('content://é')
+    expect(content_reference_key('att://A.png.good')).not.toBe(content_reference_key('att://A.png'))
+    expect(lint_content_refs('[](att://CARDS/?x=1) [](CONTENT://其他档案#top)', config)).toEqual([])
   })
   it.each(['[](old.png)', '[](@其他档案)', '[文字][id]\n\n[id]: docs/file.pdf', '![图片](cards/missing.gif)'])('does not issue migration diagnostics or infer business references from %s', (body) => {
     expect(lint_content_refs(document(body), config)).toEqual([])

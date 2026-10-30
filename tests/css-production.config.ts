@@ -7,7 +7,7 @@ const artifacts = target.shard.total > 1 ? `-shard-${target.shard.current}` : ''
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['css-production-*.spec.ts', 'content-sticky-headings.spec.ts', 'content-editor-scroll-alignment.spec.ts', 'content-iframe-carousel.spec.ts'],
+  testMatch: ['css-production-*.spec.ts', 'content-sticky-headings.spec.ts', 'content-editor-scroll-alignment.spec.ts', 'content-iframe-carousel.spec.ts', 'content-cloud-draft.spec.ts'],
   globalSetup: '../scripts/testing/browser.ts',
   metadata: { productionCss: true },
   workers: 1,

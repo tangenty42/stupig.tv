@@ -128,7 +128,11 @@ describe('维护脚本产物', () => {
     expect(scripts['content:storage:migrate']).toBeUndefined()
     expect(scripts['content:refs:migrate']).toBeUndefined()
     const manifest = JSON.parse(await readFile(resolve(project_root, '.output/server/maintenance/migration-scripts/manifest.json'), 'utf8'))
-    expect(manifest.scripts.map((item: { filename: string }) => item.filename)).toEqual(['20261024210100_content_references.ts', '20261024210200_content_workspace.ts'])
+    expect(manifest.scripts.map((item: { filename: string }) => item.filename)).toEqual([
+      '20261024210100_content_references.ts',
+      '20261024210200_content_workspace.ts',
+      '20261028210100_reference_journal_entries.ts',
+    ])
   })
 
   it('迁移产物同样能在容器里跑起来（只读 --status，不写库）', async () => {

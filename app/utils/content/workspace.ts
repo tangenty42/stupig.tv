@@ -81,7 +81,7 @@ export function project_workspace_rows(nodes: ContentWorkspaceNode[], sessions: 
   walk(root, 0)
   return result
 }
-export function workspace_capabilities(row: WorkspaceListRow, options: { readonly: boolean, can_private: boolean, pending: boolean, pending_reason?: string, references: string[], reservations?: ContentUploadReservation[], nodes?: ContentWorkspaceNode[] }) {
+export function workspace_capabilities(row: WorkspaceListRow, options: { readonly: boolean, can_private: boolean, pending: boolean, pending_reason?: string, reservations?: ContentUploadReservation[], nodes?: ContentWorkspaceNode[] }) {
   const node = row.node
   const denied = Boolean((node?.attachment?.is_private || attachment_path_is_private(row.path)) && ! options.can_private)
   const public_variant = Boolean(node?.attachment?.is_redacted_view && node.attachment.redacted_url)
@@ -93,7 +93,6 @@ export function workspace_capabilities(row: WorkspaceListRow, options: { readonl
   const reserved = node?.kind === 'file' && (protected_ids.has(node.id) || reservations.some(item => attachment_name_key(item.path) === name))
   const contains_reservation = node?.kind === 'folder' && (reservations.some(item => item.parent_id === node.id || attachment_name_key(item.path).startsWith(`${name}/`)) || (options.nodes ?? []).some(source => protected_ids.has(source.id) && attachment_name_key(source.path).startsWith(`${name}/`)))
   const busy = Boolean(row.session) || options.pending || reserved
-  const referenced = options.references.some(path => path === row.path || row.path.startsWith(`${path}/`) || (node?.kind === 'folder' && path.startsWith(`${row.path}/`)))
   const edit = ! options.readonly && ! denied && ! busy && !! node
   const edit_reasons = [
     ... (options.readonly ? ['只读模式'] : []),
@@ -110,19 +109,19 @@ export function workspace_capabilities(row: WorkspaceListRow, options: { readonl
     download: normal_readable,
     preview: Boolean(node?.attachment?.is_image && normal_readable),
     preview_redacted: Boolean(node?.attachment?.is_image && node.attachment.has_redacted && node.attachment.redacted_url),
-    rename: edit, move: edit, delete: edit && ! referenced && ! contains_reservation,
+    rename: edit, move: edit, delete: edit && ! contains_reservation,
     replace: edit && node?.kind === 'file',
     image_edit: edit && ! original_only && !! node?.attachment?.image,
     private: edit && ! contains_reservation && options.can_private,
     redact: edit && ! original_only && !! node?.attachment?.is_private && !! redactable_attachment_mime(node.name),
-    reason: options.pending ? options.pending_reason ?? '正在提交操作' : denied ? '没有机密附件权限' : row.session ? '上传会话尚未结束' : reserved ? '附件已被上传预约' : contains_reservation ? '目录内有上传预约' : referenced ? '当前草稿仍有引用' : '',
+    reason: options.pending ? options.pending_reason ?? '正在提交操作' : denied ? '没有机密附件权限' : row.session ? '上传会话尚未结束' : reserved ? '附件已被上传预约' : contains_reservation ? '目录内有上传预约' : '',
     reasons: {
       open: public_variant ? [] : denied ? ['没有机密附件权限'] : ! node?.attachment?.url ? ['附件暂不可读取'] : [],
       preview: normal_read_reasons,
       download: normal_read_reasons,
       rename: edit_reasons,
       move: edit_reasons,
-      delete: [... edit_reasons, ... (referenced ? ['当前草稿仍有引用'] : []), ... (contains_reservation ? ['目录内有上传预约'] : [])],
+      delete: [... edit_reasons, ... (contains_reservation ? ['目录内有上传预约'] : [])],
       replace: file_reasons,
       image_edit: [... file_reasons, ... (original_only ? ['此图片格式不支持编辑'] : ! node?.attachment?.image ? ['图片尚未处理就绪'] : [])],
       private: [... edit_reasons, ... (! options.can_private ? ['没有机密附件权限'] : []), ... (contains_reservation ? ['目录内有上传预约'] : [])],

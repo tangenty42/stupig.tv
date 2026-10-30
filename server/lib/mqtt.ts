@@ -83,7 +83,7 @@ export async function stop_mqtt_client() {
 }
 
 export function sync_topic(resource: string) {
-  return `${config.integrations.mqtt.topicPrefix}/${resource}`
+  return `${resource.startsWith('content_draft') ? config.integrations.mqtt.privateTopicPrefix : config.integrations.mqtt.topicPrefix}/${resource}`
 }
 
 // The broker may be unreachable for seconds at a time (reconnectPeriod is 5s),

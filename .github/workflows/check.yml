@@ -298,7 +298,7 @@ jobs:
         run: |
           # 关键结构断言（数量断言太脆，每次迁移都要改）：
           # 任务队列三表已就位、旧 scope 锁表已移除
-          for TABLE in content_locks content_tasks content_task_items migration_runs storage_audit_targets storage_audit_findings; do
+          for TABLE in content_locks content_tasks content_task_items content_story_drafts migration_runs storage_audit_targets storage_audit_findings; do
             FOUND=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
               -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = '$TABLE'")
             if [ "$FOUND" != "1" ]; then
@@ -332,6 +332,24 @@ jobs:
           ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
           ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
         run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.ts
+
+      - name: Verify shared drafts and private MQTT on isolated resources
+        env:
+          NODE_ENV: development
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          MYSQL_USER: stupig_tv
+          MYSQL_PASSWORD: ci-mysql-password
+          MYSQL_DATABASE: stupig_tv
+          MYSQL_DEV_ROOT_PASSWORD: ci-root-password
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: '6379'
+          MQTT_HOST: 127.0.0.1
+          MQTT_TCP_PORT: '1883'
+          MQTT_WS_PORT: '8083'
+          MQTT_WEB_URL: ws://localhost:8083/mqtt
+          APP_PORT: '3042'
+        run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt
 
   verified-tree:
     name: verified-tree

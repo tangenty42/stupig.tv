@@ -21,7 +21,21 @@ export function useDataSync() {
   const app = useNuxtApp()
   let transport = transports.get(app)
   if (! transport) {
-    transport = create_data_sync_transport(useRuntimeConfig().public.mqtt.web.wsUrl)
+    const config = useRuntimeConfig().public.mqtt.web
+    const public_sync = create_data_sync_transport(config.wsUrl)
+    const private_sync = create_data_sync_transport(config.draftWsUrl || new URL('mqtt-drafts', config.wsUrl).toString(), true)
+    transport = {
+      ... public_sync,
+      start(options) {
+        public_sync.start(options)
+        private_sync.start(options)
+      },
+      dispose() {
+        public_sync.dispose()
+        private_sync.dispose()
+      },
+      subscribe: (resource, listener) => (resource.startsWith('content_draft') ? private_sync : public_sync).subscribe(resource, listener),
+    }
     transports.set(app, transport)
     const owned_transport = transport
     app.vueApp.onUnmount(() => owned_transport.dispose())
@@ -29,7 +43,8 @@ export function useDataSync() {
   return transport
 }
 
-export function create_data_sync_transport(broker_url: string) {
+export function create_data_sync_transport(broker_url: string, private_mode = false) {
+  const topic_prefix = private_mode ? settings.integrations.mqtt.privateTopicPrefix : settings.integrations.mqtt.topicPrefix
   const listeners = new Map<string, Set<SyncListener>>()
   const seen_ids = new Set<string>()
   const remote_resources = new Map<string, Set<string>>()
@@ -65,7 +80,7 @@ export function create_data_sync_transport(broker_url: string) {
       return null
     }
 
-    broadcast_channel = new BroadcastChannel(settings.app.client.sync.broadcastChannelName)
+    broadcast_channel = new BroadcastChannel(settings.app.client.sync.broadcastChannelName + (private_mode ? ':drafts' : ''))
     return broadcast_channel
   }
 
@@ -201,16 +216,18 @@ export function create_data_sync_transport(broker_url: string) {
     return current_client_id
   }
 
-  function open_mqtt() {
+  async function open_mqtt() {
     if (import.meta.server || disposed || suspended || ! started) {
       return
     }
 
+    if (private_mode && ! listeners.size && ! collected_resources.size)
+      return
     if (document.hidden) {
       return
     }
 
-    if (mqtt_client) {
+    if (mqtt_client || status.value === 'connecting') {
       return
     }
 
@@ -230,9 +247,19 @@ export function create_data_sync_transport(broker_url: string) {
           return
         }
 
+        const credentials = private_mode
+          ? await fetch('/api/content-draft-sync/credentials', { credentials: 'include', cache: 'no-store' }).then(async (response) => {
+              if (! response.ok)
+                throw new Error('Private sync authorization rejected')
+              return await response.json() as { username: string, password: string }
+            })
+          : {}
+        if (generation !== connection_generation || disposed || document.hidden)
+          return
         const client = mqtt.connect(broker_url, {
-          clientId: broker_client_id(),
-          clean: false,
+          ... credentials,
+          clientId: broker_client_id() + (private_mode ? '_drafts' : ''),
+          clean: private_mode,
           reconnectPeriod: 0,
           connectTimeout: settings.app.client.sync.connectTimeoutMs,
         })
@@ -315,7 +342,7 @@ export function create_data_sync_transport(broker_url: string) {
     }
 
     const all_resources = Array.from(new Set([... listeners.keys(), ... collected_resources]))
-    const topics = all_resources.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
+    const topics = all_resources.map(resource => `${topic_prefix}/${resource}`)
     if (topics.length) {
       const client = mqtt_client
       try {
@@ -340,7 +367,7 @@ export function create_data_sync_transport(broker_url: string) {
 
     if (added.length) {
       const client = mqtt_client
-      const topics = added.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
+      const topics = added.map(resource => `${topic_prefix}/${resource}`)
       try {
         client.subscribe(topics, { qos: settings.integrations.mqtt.qos }, (err: any) => {
           if (err && ! err.message?.includes('Connection closed')) {
@@ -354,7 +381,7 @@ export function create_data_sync_transport(broker_url: string) {
 
     if (removed.length) {
       const client = mqtt_client
-      const topics = removed.map(resource => `${settings.integrations.mqtt.topicPrefix}/${resource}`)
+      const topics = removed.map(resource => `${topic_prefix}/${resource}`)
       try {
         client.unsubscribe(topics, (err: any) => {
           if (err && ! err.message?.includes('Connection closed')) {

@@ -34,6 +34,24 @@ const content_story_update = z.object({
   base_revision: z.number().int().positive(),
 })
 
+const draft_id = z.string().regex(/^[a-f0-9]{32}$/)
+const draft_lease = z.object({ page_id: draft_id, epoch: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), token: z.string().regex(/^[a-f0-9]{64}$/) })
+export const draft_schema = {
+  create: z.object({ request_id: draft_id }),
+  get: z.object({ id: draft_id.optional(), story_id: z.number().int().positive().optional(), lease: draft_lease.optional() }).refine(value => !! value.id !== !! value.story_id, '必须指定一份草稿'),
+  list: z.object({ after: draft_id.or(z.literal('')).default(''), limit: z.number().int().min(1).max(100).default(30) }).default({ after: '', limit: 30 }),
+  acquire: z.object({ id: draft_id, expected_epoch: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1), page_id: draft_id, token: z.string().regex(/^[a-f0-9]{64}$/) }),
+  command: z.object({
+    id: draft_id, lease: draft_lease, seq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    kind: z.enum(['sync', 'release', 'publish', 'reset', 'delete']),
+    markdown: z.string().max(settings.app.content.story.markdownMaxBytes * 2).optional(),
+    base_namespace_revision: z.number().int().nonnegative().nullable().default(null),
+    base_title_revision: z.number().int().nonnegative().nullable().default(null),
+    expected_revision: z.number().int().positive().optional(),
+    confirm_reference_history: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).refine(value => (value.markdown === undefined || ['sync', 'release'].includes(value.kind)) && (! ['publish', 'reset'].includes(value.kind) || value.expected_revision !== undefined), '草稿命令与正文或确认版本不匹配'),
+}
+
 export const api_schema = {
   auth: {
     register: form_schema.register,
@@ -90,19 +108,26 @@ export const api_schema = {
   },
 
   content: {
+    delete_impact: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('story'), id: z.number().int().positive() }),
+      z.object({ kind: z.literal('attachment'), id: z.number().int().positive(), targets: z.array(z.number().int().positive()).min(1).max(settings.app.content.workspace.batchLimit) }),
+    ]),
     upload_session: upload_session_schema,
     upload_session_part: upload_part_schema,
     get_attachment_workspace: public_id_input,
     get_story_body: public_id_input.extend({ base_representation_version: z.string().regex(/^[\da-f]{64}$/).optional() }),
     create_story: z.object({
       markdown: markdown_input,
+      base_title_revision: z.number().int().nonnegative().nullable().default(null),
+      confirm_reference_history: z.string().regex(/^[\da-f]{64}$/).optional(),
     }),
     update_story: public_id_input.extend(content_story_update.shape).extend({
       base_namespace_revision: z.number().int().nonnegative().nullable().default(null),
       base_title_revision: z.number().int().nonnegative().nullable().default(null),
-      confirm_reference_history: z.boolean().default(false),
+      confirm_reference_history: z.string().regex(/^[\da-f]{64}$/).optional(),
     }),
-    rewrite_draft_references: public_id_input.extend({
+    rewrite_draft_references: z.object({
+      id: z.number().int().nonnegative(),
       markdown: markdown_input.or(z.literal('')),
       base_namespace_revision: z.number().int().nonnegative().nullable(),
       base_title_revision: z.number().int().nonnegative().nullable(),

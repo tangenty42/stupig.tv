@@ -79,6 +79,7 @@ case "$1" in
     ;;
   tag|image)
     echo "$*" >> "$STUB_DIR/calls"
+    case "$1:$3" in tag:*@sha256:*) exit 1 ;; esac
     exit 0
     ;;
   compose)
@@ -108,7 +109,7 @@ case "$1" in
               if [ -s "$STUB_DIR/mqtt_health_queue" ]; then pop "$STUB_DIR/mqtt_health_queue"; else echo healthy; fi
               exit 0 ;;
             *State.Status*) echo running; exit 0 ;;
-            *Config.Image*) echo registry.example.com/ns/app:mqtt; exit 0 ;;
+            *Config.Image*) echo "\${STUB_PREVIOUS_MQTT_REF:-registry.example.com/ns/app:mqtt}"; exit 0 ;;
             *.Image*) echo "$STUB_PREVIOUS_MQTT_IMAGE"; exit 0 ;;
           esac
         done
@@ -149,6 +150,7 @@ interface Scenario {
   healths: string[]
   previous_image?: string
   previous_mqtt_image?: string
+  previous_mqtt_ref?: string
   mqtt_healths?: string[]
   /** 设为空字符串即模拟"compose 找不到该服务的容器" */
   container_id?: string
@@ -216,6 +218,7 @@ function run_deploy(scenario: Scenario): RunResult {
       DEPLOY_SCRIPT: script_path,
       STUB_PREVIOUS_IMAGE: scenario.previous_image ?? '',
       STUB_PREVIOUS_MQTT_IMAGE: scenario.previous_mqtt_image ?? '',
+      STUB_PREVIOUS_MQTT_REF: scenario.previous_mqtt_ref ?? '',
       STUB_CONTAINER_ID: scenario.container_id ?? 'a1b2c3d4e5f6',
       STUB_COMPOSE_CONFIG_FAILS: scenario.compose_config_fails ? '1' : '',
       STUB_COMPOSE_PULL_FAILS: scenario.compose_pull_fails ? '1' : '',
@@ -241,8 +244,13 @@ const needs_shell = shell ? describe : describe.skip
 describe('registry identity workflow wiring', () => {
   it('builds and publishes the dedicated MQTT target alongside the application', () => {
     const build = workflow_steps.find(step => step.name === 'Build and push image')!
-    expect(build.run).toContain('docker build --target mqtt -t "$IMAGE:mqtt" .')
+    expect(build.run).toContain('docker build --target mqtt -t "$IMAGE:mqtt" -t "$IMAGE:mqtt-$RELEASE_SHA" .')
     expect(build.run).toContain('docker push "$IMAGE:mqtt"')
+    expect(build.run).toContain('docker push "$IMAGE:mqtt-$RELEASE_SHA"')
+    expect(build.run).toContain('docker image inspect "$IMAGE:$RELEASE_SHA"')
+    expect(build.run).toContain('APP_IMAGE=%s')
+    expect(build.run).toContain('"draft_protocol":"cloud-v1"')
+    expect(build.run).toContain('CONTENT_DRAFT_PROTOCOL=cloud-v1')
   })
 
   it('uses the same Registry secrets for CI and the host and checks them before building', () => {
@@ -252,9 +260,10 @@ describe('registry identity workflow wiring', () => {
     expect(workflow_steps.indexOf(check)).toBeGreaterThanOrEqual(0)
     expect(workflow_steps.indexOf(check)).toBeLessThan(workflow_steps.indexOf(build))
     expect(workflow_steps.indexOf(check)).toBeLessThan(workflow_steps.indexOf(deploy))
-    expect(build.env).toEqual({ ACR_USERNAME: '$' + '{{ secrets.ACR_USERNAME }}', ACR_PASSWORD: '$' + '{{ secrets.ACR_PASSWORD }}' })
-    expect(check.env).toEqual(build.env)
-    expect(deploy.env).toMatchObject(build.env!)
+    expect(build.env).toMatchObject({ ACR_USERNAME: '$' + '{{ secrets.ACR_USERNAME }}', ACR_PASSWORD: '$' + '{{ secrets.ACR_PASSWORD }}' })
+    expect(build.env!.RELEASE_SHA).toBe('$' + '{{ github.event.workflow_run.head_sha }}')
+    expect(build.env).toMatchObject(check.env!)
+    expect(deploy.env).toMatchObject(check.env!)
     expect(deploy.env).not.toHaveProperty('ACR_PULL_USERNAME')
     expect(deploy.env).not.toHaveProperty('ACR_PULL_PASSWORD')
     expect(deploy.run).not.toMatch(/secrets\.ACR_(?:USERNAME|PASSWORD)/)
@@ -340,6 +349,15 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.files['.env.prod.bak']).toBe(old)
   }, 15_000)
 
+  it('stops a failed first cloud-draft cutover instead of restarting an unleased legacy writer', () => {
+    const result = run_deploy({ statuses: ['exited'], healths: ['unhealthy'], previous_image: 'sha256:legacy',
+      incoming_env_content: 'APP_PORT=3042\nCONTENT_DRAFT_PROTOCOL=cloud-v1\n' })
+    expect(result.status).not.toBe(0)
+    expect(result.calls.some(call => call.endsWith('stop app'))).toBe(true)
+    expect(result.calls.some(call => call.includes('up -d --force-recreate'))).toBe(false)
+    expect(result.files['.env.prod']).toContain('CONTENT_DRAFT_PROTOCOL=cloud-v1')
+  }, 15_000)
+
   it('restores both images and checks both services when an existing managed deployment fails', () => {
     const result = run_deploy({
       statuses: ['exited', 'running'],
@@ -352,6 +370,18 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.calls).toContain('tag sha256:old-app registry.example.com/ns/app:latest')
     expect(result.calls).not.toContain('rm -f mqtt-service-id')
     expect(result.output).toContain('已完整回滚')
+  })
+
+  it('restores a compatible cloud release by digest without trying to tag a digest destination', () => {
+    const pinned = `registry.example.com/ns/app@sha256:${'a'.repeat(64)}`
+    const result = run_deploy({ statuses: ['exited', 'running'], healths: ['unhealthy', 'healthy'], previous_image: 'sha256:old-app',
+      previous_mqtt_image: 'sha256:old-mqtt', previous_mqtt_ref: pinned,
+      env_content: `APP_IMAGE=${pinned}\nMQTT_IMAGE=${pinned}\nCONTENT_DRAFT_PROTOCOL=cloud-v1\n`,
+      incoming_env_content: 'APP_PORT=3042\nCONTENT_DRAFT_PROTOCOL=cloud-v1\n' })
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('已完整回滚')
+    expect(result.calls).not.toContain(`tag sha256:old-mqtt ${pinned}`)
+    expect(result.files['.env.prod']).toContain(`MQTT_IMAGE=${pinned}`)
   })
 
   it('removes only the newly introduced broker container on a failed migration and retains its volume', () => {

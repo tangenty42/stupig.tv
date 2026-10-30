@@ -76,17 +76,17 @@ export const settings: Settings = {
         fileNameMaxBytes: 255,
       },
       draft: {
-        schemaVersion: 3,
-        storagePrefix: 'stupig_content_draft_',
-        autosaveDelayMs: 1000,
+        saveThrottleMs: 1000,
+        keepaliveIntervalMs: 10000,
+        requestTimeoutMs: 5000,
+        leaseMarginMs: 3000,
+        notificationCredentialSeconds: 30,
       },
       reference: {
-        journalRetentionDays: 30,
-        sweepIntervalSeconds: 60,
+        journalBatchLimit: 200,
       },
       workspace: {
         batchLimit: 500,
-        draftReferenceLimit: 10000,
         suffixAttempts: 10000,
         receiptHours: 24,
         sessionHours: 24,
@@ -131,6 +131,7 @@ export const settings: Settings = {
     mqtt: {
       qos: 1,
       topicPrefix: 'stupig/sync',
+      privateTopicPrefix: 'stupig/draft-sync',
       clientIdPrefixServer: 'server',
       clientIdPrefixWeb: 'web',
       publishQueueSize: 100,

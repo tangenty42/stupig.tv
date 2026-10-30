@@ -6,7 +6,7 @@ export type ReferenceSafetyCode = z.infer<typeof reference_safety_code_schema>
 
 const application_error_schema = z.union([
   public_api_error_schema,
-  z.strictObject({ code: reference_safety_code_schema, details: z.undefined().optional() }),
+  z.strictObject({ code: reference_safety_code_schema, details: z.strictObject({ review_token: z.string().regex(/^[\da-f]{64}$/) }).optional() }),
 ])
 export type ApplicationError = z.infer<typeof application_error_schema>
 

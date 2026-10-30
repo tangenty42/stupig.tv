@@ -1,12 +1,14 @@
-import type { ContentReferenceBaseline, ContentReferenceChange, ContentReferenceJournal, ContentReferenceRewriteResult } from '@shared/types/content-reference'
+import type { ContentReferenceBaseline, ContentReferenceChange, ContentReferenceRewriteResult } from '@shared/types/content-reference'
 import type { Connection, RowDataPacket } from 'mysql2/promise'
 import type { WorkspaceChange } from './workspace-change'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { attachment_cover_url } from '@server/services/content-attachments.service'
-import { rewrite_attachment_path, rewrite_content_refs } from '@shared/content-markdown'
-import { replay_content_references } from '@shared/content-reference-replay'
-import { settings } from '@shared/settings'
+import { rewrite_attachment_path } from '@shared/content-markdown'
+import { content_name_key, format_attachment_ref, parse_content_ref } from '@shared/content-reference'
+import { replay_content_references, replay_reference_destination } from '@shared/content-reference-replay'
+import { rewrite_cloud_drafts } from './draft.repository'
+import { append_reference_journal, reference_journals_since } from './reference-journal.repository'
 
 interface NamespaceRow extends RowDataPacket {
   revision: number
@@ -24,10 +26,6 @@ interface NamespaceNode extends RowDataPacket {
   oss_version_id?: string | null
   node_revision?: number
   encryption_key?: string | null
-}
-interface JournalRow extends RowDataPacket {
-  revision: number
-  changes: ContentReferenceChange[] | string
 }
 
 export async function get_title_reference_version() {
@@ -65,6 +63,7 @@ export async function finish_namespace_change(connection: Connection, before: Aw
     'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, storage_provider, oss_version_id, node_revision, encryption_key, redacted_avif_key, redacted_jpeg_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [before.story_id],
   )
   const current = new Map(nodes.map(node => [Number(node.id), node]))
+  const previous_ids = new Set(before.nodes.map(node => Number(node.id)))
   const changes: ContentReferenceChange[] = []
   let changed = nodes.length !== before.nodes.length
   for (const old of before.nodes) {
@@ -73,26 +72,36 @@ export async function finish_namespace_change(connection: Connection, before: Aw
       // Legacy explicit folder merges absorb folder rows. Their references
       // still follow the accepted move instead of becoming deletion warnings.
       const merged_path = old.is_folder ? rewrite_attachment_path(old.file_name, { attachments: folder_moves.map(move => ({ ... move, is_folder: true })) }) : old.file_name
-      changes.push({ node_id: Number(old.id), from: old.file_name, to: node?.file_name ?? (merged_path !== old.file_name ? merged_path : null), is_folder: Boolean(old.is_folder) })
+      const next = node?.file_name ?? (merged_path !== old.file_name ? merged_path : null)
+      changes.push({ node_id: Number(old.id), from: format_attachment_ref(old.file_name), to: next === null ? null : format_attachment_ref(next), is_folder: Boolean(old.is_folder) })
       changed = true
     }
     if (node && (node.object_key !== old.object_key || node.version !== old.version || node.is_private !== old.is_private || node.storage_bucket !== old.storage_bucket || node.storage_provider !== old.storage_provider || node.oss_version_id !== old.oss_version_id || node.node_revision !== old.node_revision || node.encryption_key !== old.encryption_key))
       changed = true
   }
+  for (const node of nodes) {
+    if (node.file_name && ! previous_ids.has(Number(node.id)))
+      changes.push({ node_id: Number(node.id), from: null, to: format_attachment_ref(node.file_name), is_folder: Boolean(node.is_folder) })
+  }
   for (const move of folder_moves) {
-    if (! changes.some(change => change.from === move.from && change.is_folder))
-      changes.push({ node_id: Number(before.nodes.find(node => node.file_name === move.from)?.id ?? 0), from: move.from, to: move.to, is_folder: true })
+    if (! changes.some(change => change.from === format_attachment_ref(move.from) && change.is_folder))
+      changes.push({ node_id: Number(before.nodes.find(node => node.file_name === move.from)?.id ?? 0), from: format_attachment_ref(move.from), to: format_attachment_ref(move.to), is_folder: true })
   }
   if (! changed)
     return {}
-  const step = { attachments: changes.flatMap(change => change.to === null ? [] : [{ from: change.from, to: change.to, is_folder: change.is_folder }]) }
+  const journal = { revision: before.revision + 1, changes }
+  await append_reference_journal(connection, before.story_id, journal.revision, changes)
   const [stories] = await connection.execute<RowDataPacket[]>('SELECT markdown, cover, cover_version FROM content_stories WHERE id = ? FOR UPDATE', [before.story_id])
   const story = stories[0]!
-  const markdown = rewrite_content_refs(String(story.markdown), [step])
-  const cover = rewrite_attachment_path(String(story.cover ?? ''), step)
-  const cover_version = nodes.find(node => ! node.is_folder && node.file_name === cover)?.version ?? null
-  const cover_key = nodes.find(node => ! node.is_folder && node.file_name === cover)?.object_key ?? null
-  const old_cover_key = before.nodes.find(node => ! node.is_folder && node.file_name === story.cover)?.object_key ?? null
+  const markdown = replay_content_references(String(story.markdown), {
+    attachments: [journal], titles: [], attachment_targets: nodes.map(node => ({ id: Number(node.id), name: node.file_name })), title_targets: [],
+  }).markdown
+  const cover_ref = parse_content_ref(replay_reference_destination(format_attachment_ref(String(story.cover ?? '')), [journal]))
+  const cover = cover_ref && 'path' in cover_ref ? cover_ref.path : String(story.cover ?? '')
+  const cover_node = nodes.find(node => ! node.is_folder && content_name_key(node.file_name) === content_name_key(cover))
+  const cover_version = cover_node?.version ?? null
+  const cover_key = cover_node?.object_key ?? null
+  const old_cover_key = before.nodes.find(node => ! node.is_folder && content_name_key(node.file_name) === content_name_key(String(story.cover)))?.object_key ?? null
   const body_changed = markdown !== story.markdown || cover !== story.cover || cover_version !== story.cover_version || cover_key !== old_cover_key
   // URL identity and visibility also affect list/detail covers, without necessarily
   // rewriting stored Markdown or changing the existing updated_at policy.
@@ -100,7 +109,7 @@ export async function finish_namespace_change(connection: Connection, before: Aw
   if (body_changed)
     await connection.execute('UPDATE content_stories SET markdown = ?, cover = ?, cover_version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [markdown, cover, cover_version, before.story_id])
   await connection.execute('UPDATE content_stories SET namespace_revision = namespace_revision + 1, updated_at = updated_at WHERE id = ?', [before.story_id])
-  await connection.execute('INSERT INTO content_reference_journals (scope_id, revision, changes) VALUES (?, ?, CAST(? AS JSON))', [before.story_id, before.revision + 1, JSON.stringify(changes)])
+  await rewrite_cloud_drafts(connection, before.story_id, journal)
   // Saved reference rewrites touch updated_at, which is displayed and sorts the list.
   return { attachments: true, ... (body_changed || cover_changed ? { story: true, stories: true } : {}) }
 }
@@ -126,27 +135,42 @@ export async function with_namespace_change<T>(story_id: number, mutate: (connec
 
 export async function record_title_change(connection: Connection, revision: number, change?: ContentReferenceChange) {
   await connection.execute('UPDATE content_title_namespace SET revision = revision + 1 WHERE id = 1')
-  if (change)
-    await connection.execute('INSERT INTO content_reference_journals (scope_id, revision, changes) VALUES (0, ?, CAST(? AS JSON))', [revision + 1, JSON.stringify([change])])
-}
-
-async function journal_since(connection: Connection, scope_id: number, baseline: number | null, current: number, floor: number) {
-  const unavailable = baseline === null || baseline < floor || baseline > current
-  if (unavailable)
-    return { unavailable, journals: [] as ContentReferenceJournal[] }
-  const [rows] = await connection.execute<JournalRow[]>('SELECT revision, changes FROM content_reference_journals WHERE scope_id = ? AND revision > ? ORDER BY revision', [scope_id, baseline])
-  return { unavailable, journals: rows.map(row => ({ revision: Number(row.revision), changes: typeof row.changes === 'string' ? JSON.parse(row.changes) : row.changes })) }
+  const changes = change ? [change] : []
+  await append_reference_journal(connection, 0, revision + 1, changes)
+  const rewritten: { id: number, markdown: string }[] = []
+  if (! change?.from || ! change.to) {
+    await rewrite_cloud_drafts(connection, 0, { revision: revision + 1, changes })
+    return rewritten
+  }
+  // Main was current at the locked previous revision. Scan all sources: a
+  // reference may have been saved before its target existed.
+  const [stories] = await connection.execute<RowDataPacket[]>('SELECT id, markdown FROM content_stories ORDER BY id FOR UPDATE')
+  for (const story of stories) {
+    const markdown = replay_content_references(String(story.markdown), {
+      attachments: [], titles: [{ revision: revision + 1, changes }], attachment_targets: [], title_targets: [],
+    }).markdown
+    if (markdown !== story.markdown) {
+      await connection.execute('UPDATE content_stories SET markdown = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [markdown, story.id])
+      rewritten.push({ id: Number(story.id), markdown })
+    }
+  }
+  await rewrite_cloud_drafts(connection, 0, { revision: revision + 1, changes })
+  return rewritten
 }
 
 /** Caller holds title lock, then scope lock, throughout replay and (optional) save. */
 export async function replay_locked_references(connection: Connection, story_id: number, markdown: string, baseline: ContentReferenceBaseline, title: { revision: number, floor: number }): Promise<ContentReferenceRewriteResult> {
-  const [stories] = await connection.execute<RowDataPacket[]>('SELECT namespace_revision, namespace_floor FROM content_stories WHERE id = ? FOR UPDATE', [story_id])
+  const [stories] = story_id === 0
+    ? [[{ namespace_revision: 0, namespace_floor: 0 }]]
+    : await connection.execute<RowDataPacket[]>('SELECT namespace_revision, namespace_floor FROM content_stories WHERE id = ? FOR UPDATE', [story_id])
   if (! stories[0])
     throw new ApiError(404, '档案不存在或已被删除')
   const namespace_revision = Number(stories[0].namespace_revision)
-  const attachments = await journal_since(connection, story_id, baseline.base_namespace_revision, namespace_revision, Number(stories[0].namespace_floor))
-  const titles = await journal_since(connection, 0, baseline.base_title_revision, title.revision, title.floor)
-  const [nodes] = await connection.execute<RowDataPacket[]>('SELECT id, file_name FROM content_story_attachments WHERE story_id = ?', [story_id])
+  const attachments = story_id === 0
+    ? { unavailable: false, journals: [] }
+    : await reference_journals_since(connection, story_id, baseline.base_namespace_revision, namespace_revision, Number(stories[0].namespace_floor))
+  const titles = await reference_journals_since(connection, 0, baseline.base_title_revision, title.revision, title.floor)
+  const [nodes] = story_id === 0 ? [[]] : await connection.execute<RowDataPacket[]>('SELECT id, file_name FROM content_story_attachments WHERE story_id = ?', [story_id])
   const [catalog] = await connection.execute<RowDataPacket[]>('SELECT id, title FROM content_stories')
   const replayed = replay_content_references(markdown, {
     attachments: attachments.journals, titles: titles.journals,
@@ -170,7 +194,9 @@ export async function rewrite_draft_references(story_id: number, markdown: strin
     await connection.beginTransaction()
     const title = await lock_title_namespace(connection)
     // Reuse save's private guard: a redacted viewer must not operate on hidden bytes.
-    const [stories] = await connection.execute<RowDataPacket[]>('SELECT markdown FROM content_stories WHERE id = ? FOR UPDATE', [story_id])
+    const [stories] = story_id === 0
+      ? [[{ markdown: '' }]]
+      : await connection.execute<RowDataPacket[]>('SELECT markdown FROM content_stories WHERE id = ? FOR UPDATE', [story_id])
     if (! stories[0])
       throw new ApiError(404, '档案不存在或已被删除')
     if (! can_private) {
@@ -181,31 +207,6 @@ export async function rewrite_draft_references(story_id: number, markdown: strin
     const result = await replay_locked_references(connection, story_id, markdown, baseline, title)
     await connection.commit()
     return result
-  }
-  catch (error) {
-    await connection.rollback()
-    throw error
-  }
-  finally {
-    connection.release()
-  }
-}
-
-/** Floors advance in the same transaction as pruning, so old baselines never guess. */
-export async function prune_reference_journals() {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-    await lock_title_namespace(connection, true)
-    const [expired] = await connection.execute<RowDataPacket[]>('SELECT scope_id, MAX(revision) AS revision FROM content_reference_journals WHERE created_at < TIMESTAMPADD(DAY, -?, CURRENT_TIMESTAMP) GROUP BY scope_id ORDER BY scope_id', [settings.app.content.reference.journalRetentionDays])
-    for (const row of expired) {
-      if (Number(row.scope_id) === 0)
-        await connection.execute('UPDATE content_title_namespace SET revision_floor = GREATEST(revision_floor, ?) WHERE id = 1', [row.revision])
-      else
-        await connection.execute('UPDATE content_stories SET namespace_floor = GREATEST(namespace_floor, ?), updated_at = updated_at WHERE id = ?', [row.revision, row.scope_id])
-      await connection.execute('DELETE FROM content_reference_journals WHERE scope_id = ? AND revision <= ?', [row.scope_id, row.revision])
-    }
-    await connection.commit()
   }
   catch (error) {
     await connection.rollback()

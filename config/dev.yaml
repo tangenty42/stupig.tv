@@ -8,6 +8,7 @@ redis:
 mqtt:
   web:
     wsUrl: ws://localhost:${MQTT_WS_PORT}/mqtt
+    draftWsUrl: ws://localhost:${MQTT_DRAFT_WS_PORT:-8086}/mqtt
 
 oss:
   buckets:

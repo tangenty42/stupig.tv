@@ -41,6 +41,7 @@ services:
       # Dashboard 同理：默认 admin/public 是众所周知凭据，别对外开。
       - '127.0.0.1:${MQTT_TCP_PORT:?请在 .env.dev 中设置 MQTT_TCP_PORT}:1883' # TCP，服务端 publish 用
       - '127.0.0.1:${MQTT_WS_PORT:?请在 .env.dev 中设置 MQTT_WS_PORT}:8083' # WebSocket，浏览器 useDataSync 用
+      - '127.0.0.1:${MQTT_DRAFT_WS_PORT:-8086}:8086' # 草稿通知，需短期凭证
       - '127.0.0.1:${EMQX_DEV_DASHBOARD_PORT:?请在 .env.dev 中设置 EMQX_DEV_DASHBOARD_PORT}:18083' # Dashboard（admin/public）
     environment:
       # Dashboard 管理密码，HOCON 值要带内层双引号，否则含 # 的字符串会被截断成注释。
@@ -58,6 +59,16 @@ services:
       EMQX_AUTHENTICATION__1__BOOTSTRAP_TYPE: plain
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__NAME: sha256
       EMQX_AUTHENTICATION__1__PASSWORD_HASH_ALGORITHM__SALT_POSITION: suffix
+      EMQX_AUTHENTICATION__2__MECHANISM: password_based
+      EMQX_AUTHENTICATION__2__BACKEND: http
+      EMQX_AUTHENTICATION__2__METHOD: post
+      EMQX_AUTHENTICATION__2__URL: http://host.docker.internal:${APP_PORT:-3000}/api/content-draft-sync/authenticate
+      EMQX_AUTHENTICATION__2__HEADERS: '{"content-type":"application/json"}'
+      EMQX_AUTHENTICATION__2__BODY: '{"username":"$${username}","password":"$${password}"}'
+      EMQX_AUTHENTICATION__2__REQUEST_TIMEOUT: 3s
+      EMQX_LISTENERS__WS__DRAFTS__BIND: '0.0.0.0:8086'
+      EMQX_LISTENERS__WS__DRAFTS__ENABLE_AUTHN: 'true'
+      EMQX_LISTENERS__WS__DRAFTS__ZONE: default
       EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN: 'true'
       EMQX_LISTENERS__TCP__DEFAULT__ZONE: default
       EMQX_LISTENERS__WS__DEFAULT__ENABLE_AUTHN: 'false'

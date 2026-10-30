@@ -1,5 +1,4 @@
 import type { StorageBucket } from '@server/lib/storage'
-
 import type { ContentStoryAttachment } from '@shared/types/content'
 
 import type { Connection, RowDataPacket } from 'mysql2/promise'
@@ -9,6 +8,8 @@ import { createHash } from 'node:crypto'
 import { db } from '@server/lib/db'
 
 import { attachment_mime_type, compare_attachment_names, decrypted_attachment_name } from '@shared/content-markdown'
+
+import { content_name_key } from '@shared/content-reference'
 import { attachment_owned_object_keys } from './content/attachment-objects'
 import { image_presentation } from './content/image-presentation'
 import { has_redacted_variant, redacted_presentation_row } from './content/redacted-variant'
@@ -138,8 +139,8 @@ export async function delete_story_attachment_rows(story_id: number, executor: D
 type CoverRow = Pick<AttachmentRow, 'id' | 'file_name' | 'object_key' | 'version' | 'storage_bucket' | 'storage_provider' | 'oss_version_id' | 'is_private'> & Partial<AttachmentRow>
 
 function cover_attachment(file_name: string, rows: CoverRow[]) {
-  const public_file = (name: string) => rows.find(row => row.file_name === name && ! row.is_folder && ! row.is_private && ! row.encryption_key && row.object_key)
-  const redacted = rows.find(row => row.file_name === file_name && row.is_private && ! row.is_folder && ! row.encryption_key && has_redacted_variant(row))
+  const public_file = (name: string) => rows.find(row => content_name_key(row.file_name) === content_name_key(name) && ! row.is_folder && ! row.is_private && ! row.encryption_key && row.object_key)
+  const redacted = rows.find(row => content_name_key(row.file_name) === content_name_key(file_name) && row.is_private && ! row.is_folder && ! row.encryption_key && has_redacted_variant(row))
   if (redacted)
     return { row: redacted, redacted: true }
   const row = public_file(file_name) ?? (file_name.endsWith('.good') ? public_file(decrypted_attachment_name(file_name)) : undefined)
@@ -156,14 +157,31 @@ export async function list_cover_presentations(covers: { story_id: number, file_
   const urls = new Map<string, { url: string, image: ContentStoryAttachment['image'] }>()
   if (! covers.length)
     return urls
-  const candidates = covers.flatMap(cover => cover.file_name.endsWith('.good') ? [cover, { ... cover, file_name: decrypted_attachment_name(cover.file_name) }] : [cover])
-  const tuples = candidates.map(() => '(?, ?)').join(',')
+  // file_name uses binary collation; fetch the scopes before applying the same
+  // Unicode identity rule used by Markdown and workspace names. Fetch image
+  // metadata only for the matching rows, rather than for every attachment.
+  const scopes = [... new Set(covers.map(cover => cover.story_id))]
+  const wanted = new Map<number, Set<string>>()
+  for (const cover of covers) {
+    const names = wanted.get(cover.story_id) ?? new Set<string>()
+    names.add(content_name_key(cover.file_name))
+    if (cover.file_name.endsWith('.good'))
+      names.add(content_name_key(decrypted_attachment_name(cover.file_name)))
+    wanted.set(cover.story_id, names)
+  }
+  const [candidates] = await executor.execute<AttachmentRow[]>(
+    `SELECT id, story_id, file_name FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND story_id IN (${scopes.map(() => '?').join(', ')})`,
+    scopes,
+  )
+  const ids = candidates.filter(row => wanted.get(Number(row.story_id))?.has(content_name_key(row.file_name))).map(row => Number(row.id))
+  if (! ids.length)
+    return urls
   const [rows] = await executor.execute<AttachmentRow[]>(
     `SELECT id, story_id, file_name, object_key, version, storage_bucket, storage_provider, oss_version_id, is_private,
       avif_key, jpeg_key, image_revision, image_metadata, lqip_jpeg,
       redacted_avif_key, redacted_jpeg_key, redacted_revision, redacted_metadata, redacted_lqip_jpeg
-      FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND (story_id, file_name) IN (${tuples})`,
-    candidates.flatMap(cover => [cover.story_id, cover.file_name]),
+      FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND id IN (${ids.map(() => '?').join(', ')})`,
+    ids,
   )
   const by_story = new Map<number, AttachmentRow[]>()
   for (const row of rows) {

@@ -50,6 +50,8 @@ function throw_trpc_error(error: unknown): never {
       throw new TRPCError({ code: 'TOO_MANY_REQUESTS', ... options })
     case 502:
       throw new TRPCError({ code: 'BAD_GATEWAY', ... options })
+    case 503:
+      throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', ... options })
     default:
       throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', ... options })
   }
@@ -62,7 +64,7 @@ const t = initTRPC.context<TrpcContext>().create({
       ... shape,
       data: {
         ... shape.data,
-        applicationError: cause instanceof ReferenceSafetyError ? parse_application_error({ code: cause.reference_code }) : cause instanceof ApiError ? parse_application_error(cause.public_data) : undefined,
+        applicationError: cause instanceof ReferenceSafetyError ? parse_application_error({ code: cause.reference_code, ... (cause.review_token ? { details: { review_token: cause.review_token } } : {}) }) : cause instanceof ApiError ? parse_application_error(cause.public_data) : undefined,
       },
       message: cause instanceof ZodError
         ? get_validation_message(cause)

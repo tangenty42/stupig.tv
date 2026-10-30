@@ -1,6 +1,6 @@
 <template>
-  <NuxtLink :to="`/content/${story.id}`" class="story-card watermark" :style="watermark_style">
-    <span v-if="story.cover" class="story-card-cover">
+  <NuxtLink :to="story ? `/content/${story.id}` : `/content/draft-${draft!.id}/edit`" class="story-card watermark" :style="watermark_style">
+    <span v-if="story?.cover" class="story-card-cover">
       <MyContentStoryCover
         :src="story_front_cover_url(static_url, story.cover, story.cover_url)"
         :alt="cover_alt(story.cover, story.cover_label, story.title)"
@@ -8,50 +8,63 @@
       />
     </span>
     <div class="story-card-body">
-      <span class="story-card-title">
-        <span>{{ story.title }}</span>
-        <span
-          v-if="pinned"
-          class="ms-2 text-xs font-bold text-slate-400 dark:text-slate-500"
-        ><MyIcon name="lucide:pin" class="me-0.5" /><span>置顶</span></span>
-      </span>
-      <span v-if="story.desc" class="story-card-desc">{{ story.desc }}</span>
-      <div class="mt-2 w-full flex flex-wrap items-end gap-2">
-        <span v-if="labels.length" class="flex flex-wrap justify-center gap-1">
-          <MyBadge
-            v-for="label in labels"
-            :key="label"
-            type="info"
-            :outlined="! active_labels?.has(label)"
-          >
-            {{ label }}
+      <template v-if="story">
+        <span class="story-card-title">
+          <span>{{ story.title }}</span>
+          <span
+            v-if="pinned"
+            class="ms-2 text-xs font-bold text-slate-400 dark:text-slate-500"
+          ><MyIcon name="lucide:pin" class="me-0.5" /><span>置顶</span></span>
+        </span>
+        <span v-if="story.desc" class="story-card-desc">{{ story.desc }}</span>
+        <div class="mt-2 w-full flex flex-wrap items-end gap-2">
+          <span v-if="labels.length" class="flex flex-wrap justify-center gap-1">
+            <MyBadge
+              v-for="label in labels"
+              :key="label"
+              type="info"
+              :outlined="! active_labels?.has(label)"
+            >
+              {{ label }}
+            </MyBadge>
+          </span>
+          <span class="story-card-date ml-auto">
+            {{ format_event_range(story.event_precision, story.event_dates, time_context.timezone) }}
+          </span>
+        </div>
+      </template>
+      <template v-else-if="draft">
+        <span class="story-card-title">{{ draft.title }}</span>
+        <div class="mt-2 w-full flex flex-wrap items-end gap-2">
+          <MyBadge type="info" outlined>
+            {{ draft.story_id ? '修改草稿' : '未发布' }}
           </MyBadge>
-        </span>
-        <span class="story-card-date ml-auto">
-          {{ format_event_range(story.event_precision, story.event_dates, time_context.timezone) }}
-        </span>
-      </div>
+          <span class="story-card-date ml-auto">更新于 {{ format_event_entry('day', draft.updated_at, time_context.timezone) }}</span>
+        </div>
+      </template>
     </div>
   </NuxtLink>
 </template>
 
 <script setup lang="ts">
 import type { ContentStorySummary } from '@shared/types/content'
+import type { ContentDraftSummary } from '@shared/types/content-draft'
 import { story_pinned, story_rating_rank } from '@shared/types/content'
 import { cover_alt, story_front_cover_url } from '~/utils/content/attachment'
-import { format_event_range } from '~/utils/content/event'
+import { format_event_entry, format_event_range } from '~/utils/content/event'
 
 const props = defineProps<{
-  story: ContentStorySummary
+  story?: ContentStorySummary
+  draft?: ContentDraftSummary
   active_labels?: Set<string>
 }>()
 
 const static_url = useStaticUrl()
 const time_context = useDisplayTimeContext()
 
-const pinned = computed(() => story_pinned(props.story.labels))
-const rating_rank = computed(() => story_rating_rank(props.story.labels))
-const labels = computed(() => props.story.labels.filter(label => ! label.startsWith('#')))
+const pinned = computed(() => story_pinned(props.story?.labels ?? []))
+const rating_rank = computed(() => story_rating_rank(props.story?.labels ?? []))
+const labels = computed(() => (props.story?.labels ?? []).filter(label => ! label.startsWith('#')))
 const watermark_style = computed(() =>
   rating_rank.value
     ? { '--watermark-url': `url("${static_url(`imgs/ratings/${6 - rating_rank.value}.svg`)}")` }

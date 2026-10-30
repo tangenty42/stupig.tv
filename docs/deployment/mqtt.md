@@ -10,7 +10,7 @@
 
 | 项目 | 6.2.2 已核对行为 | 本项目配置 |
 | --- | --- | --- |
-| listener `enable_authn` | 默认 true；支持 false、quick_deny_anonymous | TCP true，浏览器实际接入的 WS/WSS false |
+| listener `enable_authn` | 默认 true；支持 false、quick_deny_anonymous | TCP／草稿 WS true，公开 WS false |
 | `authorization.no_match` | 默认 deny；5.x 默认值不同 | 仍显式设 deny，不依赖升级后的默认值 |
 | `authorization.deny_action` | 默认 ignore | 显式设 disconnect，否则拒绝操作后不一定断开连接 |
 | superuser | 认证成功后绕过 topic 授权 | 仅专用 broker 的服务端发布账号使用 |
@@ -37,12 +37,23 @@
 | 连接 | 认证 | 订阅 `stupig/sync/#` | 发布 | 其他主题 |
 | --- | --- | --- | --- | --- |
 | 浏览器实际接入的 WS/WSS listener | `enable_authn=false` | 允许 | 全部拒绝 | 拒绝 |
+| 草稿专用 WS listener（8086） | HTTP 认证当前登录的短期签名凭据 | 拒绝 | 全部拒绝 | 仅允许订阅 `stupig/draft-sync/#` |
 | 服务端 TCP，正确发布账号 | `enable_authn=true`，内置数据库验证成功 | 当前 superuser 可订阅 | 允许 | 当前 superuser 也可访问；仅用于本应用专用 broker |
 | TCP，无凭据或错误密码 | 拒绝连接 | 不适用 | 不适用 | 不适用 |
 
 当前 topic 前缀由 [`config/app-settings.yaml`](../../config/app-settings.yaml) 的 `integrations.mqtt.topicPrefix=stupig/sync` 提供；实际主题是 `stupig/sync/<resource>`，例如 `content_story:<id>`。修改前缀必须同步 ACL，不存在 `MQTT_TOPIC_PREFIX` env 覆盖。
 
-浏览器没有 MQTT 密码，也不按站点登录身份划分 topic 权限。匿名订阅者可以观察这些刷新通知及其中的资源标识；消息中不能加入正文、敏感用户数据、机密对象 URL 或凭据。API 权限仍由应用判断。
+公开连接没有 MQTT 密码，也不按站点登录身份划分 topic 权限。匿名订阅者可以观察公开刷新通知及资源标识；消息中不能加入正文、敏感用户数据、机密对象 URL 或凭据。草稿连接采用下述独立认证，API 权限仍由应用判断。
+
+### 草稿专用连接
+
+`MQTT_DRAFT_WEB_URL` 是浏览器安全的完整 WSS 地址。未设置时客户端从公开 URL 推导同域 `/mqtt-drafts`；生产反代把该路径接到宿主机 `127.0.0.1:${MQTT_DRAFT_WS_PORT:-8086}`，上游 WebSocket 路径须改写为 `/mqtt`。公开 `/mqtt` 继续接公开 listener，不可把草稿路径接回匿名 listener。生产外部反代本轮未操作，发布前必须读回验收。
+
+Compose 在全局认证链的内置数据库之后添加 HTTP 认证器，回调应用 `/api/content-draft-sync/authenticate`。浏览器先经有 httpOnly cookie 的 `/api/content-draft-sync/credentials` 获取最多 30 秒的签名凭据，绑定账号、session 和实际 token generation；broker CONNECT 时再次读取当前授权。返回凭据 ACL 仅允许订阅私有前缀，随后 deny all，不能发布。过期强制断开，重连重新取票；签名不是租约 token，也不能用于调用草稿命令。
+
+既有连接的撤权上界为剩余票期，最多 30 秒；这期间消息只有不透明资源的失效信号。草稿 API 每次事务即时重新授权，不等待 MQTT。公开 ACL 只允许 `stupig/sync/#`，共享 schema 拒绝把私有前缀放进公开前缀内。JWT 密钥轮换同时改变频道和签名；客户端重新查询并取票，不提供旧密钥过渡。
+
+`pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt` 在随机 MySQL 库、临时 EMQX 6.2.2 与仅认证用途的本地 HTTP relay 验证真实收发、匿名通配拒绝、无票／伪票拒绝、发布拒绝、到期断开与撤权后重连拒绝。此本地证据不替代公网 WSS 反代验收。
 
 **`web_` / `server_` 只是客户端 ID 命名习惯，不是可信身份。** 不能靠前缀授予发布权。尤其不能在匿名 WS 上只用 `{username, "发布账号"}` 放行：用户名也可由客户端自行填写。本方案的发布权来自 TCP 上的真实认证结果，WS 跳过认证后保持非 superuser。
 
@@ -50,17 +61,18 @@
 
 Check 的 `mqtt` 作业构建 Dockerfile 的 `mqtt` 目标，并运行[真实集成测试](../../scripts/deploy/emqx.integration.test.ts)。测试使用随机 Compose 项目、临时账号和卷，不连接生产；覆盖账号初始化、实际收发、拒绝矩阵、失效凭据健康检查及重启后账号可用，结束时清理自己的资源。
 
-main 的 Check 全部成功后，[Deploy](../../.github/workflows/deploy.yml) 构建并推送 `${ACR_IMAGE}:latest`（应用）和 `${ACR_IMAGE}:mqtt`（broker），上传 Compose 与解密后的 `.env.prod`，由[远端脚本](../../scripts/deploy/remote.sh)拉取、启动并检查两个服务。镜像包含 ACL、初始化和健康检查脚本；密码只在运行时注入，不进入镜像。
+main 的 Check 全部成功后，[Deploy](../../.github/workflows/deploy.yml) 构建并推送应用 `:${SHA}` 与 broker `:mqtt-${SHA}`，保留 latest/mqtt 别名；运行 env 的 APP_IMAGE/MQTT_IMAGE 固定对应 RepoDigest。上传 Compose 和运行 env 后，由[远端脚本](../../scripts/deploy/remote.sh)启动并检查两个服务。镜像包含 ACL、初始化和健康检查脚本；密码只在运行时注入，不进入镜像。
 
 首次启动从 `MQTT_USERNAME/PASSWORD` 创建内置数据库超级发布账号。认证器、TCP/WS 开关、唯一 File 授权源及 deny/disconnect 策略由 Compose 环境变量统一管理，不需要进 Dashboard 配置。不要再通过 Dashboard 改同一批字段；当前 HTTP Dashboard、SSL 和 WSS listener 均关闭。
 
-应用等待 broker 的凭据健康检查通过后才启动。已有托管部署失败时脚本恢复两个旧镜像及旧配置；首次引入 broker 失败时只移除本次新增容器，保留卷，不碰旧 1Panel 实例。此回滚不恢复数据库迁移，也不修改外部反代；回滚失败会报告需要人工介入。
+应用等待 broker 的凭据健康检查通过后才启动。同为 cloud-v1 的兼容发布失败可恢复旧镜像与配置；首次跨云端草稿协议的启动失败则停止应用、保留当前数据库和配置，禁止自动重启旧的无租约写者。首次引入 broker 的其他失败路径只移除本次新增容器并保留卷，不碰旧 1Panel 实例。回滚不恢复数据库或外部反代，见[备份恢复](../operations/backup-recovery.md)。
 
 ### 网络与持久化
 
 ```text
 应用容器 -> 项目 mqtt bridge -> emqx:1883（需要发布凭据）
 浏览器 -> WSS 443 -> HTTPS 反代 -> 宿主机 127.0.0.1:8085 -> emqx:8083
+草稿连接 -> WSS /mqtt-drafts -> HTTPS 反代（改写 /mqtt）-> 127.0.0.1:8086 -> emqx:8086
 ```
 
 broker 只加入项目专用 `mqtt` bridge，不加入 MySQL/Redis 的外部网络；应用同时加入两个网络。TCP 1883、Dashboard、SSL/WSS 不映射宿主机，WS 只映射回环 `${MQTT_WS_PORT:-8085}`。这是普通 bridge，不承诺阻断 broker 出站流量；不能设置 `internal: true` 后仍假定宿主机端口可正常发布。

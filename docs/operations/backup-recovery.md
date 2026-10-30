@@ -46,7 +46,9 @@ docker compose --env-file .env.prod exec app node .output/server/maintenance/mig
 
 若容器尚未运行，最后一条不能执行；改用已确认版本的一次性维护容器，见[迁移手册](./migrations.md)。不要因旧镜像健康就认为新迁移已撤销。新旧应用数据库合同不兼容时，先维持维护状态并选择兼容的恢复方案。
 
-首次部署没有旧镜像可恢复；自动恢复失败时也需要人工处理。现行 ACR 流程主要发布 `latest`，因此长期回退不能依赖某个 SHA tag 必然存在；应保存明确 image ID／构建身份，按[GitHub 与 ACR](../deployment/github-acr.md)说明重建匹配版本。
+首次部署没有旧镜像可恢复；自动恢复失败时也需要人工处理。云端草稿版本的 ACR 流程发布 SHA tag 并将运行配置固定到 RepoDigest，`application-production-receipt` 保存提交、应用／broker digest、schema 与 settings 摘要；CI artifact 当前保留 30 天，须另行保存长期恢复材料，不能假定镜像永远存在。详见[GitHub 与 ACR](../deployment/github-acr.md)。
+
+共享云端草稿切换后，备份包括 `content_story_drafts`、main、引用历史和现有 `migration_runs`；不能只恢复 main 而丢掉已确认的 draft。租约会自然到期，不导入浏览器凭证或伪造命令回执。首次从旧协议启动 cloud-v1 失败时，远端脚本停应用、保留新配置与数据库，不自动重启无租约旧写者；先维护停写并检查迁移回执，再修复同协议应用或从整套一致备份制定恢复。没有通用 down，回滚代码不是数据回滚。旧 localStorage 内容由管理员自行处理，应用不导入或删除。
 
 ## 数据或对象误操作
 

@@ -2,13 +2,13 @@ import type { ContentStorySummary } from '@shared/types/content'
 import type MarkdownIt from 'markdown-it'
 import type { FileCardData, StoryCardMeta, StoryMarkdownContext, StoryMarkdownPlugin } from './types'
 import { attachment_base_name, CONTENT_ATTACHMENT_DENIED_TEXT, decrypted_attachment_name, folder_file_count, is_attachment_folder } from '@shared/content-markdown'
-import { parse_content_ref } from '@shared/content-reference'
+import { content_name_key, parse_content_ref } from '@shared/content-reference'
 import { story_rating, story_rating_rank } from '@shared/types/content'
 import { attachment_can_read, attachment_display_url, attachment_is_restricted, cover_alt, file_icon, redacted_version_of, story_front_cover_url } from '~/utils/content/attachment'
 import { render_story_cover } from '~/utils/content/story-cover'
 import { format_bytes } from '~/utils/size'
 import { apply_chip_gaps } from './chips'
-import { find_story_by_title, local_file_name, resolve_content_url } from './links'
+import { find_story_by_title, local_file_name, resolve_content_url, with_reference_suffix } from './links'
 
 /** Shared two-line body for files, folders and unavailable private files. */
 function file_card_body_open(md: MarkdownIt, card: FileCardData) {
@@ -107,7 +107,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
         const story = find_story_by_title(ctx.options, story_title)
         if (tokens[idx + 1]?.type !== 'link_close') {
           if (story) {
-            href = `/content/${story.id}`
+            href = with_reference_suffix(`/content/${story.id}`, href)
           }
         }
         else {
@@ -119,7 +119,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
             closing.meta = { ... closing.meta, story_card }
           }
           if (story) {
-            token!.attrSet('href', `/content/${story.id}`)
+            token!.attrSet('href', with_reference_suffix(`/content/${story.id}`, href))
             token!.attrSet('target', '_blank')
             token!.attrSet('rel', 'noopener noreferrer')
             token!.attrJoin('class', 'link-card story-card')
@@ -147,7 +147,7 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
       // Private attachments: permitted viewers get the normal version. Others
       // get a redacted version when available (amber card, tag 删减版), or a
       // gray nameless card when there is none — whatever shape the link had.
-      const link_attachment = file_name ? ctx.options.attachments().find(item => item.file_name === file_name) : undefined
+      const link_attachment = file_name ? ctx.options.attachments().find(item => content_name_key(item.file_name) === content_name_key(file_name)) : undefined
       const link_twin = (link_attachment && attachment_is_restricted(link_attachment)) ? redacted_version_of(ctx.options.attachments(), link_attachment.file_name) : null
       if ((link_attachment && attachment_is_restricted(link_attachment))) {
         if (! attachment_can_read(link_attachment) && ! link_twin) {
@@ -188,8 +188,10 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
           token!.attrJoin('class', 'file-card-encrypted')
         }
       }
+      if (link_attachment && attachment_can_read(link_attachment))
+        token!.attrSet('data-attachment-url', attachment_display_url(ctx.options.static_url, link_attachment))
       if (file_name && close_index !== - 1 && visible_label === null && ! token?.meta?.file_card) {
-        const attachment = ctx.options.attachments().find(item => item.file_name === file_name)
+        const attachment = ctx.options.attachments().find(item => content_name_key(item.file_name) === content_name_key(file_name))
         if (! attachment) {
           // A label-off link to a folder. Without this it would fall into the
           // silent dead-link branch below and vanish, since a folder has no

@@ -31,15 +31,12 @@
         </Button>
       </template>
     </MyDialog>
-    <MyDialog v-model:visible="delete_visible" :header="deleting_redacted ? '删除删减版' : '删除'">
-      <p v-if="deleting_redacted">
+    <MyDialog v-model:visible="redacted_delete_visible" header="删除删减版">
+      <p>
         确认删除『{{ delete_rows[0]?.path }}』的删减版？
       </p>
-      <p v-else>
-        确认删除所选 {{ delete_rows.length }} 项？
-      </p>
       <template #footer>
-        <Button label="取消" text severity="secondary" @click="delete_visible = false" />
+        <Button label="取消" text severity="secondary" @click="redacted_delete_visible = false" />
         <Button label="删除" severity="danger" @click="submit_delete">
           <template #icon>
             <MyIcon name="lucide:check" />
@@ -47,6 +44,10 @@
         </Button>
       </template>
     </MyDialog>
+    <MyContentDeleteImpact
+      v-model:visible="delete_visible" :description="`确认删除所选 ${delete_rows.length} 项及其中内容？`" :impact="delete_impact"
+      :draft="draft_delete_references" draft-checked :loading="delete_impact_loading" :failure="delete_impact_failure" @retry="load_delete_impact" @confirm="submit_delete"
+    />
     <MyDialog v-model:visible="replace_visible" header="替换">
       <div
         class="flex flex-col items-center py-8 gap-y-3 rounded-sm border border-dashed p-4 transition-colors"
@@ -122,8 +123,10 @@
 <script setup lang="ts">
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ErrorPolicy } from '@shared/content-workspace'
+import type { ContentDeleteImpact } from '@shared/types/content-delete-impact'
 import type { AttachmentMenuItem, MyContentAttachmentRow } from '~/utils/content/attachment-list'
 import type { WorkspaceListRow } from '~/utils/content/workspace'
+import { find_delete_references } from '@shared/content-delete-impact'
 import { attachment_mime_type, decrypted_attachment_name, split_attachment_editable_name } from '@shared/content-markdown'
 import { attachment_picks_from_data_transfer } from '~/utils/content/attachment'
 import { content_selection_markdown, set_content_attachment_drag_data, set_content_folder_drag_data } from '~/utils/content/attachment-drag'
@@ -260,8 +263,39 @@ const name = ref('')
 const name_suffix = ref('')
 const name_target = ref<WorkspaceListRow | null>(null)
 const delete_visible = ref(false)
+const redacted_delete_visible = ref(false)
 const delete_rows = ref<WorkspaceListRow[]>([])
 const deleting_redacted = ref(false)
+const delete_impact = ref<ContentDeleteImpact | null>(null)
+const delete_impact_loading = ref(false)
+const delete_impact_failure = ref(false)
+let delete_impact_generation = 0
+const draft_delete_references = computed(() => delete_impact.value ? find_delete_references(model.draft_markdown, delete_impact.value.targets) : [])
+async function load_delete_impact() {
+  const generation = ++ delete_impact_generation
+  delete_impact.value = null
+  delete_impact_loading.value = true
+  delete_impact_failure.value = false
+  try {
+    const impact = await model.get_delete_impact(delete_rows.value.map(row => row.node!.id))
+    if (generation === delete_impact_generation && delete_visible.value)
+      delete_impact.value = impact
+  }
+  catch {
+    if (generation === delete_impact_generation && delete_visible.value)
+      delete_impact_failure.value = true
+  }
+  finally {
+    if (generation === delete_impact_generation)
+      delete_impact_loading.value = false
+  }
+}
+watch(delete_visible, (visible) => {
+  if (visible)
+    void load_delete_impact()
+  else
+    delete_impact_generation ++
+}, { flush: 'sync' })
 const replace_visible = ref(false)
 const replace_drag_depth = ref(0)
 watch(replace_visible, () => {
@@ -371,16 +405,19 @@ function submit_name() {
   void (name_target.value ? model.execute({ operation: 'rename', target: model.target(name_target.value), name: `${name.value}${name_suffix.value}` }) : model.execute({ operation: 'create_folder', parent_id: destination, name: name.value }))
 }
 function submit_delete() {
-  if (! delete_visible.value)
-    return
-  delete_visible.value = false
   if (deleting_redacted.value) {
+    if (! redacted_delete_visible.value)
+      return
+    redacted_delete_visible.value = false
     const row = delete_rows.value[0]
     if (row)
       void model.execute({ operation: 'delete_redacted', target: model.target(row) })
     return
   }
-  void model.execute({ operation: 'delete', targets: delete_rows.value.map(model.target), draft_references: model.references })
+  if (! delete_visible.value || ! delete_impact.value || delete_impact_loading.value || delete_impact_failure.value)
+    return
+  delete_visible.value = false
+  void model.execute({ operation: 'delete', targets: delete_rows.value.map(model.target) })
 }
 function menu_for(row: WorkspaceListRow): AttachmentMenuItem[] {
   const { selected, single } = attachment_menu_context(row, model.selected_rows)
@@ -481,7 +518,7 @@ function menu_for(row: WorkspaceListRow): AttachmentMenuItem[] {
             delete_entries.push(attachment_action_item({ label: '删除删减版', icon_name: 'lucide:trash-2', class: 'attachment-menu-danger', disabled: ! cap.private, command: () => {
               deleting_redacted.value = true
               delete_rows.value = [row]
-              delete_visible.value = true
+              redacted_delete_visible.value = true
             } }, blocked('private')))
           }
         }

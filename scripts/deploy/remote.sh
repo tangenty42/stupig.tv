@@ -9,14 +9,15 @@
 #
 # 输入（公开参数由远端命令行传入，凭据由 SSH stdin 中的赋值传入）：
 #   DEPLOY_DIR        服务器上 compose 文件与 .env.prod 所在目录
-#   IMAGE             完整镜像地址（含 :latest）
+#   IMAGE             Registry 仓库地址，兼容旧回退时使用默认 latest；运行 env 固定实际 digest
 #   ACR_USERNAME / ACR_PASSWORD                 CI 与主机共用的 Registry 凭据
 #   HEALTH_ATTEMPTS / HEALTH_INTERVAL_SECONDS   可选，健康门窗口（默认 72 × 5s = 6 分钟）
 #   SERVICE                                     可选，compose 里的服务名（默认 app），
 #                                               容器用它来解析，不靠容器的实际名字
 #
 # workflow 先把新 .env.prod 和 docker-compose.yml 上传为 incoming；本脚本备份旧文件后再切换。
-# 配置、镜像或健康门任一失败都会恢复旧文件和镜像；数据库迁移是前向迁移，不自动回退。
+# 同协议的配置、镜像或健康门失败恢复旧文件和镜像；首次跨云端草稿协议失败停写保留数据。
+# 数据库迁移是前向迁移，不自动回退。
 # 回滚锚点在 pull 前保存，成功后才 prune 旧镜像。
 set -eu
 
@@ -168,6 +169,17 @@ rollback_on_exit() {
   trap - EXIT
   if [ "$exit_status" -ne 0 ] && [ "$transaction_started" -eq 1 ] && [ "$deployment_succeeded" -ne 1 ]; then
     set +e
+    # A pre-cloud application would resume unleased main writes and local drafts.
+    # Once the new process may have migrated/served traffic, retain its state and
+    # stop editing for manual recovery instead of bringing that old writer back.
+    if [ "$up_started" -eq 1 ] && [ "$had_env" -eq 1 ] &&
+      grep -q '^CONTENT_DRAFT_PROTOCOL=cloud-v1$' .env.prod &&
+      ! grep -q '^CONTENT_DRAFT_PROTOCOL=cloud-v1$' .env.prod.bak; then
+      capture_failure_logs "$SERVICE"
+      compose stop "$SERVICE"
+      echo "共享云端草稿跨协议切换失败：应用已停止，保留当前配置和数据库，需维护恢复，禁止自动启动旧正文写入程序。" >&2
+      exit "$exit_status"
+    fi
     rollback_ok=1
     echo "部署失败：恢复旧 .env.prod 与 compose 配置" >&2
     if [ "$up_started" -eq 1 ] && [ -z "$previous_mqtt_container" ]; then
@@ -193,7 +205,10 @@ rollback_on_exit() {
     rm -f .env.prod.incoming docker-compose.yml.incoming || rollback_ok=0
 
     if [ "$pull_started" -eq 1 ] && [ -n "$previous_mqtt_image" ]; then
-      docker tag "$previous_mqtt_image" "$previous_mqtt_ref" || rollback_ok=0
+      case "$previous_mqtt_ref" in
+        *@sha256:*) : ;; # Restored Compose already names the immutable local digest.
+        *) docker tag "$previous_mqtt_image" "$previous_mqtt_ref" || rollback_ok=0 ;;
+      esac
     fi
     if [ "$rollback_ok" -eq 1 ] && [ "$pull_started" -eq 1 ] && [ -n "$previous_image" ]; then
       docker tag "$previous_image" "$IMAGE" || rollback_ok=0
