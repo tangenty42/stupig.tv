@@ -27,7 +27,8 @@ defineProps<{
      (the app root clips overflow-x); the label keeps its place because the
      page container is centered, so a viewport-wide divider stays centered. */
   .my-divider {
-    @apply -mx-[calc(50vw-50%)] flex items-center;
+    @apply flex items-center;
+    margin-inline: calc(50% - var(--app-half-viewport, 50vw));
     gap: var(--divider-gap, .5rem);
   }
   .line {

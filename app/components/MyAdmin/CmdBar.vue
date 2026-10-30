@@ -11,8 +11,8 @@
           :complete-on-focus="true"
           :delay="100"
           class="w-full"
-          input-class="!bg-transparent !border-0 !shadow-none !outline-none font-mono text-sm text-slate-800 placeholder:text-slate-400 dark:text-slate-200 dark:placeholder:text-slate-500"
-          overlay-class="overflow-hidden"
+          input-class="!bg-transparent !border-0 !shadow-none !outline-none !font-mono !text-sm !text-slate-800 placeholder:!text-slate-400 dark:!text-slate-200 dark:placeholder:!text-slate-500"
+          overlay-class="!overflow-hidden"
           fluid
           @complete="on_complete"
           @option-select="on_option_select"

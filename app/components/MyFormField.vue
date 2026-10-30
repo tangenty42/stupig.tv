@@ -26,10 +26,10 @@
 
     <component :is="otpSend ? 'InputGroup' : 'div'" v-if="props.as === 'InputOtp'">
       <MyInputOtp :id="id" v-model="$field.value" :placeholder="placeholder" :aria-describedby="described_by" v-bind="{ ... extra, ... $field.props, invalid: $field.invalid }" />
-      <InputGroupAddon v-if="otpSend" class="shrink-0 px-6">
+      <InputGroupAddon v-if="otpSend" class="shrink-0 !px-6">
         <MyOtpButton
           v-model="otp_cooldown_until"
-          class="text-sm h-full"
+          class="!text-sm h-full"
           :loading="otp_btn_loading"
           @click="on_otp_send"
         />

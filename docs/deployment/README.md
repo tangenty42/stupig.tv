@@ -34,4 +34,19 @@
 
 迁移预演与备份 → 必要时维护迁移 → Check → 生产 ESA 预检 → 推送镜像/配置 → 应用健康门 → 自动发布生产 ESA → 业务冒烟。部署失败的镜像/配置恢复不会回滚数据库；应用健康后 ESA 发布失败也不会自动回滚应用。[失败处理](github-acr.md)、[恢复](../operations/backup-recovery.md)。
 
+## CSS 样式变更发布准备
+
+当前官方主题 API 路线的范围与未完成项集中在[CSS 验收入口](../reviews/css-official-apis-validation-2026-10-29.md#发布门槛与剩余工作)。本节是后续发布时的操作要求；本机生产 profile 复验不代表已发布或已经演练缓存 / 回退。
+
+| 时点 | 操作与需保留的证据 |
+| --- | --- |
+| 提交 / 审阅前 | 按 CSS 审阅范围逐项核对 diff，保留同一工作区中的其他功能变更边界；记录候选源码身份、锁文件、关键配置及本机测试结果，重新检出后重跑必要检查 |
+| 发布前 | 关闭 CSS 入口列明的兼容未完成项，通过待发布代码树的远端 Check。生产 CSS profile 位于 Check 第一 browser 分片，旧引擎 profile 仍需带已安装历史二进制的验证环境 |
+| 构建与切换 | body ID / Tailwind selector、preset、静态 CSS、客户端 chunk 和 SSR 随同一镜像交付。记录实际 checkout SHA、镜像身份、配置 / Compose 和旧版本恢复材料；沿用现有 Deploy，不单独替换一份 CSS |
+| 交付验收 | 核对真实 HTML 的 body ID、首屏 / hydration、Dialog / ConfirmPopup 定位与动画、六级标题和编辑器；冷加载与已有标签页导航都能取得匹配的 CSS / JS chunk，无 404 或样式混用 |
+| 缓存核对 | 读取主站 HTML 与 `/_nuxt/` 的实际响应头、回源和旧资产保留行为；本站 Content 域名 `/content/` 的 ESA 规则不证明这些前端资产已安全缓存，不能直接套用该规则 |
+| 异常恢复 | 使用匹配版本的镜像 / SSR / 静态资产整体恢复，核对恢复后的 HTML 和动态 chunk；保留故障资源 URL、构建 / 镜像身份和脱敏截图，不在浏览器中临时关闭某一个主题入口来代替回退 |
+
+现有应用健康门检测不到所有视觉故障，健康后才发现的样式异常不会自动触发视觉回退。当前 ACR 主要使用 `latest` / `mqtt`，没有永久 SHA tag；不能假设旧镜像、旧 chunk 或云端缓存必然保留。旧版本再交付的实际操作见[部署失败与回退](github-acr.md#部署失败与回退)及[备份恢复](../operations/backup-recovery.md)，数据库和 ESA 函数的边界继续按其手册处理。本次整理未修改 Deploy、线上缓存规则或回滚实现。
+
 需要查某一字段、默认值或 env 选择规则时再看[配置项参考](configuration-reference.md)；RAM 授权细节见[权限参考](ram-reference.md)。

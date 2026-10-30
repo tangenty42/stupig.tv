@@ -120,12 +120,15 @@ describe('version-bound JPEG placeholders', () => {
     expect(result.html).toContain('data-lqip')
     expect(result.html).toContain('--content-lqip:url(data:image/jpeg;base64,/9j/2Q==)')
     expect(result.html).toContain('width="80" height="60"')
+    expect(result.html).toContain('--content-image-width:80px')
+    expect(result.html).toContain('--content-image-ratio:1.3333333333333333')
     expect(result.html).toContain('class="image-loading-mask"')
     expect(result.html).toContain('aria-busy="true"')
   })
   it('never uses private LQIP for denied content or its public redacted substitute', () => {
     const private_file = { ... attachment('secret.png.good', true), is_private: true, url: null, image }
     expect(render('![](att://secret.png.good)', [private_file]).html).not.toContain('/9j/2Q==')
+    expect(render('![](att://secret.png.good)', [private_file]).html).not.toContain('--content-image-')
     const twin = { ... attachment('secret.png', true), image: { ... image, lqip: 'data:image/jpeg;base64,/9j/AA==' } }
     const html = render('![](att://secret.png.good)', [{ ... private_file, redacted_url: twin.url, redacted_image: twin.image }]).html
     expect(html).toContain('/9j/AA==')
@@ -864,7 +867,7 @@ describe('private attachment projection', () => {
 
     expect(html).toContain('data-private')
     expect(html).toContain('/api/content/attachments/1?version=v1')
-    // The amber card announces 机密附件 with a loader until the blob lands.
+    // The amber card announces 机密附件 while the readable image loads.
     expect(html).toContain('encrypted-block-brand')
     expect(html).toContain('机密附件·完整版')
     expect(html).not.toContain('encrypted-image-loading')

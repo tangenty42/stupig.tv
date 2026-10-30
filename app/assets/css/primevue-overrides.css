@@ -1,42 +1,12 @@
-/* PrimeVue design token overrides. PrimeVue 4.5 injects its theme variables
-   (also on `:root,:host`) at runtime into the end of <head>, so in production
-   builds they land AFTER this stylesheet and would win the cascade. `html:root`
-   bumps specificity so these overrides always beat the theme, regardless of
-   injection order. */
+/* Theme customizations are owned by config/primevue-preset.ts.
+   The remaining html:root variables accompany the component-specific fixes
+   below; their higher specificity keeps those values independent of runtime
+   theme injection order. */
 
 html:root {
-  --p-inputtext-invalid-placeholder-color: var(--p-inputtext-placeholder-color);
-
-  --p-toast-blur: 16px;
-
-  --p-dialog-border-radius: theme('borderRadius.sm');
-
-  --p-autocomplete-overlay-border-radius: theme('borderRadius.sm');
-  --p-autocomplete-option-border-radius: theme('borderRadius.sm');
-
-  --p-button-raised-shadow:
-    0 1px 1px 0 rgb(0 0 0 / 0.1),
-    0 1px 1px -1px rgb(0 0 0 / 0.1);
-  --p-button-border-radius: var(--p-button-rounded-border-radius);
-
-  --p-paginator-background: none;
-
-  
-  --p-datepicker-buttonbar-padding: .5rem 0 .25rem 0;
-
   /* Zero-size arrow (gutter - 2px border width) and a menu-like 2px gap to the target */
   --p-confirmpopup-gutter: 2px;
   --p-confirmpopup-shadow: theme('boxShadow.sm');
-
-  --p-contextmenu-shadow: theme('boxShadow.sm');
-  --p-contextmenu-item-padding: 0.375rem 0.625rem;
-
-  --p-menu-shadow: theme('boxShadow.sm');
-  --p-menu-item-padding: 0.375rem 0.625rem;
-
-  --p-togglebutton-border-radius: theme('borderRadius.full');
-  --p-togglebutton-content-border-radius: theme('borderRadius.full');
-  --p-selectbutton-border-radius: theme('borderRadius.full');
 
   /* Aura's 3px track is a small thing to aim at. The handle keeps its own
      `slider.handle` size and centring margins, so only the bar changes. */
@@ -126,10 +96,6 @@ html:root {
 .p-paginator-first,
 .p-paginator-last {
   @apply h-8 min-w-8 text-sm;
-}
-
-.p-paginator-page-selected.p-paginator-page-selected {
-  @apply bg-primary-500 text-white dark:text-white;
 }
 
 .p-paginator .p-select {

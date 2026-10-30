@@ -7,12 +7,14 @@ test('a higher-level heading covers an exiting lower-level heading', async ({ pa
   await page.goto(`/content/${id}/edit`)
   await ready(page)
   const paragraphs = Array.from({ length: 30 }, (_, index) => `Paragraph ${index}`).join('\n\n')
-  const body = `# First chapter\n\n## Exiting subsection\n\n${paragraphs}\n\n## Next subsection\n\n${paragraphs}`
+  const levels = ['### Third level', '#### Fourth level', '##### Fifth level', '###### Sixth level'].join('\n\n')
+  const body = `# First chapter\n\n## Exiting subsection\n\n${levels}\n\n${paragraphs}\n\n## Next subsection\n\n${paragraphs}`
   await page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true }).fill(markdown(title, body))
   await page.getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.getByText('档案已保存', { exact: true })).toBeVisible()
   await page.goto(`/content/${id}`)
   await ready(page)
+  expect(await page.locator('.story-body :is(h1,h2,h3,h4,h5,h6)').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).zIndex))).toEqual(['30', '29', '28', '27', '26', '25', '29'])
 
   const overlap = await page.evaluate(async () => {
     const lower = [... document.querySelectorAll<HTMLElement>('.story-body h2')].find(heading => heading.textContent === 'Exiting subsection')!

@@ -14,6 +14,9 @@ applyTo: "app/**/*.{vue,ts}"
 - Forms use `@primevue/forms` with Zod resolvers. Reuse `server/shared/schemas.ts` for form schemas/defaults; full procedure input schemas remain in `server/trpc/schemas.ts`.
 - For state-preserving exclusive modes, put the keyed component roots directly inside `<KeepAlive>`; plain DOM wrappers between them are not cached.
 - Use Tailwind 3 and PrimeVue. Global CSS belongs in `app/assets/css/global.css` and `primevue-overrides.css`; local styles use scoped `@apply` where appropriate. Prefer PrimeVue design tokens over generated internal selectors. Use `theme('colors.primary')` and the existing palette for semantic colors.
+- Keep Tailwind's global `important` disabled. The ancestor selector strategy wraps complex variants in `:is()`, which breaks Chromium 80; global `important: true` can override inline geometry. Prefer tokens, dt and PT, with local `!` utilities only for intentional conflicts. `config/ui-style.ts` still owns Nuxt's stable body ID.
+- Shared PrimeVue theme customizations belong in `config/primevue-preset.ts`; use instance `dt` or `pt` for local values and internal nodes. Retire the corresponding CSS variable override when a token is migrated, after checking both color schemes. Keep component-specific lifecycle/animation fixes in their existing CSS owner.
+- Production browser support is declared in package.json's production Browserslist; `config/browser-targets.ts` maps it to legacy JS and Vite CSS targets. CSS-sensitive regressions need the production browser profile described in the testing guide, since the default E2E profile omits legacy.
 
 ## APIs, ownership and injection
 

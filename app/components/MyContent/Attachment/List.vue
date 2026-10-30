@@ -32,7 +32,7 @@
         @change="on_files_picked"
       >
       <Button
-        class="mt-2 pointer-events-auto w-8 h-auto aspect-square"
+        class="mt-2 pointer-events-auto !w-8 h-auto aspect-square"
         outlined
         aria-label="添加"
         :aria-busy="upload_busy"

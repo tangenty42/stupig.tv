@@ -192,17 +192,27 @@ function on_preview_keydown(event: KeyboardEvent) {
    background instead of veiling it. The backgrounds are opaque so an
    exiting lower-level title cannot show through a higher-level title. The
    padding sits inside the background, doubling as vertical spacing. */
-.story-body :deep(:is(h1, h2, h3, h4, h5, h6)) {
+.story-body :deep(h1),
+.story-body :deep(h2),
+.story-body :deep(h3),
+.story-body :deep(h4),
+.story-body :deep(h5),
+.story-body :deep(h6) {
   @apply sticky mb-2 bg-white py-2 font-bold text-slate-800 dark:bg-slate-900 dark:text-slate-100;
   top: var(--app-header-height, 0px);
   /* Full-bleed: the bar spans the viewport while the compensating
      padding keeps the title text aligned with the content column. */
-  margin-inline: calc(50% - 50vw);
-  padding-inline: calc(50vw - 50%);
+  margin-inline: calc(50% - var(--app-half-viewport, 50vw));
+  padding-inline: calc(var(--app-half-viewport, 50vw) - 50%);
 }
 
 /* compensate_section_push() measures flow positions with pinning suspended. */
-.story-body.measuring :deep(:is(h1, h2, h3, h4, h5, h6)) {
+.story-body.measuring :deep(h1),
+.story-body.measuring :deep(h2),
+.story-body.measuring :deep(h3),
+.story-body.measuring :deep(h4),
+.story-body.measuring :deep(h5),
+.story-body.measuring :deep(h6) {
   position: static;
 }
 
@@ -232,7 +242,12 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Markdown source markers, one per level, tinted back so
    they read as decoration rather than part of the title. */
-.story-body :deep(:is(h1, h2, h3, h4, h5, h6))::before {
+.story-body :deep(h1)::before,
+.story-body :deep(h2)::before,
+.story-body :deep(h3)::before,
+.story-body :deep(h4)::before,
+.story-body :deep(h5)::before,
+.story-body :deep(h6)::before {
   @apply mr-2 select-none font-bold text-slate-300 dark:text-slate-600;
 }
 
@@ -459,20 +474,6 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply block rounded-t-none;
 }
 
-/* The frame shrink-wraps its image (inline-block w-fit); with the img hidden
-   during decryption it would collapse around the loader — stretch it instead. */
-.story-body :deep(.img-frame:has(> .encrypted-image-loading)) {
-  @apply block w-full;
-}
-
-.story-body :deep(.encrypted-image-loading) {
-  @apply flex min-h-40 w-full items-center justify-center bg-amber-50/40 text-3xl text-amber-500 dark:bg-amber-950/20;
-}
-
-.story-body :deep(.encrypted-image-loading .iconify) {
-  @apply animate-spin;
-}
-
 /* The global img rules set display, which beats the [hidden] UA style — and
    the generic img[hidden] rule loses to .img-frame > img on specificity. */
 .story-body :deep(.img-frame > img[hidden]) {
@@ -594,7 +595,14 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* The empty placeholder has no image to size it, so it keeps a 16:9 box. */
 .story-body :deep(.story-card-cover-empty) {
-  @apply flex aspect-video items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
+  @apply flex items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
+}
+
+/* A zero-width flex spacer reserves 16:9 in engines without aspect-ratio. */
+.story-body :deep(.story-card-cover-empty)::before,
+.story-body :deep(.image-unavailable)::before {
+  content: '';
+  padding-top: 56.25%;
 }
 
 /* Rating badge: a large, translucent tier SVG on its own row at the
@@ -669,8 +677,30 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply rounded-none;
 }
 
+/* Reserve the same cropped box before the network image gains intrinsic
+   dimensions. These limits match the image rules above; width/height HTML
+   hints alone do not reserve this geometry in Chrome 80. */
+.story-body :deep(.carousel-item .img-frame[data-lqip]) {
+  max-width: 100%;
+  width: max(theme('spacing.32'), min(var(--content-image-width), calc(theme('spacing.64') * var(--content-image-ratio))));
+}
+
+.story-body :deep(.carousel-item .img-frame[data-lqip][aria-busy] > img) {
+  @apply absolute inset-0;
+}
+
+.story-body :deep(.carousel-item .img-frame[data-lqip][aria-busy])::after {
+  content: '';
+  display: block;
+  padding-top: clamp(theme('spacing.32'), calc(100% / var(--content-image-ratio)), theme('spacing.64'));
+}
+
+.story-body :deep(.carousel-item .img-frame[data-lqip][data-image-error]) {
+  width: auto;
+}
+
 .story-body :deep(.image-unavailable) {
-  @apply aspect-video w-64 max-w-full items-center justify-center bg-slate-200 text-3xl text-slate-400 dark:bg-slate-800 dark:text-slate-500;
+  @apply w-64 max-w-full items-center justify-center bg-slate-200 text-3xl text-slate-400 dark:bg-slate-800 dark:text-slate-500;
 }
 
 .story-body :deep(.img-frame[data-image-error]) {
@@ -707,23 +737,11 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Edge fades: while the strip can scroll in a direction, mask its content
    near that edge so the nav button floats over clear space and stays
-   distinguishable. The fade widths are registered custom properties so they
-   transition smoothly with the buttons; without @property support the mask
-   simply toggles. */
-@property --carousel-fade-l {
-  syntax: '<length>';
-  inherits: false;
-  initial-value: 0px;
-}
-
-@property --carousel-fade-r {
-  syntax: '<length>';
-  inherits: false;
-  initial-value: 0px;
-}
+   distinguishable. The carousel owner interpolates the numeric widths with
+   the same 300ms ease curve on every supported engine. */
 
 .story-body :deep(.image-carousel) {
-  @apply m-0 flex items-end gap-3 overflow-x-auto overflow-y-clip pb-2;
+  @apply m-0 flex items-end overflow-x-auto overflow-y-hidden pb-2;
   /* Multi-stop ramp: the opacity eases in over the fade width instead of
      jumping along a single straight slope, so the fade reads smoother. */
   mask-image: linear-gradient(
@@ -737,15 +755,11 @@ function on_preview_keydown(event: KeyboardEvent) {
     rgb(0 0 0 / 0.3) calc(100% - var(--carousel-fade-r, 0px) * 0.4),
     transparent 100%
   );
-  transition: --carousel-fade-l 0.3s ease, --carousel-fade-r 0.3s ease;
 }
 
-.story-body :deep(.carousel-shell:has(.carousel-prev[data-on='true']) .image-carousel) {
-  --carousel-fade-l: var(--carousel-fade-width);
-}
-
-.story-body :deep(.carousel-shell:has(.carousel-next[data-on='true']) .image-carousel) {
-  --carousel-fade-r: var(--carousel-fade-width);
+/* Flex gap is unavailable in Chrome 80 and Safari 13.1. */
+.story-body :deep(.carousel-item + .carousel-item) {
+  @apply ml-3;
 }
 
 .story-body :deep(.carousel-nav) {
@@ -758,8 +772,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Freshly wired shells apply their restored state transition-free for one
    frame, otherwise editor re-renders replay the fade/width animations. */
-.story-body :deep(.carousel-no-fx .carousel-nav),
-.story-body :deep(.carousel-no-fx .image-carousel) {
+.story-body :deep(.carousel-no-fx .carousel-nav) {
   transition: none;
 }
 
@@ -808,7 +821,13 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 .story-body :deep(.iframe-frame iframe) {
-  @apply block aspect-video w-full border-0 bg-slate-200 dark:bg-slate-700;
+  @apply absolute inset-0 block h-full w-full border-0 bg-slate-200 dark:bg-slate-700;
+}
+
+.story-body :deep(.iframe-frame)::after {
+  content: '';
+  display: block;
+  padding-top: 56.25%;
 }
 
 .story-body :deep(.carousel-caption p) {

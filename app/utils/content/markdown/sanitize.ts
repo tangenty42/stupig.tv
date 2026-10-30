@@ -32,6 +32,8 @@ export function sanitize_story_html(html: string) {
         'height': [/^\d+(?:\.\d+)?(?:px|em|rem|%)$/],
         'max-width': [/^\d+(?:\.\d+)?(?:px|em|rem|%)$/],
         '--content-lqip': [/^url\(data:image\/(?:jpeg|png);base64,[a-z\d+/=]+\)$/i],
+        '--content-image-width': [/^\d+px$/],
+        '--content-image-ratio': [/^\d+(?:\.\d+)?(?:e-\d+)?$/i],
       },
     },
   })

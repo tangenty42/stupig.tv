@@ -3,6 +3,9 @@
 // pushed away only by the next same-or-higher-level heading. All functions
 // are idempotent — re-measuring on resize or re-render is safe.
 
+// DOM selector strings do not pass through the production CSS transformer.
+export const story_heading_selector = [1, 2, 3, 4, 5, 6].map(level => `.story-section > h${level}`).join(', ')
+
 /**
     Wrap the flat rendered blocks into NESTED sections: a heading opens a
    section inside the nearest lower-level heading's section (h2 under h1,
@@ -120,7 +123,7 @@ export function compensate_section_push(body: HTMLElement) {
    resize.
  */
 export function layout_heading_offsets(body: HTMLElement) {
-  for (const heading of body.querySelectorAll<HTMLElement>('.story-section > :is(h1, h2, h3, h4, h5, h6)')) {
+  for (const heading of body.querySelectorAll<HTMLElement>(story_heading_selector)) {
     let offset = 0
     // Only our own .story-section wrappers count as nesting ancestors; the
     // page also wraps the preview in plain <section> elements.

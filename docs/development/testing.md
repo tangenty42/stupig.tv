@@ -11,6 +11,7 @@
 | `pnpm test:component` | Nuxt + happy-dom；真实挂载 Vue 组件及依赖组件生命周期的 composable |
 | `pnpm test` | 依次执行以上三组 |
 | `pnpm test:e2e` | Playwright Chromium；实际 Nuxt、API、MySQL 和同步传输 |
+| `pnpm exec playwright test --config tests/css-production.config.ts` | 完整 production 前端构建；保留 legacy、CSS 目标、压缩和分块，复用隔离业务配置 |
 | `pnpm test:all` | 执行单元、工具、组件和浏览器测试 |
 | `pnpm lint` | 代码、测试和文档规范 |
 | `pnpm exec nuxt typecheck` | 应用类型 |
@@ -45,7 +46,23 @@ OSS、CAPTCHA 和短信在测试专用 Nuxt 配置中替换供应商边界。浏
 - 权限：匿名和普通用户访问控制台、新建及编辑页被重定向，不能看到他人资料编辑控件；直接请求管理接口和越权资料修改分别返回 401 或 403。
 - 档案：创建和编辑持久化、普通附件上传、在途上传取消并收到服务端确认、两个隔离浏览器上下文间的正文同步（排除 BroadcastChannel 旁路）。
 
-该流程不证明真实 OSS、ESA 缓存交付、短信供应商、CAPTCHA 供应商或原生文件权限正常。夹具只面向 Chromium，禁用 legacy 构建；服务器复用已安装的 SDK，不验证独立部署镜像依赖收集。MQTT 主题按本轮标识隔离；浏览器连接使用已验证的本地 broker 主机地址，需确保其 WebSocket 端口可达。日志和 Playwright 产物位于被 Git 忽略的 `.dev/`；CI 只上传服务器日志、trace、截图和报告，不上传临时运行配置。真实云端与操作系统行为继续按下面矩阵验收。
+该流程不证明真实 OSS、ESA 缓存交付、短信供应商、CAPTCHA 供应商或原生文件权限正常。默认夹具只面向 Chromium，禁用 legacy 构建；服务器复用已安装的 SDK，不验证独立部署镜像依赖收集。MQTT 主题按本轮标识隔离；浏览器连接使用已验证的本地 broker 主机地址，需确保其 WebSocket 端口可达。日志和 Playwright 产物位于被 Git 忽略的 `.dev/`；CI 只上传服务器日志、trace、截图和报告，不上传临时运行配置。真实云端与操作系统行为继续按下面矩阵验收。
+
+生产 CSS 验收使用独立的 `tests/css-production.config.ts`。它复用同一个隔离启动器，但仅在构建子进程设置 `NODE_ENV=production`，保留 legacy；业务配置、测试服务及数据库仍使用开发隔离边界。`BROWSERSLIST_ENV=production` 显式传递，JS legacy 与 CSS 引擎目标由 package.json 的 production Browserslist 经 `config/browser-targets.ts` 接线，CSS minifier 和 code splitting 在 Nuxt 中显式配置。
+
+Markdown 诊断入口先加载 FormatJS 的标准 `Intl.Segmenter` polyfill，再求值 markdownlint 依赖。生产构建通过 `config/browser-transforms.ts` 的官方 Rollup Babel 插件，在 Oxc 之前编译静态 `/v` 正则的 Unicode 集合语义；Oxc 单独降为 `RegExp(..., 'v')` 不能补齐旧引擎能力。`scripts/verify/browser-regexp.test.ts` 构建真实 modern / legacy 双产物，在拒绝 `v` flag 的构造器边界检查 emoji 与组合字符；`lint-legacy.test.ts` 在缺少 Segmenter 时加载真实诊断入口。这些回归不能替代历史浏览器中的完整编辑验收。
+
+启动器从实际 Vite `configResolved` 记录目标、minifier、分块及插件，检查最终 CSS 和 legacy JS 资产；报告保存在本轮 `.dev/e2e/<run>/css-build.json`。该 profile 运行 SSR（禁用页面 JS）与 hydration、分页器、延迟路由 / 懒加载组件 CSS、Dialog / ConfirmPopup 动画、六级吸顶标题与全屏编辑滚动，以及媒体渐变中间帧、加载 / 失败、权限表示、深浅色、窄容器和重渲染恢复。测试专用页面仅属于 E2E Nuxt layer，额外 utility class 仅加入夹具构建的 Tailwind content，不写入产品配置。CI 的 browser 第一分片在常规 E2E 后执行此 profile，并在失败时保留 `.dev/css-production/`。它验证现代 Chromium 上的生产产物，不代替最低版本引擎或发布缓存验收。
+
+CSS 官方 API 的独立浏览器夹具可用 `pnpm exec playwright test --config tests/css.config.ts` 运行，不启动应用或数据库。它挂载真实 PrimeVue / CodeMirror，并对 Tailwind selector 策略、Teleport、行内尺寸、主题更新及静态 CSS 压缩结果做对照；同一回归文件也会被普通 E2E 配置发现。该入口不验证 Nuxt SSR/hydration、完整生产构建或真实旧引擎，具体结果与边界见[验证记录](../reviews/css-official-apis-validation-2026-10-29.md)。
+
+历史工具类的独立回归使用 `pnpm exec playwright test --config tests/css-legacy-utilities.config.ts`，同样不启动应用或数据库。它在真实 Chromium 80 / Firefox 78 中检查实际应用配置的普通及局部 `!` 暗色背景类，覆盖 PostCSS 原始和 Lightning CSS 压缩后的四种引擎 / 输出组合。实际配置关闭全局 important，保留普通 dark variant；组件覆盖由 preset、PT 和局部 `!` 验证。原 `application-local` 候选已合入正式 `application` 夹具，不再维护重复实验模式。
+
+Windows 上已安装的历史引擎使用 `pnpm exec playwright test --config tests/css-legacy.config.ts` 复验，保留相同隔离生产构建，使用 Chromium 80 / Firefox 78 及匹配 WebDriver，并在同一构建运行现代 Chromium 生产对照。历史场景通过原生点击和输入覆盖确认浮层、真实登录 / Markdown 编辑 / 全屏预览 / 主题与用户菜单，并复用与现代浏览器相同的媒体观测。确认浮层验收页复用应用 `useMyConfirm()` 和公开 PT state / transition DOM 补偿，原生点击后检查实际锚点坐标。二进制位于 `.dev/tools/legacy-browsers/`，不属于仓库依赖；普通 E2E 会跳过旧引擎专用场景。安装来源、实际结果与未覆盖平台见[旧引擎记录](../reviews/css-legacy-engines-2026-10-29.md)。
+
+历史 profile 通过仅回环 HTTPS 代理访问隔离应用，避免旧引擎拒收 HTTP localhost 的 Secure cookie。Windows 证书仅驻留内存，信任例外只属于临时 WebDriver 会话，不安装系统证书、不降低应用 cookie 安全属性。现代 production profile 保持原有入口；该测试代理不进入产品构建。
+
+历史驱动对响应式表单和 CodeMirror 逐字符发送原生按键；提交前检查实际字段值，正文保留原有长文档。旧引擎专用项目使用独立的用例 / 等待时间预算，现代首屏遮罩时限仍保留。窄屏验收检查真实文档 scrollWidth；缺少 Web Locks 而只读的编辑页必须判失败，不能强制开启编辑或删除该断言。
 
 ## SSR、身份与时间
 

@@ -80,6 +80,7 @@
 | [`migration/native.ts`](../../scripts/migration/native.ts) | Sharp 等原生依赖打包、身份和完整性清单 | 保留；生产镜像内图片迁移需要 |
 | [`verify/migration-runtime.ts`](../../scripts/verify/migration-runtime.ts) | 独立数据库中验证执行、恢复、冻结、容器产物等合同；Check 调用 | 保留为集成验证，不包装成日常应用命令 |
 | [`verify/content-migration.ts`](../../scripts/verify/content-migration.ts) | 独立数据库验证 Content 转换，默认内存 OSS，显式参数可走真实开发对象存储；Check 调用默认模式 | 保留；与普通单测、生产迁移的职责不同 |
+| [`verify/css-cascade-feasibility.ts`](../../scripts/verify/css-cascade-feasibility.ts) | 通过现有依赖诊断 CodeMirror / PrimeVue 的样式入口；`pnpm exec tsx scripts/verify/css-cascade-feasibility.ts`，不加载应用配置或接入转换；输出与限制见[可行性评估](../reviews/css-layer-public-api-feasibility-2026-10-29.md) | 保留为独立探针；成功退出不代表动态适配或旧浏览器兼容验收通过 |
 | [`esa/cli.ts`](../../scripts/esa/cli.ts) | 发布命令入口、目标输出、本机锁与脱敏记录 | 保留，两环境共用 |
 | [`esa/config.ts`](../../scripts/esa/config.ts) | 专用 YAML/env 校验、变量映射、脱敏 plan | 保留 |
 | [`esa/api.ts`](../../scripts/esa/api.ts) | 发布所需 ESA API 传输与错误脱敏 | 保留 |
@@ -93,6 +94,10 @@
 25 个 `*.test.ts` 均是测试，不是运维命令。其中 [`verify/package.test.ts`](../../scripts/verify/package.test.ts)、[`deploy/docker-image.test.ts`](../../scripts/deploy/docker-image.test.ts)、[`verify/nuxt-config.test.ts`](../../scripts/verify/nuxt-config.test.ts)、[`migration/maintenance-build.test.ts`](../../scripts/migration/maintenance-build.test.ts) 检查跨文件接线/产物，其余主要跟随相应模块。[`migration/sql.test.ts`](../../scripts/migration/sql.test.ts)、[`catalog-sql.test.ts`](../../scripts/migration/catalog-sql.test.ts)、[`frozen.test.ts`](../../scripts/migration/frozen.test.ts) 分别保护 SQL 执行/失败/幂等、版本识别及历史不可变合同。不要为了减少列表长度删掉这些测试。
 
 迁移实现位于 `migrations/`，scripts/migration 是运行工具。历史迁移与其冻结闭包不得改名、改内容或重新生成摘要来掩盖变化，见[迁移约束](../../.github/instructions/migrations.instructions.md)。
+
+官方 CSS API 的隔离浏览器验证使用 `pnpm exec playwright test --config tests/css.config.ts`，不经过应用服务器和数据库 setup；报告位于 `.dev/css-official-apis/`，验证范围见[评估记录](../reviews/css-official-apis-validation-2026-10-29.md)。它不是 `pnpm test:e2e` 完整应用验收的替代品。
+
+真实生产 CSS 构建验收使用 `pnpm exec playwright test --config tests/css-production.config.ts`，保留 legacy、生产 Browserslist、压缩及分块，创建并清理独立 E2E 数据库。编译配置和资产报告在 `.dev/e2e/<run>/css-build.json`，浏览器报告在 `.dev/css-production/`；详见[生产一致性验收](../reviews/css-production-parity-2026-10-29.md)。
 
 ## 建议的整理顺序
 
