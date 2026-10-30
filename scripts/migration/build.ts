@@ -135,6 +135,7 @@ export async function build_maintenance() {
   const entries = {
     'cleanup.mjs': 'storage/audit.ts',
     'migrate.mjs': 'migration/cli.ts',
+    'release.mjs': 'deploy/release.ts',
   }
   for (const [name, source] of Object.entries(entries)) {
     const outfile = resolve(output, name)

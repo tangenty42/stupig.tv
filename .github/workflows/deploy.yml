@@ -29,6 +29,19 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Reject superseded release sources
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          current_main=$(git rev-parse FETCH_HEAD)
+          [ "$(git rev-parse HEAD)" = "$RELEASE_SHA" ] &&
+            git diff --quiet "$RELEASE_SHA" "$current_main" -- . ':(glob,exclude)docs/**' ':(glob,exclude)**/*.md' || {
+            echo 'Runtime changes have superseded this Check; refusing a stale deployment.' >&2
+            exit 1
+          }
+
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 12.10.1
@@ -111,7 +124,7 @@ jobs:
           MQTT_REF=$(docker image inspect "$IMAGE:mqtt-$RELEASE_SHA" --format '{{index .RepoDigests 0}}')
           [[ "$APP_REF" =~ ^"${IMAGE}"@sha256:[a-f0-9]{64}$ ]]
           [[ "$MQTT_REF" =~ ^"${IMAGE}"@sha256:[a-f0-9]{64}$ ]]
-          printf '\nAPP_IMAGE=%s\nMQTT_IMAGE=%s\nCONTENT_DRAFT_PROTOCOL=cloud-v1\n' "$APP_REF" "$MQTT_REF" >> .env.prod.runtime
+          printf '\nAPP_IMAGE=%s\nMQTT_IMAGE=%s\nRELEASE_SHA=%s\nCONTENT_DRAFT_PROTOCOL=cloud-v1\n' "$APP_REF" "$MQTT_REF" "$RELEASE_SHA" >> .env.prod.runtime
           mkdir -p .data/releases
           SCHEMA=$(find migrations -maxdepth 1 -type f \( -name '*.sql' -o -name '*.ts' \) -printf '%f\n' | sort | tail -n 1)
           SETTINGS_SHA=$(sha256sum config/app-settings.yaml | cut -d ' ' -f 1)
@@ -150,6 +163,7 @@ jobs:
           # 共用的 Registry 凭据通过加密 SSH stdin 传入，不拼进远端命令行。
           # base64 仅处理 shell 引号；传输保密由 SSH 提供。
           {
+            printf 'DEPLOY_EXECUTION_ID=%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             printf 'ACR_USERNAME=$(printf %%s "%s" | base64 -d)\n' "$(printf '%s' "$ACR_USERNAME" | base64 -w0)"
             printf 'ACR_PASSWORD=$(printf %%s "%s" | base64 -d)\n' "$(printf '%s' "$ACR_PASSWORD" | base64 -w0)"
             cat scripts/deploy/remote.sh

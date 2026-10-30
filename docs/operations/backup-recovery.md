@@ -48,6 +48,8 @@ docker compose --env-file .env.prod exec app node .output/server/maintenance/mig
 
 首次部署没有旧镜像可恢复；自动恢复失败时也需要人工处理。云端草稿版本的 ACR 流程发布 SHA tag 并将运行配置固定到 RepoDigest，`application-production-receipt` 保存提交、应用／broker digest、schema 与 settings 摘要；CI artifact 当前保留 30 天，须另行保存长期恢复材料，不能假定镜像永远存在。详见[GitHub 与 ACR](../deployment/github-acr.md)。
 
+受控 Maintenance Deploy 会在任何生产迁移前停写，保存 `.release-plans/<计划 ID>/recovery-*` 中的一致性 SQL、摘要和旧运行配置，创建临时 QA 库恢复并逐字节比较全部表的数据导出，随后删除 QA 库。备份失败且尚未开始生产迁移时恢复此前运行的旧服务；生产维护命令一旦开始，后续失败保持停写并保留所有恢复证据。同主机 MySQL 适配器的前置要求、人工授权和远程库限制见[维护发布](../deployment/github-acr.md#授权维护发布)；它不替代定期备份或 OSS／ESA 等外部状态的恢复方案。
+
 共享云端草稿切换后，备份包括 `content_story_drafts`、main、引用历史和现有 `migration_runs`；不能只恢复 main 而丢掉已确认的 draft。租约会自然到期，不导入浏览器凭证或伪造命令回执。首次从旧协议启动 cloud-v1 失败时，远端脚本停应用、保留新配置与数据库，不自动重启无租约旧写者；先维护停写并检查迁移回执，再修复同协议应用或从整套一致备份制定恢复。没有通用 down，回滚代码不是数据回滚。旧 localStorage 内容由管理员自行处理，应用不导入或删除。
 
 ## 数据或对象误操作

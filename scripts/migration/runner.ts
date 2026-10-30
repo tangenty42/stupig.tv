@@ -6,6 +6,7 @@ import { load_database_config } from '@config/loader'
 import { log_error, log_info, log_warn } from '@server/lib/log'
 import driver from 'mysql2/promise'
 import { legacy_baseline_through, load_script, plan_migrations, read_migrations, runtime_migration, single_ledger_migration } from './catalog'
+import { deployment_fingerprint, sql_execution } from './deployment'
 
 const lock_name = 'stupig_tv_migrate'
 interface RunRow {
@@ -24,6 +25,7 @@ export interface MigrationOptions {
   baseline?: boolean
   check_only?: boolean
   dry_run?: boolean
+  preflight?: boolean
   maintenance?: boolean
   through?: string
   retry_sql?: string
@@ -88,7 +90,7 @@ async function read_only<T>(connection: mysql.Connection, signal: AbortSignal, f
 
 export async function run_migrations(options: MigrationOptions = {}) {
   const { baseline = false, check_only = false, dry_run = false, maintenance = false } = options
-  if (baseline && (check_only || dry_run || maintenance || options.retry_sql))
+  if (baseline && (check_only || dry_run || options.preflight || maintenance || options.retry_sql))
     throw new MigrationFailure('invalid_options', '--baseline 不能与 --status/--dry-run/--maintenance/--retry-sql 一起使用')
   const files = read_migrations(options.dir ?? `${process.cwd()}/migrations`, options.manifest)
   if (options.through && ! files.some(file => file.filename === options.through))
@@ -152,6 +154,27 @@ export async function run_migrations(options: MigrationOptions = {}) {
     if (baseline && pending.some(file => file.artifact || file.filename > legacy_baseline_through))
       throw new MigrationFailure('baseline_boundary', 'baseline 仅适用于冻结的历史 SQL；请用 --through 指定历史边界，脚本和新 SQL 必须执行')
 
+    if (options.preflight) {
+      const classify_sql = sql_execution(files, options.dir ?? `${process.cwd()}/migrations`)
+      const [identity] = await connection.query<mysql.RowDataPacket[]>('SELECT @@server_uuid AS server_uuid')
+      const details = []
+      for (const file of pending.filter(file => ! adopted.includes(file))) {
+        const previous = runs.get(file.filename)
+        const execution = file.artifact ? (await load_script(file)).execution : classify_sql(file)
+        details.push({ filename: file.filename, checksum: file.checksum, status: previous?.status ?? 'pending', phase: previous?.phase ?? 'apply', execution })
+      }
+      const report = {
+        version: 1 as const,
+        database: { host: config.host, port: config.port, name: config.name, server_uuid: String(identity[0]?.server_uuid ?? '') },
+        catalog: files.map(({ filename, checksum }) => ({ filename, checksum })),
+        legacy: [... legacy].map(([filename, checksum]) => ({ filename, checksum })).sort((a, b) => a.filename.localeCompare(b.filename)),
+        ledger: [... runs.values()].map(({ filename, checksum, status, phase, attempts, finished_at }) => ({ filename, checksum, status, phase, attempts, finished: Boolean(finished_at) })).sort((a, b) => a.filename.localeCompare(b.filename)),
+        pending: details,
+        requires_maintenance: details.some(file => file.execution === 'maintenance'),
+        sql_recovery_required: pending.filter(file => ! file.artifact && runs.has(file.filename) && runs.get(file.filename)?.status !== 'completed').map(file => file.filename),
+      }
+      return { applied: [... applied.keys()], pending: [], preflight: { ... report, fingerprint: deployment_fingerprint(report) } }
+    }
     if (check_only || dry_run) {
       const details = []
       let blocked_by: string | null = null
@@ -178,6 +201,19 @@ export async function run_migrations(options: MigrationOptions = {}) {
       log_info('migrations up to date', { applied: applied.size })
       return { applied: [... applied.keys()], pending: [] }
     }
+    // Classify the complete chain before metadata DDL or any earlier SQL can commit.
+    const classify_sql = sql_execution(files, options.dir ?? `${process.cwd()}/migrations`)
+    const scripts = new Map<string, Awaited<ReturnType<typeof load_script>>>()
+    for (const file of pending.filter(file => ! adopted.includes(file))) {
+      const script = file.artifact ? await load_script(file) : null
+      if (script)
+        scripts.set(file.filename, script)
+      if (! maintenance && (script?.execution ?? classify_sql(file)) === 'maintenance')
+        throw new MigrationFailure('maintenance_required', `迁移 ${file.filename} 需要维护窗口，请显式运行 pnpm migrate --maintenance`)
+      const previous = runs.get(file.filename)
+      if (! script && previous && previous.status !== 'completed' && options.retry_sql !== file.filename)
+        throw new MigrationFailure('sql_recovery_required', `SQL ${file.filename} 可能已部分执行，请核对后显式使用 --retry-sql ${file.filename}`)
+    }
     await assert_active()
     if (! has_runtime) {
       // Bootstrap only the metadata DDL from its immutable SQL source. Its version
@@ -198,7 +234,7 @@ export async function run_migrations(options: MigrationOptions = {}) {
 
     for (const file of pending.filter(file => ! adopted.includes(file))) {
       await assert_active()
-      const script = file.artifact ? await load_script(file) : null
+      const script = scripts.get(file.filename) ?? null
       if (script?.execution === 'maintenance' && ! maintenance)
         throw new MigrationFailure('maintenance_required', `迁移 ${file.filename} 需要维护窗口，请显式运行 pnpm migrate --maintenance`)
       const previous = runs.get(file.filename)

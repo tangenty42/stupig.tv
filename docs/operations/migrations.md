@@ -41,13 +41,18 @@ pnpm migrate --dry-run
 | --- | --- |
 | `--status` | 读取版本、阶段、次数和安全错误码，不导入执行脚本 |
 | `--dry-run` | 只读运行当前可执行的首个待办脚本的 plan；前置未完成时报告 `blocked_by` |
-| 无执行参数 | 执行 SQL 和 automatic 脚本；遇到 maintenance 脚本停止 |
+| `--preflight` | 只读分类完整待办链，输出 JSON、数据库身份、账本和内容指纹；不执行脚本 plan/apply/verify |
+| 无执行参数 | 写入前检查整个待办链；全部允许在线执行时才执行，否则在任何 DDL／回执写入前停止 |
 | `--maintenance` | 允许维护脚本执行；不会自动停止应用、worker 或旧 cron |
 | `--through <完整文件名>` | 包含目标及全部前置版本，不跳过中间步骤 |
 | `--retry-sql <完整文件名>` | 核对过部分执行结果后，允许重放该失败／运行中 SQL |
 | `--baseline --through <历史边界>` | 仅登记已确认具备的历史结构；不能用于跳过脚本或失败步骤 |
 
 只读命令不会初始化账本或执行 apply，但本地入口仍会编译校验迁移产物，也需要连接数据库并获取迁移锁。`--dry-run` 不代表所有后序迁移均已预演，必须根据 `blocked_by` 分阶段推进。
+
+部署准入使用 `--preflight`，不从 `--status` 或 `--dry-run` 猜测后续迁移类型。历史 SQL 至自动接管边界及账本初始化／合并步骤保留 automatic；其他 SQL 默认 maintenance。经过审核、对当前旧应用向后兼容的在线 SQL，须在 `migrations/deployment.json` 的 `automatic_sql` 中按完整文件名声明精确 SHA-256；摘要不符即拒绝。声明与迁移一同审核，不能借声明修改冻结 SQL 或把破坏性操作默认为在线。TS 类型仍由其冻结产物的 `execution` 决定。
+
+日常部署发现维护要求会保留旧服务并输出计划 ID；通过 [Maintenance Deploy](../deployment/github-acr.md#授权维护发布) 批准具体计划后执行停写、验证备份和迁移。计划同时绑定提交、镜像／配置、原运行版本、DB UUID 与账本状态，发生变化须重新预检。可能部分执行的 SQL 仍需人工核对并明确 `--retry-sql`，维护入口不会自动重试它。
 
 ## 单一账本与旧 SQL 的继承
 

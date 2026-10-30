@@ -6,6 +6,19 @@ import { parse } from 'yaml'
 describe('documentation-only CI and deployment', () => {
   const check = parse(readFileSync('.github/workflows/check.yml', 'utf8'))
   const deploy = parse(readFileSync('.github/workflows/deploy.yml', 'utf8'))
+  const maintenance = parse(readFileSync('.github/workflows/maintenance-deploy.yml', 'utf8'))
+
+  it('requires a plan-specific opt-in and serializes maintenance with ordinary deployments', () => {
+    expect(Object.keys(maintenance.on)).toEqual(['workflow_dispatch'])
+    expect(maintenance.on.workflow_dispatch.inputs.plan_id.required).toBe(true)
+    expect(maintenance.on.workflow_dispatch.inputs.confirm_maintenance).toMatchObject({ type: 'boolean', required: true, default: false })
+    expect(maintenance.concurrency).toEqual(deploy.concurrency)
+    expect(maintenance.jobs.maintenance.if).toBe('github.ref == \'refs/heads/main\'')
+    const steps = maintenance.jobs.maintenance.steps
+    const checkout = steps.find((step: { with?: { ref?: string } }) => step.with?.ref?.includes('steps.release.outputs.commit'))
+    expect(checkout).toBeDefined()
+    expect(steps.some((step: { run?: string }) => step.run?.includes('docker build'))).toBe(false)
+  })
   const ignored = check.on.push['paths-ignore'] as string[]
   // GitHub's path syntax defines **.md as Markdown at any depth, including root.
   const matches = (file: string, pattern: string) => pattern === '**.md' ? file.endsWith('.md') : pattern === 'docs/**' && file.startsWith('docs/')
