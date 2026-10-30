@@ -188,6 +188,8 @@ export const link_cards_plugin: StoryMarkdownPlugin = (md, ctx) => {
           token!.attrJoin('class', 'file-card-encrypted')
         }
       }
+      if (link_attachment && attachment_can_read(link_attachment))
+        token!.attrSet('data-attachment-url', attachment_display_url(ctx.options.static_url, link_attachment))
       if (file_name && close_index !== - 1 && visible_label === null && ! token?.meta?.file_card) {
         const attachment = ctx.options.attachments().find(item => content_name_key(item.file_name) === content_name_key(file_name))
         if (! attachment) {

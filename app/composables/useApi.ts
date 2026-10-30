@@ -212,7 +212,7 @@ export function useApi() {
     },
 
     async rewrite_draft_references(id: number, payload: { markdown: string, base_namespace_revision: number | null, base_title_revision: number | null }) {
-      return trpc_call(trpc.content.rewriteDraftReferences.mutate({ id, ... payload }))
+      return draft_call(signal => trpc.content.rewriteDraftReferences.mutate({ id, ... payload }, { signal }))
     },
     async get_title_reference_version() {
       return trpc_call(trpc.content.getTitleReferenceVersion.query())

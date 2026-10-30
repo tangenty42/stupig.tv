@@ -24,9 +24,9 @@ export function attachment_display_url(static_url: (path: string) => string, att
   return attachment.url ? attachment.is_private ? attachment.url : static_url(attachment.url) : ''
 }
 
-/** Match the rendered URL: DOM .href expands relative attachment routes to absolute URLs. */
+/** Use the attachment projection before link options; DOM .href also expands relative routes. */
 export function attachment_for_link<T>(attachments: ReadonlyMap<string, T>, link: Pick<HTMLAnchorElement, 'getAttribute'>) {
-  return attachments.get(link.getAttribute('href') ?? '')
+  return attachments.get(link.getAttribute('data-attachment-url') ?? link.getAttribute('href') ?? '')
 }
 
 /** A redacted presentation belongs to this row; other attachments are independent. */

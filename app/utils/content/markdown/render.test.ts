@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { CONTENT_ATTACHMENT_DENIED_TEXT, CONTENT_IMAGE_DENIED_TEXT, upgrade_legacy_refs } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_DENIED_TEXT, CONTENT_PRIVATE_INLINE_PLACEHOLDER } from '@shared/content-private'
 import { describe, expect, it } from 'vitest'
+import { attachment_for_link } from '~/utils/content/attachment'
 import { content_attachment_markdown, content_folder_markdown } from '~/utils/content/attachment-drag'
 import { create_story_markdown } from '~/utils/content/markdown'
 import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
@@ -20,6 +21,20 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
     is_encrypted: false,
   }
 }
+
+it.each(['#top', '?download=1#top', '?version=wrong&download=1#top'])('retains download identity for attachment links with options: %s', (suffix) => {
+  const file = { ... attachment('report.txt', false), url: '/api/content/attachments/7?version=server-version' }
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [file], static_url: path => path, stories: () => [], folder_card_openable: () => false })
+  for (const label of ['', '下载']) {
+    const html = sanitize_story_html(md.render(`[${label}](att://report.txt${suffix})`, { images: [] }))
+    const href = html.match(/ href="([^"]*)"/)![1]!.replaceAll('&amp;', '&')
+    const identity = html.match(/ data-attachment-url="([^"]*)"/)?.[1]?.replaceAll('&amp;', '&') ?? null
+    expect(href).toContain('#top')
+    expect(href).not.toContain('version=wrong')
+    const link = { getAttribute: (name: string) => name === 'href' ? href : name === 'data-attachment-url' ? identity : null }
+    expect(attachment_for_link(new Map([[file.url, file]]), link)).toBe(file)
+  }
+})
 
 it('resolves normalized attachment and title references and retains link options', () => {
   const file = { ... attachment('Docs/É.png', true), url: '/api/content/attachments/7?version=server-version' }
