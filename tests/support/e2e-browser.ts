@@ -55,9 +55,12 @@ export async function login(page: Page, username = 'admin', password = 'AaAaAaAa
   await ready(page)
   await page.getByRole('button', { name: '登录 / 注册', exact: true }).click()
   const form = page.locator('#login-password-form')
+  const dialog = page.getByRole('dialog').filter({ has: form })
+  await expect(dialog).toBeVisible()
+  // A stable input box does not mean the entrance finished (e.g. opacity-only
+  // animation). Wait for Vue to finish entering and run Dialog's focus hook.
+  await expect(dialog).not.toHaveClass(/\bp-dialog-enter-active\b/)
   const username_input = form.locator('input[name="username_or_phone"]')
-  // fill() does not wait for stability. Dialog's after-enter focus can steal
-  // insertText, so let a normal click wait for the entrance before typing.
   await username_input.click()
   await username_input.fill(username)
   await form.locator('input[type="password"]').fill(password)

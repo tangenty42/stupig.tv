@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 
 import { db } from '@server/lib/db'
 
-import { attachment_mime_type, compare_attachment_names, decrypted_attachment_name } from '@shared/content-markdown'
+import { attachment_mime_type, compare_attachment_names } from '@shared/content-markdown'
 
 import { content_name_key } from '@shared/content-reference'
 import { attachment_owned_object_keys } from './content/attachment-objects'
@@ -135,7 +135,7 @@ export async function delete_story_attachment_rows(story_id: number, executor: D
   )
 }
 
-/** Shared by cover reads and transactional change detection, including public redacted twins. */
+/** Cover reads and change detection use only the named attachment's public representation. */
 type CoverRow = Pick<AttachmentRow, 'id' | 'file_name' | 'object_key' | 'version' | 'storage_bucket' | 'storage_provider' | 'oss_version_id' | 'is_private'> & Partial<AttachmentRow>
 
 function cover_attachment(file_name: string, rows: CoverRow[]) {
@@ -143,7 +143,7 @@ function cover_attachment(file_name: string, rows: CoverRow[]) {
   const redacted = rows.find(row => content_name_key(row.file_name) === content_name_key(file_name) && row.is_private && ! row.is_folder && ! row.encryption_key && has_redacted_variant(row))
   if (redacted)
     return { row: redacted, redacted: true }
-  const row = public_file(file_name) ?? (file_name.endsWith('.good') ? public_file(decrypted_attachment_name(file_name)) : undefined)
+  const row = public_file(file_name)
   return row ? { row, redacted: false } : null
 }
 
@@ -165,8 +165,6 @@ export async function list_cover_presentations(covers: { story_id: number, file_
   for (const cover of covers) {
     const names = wanted.get(cover.story_id) ?? new Set<string>()
     names.add(content_name_key(cover.file_name))
-    if (cover.file_name.endsWith('.good'))
-      names.add(content_name_key(decrypted_attachment_name(cover.file_name)))
     wanted.set(cover.story_id, names)
   }
   const [candidates] = await executor.execute<AttachmentRow[]>(
