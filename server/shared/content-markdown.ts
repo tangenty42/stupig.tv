@@ -1,6 +1,7 @@
+import type { ReferenceDefinition } from './content-reference-definitions-live'
 import { html_no_markdown_tags, html_void_tags } from './content-html'
 import { content_name_key, content_ref_suffix, content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref, parse_migration_ref } from './content-reference'
-import { scan_reference_definitions } from './content-reference-definitions'
+import { scan_reference_definitions } from './content-reference-definitions-live'
 
 export { link_file_name_illegal_chars } from './content-reference'
 
@@ -899,6 +900,7 @@ interface MarkdownLinkSpan {
   dest_start: number
   /** End of the raw destination within the source. */
   dest_end: number
+  reference?: { definition: ReferenceDefinition, implicit: boolean }
 }
 
 // Link parsing is a real scanner, not a regex: labels can nest `[...]` pairs
@@ -967,7 +969,7 @@ function fenced_code_ranges(text: string): [number, number][] {
 }
 
 /** Try to parse an inline link/image starting at `text[start]` (`!` or `[`), within [.., limit). */
-function parse_link_at(text: string, start: number, limit: number): MarkdownLinkSpan | null {
+function parse_link_at(text: string, start: number, limit: number, resolve_reference?: (label: string) => ReferenceDefinition | undefined): MarkdownLinkSpan | null {
   const image = text[start] === '!'
   const open = image ? start + 1 : start
 
@@ -993,11 +995,37 @@ function parse_link_at(text: string, start: number, limit: number): MarkdownLink
     }
     i ++
   }
-  if (depth !== 0 || text[i] !== '(') {
+  if (depth !== 0) {
     return null
   }
   const label_start = open + 1
   const label_end = i - 1
+  if (text[i] !== '(') {
+    if (! resolve_reference)
+      return null
+    const label = text.slice(label_start, label_end)
+    let identifier = label
+    let implicit = true
+    if (text[i] === '[') {
+      let close = i + 1
+      while (close < limit && text[close] !== ']') {
+        if (text[close] === '[' && ! is_escaped(text, close))
+          return null
+        close += is_escaped(text, close) ? 2 : 1
+      }
+      if (close >= limit)
+        return null
+      const explicit = text.slice(i + 1, close)
+      identifier = explicit || label
+      implicit = ! explicit
+      i = close + 1
+    }
+    const definition = resolve_reference(identifier)
+    if (! definition)
+      return null
+    return { start, end: i, image, label, label_start, label_end, destination: definition.destination,
+      dest_start: i, dest_end: i, reference: { definition, implicit } }
+  }
   i ++
 
   while (i < limit && /\s/.test(text[i]!)) {
@@ -1066,7 +1094,7 @@ function scan_markdown_links(text: string): MarkdownLinkSpan[] {
   return spans.sort((a, b) => a.start - b.start)
 }
 
-function scan_inline_links(text: string, excluded: { from: number, to: number }[]): MarkdownLinkSpan[] {
+function scan_inline_links(text: string, excluded: { from: number, to: number }[], resolve_reference?: (label: string) => ReferenceDefinition | undefined): MarkdownLinkSpan[] {
   const spans: MarkdownLinkSpan[] = []
   const wrappers: string[] = []
   const fenced = fenced_code_ranges(text)
@@ -1127,7 +1155,7 @@ function scan_inline_links(text: string, excluded: { from: number, to: number }[
         continue
       }
       if (text[i] === '[' || (text[i] === '!' && text[i + 1] === '[')) {
-        const span = parse_link_at(text, i, limit)
+        const span = parse_link_at(text, i, limit, resolve_reference)
         if (span) {
           spans.push(span)
           i = span.end
@@ -1142,6 +1170,25 @@ function scan_inline_links(text: string, excluded: { from: number, to: number }[
     cursor = Math.max(i, fenced[fence_index]![1])
   }
   return spans
+}
+
+/** Labels on definition uses are separate from their one shared destination. */
+function scan_reference_labels(text: string) {
+  const count = front_matter_line_count(text)
+  const front_end = count ? text.split('\n').slice(0, count).join('\n').length + 1 : 0
+  const references = scan_reference_definitions(text, front_end)
+  const uses: MarkdownLinkSpan[] = []
+  if (! references.definitions.length)
+    return uses
+  const visit = (source: string, offset = 0) => {
+    for (const span of scan_inline_links(source, offset ? [] : [{ from: 0, to: front_end }, ... references.ranges], references.resolve)) {
+      if (span.reference)
+        uses.push({ ... span, start: offset + span.start, end: offset + span.end, label_start: offset + span.label_start, label_end: offset + span.label_end })
+      visit(span.label, offset + span.label_start)
+    }
+  }
+  visit(text)
+  return uses.sort((a, b) => a.start - b.start)
 }
 
 /** Walk every link span, including links nested inside labels (e.g. in image alt text). */
@@ -1236,41 +1283,30 @@ export interface ContentRefRewriteStep {
 /** Each step is simultaneous; subsequent steps replay in journal order. */
 export function rewrite_attachment_path(path: string, step: ContentRefRewriteStep) {
   // Exact file mappings win; otherwise the most specific folder mapping wins.
-  const mapping = step.attachments?.find(item => ! item.is_folder && path === item.from)
-    ?? step.attachments?.filter(item => item.is_folder && (path === item.from || path.startsWith(`${item.from}/`)))
+  const key = content_name_key(path)
+  const mapping = step.attachments?.find(item => ! item.is_folder && key === content_name_key(item.from))
+    ?? step.attachments?.filter(item => item.is_folder && (key === content_name_key(item.from) || key.startsWith(`${content_name_key(item.from)}/`)))
       .sort((left, right) => right.from.length - left.from.length)[0]
-  return mapping ? mapping.to + path.slice(mapping.from.length) : path
+  if (! mapping)
+    return path
+  const tail = mapping.is_folder ? path.split('/').slice(mapping.from.split('/').length).join('/') : ''
+  return mapping.to + (tail ? `/${tail}` : '')
 }
 
 function rewrite_ref_step(markdown: string, step: ContentRefRewriteStep): string {
-  const rewritten = rewrite_markdown_links(markdown, (span) => {
-    let label = rewrite_ref_step(span.label, step)
-    const ref = parse_content_ref(span.destination)
-    let destination = span.destination
+  return map_content_refs(markdown, (destination) => {
+    const ref = parse_content_ref(destination)
     if (ref?.kind === 'attachment' || ref?.kind === 'legacy_attachment') {
       const path = rewrite_attachment_path(ref.path, step)
-      if (path !== ref.path) {
-        destination = ref.kind === 'attachment' ? format_attachment_ref(path) + content_ref_suffix(span.destination) : path
-        if (span.label === ref.path)
-          label = path
-      }
+      if (path !== ref.path)
+        return format_attachment_ref(path) + content_ref_suffix(destination)
     }
     else if (ref?.kind === 'story' || ref?.kind === 'legacy_story') {
       const mapping = step.stories?.find(item => content_title_key(item.from) === content_title_key(ref.title))
-      if (mapping) {
-        destination = ref.kind === 'story' ? format_story_ref(mapping.to) + content_ref_suffix(span.destination) : `@${mapping.to}`
-        if (span.label === ref.title)
-          label = mapping.to
-      }
+      if (mapping)
+        return format_story_ref(mapping.to) + content_ref_suffix(destination)
     }
-    return destination === span.destination && label === span.label ? null : { destination, label }
-  })
-  return rewrite_bare_cover(rewritten, (destination) => {
-    const path = attachment_name_from_url(destination)
-    if (! path)
-      return destination
-    const next = rewrite_attachment_path(path, step)
-    return next === path ? destination : (destination.startsWith('att://') ? format_attachment_ref(next) : next)
+    return destination
   })
 }
 
@@ -1278,22 +1314,57 @@ export function rewrite_content_refs(markdown: string, steps: readonly ContentRe
   return steps.reduce(rewrite_ref_step, markdown)
 }
 
+/** Match only literal default names; formatted captions and custom prose stay authored text. */
+export function rewrite_default_reference_label(label: string, from: string, to: string) {
+  const old_ref = parse_content_ref(from)
+  const new_ref = parse_content_ref(to)
+  if (! old_ref || ! new_ref || from === to)
+    return label
+  if ('path' in old_ref && 'path' in new_ref) {
+    for (const [before, after] of [
+      [old_ref.path, new_ref.path],
+      [attachment_base_name(old_ref.path), attachment_base_name(new_ref.path)],
+      [decrypted_attachment_name(old_ref.path), decrypted_attachment_name(new_ref.path)],
+      [decrypted_attachment_name(attachment_base_name(old_ref.path)), decrypted_attachment_name(attachment_base_name(new_ref.path))],
+    ]) {
+      if (content_name_key(label) === content_name_key(before!))
+        return after!
+    }
+  }
+  else if ('title' in old_ref && 'title' in new_ref && label === old_ref.title) {
+    return new_ref.title
+  }
+  return label
+}
+
 /** Map live destinations only; code and raw HTML use the same scanner as rendering/lint. */
 export function map_content_refs(markdown: string, transform: (destination: string, from: number, to: number) => string) {
+  const destinations = new Map<number, string>()
   const visit = (text: string, offset = 0): string => rewrite_markdown_links(text, (span) => {
     const destination = transform(span.destination, offset + span.dest_start, offset + span.dest_end)
-    let label = visit(span.label, offset + span.label_start)
-    const old_ref = parse_content_ref(span.destination)
-    const new_ref = parse_content_ref(destination)
-    if (old_ref && new_ref) {
-      const old_name = 'path' in old_ref ? old_ref.path : old_ref.title
-      const new_name = 'path' in new_ref ? new_ref.path : new_ref.title
-      if (span.label === old_name)
-        label = new_name
-    }
+    destinations.set(offset + span.dest_start, destination)
+    const label = rewrite_default_reference_label(visit(span.label, offset + span.label_start), span.destination, destination)
     return { destination, label }
   })
-  const body = visit(markdown)
+  let body = visit(markdown)
+  const old_uses = scan_reference_labels(markdown)
+  const new_uses = old_uses.length ? scan_reference_labels(body) : []
+  if (old_uses.length !== new_uses.length)
+    throw new Error('Reference rewrite changed definition uses')
+  const labels: { from: number, to: number, insert: string }[] = []
+  for (const [index, use] of old_uses.entries()) {
+    const next = new_uses[index]!
+    const destination = destinations.get(use.reference!.definition.from) ?? use.destination
+    const label = rewrite_default_reference_label(use.label, use.destination, destination)
+    if (label === use.label)
+      continue
+    // Shortcut/collapsed labels double as IDs. Make the ID explicit rather
+    // than renaming a shared definition or breaking other custom uses.
+    labels.push({ from: next.label_start, to: use.reference!.implicit ? next.end : next.label_end,
+      insert: use.reference!.implicit ? `${label}][${use.label}]` : label })
+  }
+  for (const change of labels.sort((a, b) => b.from - a.from))
+    body = body.slice(0, change.from) + change.insert + body.slice(change.to)
   // Cover offsets must refer to the original snapshot, before link edits.
   let offset = 0
   const covers = new Map<string, string>()
@@ -1321,6 +1392,16 @@ export function content_ref_changes(before: string, after: string) {
     if (insert !== before.slice(span.start, span.end))
       changes.push({ from: span.start, to: span.end, insert })
   }
+  const old_uses = scan_reference_labels(before)
+  const new_uses = old_uses.length ? scan_reference_labels(after) : []
+  if (old_uses.length !== new_uses.length)
+    throw new Error('Reference rewrite changed definition uses')
+  for (const [index, span] of old_uses.entries()) {
+    const next = new_uses[index]!
+    const insert = after.slice(next.start, next.end)
+    if (insert !== before.slice(span.start, span.end) && ! changes.some(change => change.from <= span.start && change.to >= span.end))
+      changes.push({ from: span.start, to: span.end, insert })
+  }
   const old_lines = before.split('\n')
   const new_lines = after.split('\n')
   let offset = 0
@@ -1330,7 +1411,17 @@ export function content_ref_changes(before: string, after: string) {
       changes.push({ from: offset, to: offset + line.length, insert: new_lines[index]! })
     offset += line.length + 1
   }
-  return changes.sort((a, b) => a.from - b.from)
+  const disjoint: typeof changes = []
+  for (const change of changes.sort((a, b) => a.from - b.from || b.to - a.to)) {
+    const previous = disjoint.at(- 1)
+    if (previous && change.from < previous.to) {
+      if (change.to <= previous.to)
+        continue
+      throw new Error('Reference rewrite produced overlapping edits')
+    }
+    disjoint.push(change)
+  }
+  return disjoint
 }
 
 /** Bare cover destinations are outside Markdown's link scanner. */

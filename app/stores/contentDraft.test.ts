@@ -1,4 +1,6 @@
 import type { ContentDraftSnapshot, DraftCommand, DraftResult } from '@shared/types/content-draft'
+import type { ContentReferenceRewriteResult } from '@shared/types/content-reference'
+import { replay_content_references } from '@shared/content-reference-replay'
 import { settings } from '@shared/settings'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,7 +34,7 @@ async function fixture(overrides: Partial<ContentDraftSnapshot> = {}) {
       ... (input.kind === 'release' ? { owned: false, occupied: false } : {}), ... (input.kind === 'publish' ? { unpublished_changes: false } : {}) }
     return { snapshot: { ... snapshot }, receipt: { seq: input.seq, kind: input.kind, ok: true } }
   })
-  const rewrite = vi.fn(async (_id: number, input: { markdown: string }) => ({ markdown: input.markdown, changes: [], diagnostics: [], namespace_revision: snapshot.namespace_revision, title_revision: snapshot.title_revision,
+  const rewrite = vi.fn(async (_id: number, input: { markdown: string }): Promise<ContentReferenceRewriteResult> => ({ markdown: input.markdown, changes: [], diagnostics: [], namespace_revision: snapshot.namespace_revision, title_revision: snapshot.title_revision,
     base_namespace_revision: snapshot.namespace_revision, base_title_revision: snapshot.title_revision, baseline_unavailable: { namespace: false, title: false } }))
   const store = useContentDraftStore('a'.repeat(32))
   stores.push(store)
@@ -71,6 +73,24 @@ afterEach(() => {
 })
 
 describe('shared cloud draft session', () => {
+  it('replays default filename labels in unsaved input after a cloud privacy rename without losing trailing text', async () => {
+    const old = '![photo.png.good](att://docs/photo.png.good) [说明][p]\n\n[p]: att://docs/photo.png.good'
+    const current = '![photo.png](att://docs/photo.png) [说明][p]\n\n[p]: att://docs/photo.png'
+    const f = await fixture({ markdown: old })
+    f.store.markdown = `${old}\n尚未上传的文字`
+    f.change({ markdown: current, namespace_revision: 1, draft_revision: 2 })
+    // The network boundary returns the real server/shared replay result.
+    f.api.rewrite.mockImplementationOnce(async (_id, input) => ({
+      ... replay_content_references(input.markdown, {
+        attachments: [{ revision: 1, changes: [{ node_id: 1, from: 'att://docs/photo.png.good', to: 'att://docs/photo.png' }] }],
+        titles: [], attachment_targets: [{ id: 1, name: 'docs/photo.png' }], title_targets: [],
+      }), namespace_revision: 1, title_revision: 0, base_namespace_revision: 1, base_title_revision: 0, baseline_unavailable: { namespace: false, title: false },
+    }))
+    await f.store.open({ id: f.head().id })
+    expect(f.api.rewrite).toHaveBeenCalledWith(7, expect.objectContaining({ markdown: `${old}\n尚未上传的文字`, base_namespace_revision: 0 }))
+    expect(f.store.markdown).toBe(`${current}\n尚未上传的文字`)
+    expect(f.store.writable).toBe(true)
+  })
   it('recovers a lost acquire response using the same page, token and expected epoch', async () => {
     const f = await fixture()
     f.store.configure(f.api, () => true)

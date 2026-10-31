@@ -48,6 +48,8 @@ async function verify() {
     runtime.integrations.mqtt.topicPrefix = `stupig/sync/qa-${randomBytes(8).toString('hex')}`
     const { db } = await import('@server/lib/db')
     pool = db
+    const [[selected]] = await db.query<RowDataPacket[]>('SELECT DATABASE() AS name')
+    assert.equal(selected!.name, name, 'QA must use the migrated isolated database')
     const { get_draft, create_draft, acquire_draft, command_draft, list_drafts } = await import('@server/services/content/draft.service')
     const { ensure_workspace_root } = await import('@server/services/content/workspace.repository')
     const { with_namespace_change } = await import('@server/services/content/reference-history.service')

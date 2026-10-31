@@ -74,7 +74,7 @@ CSS 当前采用[官方主题 API 与 Tailwind 选择器策略](reviews/css-offi
 
 2026-10-31 的 [PR #49](https://github.com/tangenty42/stupig.tv/pull/49) 已合并迁移预检和按计划授权的维护发布入口，操作方式见[GitHub 与 ACR](deployment/github-acr.md)。[PR #52](https://github.com/tangenty42/stupig.tv/pull/52) 已将 CSS 验证移到独立 `browser-css` CI job，并保留汇总门禁，见[CSS 发布准备](deployment/README.md#css-样式变更发布准备)。上述合并状态已按提交记录核对。
 
-2026-11-01 已通过 Actions API、发布回执及 SSH 只读核对 #54 交付：应用／broker 镜像与回执一致，两个容器健康，生产迁移 30 项完成。最新生产状态与证据边界统一见[云端台账](deployment/aliyun.md#截至-2026-11-01-的发布信息)。
+2026-11-01 已通过 Actions API、发布回执及 SSH 只读核对 #54 交付：应用／broker 镜像与回执一致，两个容器健康，生产迁移 30 项完成；用户随后手动完成本轮生产业务验收并反馈无异常。最新生产状态与证据边界统一见[云端台账](deployment/aliyun.md#截至-2026-11-01-的发布信息)。
 
 下表保留各操作手册记录的部署范围与能力边界；当前线上版本须用发布回执及镜像身份核验，不能从本地改动或 PR 合并推断：
 

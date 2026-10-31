@@ -325,6 +325,31 @@ describe('deployment configuration', () => {
     expect(load_database_config(database_env)).toEqual({ host: 'db', port: 3306, password: 'placeholder', user: 'stupig_tv', name: 'stupig_tv' })
   })
 
+  it('preserves an explicit runtime database target without overriding a supplied environment', async () => {
+    vi.resetModules()
+    for (const [key, value] of Object.entries(deployment_env))
+      vi.stubEnv(key, value)
+    const loader = await import('./loader')
+    const runtime = loader.runtime_config()
+    const target = { host: '127.0.0.1', port: 3306, user: 'root', password: 'qa-password', name: `stupig_cloud_draft_qa_${'a'.repeat(32)}` }
+    runtime.db = target
+    expect(loader.load_database_config()).toEqual(target)
+    expect(loader.load_database_config(database_env)).toEqual({ host: 'db', port: 3306, password: 'placeholder', user: 'stupig_tv', name: 'stupig_tv' })
+    // Once selected, the DB target must not reread unrelated YAML or credentials.
+    const cwd = vi.spyOn(process, 'cwd').mockImplementation(() => {
+      throw new Error('Configuration must not be reloaded')
+    })
+    try {
+      vi.stubEnv('ALIYUN_OSS_ACCESS_KEY_ID', undefined)
+      expect(loader.load_database_config()).toEqual(target)
+      runtime.db = { ... target, port: 0 }
+      expect(() => loader.load_database_config()).toThrow(/db\.port/)
+    }
+    finally {
+      cwd.mockRestore()
+    }
+  })
+
   it('projects only public deployment fields out of the full configuration', () => {
     expect(public_config_from(load_config(deployment_env))).toEqual({
       site: { url: 'https://www.stupig.tv', indexable: true },

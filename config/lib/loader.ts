@@ -7,6 +7,8 @@ import { aliyun_oss_config_schema, database_config_schema, deployment_config_sch
 
 export type { Settings } from './schema'
 
+let runtime_config_cache: AppConfig | undefined
+
 function environment(): NodeJS.ProcessEnv {
   return load_environment()
 }
@@ -105,7 +107,12 @@ function read_yaml_config(node_env: string | undefined) {
   return merge_config_layers(... file_names.map(read_yaml))
 }
 
-export function load_database_config(env = environment()) {
+export function load_database_config(env?: NodeJS.ProcessEnv) {
+  // Reuse an explicitly selected runtime target (for example an isolated QA DB).
+  // A standalone caller still validates only DB configuration, without app secrets.
+  if (env === undefined && runtime_config_cache)
+    return parse_config(database_config_schema, runtime_config_cache.db, 'db')
+  env ??= environment()
   const merged_config = read_yaml_config(node_env_of(env))
   const db = interpolate_config(is_config_object(merged_config) ? merged_config.db : undefined, env, 'db')
   return parse_config(database_config_schema, db, 'db')
@@ -189,8 +196,6 @@ export type AppConfig = ReturnType<typeof load_config>
 export function public_config_from(config: AppConfig) {
   return parse_config(public_config_schema, config)
 }
-
-let runtime_config_cache: AppConfig | undefined
 
 export function runtime_config() {
   return runtime_config_cache ??= load_config()

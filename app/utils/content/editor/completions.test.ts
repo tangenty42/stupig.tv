@@ -52,6 +52,14 @@ function labels(doc: string) {
 }
 
 describe('attachment destination completion', () => {
+  it('keeps default basenames in sync when completion replaces a destination, without changing custom labels', () => {
+    expect(apply('![1.png](att://cards/1.png', '2.png', ')').doc).toBe('![2.png](att://cards/2.png)')
+    expect(apply('[cards/1.png](att://cards/1.png', '2.png', ')').doc).toBe('[cards/2.png](att://cards/2.png)')
+    expect(apply('![说明：1.png](att://cards/1.png', '2.png', ')').doc).toBe('![说明：1.png](att://cards/2.png)')
+    expect(apply('![](att://cards/1.png', '2.png', ')').doc).toBe('![](att://cards/2.png)')
+    const next = apply('![1.png](att://cards/1.png', '10.png', ')')
+    expect(next.cursor).toBe(next.doc.length)
+  })
   it('uses the workspace directory order in both source options and CodeMirror comparisons', () => {
     const files = ['10.txt', '2.txt', '1.txt'].map(name => attachment(name, false))
     const directories = ['z10', 'z2']
