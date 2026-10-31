@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { expect } from '@playwright/test'
 import { append_reference_journal } from '@server/services/content/reference-journal.repository'
 import mysql from 'mysql2/promise'
-import { content_mutation, content_query, create_story, draft_timeout, local_storage, login, markdown, test } from '../support/e2e-browser'
+import { content_mutation, content_query, create_story, draft_timeout, local_storage, login, markdown, ready, test } from '../support/e2e-browser'
 
 interface StoryBody { markdown: string, revision: number, namespace_revision: number, title_revision: number }
 interface Workspace { nodes: { id: number, path: string, version: string }[], attachments: { file_name: string }[] }
@@ -57,6 +57,12 @@ test('whole-batch retention rejects an expired draft while the floor remains rep
   finally {
     await connection.end()
   }
+
+  // Direct fixture writes do not publish invalidations. Start from the current
+  // cloud snapshot before injecting an expired command, so background replay
+  // cannot disable the confirmation button halfway through its click.
+  await page.reload()
+  await ready(page)
 
   // Emulate input captured before the retained history window. The real cloud
   // draft remains current; only this in-flight command has an expired baseline.
