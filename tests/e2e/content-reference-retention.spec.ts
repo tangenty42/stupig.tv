@@ -61,7 +61,12 @@ test('whole-batch retention rejects an expired draft while the floor remains rep
   // Direct fixture writes do not publish invalidations. Start from the current
   // cloud snapshot before injecting an expired command, so background replay
   // cannot disable the confirmation button halfway through its click.
-  await page.reload()
+  const [released] = await Promise.all([
+    page.waitForResponse(response => response.url().includes('content.commandDraft') && response.request().postDataJSON()?.kind === 'release'),
+    page.locator('a[href="/content"]').first().click(),
+  ])
+  expect((await released.json()).result.data.receipt).toMatchObject({ kind: 'release', ok: true })
+  await page.goto(`/content/${id}/edit`)
   await ready(page)
 
   // Emulate input captured before the retained history window. The real cloud
