@@ -42,7 +42,7 @@ export function require_attachment_read(row: ImageAccessRow, viewer: AuthUser | 
 export function image_download_name(name: string, extension: 'avif' | 'jpg') {
   return `${attachment_download_name(name).replace(/\.[^.]+$/, '')}.${extension}`
 }
-export async function resolve_attachment_role(row: ImageAccessRow, role: ImageReadRole, viewer: AuthUser | null, executor: Pick<typeof db, 'execute'> = db, authorize?: (row: ImageAccessRow) => Promise<void>) {
+export async function resolve_attachment_role(row: ImageAccessRow, role: ImageReadRole, viewer: AuthUser | null, authorize?: (row: ImageAccessRow) => Promise<void>) {
   const redacted = (role === 'redacted' || role.startsWith('redacted_')) || (row.is_private && ! has_permission(viewer, 'content_private', 'read') && role !== 'original')
   if (redacted) {
     if (! has_redacted_variant(row))
@@ -64,26 +64,10 @@ export async function resolve_attachment_role(row: ImageAccessRow, role: ImageRe
   }
   await check(row)
   if (role === 'original') {
-    const provenance = typeof row.image_metadata === 'string' ? JSON.parse(row.image_metadata) : row.image_metadata as { archive_source_key?: string } | null
-    const expected_key = provenance?.archive_source_key
-    const visited = new Set<number>()
-    let current = row
-    while (visited.size < settings.app.content.workspace.batchLimit) {
-      await check(current)
-      const metadata = typeof current.image_metadata === 'string' ? JSON.parse(current.image_metadata) : current.image_metadata as { original?: { name?: string }, archive_source_id?: number } | null
-      if (current.original_key && expected_key && current.original_key !== expected_key)
-        throw new ApiError(404, '原图存档来源已被替换')
-      if (current.original_key)
-        return { key: current.original_key, name: attachment_download_name(metadata?.original?.name ?? current.file_name) }
-      if (! metadata?.archive_source_id || visited.has(metadata.archive_source_id))
-        break
-      visited.add(metadata.archive_source_id)
-      const [sources] = await executor.execute<(RowDataPacket & ImageAccessRow)[]>('SELECT a.* FROM content_story_attachments a INNER JOIN content_stories s ON s.id = a.story_id WHERE a.id = ? AND a.story_id = ? AND a.is_folder = 0', [metadata.archive_source_id, row.story_id])
-      if (! sources[0])
-        break
-      current = sources[0]
-    }
-    throw new ApiError(404, '原图存档不存在或来源已删除')
+    if (! row.original_key)
+      throw new ApiError(404, '原图存档不存在')
+    const metadata = typeof row.image_metadata === 'string' ? JSON.parse(row.image_metadata) : row.image_metadata as { original?: { name?: string } } | null
+    return { key: row.original_key, name: attachment_download_name(metadata?.original?.name ?? row.file_name) }
   }
   if (row.avif_key && row.jpeg_key) {
     const jpeg = role === 'jpeg'
@@ -96,14 +80,14 @@ export async function resolve_attachment_role(row: ImageAccessRow, role: ImageRe
   return { key: row.object_key, name: attachment_download_name(row.file_name) }
 }
 
-/** Bind a capability to every authorization dependency, including archive ancestry. */
-export async function resolve_attachment_delivery(row: ImageAccessRow, role: ImageReadRole, viewer: AuthUser | null, executor: Pick<typeof db, 'execute'> = db) {
+/** Bind a capability to the current attachment's authorization state. */
+export async function resolve_attachment_delivery(row: ImageAccessRow, role: ImageReadRole, viewer: AuthUser | null) {
   if (viewer && (! Number.isSafeInteger(viewer.session_id) || viewer.session_id <= 0
     || ! Number.isSafeInteger(viewer.token_generation_id) || Number(viewer.token_generation_id) <= 0)) {
     throw new ApiError(403, '读取会话无效')
   }
   const dependencies = new Map<number, unknown>()
-  const object = await resolve_attachment_role(row, role, viewer, executor, async (current) => {
+  const object = await resolve_attachment_role(row, role, viewer, async (current) => {
     require_attachment_read(current, viewer)
     if (! Number.isSafeInteger(Number(current.id)) || Number(current.id) <= 0 || ! /^[1-9]\d*$/.test(String(current.read_revision)))
       throw new ApiError(503, '附件读取身份不完整')

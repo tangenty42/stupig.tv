@@ -60,7 +60,7 @@ export async function authorize_edge_read(input: z.infer<typeof edge_read_reques
       await connection.rollback()
       return null
     }
-    const current = await resolve_attachment_delivery(rows[0], grant.role, viewer, connection)
+    const current = await resolve_attachment_delivery(rows[0], grant.role, viewer)
     const allowed = current.key === key && current.grant.revision === grant.revision
     await connection.commit()
     return allowed ? content_authorization_proof(config.authKey, input.nonce, input.url, input.method) : null
