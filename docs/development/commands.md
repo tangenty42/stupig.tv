@@ -99,6 +99,8 @@
 
 真实生产 CSS 构建验收使用 `pnpm exec playwright test --config tests/css-production.config.ts`，保留 legacy、生产 Browserslist、压缩及分块，创建并清理独立 E2E 数据库。编译配置和资产报告在 `.dev/e2e/<run>/css-build.json`，浏览器报告在 `.dev/css-production/`；详见[生产一致性验收](../reviews/css-production-parity-2026-10-29.md)。
 
+旧浏览器检查提供 `pnpm test:e2e:legacy`（生产构建下的页面与交互）和 `pnpm test:css:legacy`（独立工具类与压缩兼容）两个入口。运行前需要准备历史浏览器和匹配的 WebDriver，前提及范围见[测试手册](testing.md)。
+
 ## 建议的整理顺序
 
 ### 第一批：减少重复入口，修正误导命名

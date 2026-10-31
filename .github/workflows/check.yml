@@ -2,10 +2,13 @@
 #
 # 背景：deploy.yml 只有构建部署，迁移 SQL 过去要到生产容器启动时才第一次被
 # 验证。本工作流把验证前置到合入前：
-#   - check：与本地一致的 pnpm lint / nuxt typecheck / pnpm test；
+#   - unit：与本地一致的 pnpm lint / nuxt typecheck / pnpm test；
+#   - check：保留既有必需检查名，汇总包括 CSS 在内的全部应用验证；
 #   - migrations：对全新 MySQL 8.4 从空库跑完整迁移链，再跑第二遍验证
 #     执行器的"全部已应用"幂等路径，最后用 information_schema 断言结构落地；
 #   - browser：真实浏览器端到端，按 `--shard` 拆成三个 job 并行；
+#   - browser-status：为纯文档及复用路径保留三个固定的必需浏览器状态；
+#   - browser-css：独立并行验证生产 CSS 和组件样式边界；
 #   - mqtt：生产 broker 镜像的权限与持久化；
 #   - changes：识别纯文档 PR，以及可安全复用的 PR 检查结果。
 #   - verified tree：仅在 PR 的所有应用检查通过时记录实际测试的代码树。
@@ -93,7 +96,7 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
-  check:
+  unit:
     runs-on: ubuntu-24.04
     needs: changes
     # 仅跳过纯文档 PR 或已确认与 PR 测试代码树一致的 main；检测失败时退回全量。
@@ -166,7 +169,7 @@ jobs:
           - 1
           - 2
           - 3
-    name: browser (${{ matrix.shard }}/3)
+    name: browser-tests (${{ matrix.shard }}/3)
     env:
       NODE_ENV: development
       MYSQL_DEV_ROOT_PASSWORD: ci-root-password
@@ -228,12 +231,6 @@ jobs:
       # 端口冲突，也不会共享数据库或 MQTT 主题。
       - run: pnpm test:e2e --shard=${{ matrix.shard }}/3
 
-      # The focused CSS suite retains legacy and production compiler settings,
-      # while reusing the isolated database and fake supplier boundaries.
-      - name: Verify production CSS and lazy styles
-        if: matrix.shard == 1
-        run: pnpm exec playwright test --config tests/css-production.config.ts
-
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
@@ -241,6 +238,107 @@ jobs:
           include-hidden-files: true
           path: |
             .dev/playwright/
+            .dev/e2e/**/server.log
+
+  # Job-level conditions run before matrix expansion. Keep the required labels
+  # on lightweight jobs so docs-only changes still report all three statuses.
+  browser-status:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    needs:
+      - changes
+      - browser
+    if: '!cancelled()'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - 1
+          - 2
+          - 3
+    name: browser (${{ matrix.shard }}/3)
+    steps:
+      - name: Require browser verification when needed
+        if: "needs.changes.result != 'success' || (needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true' && needs.browser.result != 'success')"
+        run: exit 1
+
+  browser-css:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: changes
+    if: "!cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true'"
+    env:
+      NODE_ENV: development
+      MYSQL_DEV_ROOT_PASSWORD: ci-root-password
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '6379'
+      MQTT_HOST: 127.0.0.1
+      MQTT_TCP_PORT: '1883'
+      MQTT_WS_PORT: '8083'
+      MQTT_WEB_URL: ws://localhost:8083/mqtt
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_ROOT_HOST: '%'
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      mqtt:
+        image: emqx/emqx:6.2.2
+        ports:
+          - 1883:1883
+          - 8083:8083
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 12.10.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 浏览器包按 Playwright 版本缓存；系统依赖仍由 --with-deps 每次确认，
+      # 因此缓存过期只会多下载，不会让分片跑在缺库的 runner 上。
+      - name: Read Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -p "require('./node_modules/@playwright/test/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      # Keep both CSS profiles outside the application shards; the production
+      # profile builds its own isolated application with legacy assets retained.
+      - name: Verify production CSS and lazy styles
+        run: pnpm exec playwright test --config tests/css-production.config.ts
+
+      - name: Verify CSS APIs and cascade boundaries
+        run: pnpm exec playwright test --config tests/css.config.ts
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: browser-css-diagnostics
+          include-hidden-files: true
+          path: |
+            .dev/css-official-apis/
             .dev/css-production/
             .dev/e2e/**/server.log
             .dev/e2e/**/css-build.json
@@ -359,6 +457,21 @@ jobs:
           APP_PORT: '3042'
         run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt
 
+  check:
+    runs-on: ubuntu-24.04
+    needs:
+      - changes
+      - unit
+      - mqtt
+      - browser
+      - browser-css
+      - migrations
+    if: "!cancelled() && needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true'"
+    steps:
+      - name: Require every application check
+        if: "needs.unit.result != 'success' || needs.mqtt.result != 'success' || needs.browser.result != 'success' || needs.browser-css.result != 'success' || needs.migrations.result != 'success'"
+        run: exit 1
+
   verified-tree:
     name: verified-tree
     needs:
@@ -366,8 +479,9 @@ jobs:
       - check
       - mqtt
       - browser
+      - browser-css
       - migrations
-    if: "github.event_name == 'pull_request' && needs.changes.outputs.code == 'true' && needs.check.result == 'success' && needs.mqtt.result == 'success' && needs.browser.result == 'success' && needs.migrations.result == 'success'"
+    if: "github.event_name == 'pull_request' && needs.changes.outputs.code == 'true' && needs.check.result == 'success' && needs.mqtt.result == 'success' && needs.browser.result == 'success' && needs.browser-css.result == 'success' && needs.migrations.result == 'success'"
     runs-on: ubuntu-24.04
     steps:
       - name: verified-tree-${{ needs.changes.outputs.tree }}

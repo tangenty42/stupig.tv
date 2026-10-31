@@ -3,7 +3,7 @@ import { appendFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const required_jobs = ['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser (2/3)', 'browser (3/3)']
+const required_jobs = ['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser (2/3)', 'browser (3/3)', 'browser-css']
 
 // A successful workflow alone is insufficient: skipped jobs also yield success.
 export function verified_jobs(jobs, tree) {

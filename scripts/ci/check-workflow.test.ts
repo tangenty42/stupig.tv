@@ -67,6 +67,51 @@ describe('documentation-only CI and deployment', () => {
     expect(check.jobs['verified-tree'].steps[0].name).toBe('verified-tree-$' + '{{ needs.changes.outputs.tree }}')
   })
 
+  it('requires the independent CSS job before attesting to the PR tree', () => {
+    const verification = check.jobs['verified-tree']
+    expect(check.jobs['browser-css'].needs).toBe('changes')
+    expect(verification.needs).toContain('browser-css')
+    const condition = verification.if.replaceAll('needs.browser-css', 'needs["browser-css"]')
+    const needs = Object.fromEntries(verification.needs.map((name: string) => [name, { result: 'success' }]))
+    needs.changes = { outputs: { code: 'true' } }
+    const github = { event_name: 'pull_request' }
+    expect(runInNewContext(condition, { github, needs })).toBe(true)
+    for (const result of ['failure', 'skipped', 'cancelled']) {
+      expect(runInNewContext(condition, { github, needs: { ... needs, 'browser-css': { result } } })).toBe(false)
+    }
+  })
+
+  it('keeps the existing required check red when an application job fails or skips', () => {
+    const gate = check.jobs.check
+    expect(gate.needs).toEqual(['changes', 'unit', 'mqtt', 'browser', 'browser-css', 'migrations'])
+    const condition = gate.steps[0].if.replaceAll('needs.browser-css', 'needs["browser-css"]')
+    const needs = Object.fromEntries(gate.needs.map((name: string) => [name, { result: 'success' }]))
+    expect(runInNewContext(condition, { needs })).toBe(false)
+    expect(gate.steps[0].run).toBe('exit 1')
+    for (const name of gate.needs.filter((name: string) => name !== 'changes')) {
+      for (const result of ['failure', 'skipped', 'cancelled']) {
+        expect(runInNewContext(condition, { needs: { ... needs, [name]: { result } } })).toBe(true)
+      }
+    }
+  })
+
+  it.each([
+    { code: 'false', reuse: '', classification: 'success', browser: 'skipped', fails: false },
+    { code: 'true', reuse: 'true', classification: 'success', browser: 'skipped', fails: false },
+    { code: 'true', reuse: '', classification: 'success', browser: 'success', fails: false },
+    ... ['failure', 'skipped', 'cancelled'].map(browser => ({ code: 'true', reuse: '', classification: 'success', browser, fails: true })),
+    { code: '', reuse: '', classification: 'failure', browser: 'success', fails: true },
+  ])('reports every required browser status without bypassing verification: %#', ({ code, reuse, classification, browser, fails }) => {
+    const gate = check.jobs['browser-status']
+    expect(gate.name).toBe('browser ($' + '{{ matrix.shard }}/3)')
+    expect(gate.strategy.matrix.shard).toEqual([1, 2, 3])
+    expect(gate.needs).toEqual(['changes', 'browser'])
+    expect(runInNewContext(gate.if, { cancelled: () => false })).toBe(true)
+    const needs = { changes: { result: classification, outputs: { code, reuse } }, browser: { result: browser } }
+    expect(runInNewContext(gate.steps[0].if, { needs })).toBe(fails)
+    expect(gate.steps[0].run).toBe('exit 1')
+  })
+
   it.each([
     { code: 'true', reuse: '', run: true },
     { code: 'true', reuse: 'true', run: false },
@@ -74,7 +119,7 @@ describe('documentation-only CI and deployment', () => {
     { code: '', reuse: '', run: true },
     { code: 'false', reuse: '', run: false },
   ])('runs every application job only when verification is needed: %#', ({ code, reuse, run }) => {
-    for (const name of ['check', 'migrations', 'mqtt', 'browser']) {
+    for (const name of ['check', 'unit', 'migrations', 'mqtt', 'browser', 'browser-css']) {
       const context = { cancelled: () => false, needs: { changes: { outputs: { code, reuse } } } }
       expect(runInNewContext(check.jobs[name].if, context), name).toBe(run)
     }

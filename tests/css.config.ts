@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 // Component CSS verification has no application server, database or cloud
-// boundary. The regular E2E config can also discover the same regression file.
+// boundary. CI runs this suite in the dedicated browser-css job.
 export default defineConfig({
   testDir: './e2e',
   testMatch: 'css-official-apis.spec.ts',
