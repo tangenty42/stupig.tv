@@ -154,14 +154,29 @@ describe('transactional reference history', () => {
     expect(await finish_namespace_change(connection, before)).toEqual({ attachments: true })
   })
 
-  it('refreshes the public cover when a redacted twin appears under an unchanged confidential cover path', async () => {
+  it('does not refresh a confidential cover when a separate public namesake appears', async () => {
     state.story.cover = 'old.png.good'
     state.nodes[0]!.file_name = 'old.png.good'
     Object.assign(state.nodes[0]!, { is_private: 1 })
     const connection = await db.getConnection()
     const before = await begin_namespace_change(connection, 1)
     state.nodes.push({ id: 12, file_name: 'old.png', is_folder: 0, object_key: 'public-copy', version: 'v2' })
+    expect(await finish_namespace_change(connection, before)).toEqual({ attachments: true })
+    expect(state.writes.some(sql => sql.startsWith('UPDATE content_stories SET markdown'))).toBe(false)
+  })
+
+  it('refreshes a confidential cover when its own redaction is added or removed', async () => {
+    state.story.cover = 'old.png.good'
+    state.nodes[0]!.file_name = 'old.png.good'
+    Object.assign(state.nodes[0]!, { is_private: 1 })
+    state.nodes.push({ id: 12, file_name: 'old.png', is_folder: 0, object_key: 'public-copy', version: 'v2' })
+    const connection = await db.getConnection()
+    const before = await begin_namespace_change(connection, 1)
+    Object.assign(state.nodes[0]!, { redacted_avif_key: 'own-avif', redacted_jpeg_key: 'own-jpeg', redacted_revision: 1, node_revision: 1 })
     expect(await finish_namespace_change(connection, before)).toEqual({ attachments: true, story: true, stories: true })
+    const redacted = await begin_namespace_change(connection, 1)
+    Object.assign(state.nodes[0]!, { redacted_avif_key: null, redacted_jpeg_key: null, redacted_revision: 2, node_revision: 2 })
+    expect(await finish_namespace_change(connection, redacted)).toEqual({ attachments: true, story: true, stories: true })
     expect(state.writes.some(sql => sql.startsWith('UPDATE content_stories SET markdown'))).toBe(false)
   })
 
