@@ -4,7 +4,7 @@
 
 这里的暂停只针对自定义动态 CSS 转换插件。后续已采用[官方主题 API 与 Tailwind 选择器策略](css-official-apis-validation-2026-10-29.md)，当前改动、验收与发布条件由该页集中维护；本探针不作为产品运行时 adapter。
 
-本评估承接[插件设计](../designs/css-layer-compat-plugin-2026-10-29.md)。首轮授权范围为 P0–P2；旧浏览器的交互与动画效果均须等价；只允许公开 API 和官方扩展点，无法覆盖时暂停重新评估。依赖 patch、内部模块替换及依赖内部接口的包装 / alias 均已排除。
+本评估记录未采用的自定义分层插件为何停止接入；原长篇设计已移出当前文档，可从 Git 历史回查。首轮范围为动态入口验证及转换原型：旧浏览器的交互与动画效果均须等价，只允许公开 API 和官方扩展点，无法覆盖时暂停重新评估。依赖 patch、内部模块替换及依赖内部接口的包装 / alias 均已排除。
 
 ## 可重复的证据
 
@@ -42,7 +42,7 @@ pnpm exec vitest run --project tools scripts/verify/css-cascade-feasibility.test
 
 ## 其他已确认的兼容输入
 
-当前 [Preview.vue](../../app/components/MyContent/Markdown/Preview.vue) 的加密图片加载布局及轮播边缘遮罩使用 `:has()`，边缘过渡还使用 `@property`。按本次约束，这些需要保留交互与动画效果的替代实现，不能通过忽略规则或只登记例外完成验收。本轮在动态入口门槛处暂停，没有改写这些现有行为。
+评估时 [Preview.vue](../../app/components/MyContent/Markdown/Preview.vue) 的加密图片加载布局及轮播边缘遮罩使用 `:has()`，边缘过渡还使用 `@property`。当时要求保留交互与动画效果，不能通过忽略规则或只登记例外完成验收。本轮在动态入口门槛处暂停；后续官方 API 路线的兼容改写与验证见当前入口，不将本段历史观察视为现行源码描述。
 
 ## 交付状态与恢复条件
 

@@ -1,8 +1,8 @@
 # 官方主题 API 与 Tailwind 选择器策略验证
 
-更新日期：2026-10-30。当前状态：**CSS 独立 PR 已从 main 拆出，Tailwind 关闭全局 selector important，使用官方主题入口与局部 `!`；Chromium 80 的真实编辑页暗色背景、管理页控件、媒体与浮层通过，现代共享表单与管理页验收通过。Segmenter、静态 Unicode 正则及窄屏修复保留。Firefox 78 编辑仍被 Web Locks 保护设为只读，草稿协议未改。尚未部署。**
+更新日期：2026-10-31。当前代码状态：**CSS 兼容改造已随 [PR #46](https://github.com/tangenty42/stupig.tv/pull/46) 合并；Tailwind 关闭全局 selector important，使用官方主题入口与局部 `!`，保留 Segmenter、静态 Unicode 正则及窄屏修复。随后 [PR #48](https://github.com/tangenty42/stupig.tv/pull/48) 已用服务端租约替换 Web Locks，Firefox 78 编辑不再因缺少 Web Locks 而只读。**
 
-以上是 CSS 独立 PR 的验收状态。后续工作区已实现共享云端草稿及服务端租约，Firefox 78 编辑流程的隔离复验见[实施记录](../designs/shared-cloud-draft-implementation-2026-10-30.md)；生产切换仍待单独验收。
+Firefox 78 编辑流程的隔离复验见[实施记录](../designs/shared-cloud-draft-implementation-2026-10-30.md)。下文按各轮实际范围保留历史证据，不累加为一次全绿，也不把代码合并当作生产验收；本次整理未读取生产回执。
 
 这是[动态转换公开 API 可行性评估](css-layer-public-api-feasibility-2026-10-29.md)之后采用的路线：通过各库支持的接口定制样式，保留生产 CSS 转换与懒加载。自定义分层插件仍暂停；本路线不提供完整 layer 等价保证。旧浏览器交互与动画等价的要求保留。
 
@@ -18,6 +18,8 @@
 
 ## 当前交付与证据
 
+CSS 独立候选的历史结果如下；其中 Web Locks 只读限制已由后续草稿协议解决，当前剩余范围以文末清单为准。
+
 | 范围 | 当前结果 | 证据 |
 | --- | --- | --- |
 | 样式入口 | Tailwind `important: false`；PrimeVue preset / dt / PT、CodeMirror 主题与必要的局部 `!`。`stupig-app` 仅保留稳定 body 身份，不参与 utility 加权 | [官方局部权重接入](css-legacy-engines-2026-10-29.md#官方局部权重接入) |
@@ -27,7 +29,7 @@
 | 生产验收 | CSS 独立候选首轮 9 / 12，Chromium 启动路径修正后定向 3 / 3 通过；两轮分别记录。Firefox 78 编辑仍未通过，未运行的失败断言保留 | 构建 `c0e74933f3ed4e68b91aee64e58fddb4` 与 `2dbf02e4af18456584b686ee191d99c1`；此前混合工作区结果留在历史证据中 |
 | 暗色工具类门槛 | 当前配置在 Chromium 80 / Firefox 78 的普通及局部 `!` 底色断言通过；首次 Firefox 退出驱动异常后，对应两项复跑通过 | 当前独立入口仅保留应用的四种引擎 / 输出组合，历史加权失败留在评估记录 |
 | 配套检查 | CSS 独立候选合计 2024 项已有通过结果、1 项既有跳过，含 ESA CLI 超时后的定向复验；lint、Nuxt、scripts / tests 类型、配置生成检查通过。独立 CSS 十组通过 | 重复候选模式已合入正式应用夹具；旧 2052 项及晚到样式定向结果属于混合工作区的历史计数 |
-| 远端 CI / 发布 | Check 第一 browser 分片已增加生产 CSS 验收；未执行远端 CI、镜像发布或缓存 / 回滚演练 | [Check](../../.github/workflows/check.yml)、[发布准备](../deployment/README.md#css-样式变更发布准备) |
+| 远端 CI / 发布 | PR #46 已合并；源码中的验证入口见 Check，生产交付与缓存 / 回滚结果按发布回执单独核验 | [Check](../../.github/workflows/check.yml)、[发布准备](../deployment/README.md#css-样式变更发布准备) |
 
 浏览器报告和截图是被忽略的本机 `.dev/` 证据，其他检出需按[测试指南](../development/testing.md)重新生成。旧浏览器安装包不进入源码或应用依赖；生产 CSS profile 已加入 CI，历史二进制 profile 仍为本机专用入口。
 
@@ -114,9 +116,8 @@ CodeMirror 本来就通过 `theme_extensions()` 使用公开主题 API，本次�
 
 | 未完成项 | 完成条件 |
 | --- | --- |
-| 跨标签草稿兼容 | 随后续共享云端草稿改造（另案设计，不属于本 PR）以服务端租约替换 Web Locks，停止本地正文持久化；不单独推进临时 IndexedDB 互斥或每标签草稿分支。设计尚未实现，Firefox 78 当前只读，完整编辑要求与失败断言保留，须在云草稿接入后重新验收 |
 | 浏览器覆盖 | 补正式 Chrome / Edge 80 和 Safari 13.1；Chromium snapshot 不代替两种品牌版本，当前 WebKit 不代替 Safari 13.1 |
-| 完整旧引擎业务 | 媒体覆盖深浅色、288px 容器、加载 / 失败、权限表示及轮播恢复；Chromium 80 编辑、暗色底色和窄屏通过；Firefox 78 编辑仍被 Web Locks 保护阻塞，其他业务组件仍需扩展验收 |
+| 完整旧引擎业务 | 受测媒体、Chromium 80 编辑及后续 Firefox 78 草稿流程已有记录；其他业务组件仍需扩展验收，不能据此宣称全站已覆盖 |
 | 真实发布交付 | 固定待发布代码与构建身份，通过远端 Check；验证镜像实际 SSR / CSS、静态资产交付、新旧标签页懒加载和整体回退 |
 
 发布时的操作与回退要求由[部署清单](../deployment/README.md#css-样式变更发布准备)维护。上述未完成项需要真实结果关闭，不能用受测 CSS 场景的通过替代，也没有降低门槛。
