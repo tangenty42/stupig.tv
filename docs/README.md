@@ -66,13 +66,15 @@
 
 2026-10-28 的[架构与文档一致性审查](reviews/architecture-and-documentation-audit-2026-10-28.md)独立记录架构评估、已发现的说明偏差及逐项决策选项；它是审查记录，不替代下列手册或线上验收。
 
-2026-10-29 的[共享云端草稿与编辑租约设计](designs/shared-cloud-draft-2026-10-29.md)记录 A02 的协议与选择。2026-10-30 工作区已接入共享云端 draft、服务端租约及内存编辑会话，旧 localStorage 由管理员自行处理；代码落地不代表生产已切换。
+2026-10-29 的[共享云端草稿与编辑租约设计](designs/shared-cloud-draft-2026-10-29.md)记录 A02 的协议与选择。共享云端 draft、服务端租约及内存编辑会话已于 2026-10-30 随 [PR #48](https://github.com/tangenty42/stupig.tv/pull/48) 合并，旧 localStorage 由管理员自行处理；合并状态不代表生产已切换。
 
 2026-10-30 的[共享云端草稿实现方案与记录](designs/shared-cloud-draft-implementation-2026-10-30.md)按 P0–P6 对应审计 A01–A10、D01–D20，记录实际落点、隔离验证、容量边界和未完成的独立审计项；该记录不作为生产上线回执。
 
-CSS 当前采用[官方主题 API 与 Tailwind 选择器策略](reviews/css-official-apis-validation-2026-10-29.md)，该页保留样式改造证据和发布门槛。此前 Firefox 78 因缺少 Web Locks 而只读；工作区已改用服务端租约，旧引擎编辑流程的隔离验证见[共享云端草稿实施记录](designs/shared-cloud-draft-implementation-2026-10-30.md)。剩余浏览器和生产交付仍待验收。[自定义 CSS 分层兼容插件设计](designs/css-layer-compat-plugin-2026-10-29.md)因公开扩展点不足保持暂停，作为历史提案保留，不是当前运行方案。
+CSS 当前采用[官方主题 API 与 Tailwind 选择器策略](reviews/css-official-apis-validation-2026-10-29.md)，已随 [PR #46](https://github.com/tangenty42/stupig.tv/pull/46) 合并。此前 Firefox 78 因缺少 Web Locks 而只读，随后已由服务端租约替换；旧引擎编辑流程的隔离验证见[共享云端草稿实施记录](designs/shared-cloud-draft-implementation-2026-10-30.md)。完整浏览器覆盖与生产交付需按证据单独验收。未采用的自定义 CSS 分层插件长篇提案已移出当前文档，保留[公开 API 可行性结论](reviews/css-layer-public-api-feasibility-2026-10-29.md)及 Git 历史供回查。
 
-当前生产状态与待验收范围如下，部署回执及镜像身份见相应操作手册：
+2026-10-31 的 [PR #49](https://github.com/tangenty42/stupig.tv/pull/49) 已合并迁移预检和按计划授权的维护发布入口，操作方式见[GitHub 与 ACR](deployment/github-acr.md)。上述合并状态已核对；本次文档整理没有重新连接生产数据库或读取生产发布回执。
+
+下表保留各操作手册记录的部署范围与能力边界；当前线上版本须用发布回执及镜像身份核验，不能从本地改动或 PR 合并推断：
 
 | 事项 | 状态与下一步 |
 | --- | --- |
@@ -82,7 +84,7 @@ CSS 当前采用[官方主题 API 与 Tailwind 选择器策略](reviews/css-offi
 | ESA 历史规则异常 | 曾出现旁路与规则字段交互问题；部署文档保留需要验证的组合，不假定厂商已修复 |
 | 通用任务内核 | 当前只有共享调度外壳和领域账本；通用 job/attempt/step 及跨进程容量尚未实现 |
 | 生产独立 worker | 源码命令已实现，生产精简镜像及 Compose 尚未交付 worker/status CLI；现行生产使用 app 模式 |
-| 官方 CSS API 接入 | 工作区与限定生产 / 旧引擎场景已验证；发布前整理完成，尚未通过全站兼容与真实发布门槛，见 CSS 当前路线 |
+| 官方 CSS API 接入 | 代码已合并，限定生产构建 / 旧引擎场景已有验证；完整浏览器覆盖与真实交付另行核验，见 CSS 当前路线 |
 | 业务恢复 | 当前没有自助回收站和通用自动数据回滚；按备份恢复手册操作 |
 
 ## 文档维护方式
