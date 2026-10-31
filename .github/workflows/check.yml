@@ -7,6 +7,7 @@
 #   - migrations：对全新 MySQL 8.4 从空库跑完整迁移链，再跑第二遍验证
 #     执行器的"全部已应用"幂等路径，最后用 information_schema 断言结构落地；
 #   - browser：真实浏览器端到端，按 `--shard` 拆成三个 job 并行；
+#   - browser-status：为纯文档及复用路径保留三个固定的必需浏览器状态；
 #   - browser-css：独立并行验证生产 CSS 和组件样式边界；
 #   - mqtt：生产 broker 镜像的权限与持久化；
 #   - changes：识别纯文档 PR，以及可安全复用的 PR 检查结果。
@@ -168,7 +169,7 @@ jobs:
           - 1
           - 2
           - 3
-    name: browser (${{ matrix.shard }}/3)
+    name: browser-tests (${{ matrix.shard }}/3)
     env:
       NODE_ENV: development
       MYSQL_DEV_ROOT_PASSWORD: ci-root-password
@@ -238,6 +239,28 @@ jobs:
           path: |
             .dev/playwright/
             .dev/e2e/**/server.log
+
+  # Job-level conditions run before matrix expansion. Keep the required labels
+  # on lightweight jobs so docs-only changes still report all three statuses.
+  browser-status:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    needs:
+      - changes
+      - browser
+    if: '!cancelled()'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - 1
+          - 2
+          - 3
+    name: browser (${{ matrix.shard }}/3)
+    steps:
+      - name: Require browser verification when needed
+        if: "needs.changes.result != 'success' || (needs.changes.outputs.code != 'false' && needs.changes.outputs.reuse != 'true' && needs.browser.result != 'success')"
+        run: exit 1
 
   browser-css:
     runs-on: ubuntu-24.04

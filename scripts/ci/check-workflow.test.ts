@@ -96,6 +96,23 @@ describe('documentation-only CI and deployment', () => {
   })
 
   it.each([
+    { code: 'false', reuse: '', classification: 'success', browser: 'skipped', fails: false },
+    { code: 'true', reuse: 'true', classification: 'success', browser: 'skipped', fails: false },
+    { code: 'true', reuse: '', classification: 'success', browser: 'success', fails: false },
+    ... ['failure', 'skipped', 'cancelled'].map(browser => ({ code: 'true', reuse: '', classification: 'success', browser, fails: true })),
+    { code: '', reuse: '', classification: 'failure', browser: 'success', fails: true },
+  ])('reports every required browser status without bypassing verification: %#', ({ code, reuse, classification, browser, fails }) => {
+    const gate = check.jobs['browser-status']
+    expect(gate.name).toBe('browser ($' + '{{ matrix.shard }}/3)')
+    expect(gate.strategy.matrix.shard).toEqual([1, 2, 3])
+    expect(gate.needs).toEqual(['changes', 'browser'])
+    expect(runInNewContext(gate.if, { cancelled: () => false })).toBe(true)
+    const needs = { changes: { result: classification, outputs: { code, reuse } }, browser: { result: browser } }
+    expect(runInNewContext(gate.steps[0].if, { needs })).toBe(fails)
+    expect(gate.steps[0].run).toBe('exit 1')
+  })
+
+  it.each([
     { code: 'true', reuse: '', run: true },
     { code: 'true', reuse: 'true', run: false },
     { code: 'true', reuse: 'false', run: true },

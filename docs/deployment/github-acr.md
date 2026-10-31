@@ -17,7 +17,7 @@
 | Secret | `SSH_KNOWN_HOSTS` | 经独立渠道核实的 SSH 主机公钥，采用 OpenSSH known_hosts 格式，含主机名和端口 |
 | Secret | `ENV_PASSPHRASE` | 解密已提交 `.env.prod.gpg` 的口令 |
 
-GitHub Ruleset 的必需状态检查：`check`、`changes`、`migrations`、`mqtt` 与三个 `browser (N/3)` 分片共七项，均来自 GitHub Actions；同时启用"合并前分支必须最新"（strict），创建分支/仓库时不强制检查。被 `if` 跳过的 job 在分支保护中按成功上报，因此纯文档 PR 跳过应用检查也能满足全部必需检查；`verified-tree` 未列入必需项。
+GitHub Ruleset 的必需状态检查：`check`、`changes`、`migrations`、`mqtt` 与三个 `browser (N/3)` 状态共七项，均来自 GitHub Actions；同时启用"合并前分支必须最新"（strict），创建分支/仓库时不强制检查。普通 job 被 `if` 跳过时按成功上报，但跳过整个矩阵不会展开分片名；因此三个固定浏览器状态由轻量 `browser-status` 矩阵上报，应用验证需要运行时必须等待全部 `browser-tests` 分片成功。纯文档或已确认复用的代码树可以跳过重型测试；`verified-tree` 未列入必需项。
 
 `unit` 执行 lint、类型和单元／组件检查；`browser-css` 与三个应用浏览器分片并行。原必需状态 `check` 汇总 unit、MQTT、浏览器、CSS 和迁移结果，任一失败或意外跳过都会失败，因此拆出 CSS 后无须更改已有 Ruleset 即可维持合并门槛。
 
