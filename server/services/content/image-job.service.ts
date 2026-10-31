@@ -110,7 +110,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
         throw conflict()
       }
       if (intent.input_basis === 'original') {
-        await resolve_attachment_role(row as ImageAccessRow, 'original', null, connection, async (source) => {
+        await resolve_attachment_role(row as ImageAccessRow, 'original', null, async (source) => {
           await require_workspace_actor(intent.actor_id, Boolean(source.is_private), connection)
         })
       }
@@ -332,13 +332,6 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       return
     }
     const previous = typeof row.image_metadata === 'string' ? JSON.parse(row.image_metadata) : row.image_metadata
-    let archive_source_key = intent.mode === 'overwrite' ? previous?.archive_source_key ?? null : null
-    if (intent.source && intent.mode !== 'overwrite' && intent.mode !== 'copy') {
-      const [sources] = await connection.execute<RowDataPacket[]>('SELECT original_key, image_metadata FROM content_story_attachments WHERE id = ? AND story_id = ?', [intent.source.id, intent.scope_id])
-      const source = sources[0]
-      const source_metadata = typeof source?.image_metadata === 'string' ? JSON.parse(source.image_metadata) : source?.image_metadata
-      archive_source_key = source?.original_key ?? source_metadata?.archive_source_key ?? null
-    }
     const archive = intent.mode === 'upload' ? intent.input : intent.mode === 'copy' ? result.avif : null
     if (!! archive !== !! result.original || (result.original && (result.original.key !== image_original_key(id, job.active_attempt_id!)
       || result.original.sha256 !== archive!.sha256 || result.original.size !== archive!.size))) {
@@ -350,8 +343,6 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       original: archive ? { ... result.original!, name: intent.mode === 'copy' ? image_download_name(row.file_name, 'avif') : intent.original_name, mime: intent.mode === 'copy' ? 'image/avif' : intent.original_mime } : intent.mode === 'overwrite' ? previous?.original ?? null : null,
       source_id: intent.mode === 'copy' ? null : intent.source?.id ?? null, source_revision: intent.mode === 'copy' ? null : intent.source?.revision ?? null,
       input_basis: intent.input_basis ?? (intent.mode === 'upload' ? 'original' : 'avif'),
-      archive_source_id: intent.mode === 'copy' ? null : intent.mode === 'overwrite' ? previous?.archive_source_id ?? null : intent.source?.id ?? null,
-      archive_source_key,
       redaction_source_id: null }
     await connection.execute(`UPDATE content_story_attachments SET original_key = ?, avif_key = ?, jpeg_key = ?, parent_avif_key = ?,
       image_revision = image_revision + 1, is_edited = ?, image_metadata = CAST(? AS JSON), lqip_jpeg = ?,

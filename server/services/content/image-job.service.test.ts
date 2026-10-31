@@ -262,7 +262,9 @@ it('publishes an independent edited copy with its own initial AVIF archive and n
   expect(f.storage.copy_object).toHaveBeenCalledExactlyOnceWith(avif.key, key, 'private')
   await f.adopt()
   expect(f.state.attachment).toMatchObject({ original_key: key, avif_key: avif.key, jpeg_key: expect.stringMatching(/\.jpg$/), parent_avif_key: null,
-    image_metadata: { original: { key, name: '副本.avif', mime: 'image/avif' }, source_id: null, source_revision: null, archive_source_id: null, archive_source_key: null, redaction_source_id: null } })
+    image_metadata: { original: { key, name: '副本.avif', mime: 'image/avif' }, source_id: null, source_revision: null, redaction_source_id: null } })
+  expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_id')
+  expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_key')
   source.original_key = 'replaced-source-original'
   source.is_private = 1
   await f.adopt() // Committed replay must not recheck the detached source.
@@ -282,6 +284,7 @@ it('keeps the initial copy archive through subsequent overwrite edits and retire
   const { f } = await copy_pipeline()
   await f.jobs.run(f.state.job.id, 1)
   await f.adopt()
+  Object.assign(f.state.attachment.image_metadata as object, { archive_source_id: 77, archive_source_key: 'obsolete' })
   const archive = String(f.state.attachment.original_key)
   const initial = Buffer.from(f.objects.get(archive)!.bytes)
   const avif = String(f.state.attachment.avif_key)
@@ -296,6 +299,8 @@ it('keeps the initial copy archive through subsequent overwrite edits and retire
   expect(f.state.job.result?.original).toBeNull()
   await f.adopt(Number(f.state.attachment.node_revision))
   expect(f.state.attachment.original_key).toBe(archive)
+  expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_id')
+  expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_key')
   expect(f.objects.get(archive)?.bytes).toEqual(initial)
   expect(f.state.retired).toEqual(expect.arrayContaining([avif, jpeg, input.key]))
   expect(f.state.retired).not.toContain(archive)

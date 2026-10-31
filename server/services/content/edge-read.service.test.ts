@@ -95,21 +95,13 @@ describe('online ESA authorization before cached bytes', () => {
     expect(await authorize_edge_read(request(url))).toBeTruthy()
   })
 
-  it.each(['privacy', 'deleted', 'replaced'])('rechecks an original archive ancestor when it is %s', async (change) => {
-    row().image_metadata = { archive_source_id: 22, archive_source_key: 'content/att/original' }
-    state.rows.set(22, { ... row(), id: 22, original_key: 'content/att/original', image_metadata: null })
+  it('rejects an issued original grant when the attachment archive changes or disappears', async () => {
+    row().original_key = 'content/att/original'
     const url = await signed('original', admin)
     expect(await authorize_edge_read(request(url))).toBeTruthy()
-    if (change === 'privacy') {
-      state.rows.get(22)!.is_private = 1
-      state.rows.get(22)!.read_revision = 2
-    }
-    else if (change === 'deleted') {
-      state.rows.delete(22)
-    }
-    else {
-      state.rows.get(22)!.original_key = 'content/att/new-original'
-    }
+    row().original_key = 'content/att/replacement'
+    expect(await authorize_edge_read(request(url))).toBeNull()
+    row().original_key = null
     expect(await authorize_edge_read(request(url))).toBeNull()
   })
 

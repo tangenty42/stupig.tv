@@ -65,16 +65,16 @@ describe('unified attachment reads', () => {
     expect(missing.original_reason).toBeTruthy()
     expect(missing.avif_url).toContain(has_redacted ? 'role=redacted_avif' : 'role=avif')
   })
-  it('keeps legacy ancestor reads explicit rather than substituting them for AVIF downloads', async () => {
+  it('never follows an ancestor when the attachment has no original', async () => {
     Object.assign(state.row, { story_id: 1, file_name: 'photo_副本.avif', avif_key: 'copy.avif', jpeg_key: 'copy.jpg', original_key: null,
       image_metadata: { archive_source_id: 22, archive_source_key: 'source-original' } })
     state.sources.set(22, { ... state.row, id: 22, original_key: 'source-original', image_metadata: { original: { name: 'source.PNG' } } })
     await attachment_redirect(11, version(), admin, 'GET', 'avif')
     expect(state.sign).toHaveBeenLastCalledWith('copy.avif', expect.any(Number), 'GET', 'photo_副本.avif', 'inline', expect.any(Object))
     const editor = await image_editor_source(11, version(), admin)
-    expect(editor.original_url).toContain('role=original')
-    await attachment_redirect(11, version(), admin, 'GET', 'original')
-    expect(state.sign).toHaveBeenLastCalledWith('source-original', expect.any(Number), 'GET', 'source.png', 'inline', expect.any(Object))
+    expect(editor.original_url).toBeNull()
+    await expect(attachment_redirect(11, version(), admin, 'GET', 'original')).rejects.toMatchObject({ statusCode: 404 })
+    expect(state.sign).toHaveBeenCalledOnce()
   })
   it('reads a detached copy archive without looking up a deleted or private source', async () => {
     Object.assign(state.row, { story_id: 1, file_name: 'photo_副本.avif', avif_key: 'copy.avif', jpeg_key: 'copy.jpg', original_key: 'copy-original',
@@ -102,25 +102,10 @@ describe('unified attachment reads', () => {
     expect(state.sign).toHaveBeenLastCalledWith('content/att/raw', expect.any(Number), 'HEAD', '未处理.png', 'inline', expect.objectContaining({ id: 11, revision: expect.stringMatching(/^[a-f\d]{64}$/), session: expect.any(Number) }))
   })
 
-  it('does not grant confidential ancestor archives to readers of a public redaction', async () => {
-    Object.assign(state.row, { story_id: 1, avif_key: 'content/att/public.avif', jpeg_key: 'content/att/public.jpg', image_metadata: { archive_source_id: 22 } })
-    state.sources.set(22, { ... state.row, id: 22, is_private: 1, original_key: 'content/att/secret-archive', image_metadata: { original: { name: 'secret.png' } } })
-    await expect(attachment_redirect(11, version(), null, 'GET', 'original')).rejects.toMatchObject({ statusCode: 403 })
-    expect(state.sign).not.toHaveBeenCalled()
+  it('uses its own original even if obsolete provenance points elsewhere', async () => {
+    Object.assign(state.row, { story_id: 1, original_key: 'content/att/own-original', image_metadata: { archive_source_id: 22, archive_source_key: 'content/att/old-archive' } })
     await attachment_redirect(11, version(), admin, 'GET', 'original')
-    expect(state.sign).toHaveBeenLastCalledWith('content/att/secret-archive', expect.any(Number), 'GET', 'secret.png', 'inline', expect.objectContaining({ id: 11, revision: expect.stringMatching(/^[a-f\d]{64}$/), session: expect.any(Number) }))
-    state.sources.delete(22)
-    const editor = await image_editor_source(11, version(), admin)
-    expect(editor.original_url).toBeNull()
-    expect(editor.original_reason).toContain('来源已删除')
-    expect(editor.avif_url).toContain('role=avif')
-  })
-
-  it('does not substitute a newly replaced ancestor archive for the original provenance', async () => {
-    Object.assign(state.row, { story_id: 1, avif_key: 'content/att/public.avif', jpeg_key: 'content/att/public.jpg', image_metadata: { archive_source_id: 22, archive_source_key: 'content/att/expected-archive' } })
-    state.sources.set(22, { ... state.row, id: 22, original_key: 'content/att/new-archive' })
-    await expect(attachment_redirect(11, version(), admin, 'GET', 'original')).rejects.toMatchObject({ statusCode: 404 })
-    expect(state.sign).not.toHaveBeenCalled()
+    expect(state.sign.mock.lastCall?.[0]).toBe('content/att/own-original')
   })
 
   it.each(['GET', 'HEAD'] as const)('signs %s with the logical filename', async (method) => {
