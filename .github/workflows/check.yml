@@ -281,6 +281,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Verify deployment admission and maintenance upgrade
+        env:
+          NODE_ENV: development
+          MYSQL_DEV_ROOT_PASSWORD: ci-root-password
+          ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
+          ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
+        run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/deployment.ts
+
       - name: Apply migrations on a fresh database
         env:
           NODE_ENV: production

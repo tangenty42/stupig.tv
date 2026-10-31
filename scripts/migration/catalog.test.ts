@@ -61,6 +61,9 @@ describe('migration CLI and contract', () => {
     expect(migration_options([])).toEqual({})
     expect(migration_options(['--maintenance', '--through', 'x.sql', '--retry-sql', 'y.sql'])).toEqual({ maintenance: true, through: 'x.sql', retry_sql: 'y.sql' })
     expect(migration_options(['--dry-run'])).toEqual({ dry_run: true })
+    expect(migration_options(['--preflight'])).toEqual({ preflight: true })
+    for (const args of [['--preflight', '--maintenance'], ['--preflight', '--status'], ['--preflight', '--baseline']])
+      expect(() => migration_options(args)).toThrow()
   })
 
   it('未知参数、缺参和混合读写参数均拒绝', () => {

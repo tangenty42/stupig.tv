@@ -2,7 +2,8 @@ import type { SpawnSyncReturns } from 'node:child_process'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 
@@ -25,15 +26,16 @@ const workflow_steps = parse(readFileSync(join(repo_root, '.github/workflows/dep
 }[]
 
 /** `sh` is not on PATH on Windows, but Git for Windows ships one. */
-function find_shell(): string | null {
-  const candidates = [
-    'sh',
-    'C:/Program Files/Git/usr/bin/sh.exe',
-    'C:/Program Files/Git/bin/sh.exe',
-    'C:/Program Files (x86)/Git/usr/bin/sh.exe',
+function find_shell(program = 'sh'): string | null {
+  const git_shells = [
+    `C:/Program Files/Git/usr/bin/${program}.exe`,
+    `C:/Program Files/Git/bin/${program}.exe`,
+    `C:/Program Files (x86)/Git/usr/bin/${program}.exe`,
   ]
+  // Windows may expose WSL's bash.exe on PATH, which uses a different filesystem.
+  const candidates = process.platform === 'win32' ? [... git_shells, program] : [program, ... git_shells]
   for (const candidate of candidates) {
-    if (candidate !== 'sh' && ! existsSync(candidate))
+    if (candidate !== program && ! existsSync(candidate))
       continue
     const probe = spawnSync(candidate, ['-c', 'exit 0'])
     if (! probe.error && probe.status === 0)
@@ -43,6 +45,8 @@ function find_shell(): string | null {
 }
 
 const shell = find_shell()
+// Actions run blocks use Bash; the deployed POSIX script is still tested with sh.
+const workflow_shell = find_shell('bash')
 
 const stub_docker = `#!/bin/sh
 # 替身 docker：把"容器现在的状态"按队列逐个吐给脚本，并记录所有有副作用的调用。
@@ -67,6 +71,17 @@ pop() {
 }
 
 case "$1" in
+  exec)
+    echo "$*" >> "$STUB_DIR/calls"
+    case "$*" in
+      *"SELECT @@server_uuid"*) echo '11111111-1111-1111-1111-111111111111' ;;
+      *"information_schema.processlist"*|*"information_schema.triggers"*) echo 0 ;;
+      *mysqldump*)
+        [ -z "$STUB_BACKUP_FAILS" ] || exit 1
+        echo 'INSERT INTO backup_ok VALUES (1);' ;;
+    esac
+    exit 0
+    ;;
   login)
     echo "$*" >> "$STUB_DIR/calls"
     cat > "$STUB_DIR/login-password"
@@ -87,6 +102,18 @@ case "$1" in
     # "compose ps -q <service>" 是脚本解析容器的方式（不靠固定容器名）。容器 ID
     # 故意取一个与任何名字都不像的值：写死 stupig-tv 的实现在这里就会暴露。
     case "$*" in
+      *"release.mjs plan"*)
+        [ -z "$STUB_PREFLIGHT_FAILS" ] || exit 1
+        case "$*" in
+          *"plan new"*)
+            printf 'PLAN_ID=%s\\nMAINTENANCE_REQUIRED=%s\\nSQL_RECOVERY_REQUIRED=0\\nDB_HOST=mysql\\nDB_NAME=qa\\nDB_UUID=11111111-1111-1111-1111-111111111111\\nCLOUD_BACKFILL=0\\n' "$STUB_PLAN_ID" "$STUB_MAINTENANCE_REQUIRED" > "$candidate_dir/decision.env"
+            echo '{}' > "$candidate_dir/plan.json" ;;
+          *) [ -z "$STUB_PLAN_DRIFT" ] || exit 1 ;;
+        esac
+        ;;
+      *"release.mjs verify-public"*) [ -z "$STUB_PUBLIC_FAILS" ] || exit 1 ;;
+      *"release.mjs rollback"*) [ -z "$STUB_ROLLBACK_UNSAFE" ] || exit 1 ;;
+      *"migrate.mjs --maintenance"*) [ -z "$STUB_MIGRATION_FAILS" ] || exit 1 ;;
       *"ps -q emqx"*)
         if [ -f "$STUB_DIR/mqtt-created" ] || [ -n "$STUB_PREVIOUS_MQTT_IMAGE" ]; then
           echo mqtt-service-id
@@ -101,6 +128,10 @@ case "$1" in
     exit 0
     ;;
   inspect)
+    case "$*" in
+      *State.Running*) echo true; exit 0 ;;
+      *Config.Labels*) echo deploy-fixture; exit 0 ;;
+    esac
     case "$*" in
       *mqtt-service-id*)
         for arg in "$@"; do
@@ -146,6 +177,14 @@ interface RunResult {
 }
 
 interface Scenario {
+  maintenance_required?: boolean
+  preflight_fails?: boolean
+  public_fails?: boolean
+  rollback_unsafe?: boolean
+  mode?: 'normal' | 'maintenance'
+  plan_drift?: boolean
+  backup_fails?: boolean
+  migration_fails?: boolean
   statuses: string[]
   healths: string[]
   previous_image?: string
@@ -190,6 +229,15 @@ function run_deploy(scenario: Scenario): RunResult {
   }
   writeFileSync(join(dir, 'docker-compose.yml'), 'old-compose\n')
   writeFileSync(join(dir, 'docker-compose.yml.incoming'), 'new-compose\n')
+  const plan_id = 'a'.repeat(64)
+  if (scenario.mode === 'maintenance') {
+    const pending = join(dir, '.release-plans', plan_id)
+    mkdirSync(pending, { recursive: true })
+    writeFileSync(join(pending, '.env.prod'), incoming_env_content ?? '')
+    writeFileSync(join(pending, 'docker-compose.yml'), 'new-compose\n')
+    writeFileSync(join(pending, 'plan.json'), '{}')
+    writeFileSync(join(pending, 'decision.env'), `PLAN_ID=${plan_id}\nMAINTENANCE_REQUIRED=1\nSQL_RECOVERY_REQUIRED=0\nDB_HOST=mysql\nDB_NAME=qa\nDB_UUID=11111111-1111-1111-1111-111111111111\nCLOUD_BACKFILL=0\n`)
+  }
   for (const [name, content] of Object.entries(scenario.files ?? {}))
     writeFileSync(join(dir, name), content)
 
@@ -198,7 +246,7 @@ function run_deploy(scenario: Scenario): RunResult {
   // retains command exit codes and variable isolation, but avoids launching a
   // new Git-for-Windows shell executable for every simulated Docker call.
   // Production still uses the unchanged executable / SSH entry point.
-  const result = spawnSync(shell!, ['-c', 'docker() ( . "$STUB_DOCKER" ); . "$DEPLOY_SCRIPT"'], {
+  const result = spawnSync(shell!, ['-c', 'flock() { :; }; docker() ( . "$STUB_DOCKER" ); . "$DEPLOY_SCRIPT"'], {
     cwd: dir,
     encoding: 'utf-8',
     env: {
@@ -213,6 +261,17 @@ function run_deploy(scenario: Scenario): RunResult {
       // 采样窗口要短：这里测的是分支，不是真实等待
       HEALTH_ATTEMPTS: '3',
       HEALTH_INTERVAL_SECONDS: '0',
+      DEPLOY_MODE: scenario.mode ?? 'normal',
+      APPROVED_PLAN_ID: plan_id,
+      CONFIRM_MAINTENANCE: 'true',
+      STUB_PLAN_ID: plan_id,
+      STUB_MAINTENANCE_REQUIRED: scenario.maintenance_required ? '1' : '0',
+      STUB_PREFLIGHT_FAILS: scenario.preflight_fails ? '1' : '',
+      STUB_PUBLIC_FAILS: scenario.public_fails ? '1' : '',
+      STUB_ROLLBACK_UNSAFE: scenario.rollback_unsafe ? '1' : '',
+      STUB_PLAN_DRIFT: scenario.plan_drift ? '1' : '',
+      STUB_BACKUP_FAILS: scenario.backup_fails ? '1' : '',
+      STUB_MIGRATION_FAILS: scenario.migration_fails ? '1' : '',
       STUB_DIR: dir,
       STUB_DOCKER: join(fakebin, 'docker'),
       DEPLOY_SCRIPT: script_path,
@@ -227,11 +286,12 @@ function run_deploy(scenario: Scenario): RunResult {
 
   const calls = readFileSync(join(dir, 'calls'), 'utf-8').split('\n').filter(Boolean)
   const files: Record<string, string> = {}
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     // 队列/记录文件是测试自己的脚手架，不是被测对象留下的东西
-    if (['fakebin', 'status_queue', 'health_queue', 'mqtt_health_queue', 'mqtt-created', 'calls', 'login-password'].includes(name))
+    if (name.isDirectory() || name.parentPath.includes('fakebin') || ['fakebin', 'status_queue', 'health_queue', 'mqtt_health_queue', 'mqtt-created', 'calls', 'login-password'].includes(name.name))
       continue
-    files[name] = readFileSync(join(dir, name), 'utf-8')
+    const path = join(name.parentPath, name.name)
+    files[path.slice(dir.length + 1).replaceAll('\\', '/')] = readFileSync(path, 'utf-8')
   }
   const password_path = join(dir, 'login-password')
   const login_password = existsSync(password_path) ? readFileSync(password_path, 'utf8') : null
@@ -242,6 +302,55 @@ function run_deploy(scenario: Scenario): RunResult {
 const needs_shell = shell ? describe : describe.skip
 
 describe('registry identity workflow wiring', () => {
+  it.skipIf(! workflow_shell)('allows documentation-only main advances and rejects superseded runtime code', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'deploy-source-'))
+    const origin = join(dir, 'origin')
+    const checkout = join(dir, 'checkout')
+    mkdirSync(origin)
+    const git = (args: string[], cwd = origin) => {
+      const result = spawnSync('git', ['-c', 'core.hooksPath=', '-c', 'commit.gpgsign=false', ... args], { cwd, encoding: 'utf8' })
+      expect(result.status, result.stderr).toBe(0)
+      return result.stdout.trim()
+    }
+    try {
+      git(['init', '-b', 'main'])
+      git(['config', 'user.name', 'Deployment fixture'])
+      git(['config', 'user.email', 'fixture@localhost'])
+      writeFileSync(join(origin, 'runtime.js'), 'export default 1\n')
+      writeFileSync(join(origin, 'README.md'), 'initial\n')
+      git(['add', '.'])
+      git(['commit', '-m', 'test(deploy): seed source fixture'])
+      const source = git(['rev-parse', 'HEAD'])
+      git(['clone', '--no-local', '--depth=1', pathToFileURL(origin).href, checkout], dir)
+      writeFileSync(join(origin, 'README.md'), 'documentation update\n')
+      mkdirSync(join(origin, 'docs'))
+      writeFileSync(join(origin, 'docs', 'notes.txt'), 'notes\n')
+      git(['add', '.'])
+      git(['commit', '-m', 'docs(deploy): update fixture notes'])
+      const script = workflow_steps.find(step => step.name === 'Reject superseded release sources')!.run!
+      const probe = () => spawnSync(workflow_shell!, ['-c', script], { cwd: checkout, encoding: 'utf8', env: { ... process.env, RELEASE_SHA: source } })
+      const same_runtime = probe()
+      expect(same_runtime.status, same_runtime.stderr).toBe(0)
+      writeFileSync(join(origin, 'runtime.js'), 'export default 2\n')
+      git(['add', '.'])
+      git(['commit', '-m', 'fix(deploy): replace fixture runtime'])
+      expect(probe().status).not.toBe(0)
+    }
+    finally {
+      expect(dirname(dir)).toBe(tmpdir())
+      expect(basename(dir).startsWith('deploy-source-')).toBe(true)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20000)
+
+  it.skipIf(! workflow_shell)('parses every ordinary and maintenance shell step', () => {
+    const maintenance = parse(readFileSync(join(repo_root, '.github/workflows/maintenance-deploy.yml'), 'utf8')).jobs.maintenance.steps as typeof workflow_steps
+    for (const step of [... workflow_steps, ... maintenance].filter(step => step.run)) {
+      const result = spawnSync(workflow_shell!, ['-n'], { input: step.run, encoding: 'utf8' })
+      expect(result.status, `${step.name}: ${result.stderr}`).toBe(0)
+    }
+  })
+
   it('builds and publishes the dedicated MQTT target alongside the application', () => {
     const build = workflow_steps.find(step => step.name === 'Build and push image')!
     expect(build.run).toContain('docker build --target mqtt -t "$IMAGE:mqtt" -t "$IMAGE:mqtt-$RELEASE_SHA" .')
@@ -312,6 +421,68 @@ needs_shell('registry credential transport', () => {
 })
 
 needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
+  it('blocks maintenance before replacing configuration or stopping the old application', () => {
+    const result = run_deploy({ statuses: [], healths: [], previous_image: 'sha256:old-app', maintenance_required: true })
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('旧服务未切换')
+    expect(result.files['.env.prod']).toContain('DEPLOYMENT_ENV=old')
+    expect(result.files[`.release-plans/${'a'.repeat(64)}/plan.json`]).toBeDefined()
+    expect(result.calls.some(call => / up | stop |--maintenance/.test(call))).toBe(false)
+  })
+
+  it('rejects a changed approved plan before stopping writers', () => {
+    const result = run_deploy({ statuses: [], healths: [], previous_image: 'sha256:old-app', mode: 'maintenance', plan_drift: true })
+    expect(result.status).not.toBe(0)
+    expect(result.calls.some(call => call.endsWith('stop app'))).toBe(false)
+    expect(result.files['.env.prod']).toContain('DEPLOYMENT_ENV=old')
+  })
+
+  it('backs up and restores in isolation before maintenance, then verifies public routes', () => {
+    const result = run_deploy({ statuses: ['running'], healths: ['healthy'], previous_image: 'sha256:old-app', mode: 'maintenance' })
+    expect(result.output, result.calls.join('\n')).toContain('部署完成')
+    expect(result.status).toBe(0)
+    const stopped = result.calls.findIndex(call => call.endsWith('stop app'))
+    const dump = result.calls.findIndex(call => call.includes('mysqldump'))
+    const migrated = result.calls.findIndex(call => call.includes('migrate.mjs --maintenance'))
+    const started = result.calls.findIndex(call => call.endsWith('up -d'))
+    expect(stopped).toBeLessThan(dump)
+    expect(dump).toBeLessThan(migrated)
+    expect(migrated).toBeLessThan(started)
+    expect(result.calls.some(call => call.includes('DROP DATABASE'))).toBe(true)
+    expect(result.calls.some(call => call.includes('verify-public'))).toBe(true)
+    expect(Object.values(result.files)).toContain('all-table-restored-data=byte-identical\n')
+  }, 20000)
+
+  it('resumes the old service if backup fails before production migration starts', () => {
+    const result = run_deploy({ statuses: ['running'], healths: ['healthy'], previous_image: 'sha256:old-app', mode: 'maintenance', backup_fails: true })
+    expect(result.status).not.toBe(0)
+    expect(result.calls.some(call => call.includes('migrate.mjs --maintenance'))).toBe(false)
+    expect(result.calls.some(call => call.includes('up -d --force-recreate'))).toBe(true)
+    expect(result.files['.env.prod']).toContain('DEPLOYMENT_ENV=old')
+  }, 20000)
+
+  it('retains stopped writers and recovery evidence after maintenance starts failing', () => {
+    const result = run_deploy({ statuses: [], healths: [], previous_image: 'sha256:old-app', mode: 'maintenance', migration_fails: true })
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('维护恢复状态')
+    expect(result.calls.some(call => call.includes('up -d'))).toBe(false)
+    expect(Object.keys(result.files).some(name => name.endsWith('/database.sql'))).toBe(true)
+  }, 20000)
+
+  it('rejects healthy containers when public WSS acceptance fails', () => {
+    const result = run_deploy({ statuses: ['running', 'running'], healths: ['healthy', 'healthy'], previous_image: 'sha256:old-app', public_fails: true })
+    expect(result.status).not.toBe(0)
+    expect(result.output).not.toContain('部署完成')
+    expect(result.calls.some(call => call.includes('up -d --force-recreate'))).toBe(true)
+  })
+
+  it('keeps the application stopped when schema compatibility cannot be established', () => {
+    const result = run_deploy({ statuses: ['exited'], healths: ['unhealthy'], previous_image: 'sha256:old-app', rollback_unsafe: true })
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('维护恢复状态')
+    expect(result.calls.some(call => call.includes('up -d --force-recreate'))).toBe(false)
+  })
+
   let saved_attempts: string | undefined
 
   beforeEach(() => {
@@ -507,7 +678,7 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
   })
 
-  it('镜像拉取失败：恢复旧配置和镜像标签，不重建当前容器', () => {
+  it('镜像拉取失败：保留旧配置与运行容器', () => {
     const result = run_deploy({
       statuses: ['running'],
       healths: ['healthy'],
@@ -518,10 +689,10 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
     expect(result.status).not.toBe(0)
     expect(result.files['.env.prod']).toContain('DEPLOYMENT_ENV=old')
     expect(result.files['docker-compose.yml']).toBe('old-compose\n')
-    expect(result.calls).toContain('tag sha256:old registry.example.com/ns/app:latest')
+    expect(result.calls.some(call => call.startsWith('tag '))).toBe(false)
     expect(result.calls.some(call => call.startsWith('compose up'))).toBe(false)
-    expect(result.files['.env.prod.incoming']).toBeUndefined()
-    expect(result.files['docker-compose.yml.incoming']).toBeUndefined()
+    expect(result.files['.env.prod.incoming']).toContain('DEPLOYMENT_ENV=new')
+    expect(result.files['docker-compose.yml.incoming']).toBe('new-compose\n')
   })
 
   it('compose 里找不到容器：当作确定的坏消息，而不是干等超时', () => {
@@ -651,9 +822,9 @@ needs_shell('deploy-remote.sh（用替身 docker 跑真实脚本）', () => {
 
     expect(result.status).not.toBe(0)
     expect(result.files['.env.prod']).toBe('APP_PORT=3042\nDEPLOYMENT_ENV=old\n')
-    expect(result.files['.env.prod.bak']).toBe('APP_PORT=3042\nDEPLOYMENT_ENV=old\n')
+    expect(result.files['.env.prod.bak']).toBeUndefined()
     expect(result.files['docker-compose.yml']).toBe('old-compose\n')
-    expect(result.files['docker-compose.yml.bak']).toBe('old-compose\n')
+    expect(result.files['docker-compose.yml.bak']).toBeUndefined()
     expect(result.output).toContain('校验失败')
     // 连镜像都不该拉：这一步失败就已经决定这次部署不成立
     expect(result.calls.some(call => call.startsWith('compose pull'))).toBe(false)

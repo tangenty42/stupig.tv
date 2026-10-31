@@ -105,7 +105,11 @@ async function verify() {
     assert.equal(total!.n, 6)
 
     const partial = '20261024070000_partial.sql'
-    await writeFile(resolve(dir, partial), 'CREATE TABLE IF NOT EXISTS partial_fixture(n INT); INSERT INTO missing_fixture(n) VALUES (1);')
+    const partial_sql = 'CREATE TABLE IF NOT EXISTS partial_fixture(n INT); INSERT INTO missing_fixture(n) VALUES (1);'
+    await writeFile(resolve(dir, partial), partial_sql)
+    // This fixture deliberately exercises an online SQL failure and explicit
+    // recovery; new SQL otherwise stops at the maintenance admission gate.
+    await writeFile(resolve(dir, 'deployment.json'), JSON.stringify({ version: 1, automatic_sql: { [partial]: sha256(partial_sql) } }))
     await assert.rejects(run(), /已终止/)
     await assert.rejects(run(), /retry-sql/)
     await probe.query('CREATE TABLE missing_fixture(n INT PRIMARY KEY)')
@@ -124,7 +128,7 @@ async function verify() {
       async verify({db}){const [[row]]=await db.query('SELECT COUNT(*) n FROM fixture WHERE n>0');return row.n===7}
     }`)
     for (const file of await readdir(dir)) {
-      if (/\.(?:sql|ts)$/.test(file))
+      if (/\.(?:sql|ts)$/.test(file) || file === 'deployment.json')
         await copyFile(resolve(dir, file), resolve(standalone, 'migrations', file))
     }
     await build_migration_scripts(resolve(standalone, 'migrations'), resolve(standalone, 'migration-scripts'))
@@ -156,7 +160,7 @@ async function verify() {
     await copyFile(resolve(standalone, 'config/prod.yaml'), resolve(production, 'config/prod.yaml'))
     await copyFile(cli, resolve(production, 'migrate.mjs'))
     for (const filename of await readdir(migration_dir)) {
-      if (/\.(?:sql|ts)$/.test(filename))
+      if (/\.(?:sql|ts)$/.test(filename) || filename === 'deployment.json')
         await copyFile(resolve(migration_dir, filename), resolve(production, 'migrations', filename))
     }
     const production_manifest = await build_migration_scripts(migration_dir, resolve(production, 'migration-scripts'))

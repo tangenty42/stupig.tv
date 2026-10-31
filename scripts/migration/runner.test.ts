@@ -31,6 +31,8 @@ function sql_call(sql: string, values: unknown[] = []): [unknown, unknown[]] {
     return [[{ acquired: state.lock }], []]
   if (sql.includes('IS_USED_LOCK'))
     return [[{ owned: state.owned }], []]
+  if (sql.includes('@@server_uuid'))
+    return [[{ server_uuid: '11111111-1111-1111-1111-111111111111' }], []]
   if (sql.includes('information_schema')) {
     if (sql.includes('COUNT'))
       return [[{ n: state.business_tables }], []]
@@ -123,6 +125,40 @@ beforeEach(async () => {
 })
 
 describe('mixed migration runtime', () => {
+  it('rejects a later maintenance script before any preceding SQL or metadata writes', async () => {
+    await expect(run_migrations({ dir })).rejects.toThrow(/maintenance|维护/)
+    expect(state.queries.some(sql => /CREATE|INSERT|UPDATE|ALTER|DELETE|DROP/.test(sql))).toBe(false)
+    expect(state.runtime).toBe(false)
+  })
+
+  it('classifies the entire pending chain without invoking plans or writing receipts', async () => {
+    const sql_file = '20261031010000_late.sql'
+    await writeFile(resolve(dir, sql_file), 'SELECT late_sql')
+    const result = await run_migrations({ dir, preflight: true })
+    expect(result.preflight?.requires_maintenance).toBe(true)
+    expect(result.preflight?.pending).toEqual(expect.arrayContaining([
+      expect.objectContaining({ filename, execution: 'maintenance' }),
+      expect.objectContaining({ filename: sql_file, execution: 'maintenance' }),
+    ]))
+    expect(state.queries).not.toContain('SELECT fixture_count')
+    expect(state.queries.some(sql => /CREATE|INSERT|UPDATE|ALTER|DELETE|DROP/.test(sql))).toBe(false)
+    const again = await run_migrations({ dir, preflight: true })
+    expect(again.preflight?.fingerprint).toBe(result.preflight?.fingerprint)
+  })
+
+  it('allows new SQL online only when its exact digest is declared', async () => {
+    const sql_file = '20261031010000_online.sql'
+    const sql = 'SELECT online_sql'
+    await writeFile(resolve(dir, filename), script.replace('execution: \'maintenance\'', 'execution: \'automatic\''))
+    await writeFile(resolve(dir, sql_file), sql)
+    await expect(run_migrations({ dir })).rejects.toThrow(/维护/)
+    await writeFile(resolve(dir, 'deployment.json'), JSON.stringify({ version: 1, automatic_sql: { [sql_file]: sha256(sql) } }))
+    await run_migrations({ dir })
+    expect(state.queries).toContain(sql)
+    await writeFile(resolve(dir, sql_file), `${sql} `)
+    await expect(run_migrations({ dir, preflight: true })).rejects.toThrow(/改动|inconsistent/)
+  })
+
   it('新库只使用新账本，完成后没有旧表也不会重新执行', async () => {
     await run_migrations({ dir, maintenance: true })
     const before = state.queries.filter(sql => sql === 'SELECT apply_called').length
@@ -187,7 +223,7 @@ describe('mixed migration runtime', () => {
   it('按顺序执行 SQL／脚本／SQL，脚本默认维护门禁阻止后续步骤', async () => {
     await writeFile(resolve(dir, '20261024040000_after.sql'), 'SELECT after_script')
     await expect(run_migrations({ dir })).rejects.toThrow(/维护窗口/)
-    expect(completed().has(runtime_migration)).toBe(true)
+    expect(completed().has(runtime_migration)).toBe(false)
     expect(state.rows.size).toBe(0)
     expect(state.queries.some(sql => sql.includes('after_script'))).toBe(false)
     await run_migrations({ dir, maintenance: true })
@@ -261,10 +297,10 @@ describe('mixed migration runtime', () => {
     state.business_tables = 8
     await writeFile(resolve(dir, '20261008000000_old.sql'), 'SELECT old_schema')
     await expect(run_migrations({ dir })).rejects.toThrow(/维护窗口/)
-    expect(completed().has('20261008000000_old.sql')).toBe(true)
+    expect(completed().has('20261008000000_old.sql')).toBe(false)
     expect(state.queries).not.toContain('SELECT old_schema')
     expect(completed().has(filename)).toBe(false)
-    expect(state.runtime).toBe(true)
+    expect(state.runtime).toBe(false)
   })
 
   it('显式 baseline 不得把脚本或新 SQL 标为完成', async () => {

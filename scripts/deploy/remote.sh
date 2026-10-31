@@ -32,6 +32,13 @@ SERVICE=${SERVICE:-app}
 
 cd "$DEPLOY_DIR"
 
+# The manual workflow and ordinary CD share both the Actions concurrency group
+# and this host lock. A maintenance approval must not race another release.
+exec 9> .deploy.lock
+flock -n 9 || { echo '另一发布正在运行，拒绝并发切换。' >&2; exit 1; }
+DEPLOY_MODE=${DEPLOY_MODE:-normal}
+case "$DEPLOY_MODE" in normal|maintenance) ;; *) exit 1 ;; esac
+
 # The previous release may still use .env. Only rollback reads that legacy name.
 previous_env_file=.env.prod
 if [ ! -f .env.prod ] && [ -f .env ]; then
@@ -40,6 +47,61 @@ fi
 active_env_file=$previous_env_file
 compose() {
   docker compose --env-file "$active_env_file" "$@"
+}
+
+candidate_compose() {
+  docker compose -p "$compose_project" --project-directory "$candidate_dir" --env-file "$candidate_dir/.env.prod" -f "$candidate_dir/docker-compose.yml" "$@"
+}
+
+release_check() {
+  # Keep host-side plan files owned by the account running this deployment.
+  candidate_compose run --rm --no-deps --user "$(id -u):$(id -g)" -v "$candidate_dir:/release" app node .output/server/maintenance/release.mjs "$@"
+}
+
+# The root Docker host can back up a colocated MySQL without distributing its
+# root credential to the runner or application. Remote DBs require an adapter.
+backup_and_verify() {
+  mysql_container=${MYSQL_BACKUP_CONTAINER:-$DB_HOST}
+  case "$mysql_container" in ''|[!a-zA-Z0-9]*|*[!a-zA-Z0-9_.-]*) return 1 ;; esac
+  case "$DB_NAME" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
+  recovery=$(mktemp -d "$candidate_dir/recovery-XXXXXXXX") || return 1
+  for backup_file in "$previous_env_file" docker-compose.yml; do
+    if [ -f "$backup_file" ]; then cp -p "$backup_file" "$recovery/" || return 1; fi
+  done
+  cp -p "$candidate_dir/.env.prod" "$recovery/candidate.env" || return 1
+  actual_uuid=$(docker exec "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --batch --skip-column-names -e "SELECT @@server_uuid"') || return 1
+  [ "$actual_uuid" = "$DB_UUID" ] || { echo '备份实例与应用连接的数据库不一致。' >&2; return 1; }
+  sessions=$(docker exec "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --batch --skip-column-names -e "$1"' sh "SELECT COUNT(*) FROM information_schema.processlist WHERE db='$DB_NAME' AND id != CONNECTION_ID()") || return 1
+  [ "$sessions" = 0 ] || { echo '目标数据库仍有其他连接，需停止外部写者后重试。' >&2; return 1; }
+  # Program objects could contain source-qualified writes or scheduled effects.
+  # Reject before production writes and require a reviewed recovery adapter for them.
+  objects=$(docker exec "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --batch --skip-column-names -e "$1"' sh "SELECT (SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema='$DB_NAME') + (SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema='$DB_NAME') + (SELECT COUNT(*) FROM information_schema.events WHERE event_schema='$DB_NAME') + (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB_NAME' AND (table_type!='BASE TABLE' OR engine!='InnoDB')) + (SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema='$DB_NAME' AND unique_constraint_schema!='$DB_NAME')") || return 1
+  [ "$objects" = 0 ] || { echo '数据库结构超出当前恢复适配器支持范围，需要专用方案。' >&2; return 1; }
+  docker exec "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump -uroot --single-transaction --hex-blob --no-tablespaces --set-gtid-purged=OFF --routines --events --triggers "$1"' sh "$DB_NAME" > "$recovery/database.sql.part" || return 1
+  [ -s "$recovery/database.sql.part" ] || return 1
+  mv "$recovery/database.sql.part" "$recovery/database.sql" || return 1
+  sha256sum "$recovery/database.sql" > "$recovery/database.sha256" || return 1
+  qa="stupig_deploy_qa_$(date -u +%s)_$$"
+  docker exec "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -e "$1"' sh "CREATE DATABASE \`$qa\` CHARACTER SET utf8mb4" || return 1
+  # The subshell owns only this uniquely named QA database; clean it even if a
+  # restore or byte comparison fails. The production dump is always retained.
+  (
+    trap 'qa_status=$?; trap - EXIT; docker exec "$mysql_container" sh -c '\''MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -e "$1"'\'' sh "DROP DATABASE \`$qa\`" || exit 1; exit "$qa_status"' EXIT
+    docker exec -i "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$1"' sh "$qa" < "$recovery/database.sql" || exit 1
+    for target in "$DB_NAME" "$qa"; do
+      docker exec "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump -uroot --single-transaction --hex-blob --no-tablespaces --set-gtid-purged=OFF --no-create-info --skip-comments --skip-dump-date --skip-add-locks --skip-disable-keys --skip-triggers --order-by-primary "$1"' sh "$target" > "$recovery/$target.data.sql" || exit 1
+    done
+    cmp "$recovery/$DB_NAME.data.sql" "$recovery/$qa.data.sql" || exit 1
+    printf 'all-table-restored-data=byte-identical\n' > "$recovery/restore-verification.txt" || exit 1
+  ) || return 1
+  if [ "${VERIFY_MAIN_UNCHANGED:-0}" = 1 ]; then
+    snapshot_main > "$recovery/main-before.tsv" || return 1
+  fi
+  echo "一致性备份已通过隔离恢复验证：$recovery"
+}
+
+snapshot_main() {
+  docker exec "$mysql_container" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --batch --skip-column-names -e "$1"' sh "SELECT id,OCTET_LENGTH(markdown),SHA2(markdown,256),revision,namespace_revision,namespace_floor,created_at,updated_at FROM \`$DB_NAME\`.content_stories ORDER BY id"
 }
 
 # Old rollback files may still contain publisher credentials. Only rewrite a
@@ -148,6 +210,10 @@ wait_until_ready() {
 
 previous_container=$(resolve_container)
 previous_image=$(docker inspect --format '{{.Image}}' "$previous_container" 2>/dev/null || true)
+previous_running=$(docker inspect --format '{{.State.Running}}' "$previous_container" 2>/dev/null || true)
+compose_project=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$previous_container" 2>/dev/null || true)
+compose_project=${compose_project:-$(basename "$DEPLOY_DIR")}
+case "$compose_project" in *[!a-z0-9_-]*|'') echo 'Invalid Compose project' >&2; exit 1 ;; esac
 previous_mqtt_container=$(resolve_container emqx)
 previous_mqtt_image=
 previous_mqtt_ref=
@@ -155,6 +221,12 @@ if [ -n "$previous_mqtt_container" ]; then
   previous_mqtt_image=$(docker inspect --format '{{.Image}}' "$previous_mqtt_container")
   previous_mqtt_ref=$(docker inspect --format '{{.Config.Image}}' "$previous_mqtt_container")
 fi
+previous_release_sha256=$({
+  printf '%s\n%s\n' "$previous_image" "$previous_mqtt_image"
+  for identity_file in "$previous_env_file" docker-compose.yml; do
+    if [ -f "$identity_file" ]; then sha256sum "$identity_file"; fi
+  done
+} | sha256sum | cut -d ' ' -f 1)
 echo "previous container: ${previous_container:-<none>} image: ${previous_image:-<none>}"
 
 transaction_started=0
@@ -163,6 +235,8 @@ pull_started=0
 up_started=0
 had_env=0
 had_compose=0
+writers_stopped=0
+data_started=0
 
 rollback_on_exit() {
   exit_status=$?
@@ -172,12 +246,17 @@ rollback_on_exit() {
     # A pre-cloud application would resume unleased main writes and local drafts.
     # Once the new process may have migrated/served traffic, retain its state and
     # stop editing for manual recovery instead of bringing that old writer back.
-    if [ "$up_started" -eq 1 ] && [ "$had_env" -eq 1 ] &&
-      grep -q '^CONTENT_DRAFT_PROTOCOL=cloud-v1$' .env.prod &&
-      ! grep -q '^CONTENT_DRAFT_PROTOCOL=cloud-v1$' .env.prod.bak; then
+    unsafe_database=0
+    if [ "$up_started" -eq 1 ] && [ "$data_started" -eq 0 ]; then
+      release_check rollback > "$candidate_dir/rollback-check.log" 2>&1 || unsafe_database=1
+    fi
+    if [ "$data_started" -eq 1 ] || [ "$unsafe_database" -eq 1 ] ||
+      { [ "$up_started" -eq 1 ] && [ "$had_env" -eq 1 ] &&
+        grep -q '^CONTENT_DRAFT_PROTOCOL=cloud-v1$' .env.prod &&
+        ! grep -q '^CONTENT_DRAFT_PROTOCOL=cloud-v1$' .env.prod.bak; }; then
       capture_failure_logs "$SERVICE"
       compose stop "$SERVICE"
-      echo "共享云端草稿跨协议切换失败：应用已停止，保留当前配置和数据库，需维护恢复，禁止自动启动旧正文写入程序。" >&2
+      echo "发布已进入维护恢复状态：应用已停止，保留配置、数据库和备份，禁止自动启动不兼容的旧写者。" >&2
       exit "$exit_status"
     fi
     rollback_ok=1
@@ -212,7 +291,7 @@ rollback_on_exit() {
     fi
     if [ "$rollback_ok" -eq 1 ] && [ "$pull_started" -eq 1 ] && [ -n "$previous_image" ]; then
       docker tag "$previous_image" "$IMAGE" || rollback_ok=0
-      if [ "$rollback_ok" -eq 1 ] && [ "$up_started" -eq 1 ]; then
+      if [ "$rollback_ok" -eq 1 ] && { [ "$up_started" -eq 1 ] || { [ "$writers_stopped" -eq 1 ] && [ "$previous_running" = true ]; }; }; then
         compose up -d --force-recreate || rollback_ok=0
         if [ "$rollback_ok" -eq 1 ] && [ -n "$previous_mqtt_container" ]; then
           wait_until_ready emqx || rollback_ok=0
@@ -243,6 +322,15 @@ trap rollback_on_exit EXIT
 printf '%s' "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
 
 # CD 只上传 incoming 文件；切换前先验证候选 .env.prod，并保存完整回滚点。
+umask 077
+mkdir -p .release-plans
+chmod 700 .release-plans
+if [ "$DEPLOY_MODE" = maintenance ]; then
+  case "${APPROVED_PLAN_ID:-}" in ''|*[!a-f0-9]*) echo 'Invalid approved plan' >&2; exit 1 ;; esac
+  [ "${#APPROVED_PLAN_ID}" = 64 ] && [ "${CONFIRM_MAINTENANCE:-}" = true ] || exit 1
+  candidate_dir="$DEPLOY_DIR/.release-plans/$APPROVED_PLAN_ID"
+  [ -f "$candidate_dir/plan.json" ] && [ -f "$candidate_dir/decision.env" ] || { echo '预检计划不存在。' >&2; exit 1; }
+else
 if [ ! -f .env.prod.incoming ]; then
   echo "缺少 .env.prod.incoming，拒绝部署。" >&2
   exit 1
@@ -255,6 +343,36 @@ if [ ! -f docker-compose.yml.incoming ]; then
   echo "缺少 docker-compose.yml.incoming，拒绝部署。" >&2
   exit 1
 fi
+  candidate_dir=$(mktemp -d "$DEPLOY_DIR/.release-plans/staging-XXXXXXXX")
+  cp .env.prod.incoming "$candidate_dir/.env.prod"
+  cp docker-compose.yml.incoming "$candidate_dir/docker-compose.yml"
+fi
+
+if ! candidate_compose config -q; then
+  echo '候选配置校验失败，旧配置与容器未切换。' >&2
+  exit 1
+fi
+pull_started=1
+candidate_compose pull
+previous_protocol=legacy
+if [ -f "$previous_env_file" ] && grep -q '^CONTENT_DRAFT_PROTOCOL=cloud-v1$' "$previous_env_file"; then previous_protocol=cloud-v1; fi
+if [ "$DEPLOY_MODE" = maintenance ]; then
+  release_check plan "$APPROVED_PLAN_ID" "$previous_protocol" "$previous_release_sha256"
+else
+  release_check plan new "$previous_protocol" "$previous_release_sha256"
+  . "$candidate_dir/decision.env"
+  [ ! -e "$DEPLOY_DIR/.release-plans/$PLAN_ID" ] || { echo '该计划已存在，请使用已有计划。' >&2; exit 1; }
+  mv "$candidate_dir" "$DEPLOY_DIR/.release-plans/$PLAN_ID"
+  candidate_dir="$DEPLOY_DIR/.release-plans/$PLAN_ID"
+fi
+. "$candidate_dir/decision.env"
+[ "$SQL_RECOVERY_REQUIRED" = 0 ] || { echo '存在可能部分执行的 SQL，须先人工核对恢复。' >&2; exit 1; }
+if [ "$MAINTENANCE_REQUIRED" = 1 ] && [ "$DEPLOY_MODE" != maintenance ]; then
+  echo "需要维护发布；旧服务未切换。请在 Maintenance Deploy 授权计划：$PLAN_ID" >&2
+  exit 1
+fi
+cp "$candidate_dir/.env.prod" .env.prod.incoming
+cp "$candidate_dir/docker-compose.yml" docker-compose.yml.incoming
 
 if [ -f "$previous_env_file" ]; then
   cp -p "$previous_env_file" .env.prod.bak
@@ -266,6 +384,19 @@ if [ -f docker-compose.yml ]; then
 fi
 
 transaction_started=1
+if [ "$DEPLOY_MODE" = maintenance ]; then
+  if [ -n "$previous_container" ]; then
+    compose stop "$SERVICE"
+    writers_stopped=1
+  fi
+  # Check the approved ledger again after every old writer has disconnected.
+  release_check plan "$APPROVED_PLAN_ID" "$previous_protocol" "$previous_release_sha256"
+  if ! backup_and_verify > "$candidate_dir/backup-verification.log" 2>&1; then
+    echo '备份或隔离恢复验证失败，未执行生产迁移；详细日志保留在计划目录。' >&2
+    exit 1
+  fi
+  echo "一致性备份已通过隔离恢复验证：$recovery"
+fi
 mv .env.prod.incoming .env.prod
 chmod 600 .env.prod
 active_env_file=.env.prod
@@ -278,8 +409,21 @@ if ! compose config -q; then
   exit 1
 fi
 
-pull_started=1
-compose pull
+if [ "$DEPLOY_MODE" = maintenance ]; then
+  data_started=1
+  if ! candidate_compose run --rm --no-deps app node .output/server/maintenance/migrate.mjs --maintenance > "$candidate_dir/maintenance.log" 2>&1; then
+    echo '生产维护迁移失败，详细结果保留在计划目录。' >&2
+    exit 1
+  fi
+  if ! release_check verify before-start > "$candidate_dir/data-verification.log" 2>&1; then
+    echo '迁移数据校验失败。' >&2
+    exit 1
+  fi
+  if [ "${VERIFY_MAIN_UNCHANGED:-0}" = 1 ]; then
+    snapshot_main > "$recovery/main-after.tsv"
+    cmp "$recovery/main-before.tsv" "$recovery/main-after.tsv"
+  fi
+fi
 up_started=1
 compose up -d
 
@@ -295,6 +439,19 @@ readiness=$?
 set -e
 
 if [ "$readiness" -eq 0 ]; then
+  # Container health does not prove that the public authenticated WSS route exists.
+  if ! release_check verify-public > "$candidate_dir/public-verification.log" 2>&1; then
+    echo '公网 HTTP/WSS 验收失败。' >&2
+    exit 1
+  fi
+  if ! release_check verify > "$candidate_dir/final-migrations.log" 2>&1; then
+    echo '迁移完成回执校验失败。' >&2
+    exit 1
+  fi
+  if ! release_check receipt "$DEPLOY_MODE" "${DEPLOY_EXECUTION_ID:-manual}" > "$candidate_dir/receipt.log" 2>&1; then
+    echo '生产回执保存失败。' >&2
+    exit 1
+  fi
   if [ -f .env ]; then
     mv .env .env.legacy.bak
   fi
@@ -305,6 +462,9 @@ if [ "$readiness" -eq 0 ]; then
       echo "无法安全清理 $backup 中的发布凭据；请手动检查该备份。" >&2
     fi
   done
+  if [ -n "${recovery:-}" ] && ! sanitize_backup "$recovery/$(basename "$previous_env_file")"; then
+    echo '无法清理恢复配置中的历史发布凭据，请检查私有恢复目录。' >&2
+  fi
   echo "部署完成：容器已就绪"
   exit 0
 fi

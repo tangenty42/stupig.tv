@@ -1,0 +1,167 @@
+name: Maintenance Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan_id:
+        description: Exact plan ID printed by the blocked Deploy run
+        required: true
+        type: string
+      confirm_maintenance:
+        description: 'Authorize stopping writers, backup/restore verification, these migrations and service recovery'
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  maintenance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate approval
+        env:
+          PLAN_ID: ${{ inputs.plan_id }}
+          CONFIRM: ${{ inputs.confirm_maintenance }}
+        run: |
+          [[ "$PLAN_ID" =~ ^[a-f0-9]{64}$ ]] && [ "$CONFIRM" = true ] || {
+            echo 'A valid plan and explicit maintenance confirmation are required.' >&2
+            exit 1
+          }
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Configure SSH identity
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf 'Host *\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
+          if [ "$SSH_PORT" = 22 ]; then entry="$SSH_HOST"; else entry="[$SSH_HOST]:$SSH_PORT"; fi
+          ssh-keygen -F "$entry" -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Read the approved release identity
+        id: release
+        env:
+          PLAN_ID: ${{ inputs.plan_id }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT }}
+          SSH_USER: ${{ vars.SSH_USER }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+        run: |
+          set -euo pipefail
+          case "$DEPLOY_DIR" in /*) ;; *) exit 1 ;; esac
+          case "$DEPLOY_DIR" in *"'"*|*$'\n'*) exit 1 ;; esac
+          umask 077
+          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "cat '$DEPLOY_DIR/.release-plans/$PLAN_ID/plan.json'" > "$RUNNER_TEMP/approved-plan.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs'
+          const plan = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/approved-plan.json`, 'utf8'))
+          if (plan.id !== process.env.PLAN_ID || !/^[a-f\d]{40}$/.test(plan.identity.commit)) process.exit(1)
+          appendFileSync(process.env.GITHUB_OUTPUT, `commit=${plan.identity.commit}\n`)
+          NODE
+
+      # Reuse the approved release's source/config and the already pinned server
+      # images. Rebuilding here would produce a different plan after approval.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.release.outputs.commit }}
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 12.10.1
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Prepare ESA publication before stopping writers
+        env:
+          ENV_PASSPHRASE: ${{ secrets.ENV_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile --ignore-scripts
+          umask 077
+          printf '%s' "$ENV_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt \
+            --output .env.prod .env.prod.gpg
+          pnpm exec tsx scripts/deploy/mask-env.ts
+          pnpm esa:deploy:prod --check
+
+      - name: Execute the approved maintenance plan
+        id: execute
+        env:
+          PLAN_ID: ${{ inputs.plan_id }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT }}
+          SSH_USER: ${{ vars.SSH_USER }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+          IMAGE: ${{ vars.ACR_IMAGE }}
+          MYSQL_BACKUP_CONTAINER: ${{ vars.MYSQL_BACKUP_CONTAINER }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'DEPLOY_EXECUTION_ID=%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'ACR_USERNAME=$(printf %%s "%s" | base64 -d)\n' "$(printf '%s' "$ACR_USERNAME" | base64 -w0)"
+            printf 'ACR_PASSWORD=$(printf %%s "%s" | base64 -d)\n' "$(printf '%s' "$ACR_PASSWORD" | base64 -w0)"
+            printf 'MYSQL_BACKUP_CONTAINER=$(printf %%s "%s" | base64 -d)\n' "$(printf '%s' "$MYSQL_BACKUP_CONTAINER" | base64 -w0)"
+            cat scripts/deploy/remote.sh
+          } | ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_DIR='$DEPLOY_DIR' IMAGE='$IMAGE' DEPLOY_MODE=maintenance APPROVED_PLAN_ID='$PLAN_ID' CONFIRM_MAINTENANCE=true sh -s"
+
+      - name: Publish the approved ESA function
+        run: pnpm esa:deploy:prod
+
+      - name: Retrieve the server receipt
+        if: always() && steps.release.outcome == 'success' && steps.execute.outcome != 'skipped'
+        env:
+          PLAN_ID: ${{ inputs.plan_id }}
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT }}
+          SSH_USER: ${{ vars.SSH_USER }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+        run: |
+          scp -P "$SSH_PORT" "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/.release-plans/$PLAN_ID/result.json" \
+            "$RUNNER_TEMP/maintenance-result.json" || true
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, unlinkSync } from 'node:fs'
+          const path = `${process.env.RUNNER_TEMP}/maintenance-result.json`
+          if (existsSync(path)) {
+            const receipt = JSON.parse(readFileSync(path, 'utf8'))
+            if (receipt.execution_id !== `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`) unlinkSync(path)
+          }
+          NODE
+
+      - name: Upload maintenance receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: maintenance-production-receipt
+          path: |
+            ${{ runner.temp }}/approved-plan.json
+            ${{ runner.temp }}/maintenance-result.json
+            .data/esa-deploy/*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Remove plaintext environment
+        if: always()
+        run: |
+          if [ -f .env.prod ]; then shred -u .env.prod; fi

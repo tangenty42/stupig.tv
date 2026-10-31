@@ -14,6 +14,9 @@ export function migration_options(args: string[]): MigrationOptions {
     else if (arg === '--dry-run') {
       options.dry_run = true
     }
+    else if (arg === '--preflight') {
+      options.preflight = true
+    }
     else if (arg === '--baseline') {
       options.baseline = true
     }
@@ -32,8 +35,10 @@ export function migration_options(args: string[]): MigrationOptions {
       throw new MigrationFailure('invalid_options', '未知迁移参数')
     }
   }
-  if ((options.check_only || options.dry_run) && (options.maintenance || options.retry_sql))
+  if ((options.check_only || options.dry_run || options.preflight) && (options.maintenance || options.retry_sql || options.baseline))
     throw new MigrationFailure('invalid_options', '只读模式不能与执行参数组合')
+  if ([options.check_only, options.dry_run, options.preflight].filter(Boolean).length > 1)
+    throw new MigrationFailure('invalid_options', '只读模式只能选择一种')
   return options
 }
 
@@ -43,7 +48,10 @@ export async function migration_cli(options: MigrationOptions, manifest?: string
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   try {
-    return await run_migrations({ ... options, manifest, signal: controller.signal })
+    const result = await run_migrations({ ... options, manifest, signal: controller.signal })
+    if (options.preflight)
+      console.log(JSON.stringify(result.preflight))
+    return result
   }
   finally {
     process.off('SIGINT', stop)
