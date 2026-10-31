@@ -120,6 +120,10 @@ app:
     quotaReserve: 1000
     maxSubmissions: 3
     maxObjectBytes: 20971520
+  contentReceipts:
+    enabled: true
+    sweepIntervalSeconds: 60
+    scanLimit: 100
   contentSync:
     enabled: true
     sweepIntervalSeconds: 1

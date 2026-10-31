@@ -16,7 +16,6 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
     is_image,
     version: 'v1',
     url: `/objects/${file_name}`,
-    is_encrypted: false,
   }
 }
 

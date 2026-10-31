@@ -35,7 +35,6 @@ function attachment(overrides: Partial<ContentStoryAttachment> = {}): ContentSto
     is_image: true,
     version: 'v1',
     url: '/objects/solo.png',
-    is_encrypted: false,
     ... overrides,
   }
 }

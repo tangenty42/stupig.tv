@@ -71,6 +71,15 @@ describe('deployment configuration', () => {
     for (const invalid of [{ scanLimit: 0 }, { scanLimit: 101 }, { leaseSeconds: 10 }, { publishTimeoutMs: 30000 }, { maxRetrySeconds: 1 }])
       expect(deployment_config_schema.safeParse({ ... config, app: { ... config.app, contentSync: { ... config.app.contentSync, ... invalid } } }).success).toBe(false)
   })
+  it('loads bounded receipt compaction independently of cloud consumers and keeps it server-only', () => {
+    const config = load_config(deployment_env)
+    expect(config.app.contentReceipts).toEqual({ enabled: true, sweepIntervalSeconds: 60, scanLimit: 100 })
+    expect(public_config_from(config)).not.toHaveProperty('app.contentReceipts')
+    expect(deployment_config_schema.safeParse({ ... config, aliyun: { ... config.aliyun, oss: null },
+      app: { ... config.app, contentReceipts: { ... config.app.contentReceipts, enabled: false } } }).success).toBe(true)
+    for (const invalid of [{ scanLimit: 0 }, { scanLimit: 101 }, { scanLimit: 1.5 }, { sweepIntervalSeconds: 0 }, { enabled: 'invalid' }])
+      expect(deployment_config_schema.safeParse({ ... config, app: { ... config.app, contentReceipts: { ... config.app.contentReceipts, ... invalid } } }).success).toBe(false)
+  })
   it('loads upload lifecycle budgets independently of images and keeps them server-only', () => {
     const config = load_config(deployment_env)
     expect(config.app.contentUploads).toEqual({ enabled: true, sweepIntervalSeconds: 5, scanLimit: 20 })

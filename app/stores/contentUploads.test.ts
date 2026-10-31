@@ -143,7 +143,7 @@ it.each([
   ['receipt-first', false], ['snapshot-first', false], ['newer-deletion', false],
   ['receipt-first', true], ['snapshot-first', true], ['newer-deletion', true],
 ] as const)('hands the upload to a coherent namespace without duplicates or an empty frame: %s, replace=%s', async (order, replacing) => {
-  const file = { id: 9, file_name: 'a.txt', file_size: 3, mime_type: 'text/plain', is_image: false, is_encrypted: false, version: 'v2', url: '/file' }
+  const file = { id: 9, file_name: 'a.txt', file_size: 3, mime_type: 'text/plain', is_image: false, version: 'v2', url: '/file' }
   const published: ContentAttachmentWorkspace = { root_id: 1, nodes: [{ id: 9, parent_id: 1, name: 'a.txt', path: 'a.txt', kind: 'file', version: 'node-v2', attachment: file }], attachments: [file], folders: [], namespace_revision: 2, viewer_key: '7:true' }
   const old_file = { ... file, file_name: 'old.txt', version: 'v1' }
   const workspace = ref<ContentAttachmentWorkspace>({ ... published, nodes: replacing ? [{ ... published.nodes![0]!, name: 'old.txt', path: 'old.txt', version: 'node-v1', attachment: old_file }] : [], attachments: replacing ? [old_file] : [], namespace_revision: 1 })

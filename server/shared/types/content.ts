@@ -22,9 +22,9 @@ export interface ContentStorySummary {
   cover: string | null
   /** Cover image alt text (`![label](file.jpg)`); null when written as a bare link. */
   cover_label: string | null
-  /** Cover object's ETag for local attachment covers; rendered as `?version=` to bust the immutable cache. */
+  /** Stored cover object's ETag; the read identity is carried separately by cover_url. */
   cover_version: string | null
-  /** Root-relative object URL for a local-attachment cover; null for external covers. */
+  /** Same-origin, version-bound attachment read URL; null for external covers. */
   cover_url: string | null
   /** Public cover representation only, including a redaction's own dimensions/LQIP. */
   cover_image?: ContentStoryAttachment['image']
@@ -45,52 +45,12 @@ export interface ContentStoryAttachment {
   mime_type: string | null
   file_size: number
   is_image: boolean
-  /** Object ETag — changes with the object's content; rendered as `?version=` to bust the immutable cache. */
+  /** Object ETag; distinct from the read-identity hash in url and the workspace node_version. */
   version: string
-  /** Root-relative path; prefix with the static base URL before rendering. */
+  /** Same-origin attachment read URL with a version-bound identity; null when unreadable. */
   url: string | null
-  /** Release A: private plaintext in its own bucket; legacy encrypted rows stay separate. */
+  /** Confidentiality flag; current attachment objects contain plaintext. */
   is_private?: boolean
-  /** Server-side encrypted (`.good` suffix); the object at `url` is AES-256-GCM ciphertext. */
-  is_encrypted: boolean
-  /** base64 AES-256-GCM key, present only for viewers holding content_private:read. */
-  encryption_key?: string
-}
-
-export interface ContentBatchSkipped {
-  file_name: string
-  reason: string
-}
-
-export interface ContentAttachmentBatchResult {
-  attachments: ContentStoryAttachment[]
-  succeeded: string[]
-  skipped: ContentBatchSkipped[]
-}
-
-export type ContentUploadS3Method = 'PUT' | 'POST' | 'GET' | 'DELETE'
-
-export interface ContentUploadSignRequest {
-  story_id: number
-  method: ContentUploadS3Method
-  key: string
-  upload_id?: string
-  part_number?: number
-  content_type?: string | null
-}
-
-export interface ContentAttachmentReplaceRequest {
-  story_id: number
-  old_file_name: string
-  mode: 'keep-name' | 'new-name'
-  key: string
-  file_name: string
-  content_type: string | null
-}
-
-export interface ContentUploadSignResponse {
-  url: string
-  key?: string
 }
 
 /** Body projection carries no attachment/task arrays or decryption material. */

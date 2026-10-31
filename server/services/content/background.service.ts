@@ -5,6 +5,7 @@ import { log_error } from '@server/lib/log'
 import { publish_sync_confirmed } from '@server/lib/mqtt'
 import { create_background_runner } from '@server/services/background/runner'
 import { sweep_storage_audit } from '@server/services/storage-audit/service'
+import { create_content_receipt_compactor } from './command-receipts.service'
 import { sweep_object_retirements } from './object-retirement.service'
 import { sweep_preloads } from './preload.service'
 import { create_content_sync_dispatcher } from './sync-outbox.service'
@@ -18,6 +19,7 @@ export function content_background_adapters(): BackgroundAdapter[] {
     { id: 'retirement', intervalSeconds: app.contentRetirement.sweepIntervalSeconds, resources: { oss: 1, esa: 1 }, sweep: signal => sweep_object_retirements(undefined, signal) },
     { id: 'preload', intervalSeconds: app.contentPreload.sweepIntervalSeconds, resources: { esa: 1 }, sweep: sweep_preloads },
     { id: 'sync', intervalSeconds: app.contentSync.sweepIntervalSeconds, resources: { notification: 1 }, sweep: create_content_sync_dispatcher(db, publish_sync_confirmed, app.contentSync) },
+    { id: 'receipts', intervalSeconds: app.contentReceipts.sweepIntervalSeconds, resources: {}, sweep: create_content_receipt_compactor(db, app.contentReceipts) },
     { id: 'storage_audit', intervalSeconds: app.storageAudit.sweepIntervalSeconds, resources: { oss: 1 }, sweep: sweep_storage_audit },
   ]
 }

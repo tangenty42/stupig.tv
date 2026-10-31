@@ -49,18 +49,20 @@ describe('independent attachment workspace snapshot', () => {
   it('projects new private plaintext as a guarded address only for an authorized viewer', async () => {
     mocks.private_plaintext = true
     const guest = await get_attachment_workspace(1, null)
-    expect(guest.attachments[0]).toMatchObject({ is_private: true, is_encrypted: false, url: null })
+    expect(guest.attachments[0]).toMatchObject({ is_private: true, url: null })
     expect(guest.attachments[0]).not.toHaveProperty('image')
     const admin = await get_attachment_workspace(1, { id: 7, is_admin: true } as AuthUser)
     expect(admin.attachments[0]?.url).toMatch(/^\/api\/content\/attachments\/11\?version=[\da-f]{64}$/)
     expect(admin.attachments[0]?.image?.lqip).toBe('data:image/jpeg;base64,/9j/2Q==')
     expect(admin.attachments[0]).not.toHaveProperty('encryption_key')
+    expect(admin.attachments[0]).not.toHaveProperty('is_encrypted')
   })
   it('returns a coherent public projection without reading body/title/tasks or sending encryption keys', async () => {
     const result = await get_attachment_workspace(1, null)
     expect(result).toMatchObject({ namespace_revision: 3, viewer_key: 'anon:false', folders: ['folder'] })
-    expect(result.attachments[0]).toMatchObject({ id: 11, file_name: 'folder/private.png.good', is_encrypted: false, is_private: true })
+    expect(result.attachments[0]).toMatchObject({ id: 11, file_name: 'folder/private.png.good', is_private: true })
     expect(result.attachments[0]).not.toHaveProperty('encryption_key')
+    expect(result.attachments[0]).not.toHaveProperty('is_encrypted')
     expect(result).not.toHaveProperty('markdown')
     expect(mocks.execute.mock.calls.every(([sql]) => String(sql).startsWith('SELECT'))).toBe(true)
     expect(mocks.execute.mock.calls.some(([sql]) => /markdown|content_tasks|content_title_namespace/.test(String(sql)))).toBe(false)

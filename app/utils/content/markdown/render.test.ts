@@ -18,7 +18,6 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
     is_image,
     version: 'v1',
     url: `/objects/${file_name}`,
-    is_encrypted: false,
   }
 }
 
@@ -717,11 +716,11 @@ describe('compiled icons', () => {
         attachment('clip.mp4', false),
         attachment('code.sql', false),
         attachment('notes.txt', false),
-        { ... attachment('locked.png', true), file_name: 'locked.png.good', is_encrypted: false, is_private: true, url: null },
-        { ... attachment('unlocked.png', true), file_name: 'unlocked.png.good', is_encrypted: false, is_private: true },
+        { ... attachment('locked.png', true), file_name: 'locked.png.good', is_private: true, url: null },
+        { ... attachment('unlocked.png', true), file_name: 'unlocked.png.good', is_private: true },
         // A same-row redacted version exercises the restricted-image brand.
         attachment('twin.png', true),
-        { ... attachment('twin.png', true), file_name: 'twin.png.good', is_encrypted: false, is_private: true, url: null,
+        { ... attachment('twin.png', true), file_name: 'twin.png.good', is_private: true, url: null,
           redacted_url: '/objects/twin.png', redacted_image: { revision: 1, width: 2, height: 2, has_original: false, lqip: null } },
       ],
       stories: () => [{
@@ -808,7 +807,7 @@ describe('private attachment projection', () => {
     is_image: true,
     version: 'v1',
     url: null,
-    is_encrypted: false, is_private: true,
+    is_private: true,
   }
   const with_key = { ... encrypted, url: '/api/content/attachments/1?version=v1' }
 
@@ -921,7 +920,6 @@ describe('same-row redacted version (删减版)', () => {
     is_image: true,
     version: 'v1',
     url: '/objects/secret.png',
-    is_encrypted: false,
   }
   const encrypted = {
     file_name: 'secret.png.good',
@@ -930,7 +928,7 @@ describe('same-row redacted version (删减版)', () => {
     is_image: true,
     version: 'v2',
     url: null,
-    is_encrypted: false, is_private: true,
+    is_private: true,
   }
   const with_key = { ... encrypted, url: '/api/content/attachments/1?version=v1' }
   const redacted = { ... encrypted, redacted_url: twin.url,

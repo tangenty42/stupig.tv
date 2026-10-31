@@ -260,4 +260,4 @@ pnpm test:e2e tests/e2e/content-cloud-draft.spec.ts tests/e2e/content-draft-hist
 
 生产编译后的浏览器验收分轮通过 20 个不同场景，包含原生 Chromium 80、Firefox 78、共享草稿交接、强关页到期接管、丢响应后的原命令重试、机密正文隔离、引用重放及历史裁剪；整轮中的两项失败修正后使用新生产构建定向复验通过。Nuxt、scripts 和浏览器测试 TypeScript 检查、settings 生成一致性、全仓 ESLint、迁移冻结摘要及 `git diff --check` 均通过。本轮随机隔离数据库和临时 broker 已清理。
 
-审计 D04 同名公开封面回退于 2026-10-31 单独修复；D05 历史祖先原图于 2026-11-01 单独处理。A06 其他账本保留、A07 其他兼容退出及账号域完整 outbox 仍是独立事项，不随云端草稿一并关闭。
+审计 D04 同名公开封面回退于 2026-10-31 单独修复；D05 历史祖先原图于 2026-11-01 单独处理。A06 其他账本保留及账号域完整 outbox 仍是独立事项，不随云端草稿一并关闭。A07 的旧附件公共类型与数据库配置依赖、A06 的过期回执负载治理已进入后续收尾，当前状态见[审计入口](../reviews/architecture-and-documentation-audit-2026-10-28.md#结论与证据范围)。生产验收边界见[云端台账](../deployment/aliyun.md)。

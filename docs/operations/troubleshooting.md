@@ -9,11 +9,13 @@
 | `APP_PORT` 已占用 | 确认原终端和监听进程。复用已有应用时只补 `dev:tunnel`；不要启动第二套或让端口自动漂移 |
 | 55500 被占用 | 查看是否为带 `X-Dev-Auth-Proxy: 1` 的已知代理。未知进程由操作者核实后处理，启动器不会接管 |
 | frpc 不能执行／版本不符 | 核对 `devAuthTunnel.frp.executable`、版本 0.71.0 和操作系统实际错误；不通过关闭防护或跳过 TLS 校验解决 |
-| Docker 依赖未启动 | `docker compose -f docker-compose.dev.yml ps` 并检查对应服务日志；Compose 失败时组合入口不会继续启动应用 |
+| Docker 依赖未启动 | `docker compose --env-file .env.dev -f docker-compose.dev.yml ps` 并检查对应服务日志；Compose 失败时组合入口不会继续启动应用 |
 | `.env.dev` / `.env.prod` 仍有 `<required>` | 重跑对应环境生成命令或在目标文件补齐，然后重新加载进程 |
 | 修改 MySQL／MQTT 密码后认证失败 | 环境值变化不保证现有数据库或 broker 账号被同步修改，核对真实账号；不要删除卷重建来掩盖差异 |
 
 `NODE_ENV` 只能是 development 或 production，分别选择 `.env.dev` / `.env.prod` 和对应 YAML。工具可以用 `--env=prod` 明确选择生产；旧 `.env` 不再加载。进程变量优先于文件，遇到意外连接目标或 GPG 口令不一致时先核对终端继承的同名变量。
+
+手动执行开发 Compose 的 `ps`、`logs`、`up` 等命令时都显式传 `--env-file .env.dev`；生产编排使用 `docker compose --env-file .env.prod -f docker-compose.yml …`。Compose 的 `${…}` 插值需要该环境文件，服务内的 `env_file` 不能代替命令行插值来源。
 
 ## 迁移与健康检查
 
@@ -29,7 +31,7 @@
 | TS verify 失败 | 检查业务结果及回执，重跑只验证，不删除账本重做 apply |
 | 旧 `schema_migrations` 再出现 | 查明是否启动了旧版本，核对账本协议，禁止自动重新 baseline |
 
-恢复步骤见[迁移手册](./migrations.md)和 [Content 切换](./content-cutover.md)。现有生产 Content 尚未完成迁移，不能把新镜像重启成功当成切换验收。
+恢复步骤见[迁移手册](./migrations.md)和 [Content 切换](./content-cutover.md)。2026-10-25 的回执记录生产 Content 已完成副本预演和正式迁移；后续版本仍须独立核对迁移链与发布回执，不能把新镜像重启成功当成切换验收。截至 2026-11-01 的生产发布信息与核验边界见[云端台账](../deployment/aliyun.md#截至-2026-11-01-的发布信息)。
 
 ## 授权回调和 ESA
 

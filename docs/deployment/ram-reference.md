@@ -11,10 +11,10 @@
 | 目标桶 `content/att/*` | GetObject、PutObject、Get/PutObjectAcl、DeleteObject、ListParts、AbortMultipartUpload |
 | 目标桶 `imgs/*`、`avatar/*` | GetObject、PutObject、Get/PutObjectAcl、DeleteObject；只操作本环境前缀 |
 | 目标桶 | ListMultipartUploads、GetBucketVersioning |
-| 目标桶清单 | ListObjects，仅供全桶元数据对账；不授予未知前缀的对象内容读取 |
+| 目标桶清单 | ListObjects，无 prefix 条件，允许指定桶全量元数据列举；不授予未知前缀的对象内容读取 |
 | 显式拒绝 | 非 TLS、Content 的 public-read/public-read-write ACL、DeleteObjectVersion 永久删版本 |
 
-不允许任意列举桶对象、改桶配置或操作另一个环境。软删除保留版本，生命周期的清理责任另见 [OSS](oss.md)。普通分片请求可能没有 ACL header，策略不要求每片都带 private，初始化/完成和精确签名由后端控制。依据：[OSS RAM Policy](https://help.aliyun.com/zh/oss/user-guide/ram-policy/)。
+允许指定桶全量元数据列举；对象内容读取和写入／删除仍限于表中的受控前缀，不允许任意前缀内容读取、改桶配置或操作另一个环境。这是仓库策略文件的范围，云端绑定与生效状态须按[台账及回执](aliyun.md)核验。软删除保留版本，生命周期的清理责任另见 [OSS](oss.md)。普通分片请求可能没有 ACL header，策略不要求每片都带 private，初始化/完成和精确签名由后端控制。依据：[OSS RAM Policy](https://help.aliyun.com/zh/oss/user-guide/ram-policy/)。
 
 日常运行已不使用旧 Rains S3 凭据。历史恢复所需的 `OSS_PUBLIC_*` / `OSS_PRIVATE_*` 仅保留在受保护的备份，本账号 RAM 策略不能授予另一个提供方的访问能力。两份 OSS 策略的 v2 已增加精确 `imgs/*` 与 `avatar/*` 对象操作；需要永久删除历史版本等恢复维护能力时，单独授权维护身份，不扩入应用策略。
 

@@ -5,7 +5,7 @@ import { create_story_markdown } from './index'
 // Keep the browser renderer integration in the app project. Shared/server
 // suites must not pull DOM-dependent renderer modules into their type graph.
 function render(source: string, name = 'a.txt') {
-  const md = create_story_markdown({ story_id: () => 1, attachments: () => [{ file_name: name, mime_type: 'text/plain', is_image: false, file_size: 1, version: 'v1', url: `/objects/${name}`, is_encrypted: false }], stories: () => [], static_url: path => path, folder_card_openable: () => false })
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [{ file_name: name, mime_type: 'text/plain', is_image: false, file_size: 1, version: 'v1', url: `/objects/${name}` }], stories: () => [], static_url: path => path, folder_card_openable: () => false })
   return md.render(source, { images: [] })
 }
 

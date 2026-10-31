@@ -163,10 +163,9 @@ export async function list_stories() {
   }))
 }
 
-// Identifies the viewer a story payload was rendered for; echoed back as
-// base_viewer_key so the version check below can tell "story unchanged" from
-// "viewer changed" — a guest's redacted copy and a privileged full copy share
-// the same updated_at.
+// Identifies the permission projection included in representation_version.
+// Clients echo base_representation_version; updated_at alone cannot distinguish
+// a guest's redacted copy from a privileged full copy.
 function story_viewer_key(viewer: AuthUser | null | undefined) {
   return viewer === undefined
     ? 'internal'

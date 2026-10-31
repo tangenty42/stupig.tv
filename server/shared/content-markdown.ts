@@ -1223,7 +1223,7 @@ export function extract_story_reference_titles(markdown: string) {
   return [... titles]
 }
 
-/** Rename `[](@old_title)` story references to `@new_title`; other text is left untouched. */
+/** Rename `[](content://old_title)` references to `content://new_title`; preserve other text. */
 export function rename_story_references(markdown: string, old_title: string, new_title: string): string {
   return rewrite_content_refs(markdown, [{ stories: [{ from: old_title, to: new_title }] }])
 }

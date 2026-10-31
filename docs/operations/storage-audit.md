@@ -1,6 +1,6 @@
 # OSS 全桶对账
 
-`storage_audit` 是现有 runner 的第六个适配器，占用一个 OSS 槽。默认 `app` 模式随应用启动，不配置 cron，也不另起重复消费者。扫描只读取 OSS 元数据，写入扫描和异常账本，不终止 multipart、不改业务引用或 ACL。另有默认关闭的孤立对象清理选项，通过已有退役通道执行。
+`storage_audit` 是现有 runner 的全桶对账适配器，占用一个 OSS 槽。默认 `app` 模式随应用启动，不配置 cron，也不另起重复消费者。扫描只读取 OSS 元数据，写入扫描和异常账本，不终止 multipart、不改业务引用或 ACL。另有默认关闭的孤立对象清理选项，通过已有退役通道执行。
 
 ## 覆盖范围
 
@@ -64,7 +64,7 @@ pnpm background:status --storage-findings
 
 ## 可选自动清理
 
-当前生产发布 `20261025-e9f50d4e` 只有扫描；本 PR 新增的自动清理实现尚未部署，默认仍关闭。先保留一至两周扫描观察期，再按环境显式启用 `app.storageAudit.orphanCleanup.enabled` 并重启应用或 worker。
+2026-10-25 的 `20261025-e9f50d4e` 发布回执记录当时生产只有扫描。自动清理实现已随 [PR #23](https://github.com/tangenty42/stupig.tv/pull/23) 合并并包含在当前源码中，仓库默认 `app.storageAudit.orphanCleanup.enabled=false`；截至 2026-11-01 的最新生产镜像、实际开关和扫描状态须按[发布信息及回执](../deployment/aliyun.md#截至-2026-11-01-的发布信息)核验。启用前先保留一至两周扫描观察期，再按环境显式启用该开关并重启应用或 worker。
 
 仅 `orphan_candidate` 且 key 符合现有 Content 不可变对象生成规则的对象可进入清理：UUID 主对象、staging/transfers/originals 的任务与尝试 key、images 的 AVIF/JPEG key。头像、静态资源、未知路径、目录标记和其他异常均继续人工处理。它们没有同样的退役/发布互斥协议，不能只凭无引用就自动删除。
 
@@ -72,7 +72,7 @@ pnpm background:status --storage-findings
 
 入队后由原退役 runner 再核对引用和任务归属，完成源站软删除、404 确认和 ESA 精确刷新，保留原有租约、重试和回执。关闭开关会阻止新的入队及尚未进入删除阶段的此类任务；已经删除或进入刷新阶段的任务继续收尾，避免丢失缓存刷新责任。不永久删除历史版本。修复与清理结果由后续扫描关闭异常，入队本身不伪造『已解决』。
 
-应用 RAM 策略需要指定桶的 `oss:ListObjects`，以及已有受控对象前缀的读取/ACL 权限。两环境 OSS 策略已按授权更新为 v3 并读回一致，只增加全桶元数据列举，没有放开任意前缀的对象内容读取或删除。参见 [RAM](../deployment/ram.md) 和 [OSS](../deployment/oss.md)。
+应用 RAM 策略需要指定桶的 `oss:ListObjects`（无 prefix 条件），以及已有受控对象前缀的读取/ACL 权限。2026-10-25 的记录中，两环境 OSS 策略已按授权更新为 v3 并读回一致，只增加全桶元数据列举，没有放开任意前缀的对象内容读取或删除；当前云端绑定需另行核验。参见 [RAM](../deployment/ram.md) 和 [OSS](../deployment/oss.md)。
 
 ## 首次验收
 

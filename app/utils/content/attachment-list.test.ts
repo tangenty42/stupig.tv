@@ -46,7 +46,7 @@ it('keeps explicit empty folders and malformed paths visible instead of losing t
 })
 
 it('projects conflict summaries onto the real list without inventing upload state or losing private metadata', () => {
-  const private_file = { file_name: 'docs/photo.png.good', mime_type: 'image/png', file_size: 32, version: 'v1', is_image: true, is_private: true, is_encrypted: false, has_redacted: true, url: null }
+  const private_file = { file_name: 'docs/photo.png.good', mime_type: 'image/png', file_size: 32, version: 'v1', is_image: true, is_private: true, has_redacted: true, url: null }
   const node = { id: 10, parent_id: 2, name: 'photo.png.good', path: private_file.file_name, kind: 'file' as const, version: 'v1', attachment: private_file }
   const [folder, secret, unknown, duplicate] = attachment_summary_rows(['docs', 'docs/photo.png', 'next.svg', 'next.svg'], [rows[0]!.node!, node])
   expect(folder!.data).toMatchObject({ kind: 'folder', name: 'docs' })
@@ -69,7 +69,7 @@ it.each([true, false])('offers a separate redacted preview to an unprivileged re
   const source = readFileSync(new URL('../../components/MyContent/Attachment/Workspace.vue', import.meta.url), 'utf8')
   const builder = source.slice(source.indexOf('function menu_for('), source.indexOf('\nfunction replaced('))
   const row: WorkspaceListRow = { ... rows[1]!, node: { ... rows[1]!.node!, attachment: {
-    id: 3, file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 20, version: 'v1', is_image: true, is_private: true, is_encrypted: false,
+    id: 3, file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 20, version: 'v1', is_image: true, is_private: true,
     url: null, is_redacted_view: has_redacted, has_redacted, redacted_url: has_redacted ? '/redacted' : null,
   } } }
   const calls: unknown[][] = []
@@ -148,7 +148,7 @@ it.each(['file', 'folder', 'image', 'image_copy', 'replacement', 'upload', 'read
   const source = readFileSync(new URL('../../components/MyContent/Attachment/Workspace.vue', import.meta.url), 'utf8')
   const builder = source.slice(source.indexOf('function menu_for('), source.indexOf('\nfunction replaced('))
   const file: WorkspaceListRow = { ... rows[2]!, node: { ... rows[2]!.node!, attachment: {
-    file_name: 'b.txt', mime_type: 'text/plain', file_size: 1, version: 'v', url: '/b.txt', is_image: false, is_encrypted: false,
+    file_name: 'b.txt', mime_type: 'text/plain', file_size: 1, version: 'v', url: '/b.txt', is_image: false,
   } } }
   const image = { ... file, node: { ... file.node!, attachment: { is_image: true, image: { has_original: scenario !== 'image_copy' }, url: '/image.avif' } } } as WorkspaceListRow
   const upload = { ... rows[4]!, session: { id: 'upload', status: 'receiving' } } as WorkspaceListRow
@@ -192,7 +192,7 @@ it('confirms redacted deletion before executing and keeps ordinary deletion inde
   const builder = source.slice(source.indexOf('function menu_for('), source.indexOf('\nfunction replaced('))
   const submit = source.slice(source.indexOf('function submit_delete('), source.indexOf('\nfunction menu_for('))
   const row: WorkspaceListRow = { ... rows[2]!, node: { ... rows[2]!.node!, attachment: {
-    file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 1, version: 'v1', url: '/normal', is_image: true, is_encrypted: false,
+    file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 1, version: 'v1', url: '/normal', is_image: true,
     is_private: true, has_redacted: true,
   } } }
   const requests: unknown[] = []

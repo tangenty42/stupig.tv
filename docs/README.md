@@ -44,7 +44,7 @@
 | [账号与权限](modules/accounts.md) | 登录、会话、资料、管理与授权 |
 | [实时同步](modules/realtime.md) | MQTT、BroadcastChannel、SSR、轮询、Content outbox |
 | [外部集成](modules/integrations.md) | 外部信息获取与缓存边界 |
-| [后台工作](modules/background-jobs.md) | runner 模式、六类扫描、资源槽、租约和退出 |
+| [后台工作](modules/background-jobs.md) | runner 模式、七类扫描、资源槽、租约和退出 |
 | [Content 总览](modules/content/README.md) | 档案、附件、关键状态与模块导航 |
 | [工作区](modules/content/workspace.md) | 树结构、命名、路径约束、resolve 和批量操作 |
 | [上传](modules/content/uploads.md) | 预约、分片、续传、替换、取消及发布 |
@@ -72,15 +72,17 @@
 
 CSS 当前采用[官方主题 API 与 Tailwind 选择器策略](reviews/css-official-apis-validation-2026-10-29.md)，已随 [PR #46](https://github.com/tangenty42/stupig.tv/pull/46) 合并。此前 Firefox 78 因缺少 Web Locks 而只读，随后已由服务端租约替换；旧引擎编辑流程的隔离验证见[共享云端草稿实施记录](designs/shared-cloud-draft-implementation-2026-10-30.md)。完整浏览器覆盖与生产交付需按证据单独验收。未采用的自定义 CSS 分层插件长篇提案已移出当前文档，保留[公开 API 可行性结论](reviews/css-layer-public-api-feasibility-2026-10-29.md)及 Git 历史供回查。
 
-2026-10-31 的 [PR #49](https://github.com/tangenty42/stupig.tv/pull/49) 已合并迁移预检和按计划授权的维护发布入口，操作方式见[GitHub 与 ACR](deployment/github-acr.md)。上述合并状态已核对；本次文档整理没有重新连接生产数据库或读取生产发布回执。
+2026-10-31 的 [PR #49](https://github.com/tangenty42/stupig.tv/pull/49) 已合并迁移预检和按计划授权的维护发布入口，操作方式见[GitHub 与 ACR](deployment/github-acr.md)。[PR #52](https://github.com/tangenty42/stupig.tv/pull/52) 已将 CSS 验证移到独立 `browser-css` CI job，并保留汇总门禁，见[CSS 发布准备](deployment/README.md#css-样式变更发布准备)。上述合并状态已按提交记录核对。
+
+2026-11-01 已通过 Actions API、发布回执及 SSH 只读核对 #54 交付：应用／broker 镜像与回执一致，两个容器健康，生产迁移 30 项完成。最新生产状态与证据边界统一见[云端台账](deployment/aliyun.md#截至-2026-11-01-的发布信息)。
 
 下表保留各操作手册记录的部署范围与能力边界；当前线上版本须用发布回执及镜像身份核验，不能从本地改动或 PR 合并推断：
 
 | 事项 | 状态与下一步 |
 | --- | --- |
 | 生产 Content 迁移 | 2026-10-25 已完成生产副本预演、正式维护切换及静态资源迁移；保留恢复材料，见切换手册 |
-| 生产云端配置 | OSS、ESA 路由/函数和 RAM 已核对并上线；真实生产用户上传/编辑及生产预热仍待验收，预热保持关闭 |
-| OSS 全桶对账 | 生产已完成 405 个引用、313 个当前对象扫描且无异常；本次待合并的自动清理默认关闭，尚未部署生产，先观察一至两周 |
+| 生产云端配置 | 2026-10-25 记录 OSS、ESA 路由/函数和 RAM 已核对并上线，当时真实生产用户上传/编辑及生产预热待验收、预热关闭；最新状态按云端台账及回执核验 |
+| OSS 全桶对账 | 2026-10-25 首轮生产扫描为 405 个引用、313 个当前对象且无异常；自动清理实现已合并，仓库默认关闭，生产实际开关与后续扫描结果须按回执核验；启用前先观察一至两周 |
 | ESA 历史规则异常 | 曾出现旁路与规则字段交互问题；部署文档保留需要验证的组合，不假定厂商已修复 |
 | 通用任务内核 | 当前只有共享调度外壳和领域账本；通用 job/attempt/step 及跨进程容量尚未实现 |
 | 生产独立 worker | 源码命令已实现，生产精简镜像及 Compose 尚未交付 worker/status CLI；现行生产使用 app 模式 |

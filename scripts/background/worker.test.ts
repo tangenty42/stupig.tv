@@ -4,7 +4,7 @@ const state = vi.hoisted(() => ({ mode: 'worker', register: vi.fn(), close: vi.f
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ app: { backgroundRunner: { mode: state.mode, shutdownTimeoutMs: 100 } } }) }))
 vi.mock('@server/services/content/background.service', () => ({
   create_content_background_runner: () => ({ register: state.register, close: state.close }),
-  content_background_adapters: () => ['images', 'uploads', 'retirement', 'preload', 'sync', 'storage_audit'].map(id => ({ id })),
+  content_background_adapters: () => ['images', 'uploads', 'retirement', 'preload', 'sync', 'receipts', 'storage_audit'].map(id => ({ id })),
 }))
 vi.mock('@server/lib/db', () => ({ db: { end: state.db } }))
 vi.mock('@server/lib/mqtt', () => ({ stop_mqtt_client: state.mqtt }))
@@ -26,7 +26,7 @@ afterEach(() => {
 it('registers all adapters and closes existing connections once on repeated stop requests', async () => {
   const before = process.listenerCount('SIGINT')
   const worker = await run_background_worker()
-  expect(state.register.mock.calls.map(([adapter]) => adapter.id)).toEqual(['images', 'uploads', 'retirement', 'preload', 'sync', 'storage_audit'])
+  expect(state.register.mock.calls.map(([adapter]) => adapter.id)).toEqual(['images', 'uploads', 'retirement', 'preload', 'sync', 'receipts', 'storage_audit'])
   expect(process.listenerCount('SIGINT')).toBe(before + 1)
   const first = worker.stop()
   expect(worker.stop()).toBe(first)

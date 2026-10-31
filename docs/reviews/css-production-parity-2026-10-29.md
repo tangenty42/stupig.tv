@@ -47,7 +47,7 @@ pnpm exec playwright test --config tests/css-production.config.ts
 - 验证实际 Dialog 的 body Teleport、`321px` 行内宽度、`6.4px` 圆角、PT 内边距及组件 CSS；记录 `card-in` / `card-out` 和 ConfirmPopup 的入场动画及无 scale 行为。
 - 复用并扩展真实档案工作流：检查六级标题 `30 / 29 / 28 / 27 / 26 / 25`、实际遮挡命中和末尾吸顶；复用全屏编辑滚动同步工作流。
 
-最终生产浏览器验收 **4 / 4 通过**，耗时约 3.3 分钟，无失败、重试或跳过。对应构建报告为 `.dev/e2e/80d1adbba7254b62b480d5a4e08bb7b0/css-build.json`，Playwright 汇总为 `.dev/css-production/report.json`；临时运行凭据已删除。CI 已在 browser 第一分片串行加入此验收，沿用已有服务和信任门槛，尚未在远端执行。
+最终生产浏览器验收 **4 / 4 通过**，耗时约 3.3 分钟，无失败、重试或跳过。对应构建报告为 `.dev/e2e/80d1adbba7254b62b480d5a4e08bb7b0/css-build.json`，Playwright 汇总为 `.dev/css-production/report.json`；临时运行凭据已删除。该轮将验收加入 browser 第一分片，未执行远端 CI；后续 #52 已改为独立的 `browser-css` job，当前入口以 [Check](../../.github/workflows/check.yml) 为准。#54 合并后的 [Check](https://github.com/tangenty42/stupig.tv/actions/runs/41219507950) 已通过；本段测试计数仍属于首次隔离验收。
 
 配套验证：`pnpm test` 共 2037 项通过、1 项既有跳过；Nuxt、scripts 和 tests 类型检查通过。分页器修复的浅色 / 深色真实组件回归 2 项通过。
 
