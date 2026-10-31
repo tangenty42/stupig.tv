@@ -7,7 +7,7 @@
           <span>蠢猪档案！</span>
         </h1>
         <div v-if="can_manage_content" class="flex flex-wrap items-center gap-3">
-          <SelectButton v-model="selected_view" :options="view_options" option-label="label" option-value="value" :allow-empty="false" aria-label="档案类型">
+          <SelectButton v-model="selected_view" :options="view_options" option-label="label" option-value="value" :allow-empty="false" aria-label="档案类型" size="small">
             <template #option="{ option }">
               <span class="whitespace-nowrap">
                 <MyIcon :name="option.icon" class="mr-1.5" />

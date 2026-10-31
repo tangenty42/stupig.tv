@@ -98,7 +98,8 @@
       </MyHeightSection>
     </div>
 
-    <div v-else class="section-card-collapse py-12 text-center text-slate-500 dark:text-slate-400">
+    <div v-else class="section-card-collapse flex flex-col items-center gap-4 py-12 text-center text-slate-500 dark:text-slate-400" role="status">
+      <MyIcon name="lucide:loader-circle" size="3rem" class="animate-spin" />
       正在连接云端草稿，或草稿已不可访问
     </div>
 

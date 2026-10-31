@@ -76,7 +76,7 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
     }
     if (store.unconfirmed_changes)
       return '修改待上传…'
-    return cloud.value.unpublished_changes ? '草稿已自动保存' : '草稿与远端一致'
+    return cloud.value.unpublished_changes ? '草稿已自动保存' : '草稿与云端一致'
   })
   const delete_pending = save_pending
   const delete_visible = ref(false)

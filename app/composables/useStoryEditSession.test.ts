@@ -94,10 +94,10 @@ describe('cloud edit page adapter', () => {
     }))
     const renewal = f.store.cycle()
     expect(f.store.request_pending).toBe(true)
-    expect(f.editing.draft_status_label.value).toBe('草稿与远端一致')
+    expect(f.editing.draft_status_label.value).toBe('草稿与云端一致')
     resolve({ snapshot: { ... initial, owned: true, occupied: true, lease_epoch: 1 }, receipt: { kind: 'sync', seq: 1, ok: true } })
     await renewal
-    expect(f.editing.draft_status_label.value).toBe('草稿与远端一致')
+    expect(f.editing.draft_status_label.value).toBe('草稿与云端一致')
   })
   it('shows an unconfirmed save even if input returns to the previous cloud text', async () => {
     const f = await fixture()
