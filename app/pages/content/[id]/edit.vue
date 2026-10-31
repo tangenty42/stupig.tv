@@ -194,7 +194,7 @@ const { markdown } = storeToRefs(draft_store)
 const attachment_panel = await useAttachmentPanel(story_id.value, () => markdown.value)
 const attachment_workspace = attachment_panel.catalog
 
-// Existing titles must reach the save/header validation too, or every `@ref`
+// Existing titles must reach the save/header validation too, or every `content://` reference
 // is flagged as dead (undefined existing_titles → `! undefined?.some()` is true).
 const content_markdown_config = computed(() => ({
   title_max_length: settings.app.content.story.titleMaxLength,

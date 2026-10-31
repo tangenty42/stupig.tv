@@ -249,6 +249,7 @@ export const deployment_config_schema = z.object({
   app: z.object({
     storageAudit: storage_audit_config_schema,
     contentMigration: z.object({ partSizeMb: positive_integer.min(5).max(5120) }).default({ partSizeMb: 8 }),
+    contentReceipts: z.object({ enabled: boolean_value, sweepIntervalSeconds: positive_integer, scanLimit: positive_integer.max(100) }),
     contentSync: z.object({
       enabled: boolean_value, sweepIntervalSeconds: positive_integer, scanLimit: positive_integer.max(100),
       leaseSeconds: positive_integer, publishTimeoutMs: positive_integer, retrySeconds: positive_integer, maxRetrySeconds: positive_integer,

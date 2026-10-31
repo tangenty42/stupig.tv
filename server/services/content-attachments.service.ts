@@ -87,7 +87,6 @@ function format_row(row: AttachmentRow, private_readable = false): ContentStoryA
     is_image: (mime_type ?? '').startsWith('image/'),
     url: row.is_private && ! private_readable ? null : attachment_object_url(row),
     is_private: Boolean(row.is_private),
-    is_encrypted: row.encryption_key !== null,
   }
 }
 
@@ -115,7 +114,7 @@ export async function get_story_object_keys(story_id: number, executor: DbExecut
   return rows.flatMap(row => attachment_owned_object_keys(row).map(key => ({ bucket: row.storage_bucket, key, ... (row.storage_provider === 'aliyun' ? { provider: 'aliyun' as const } : {}) })))
 }
 
-/** Raw file rows by name (encrypt/decrypt need object_key and encryption_key, which format_row drops). */
+/** Raw file rows for server-side object identity and publication checks. */
 export async function list_scope_file_rows(story_id: number, file_names: string[], executor: DbExecutor = db) {
   if (! file_names.length)
     return []
@@ -127,7 +126,7 @@ export async function list_scope_file_rows(story_id: number, file_names: string[
   return rows
 }
 
-/** Removes every row of a story; the story row is already gone (no FK cascade). */
+/** Removes attachments in the deletion transaction before deleting the story row. */
 export async function delete_story_attachment_rows(story_id: number, executor: DbExecutor = db) {
   await executor.execute(
     'DELETE FROM content_story_attachments WHERE story_id = ?',

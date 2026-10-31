@@ -12,7 +12,7 @@ Content 使用不可变对象 key。数据库记录哪一版对象已经正式�
 
 ## 增量预热
 
-当前预热针对新发布的正常／删减图片 AVIF 和 JPEG。它不是遍历全桶、每次启动全量预热，也不预热归档原图或任意普通附件。入队发生在图片发布事务中，按目的站点、交付域名和对象 key 去重；超过 `app.contentPreload.maxObjectBytes` 的对象不会入队。
+当前预热针对新发布的可交付图片表示：正常／删减图片的 AVIF 和 JPEG，以及未走图片派生处理、MIME 为 `image/*` 的原样图片主对象（如 GIF／SVG）。它不是遍历全桶、每次启动全量预热，也不预热独立归档原图或任意非图片附件。入队发生在附件发布事务中，按目的站点、交付域名和对象 key 去重；只有大小为正的安全整数且不超过 `app.contentPreload.maxObjectBytes` 的对象才会入队。
 
 `content_preload_sites` 管理目标和租约，`content_preload_jobs` 保存待办及云任务回执，`content_preload_budget` 记录本地提交预算。扫描前重新检查对象仍被该附件采用，且不处于退役中。
 
@@ -54,7 +54,7 @@ OSS 开启版本控制时，软删除不等于历史版本已经永久回收；�
 - 采用：[`object-adoption.service.ts`](../../../server/services/content/object-adoption.service.ts)。
 - 上传清理：[`upload-lifecycle.service.ts`](../../../server/services/content/upload-lifecycle.service.ts)。
 - 图片清理：[`image-attempt-cleanup.service.ts`](../../../server/services/content/image-attempt-cleanup.service.ts)。
-- 预热：[`preload.repository.ts`](../../../server/services/content/preload.repository.ts)、[`preload.service.ts`](../../../server/services/content/preload.service.ts)。
+- 预热：[`upload-publication.service.ts`](../../../server/services/content/upload-publication.service.ts)、[`image-job.service.ts`](../../../server/services/content/image-job.service.ts)负责发布入队；[`preload.repository.ts`](../../../server/services/content/preload.repository.ts)、[`preload.service.ts`](../../../server/services/content/preload.service.ts)负责筛选与执行。
 - 退役：[`object-retirement.service.ts`](../../../server/services/content/object-retirement.service.ts)。
 
 自动测试覆盖引用保护、租约、迟到结果、配额不足、云回执丢失及恢复。云端验收分别核对新对象可读、预热实际生效、撤权、删除和刷新结果；数据库里的 completed 与浏览器当前可用性需要各自验证。

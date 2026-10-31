@@ -1,4 +1,5 @@
 import type { WorkspaceRow } from './workspace.repository'
+import { wire_resource } from '@server/lib/sync-channel'
 import { workspace_command_schema } from '@shared/content-workspace'
 import { beforeEach, expect, it, vi } from 'vitest'
 
@@ -6,7 +7,7 @@ const mocks = vi.hoisted(() => ({ execute: vi.fn(), query: vi.fn(), commit: vi.f
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ aliyun: {
   oss: { bucket: 'test-bucket', endpoint: 'https://oss.example.test' },
   esa: { baseUrl: 'https://cdn.example.test' }, esaPurge: { siteId: 'test-site' },
-} }) }))
+}, app: { auth: { jwt: { secret: 'workspace-test-secret' } } } }) }))
 vi.mock('@server/lib/db', () => ({ db: {
   execute: mocks.execute,
   getConnection: async () => ({ execute: mocks.execute, query: mocks.query, beginTransaction: vi.fn(), commit: mocks.commit, rollback: mocks.rollback, release: mocks.release }),
@@ -356,6 +357,35 @@ it('rewrites a saved definition on rename and enqueues document and list refresh
   const writes = mocks.execute.mock.calls.filter(([sql]) => String(sql).startsWith('UPDATE content_stories SET'))
   expect(writes.some(([, args]) => args.includes('[f]\n\n[f]: att://c.txt "keep"'))).toBe(true)
   expect(resources()).toEqual(['content_attachments:1', 'content_stories:all', 'content_story:1'])
+})
+
+it('declassifies a nested file and rewrites default labels in main, cloud draft and cover while preserving captions', async () => {
+  Object.assign(rows[3]!, { parent_id: 2, name: 'b.txt.good', name_key: 'b.txt.good', file_name: 'docs/b.txt.good', is_private: 1 })
+  story.cover = 'docs/b.txt.good'
+  story.markdown = '---\ncover: ![b.txt.good](att://DOCS/B.TXT.GOOD)\n---\n![b.txt.good](att://docs/b.txt.good) [说明][p]\n\n[p]: att://docs/b.txt.good'
+  const draft = { id: 'd'.repeat(32), story_id: 1, markdown: `${story.markdown}\n未发布文字`, namespace_revision: 1, title_revision: 0, draft_revision: 3 }
+  const execute = mocks.execute.getMockImplementation()!
+  mocks.execute.mockImplementation(async (sql: string, args: unknown[] = []) => {
+    if (sql.includes('FROM content_story_drafts'))
+      return [[{ ... draft }]]
+    if (sql.startsWith('UPDATE content_story_drafts SET markdown')) {
+      Object.assign(draft, { markdown: String(args[0]), namespace_revision: Number(args[1]), draft_revision: draft.draft_revision + 1 })
+      return [{ affectedRows: 1 }]
+    }
+    if (sql.startsWith('UPDATE content_stories SET markdown'))
+      Object.assign(story, { markdown: String(args[0]), cover: String(args[1]), cover_version: args[2] })
+    return execute(sql, args)
+  })
+  const input = command([4], false)
+  await execute_workspace_command(7, input)
+  expect(rows[3]).toMatchObject({ name: 'b.txt', file_name: 'docs/b.txt', is_private: 0, node_revision: 2, read_revision: 2 })
+  expect(story.cover).toBe('docs/b.txt')
+  expect(story.markdown).toBe('---\ncover: ![b.txt](att://docs/b.txt)\n---\n![b.txt](att://docs/b.txt) [说明][p]\n\n[p]: att://docs/b.txt')
+  expect(draft).toMatchObject({ markdown: `${story.markdown}\n未发布文字`, namespace_revision: 2, draft_revision: 4 })
+  expect(resources()).toEqual(['content_attachments:1', wire_resource(`content_draft:${draft.id}`), 'content_stories:all', 'content_story:1'].sort())
+  await execute_workspace_command(7, input)
+  expect(rows[3]!.read_revision).toBe(2)
+  expect(draft.draft_revision).toBe(4)
 })
 
 it('revokes old read grants on both privacy transitions but not no-ops or receipt replay', async () => {

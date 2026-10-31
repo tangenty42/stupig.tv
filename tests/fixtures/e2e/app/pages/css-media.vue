@@ -39,7 +39,7 @@ const revision = ref(0)
 const color_mode = useColorMode()
 const attachments: ContentStoryAttachment[] = ['one', 'two', 'three', 'loading', 'failed'].map(name => ({
   file_name: `${name}.png`, mime_type: 'image/png', file_size: 100,
-  version: 'v1', is_image: true, is_private: true, is_encrypted: false,
+  version: 'v1', is_image: true, is_private: true,
   url: `/api/e2e-css-image?name=${name}`,
   image: { revision: 1, width: 800, height: 320, lqip: 'data:image/jpeg;base64,/9j/2wBDABQODxIPDRQSEBIXFRQYHjIhHhwcHj0sLiQySUBMS0dARkVQWnNiUFVtVkVGZIhlbXd7gYKBTmCNl4x9lnN+gXz/2wBDARUXFx4aHjshITt8U0ZTfHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHz/wAARCAACAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAL/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAABf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ALABln//2Q==', has_original: false },
 }))

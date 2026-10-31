@@ -25,7 +25,7 @@ it.each(['/api/content/attachments/11?version=v1', 'https://static.test/objects/
 })
 
 it('resolves private addresses without a public static prefix and treats a missing projection as denied', () => {
-  const source = { url: '/api/content/private-attachments/11', is_private: true, is_encrypted: false }
+  const source = { url: '/api/content/private-attachments/11', is_private: true }
   const static_url = (path: string) => `https://static.test${path}`
   expect(attachment_display_url(static_url, source)).toBe(source.url)
   expect(attachment_can_read(source)).toBe(true)
@@ -70,11 +70,8 @@ describe('attachment_leading_action', () => {
     expect(attachment_leading_action(row('text/markdown', false))).toBe('download')
   })
 
-  // Encryption is deliberately not an input: the row's action depends on its
-  // type alone, so a private video cannot collapse to "download" the way a
-  // short-circuit on the encrypted flag made it.
-  it('has no encrypted input that could override the type', () => {
-    const media = { mime_type: 'video/mp4', is_image: false, is_encrypted: true, encryption_key: 'k' }
+  it('opens confidential video inline according to its media type', () => {
+    const media = { mime_type: 'video/mp4', is_image: false, is_private: true }
     expect(attachment_leading_action(media)).toBe('open')
   })
 })

@@ -5,7 +5,7 @@ import { create_story_markdown } from './index'
 function render(source: string, story_exists = false) {
   const md = create_story_markdown({
     story_id: () => 1,
-    attachments: () => [{ file_name: 'a.txt', is_image: false, mime_type: 'text/plain', file_size: 1, version: 'v1', url: '/objects/a.txt', is_encrypted: false }],
+    attachments: () => [{ file_name: 'a.txt', is_image: false, mime_type: 'text/plain', file_size: 1, version: 'v1', url: '/objects/a.txt' }],
     stories: () => story_exists ? [{ id: 2, title: 'Other', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null, cover: null, cover_label: null, cover_version: null, cover_url: null }] : [],
     static_url: path => path,
     folder_card_openable: () => false,

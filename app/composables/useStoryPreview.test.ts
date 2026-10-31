@@ -54,11 +54,11 @@ it('switches the whole preview to the public body and attachment representation 
   const private_image = { revision: 1, width: 1200, height: 800, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: true }
   const public_image = { revision: 2, width: 20, height: 10, lqip: 'data:image/jpeg;base64,/9j/AA==', has_original: false }
   const preview = setup('<good>\nBLOCK_SECRET\n</good>\n\ninline <good>INLINE_SECRET</good> text\n\n![caption](att://secret.png.good)\n\n![](att://denied.png.good)\n\n![](att://public.png)')
-  const owner: ContentStoryAttachment = { id: 1, file_name: 'secret.png.good', mime_type: 'image/avif', file_size: 5, is_image: true, is_encrypted: false,
-    is_private: true, url: '/private-normal', version: '1', image: private_image, encryption_key: 'PRIVATE_KEY',
+  const owner: ContentStoryAttachment = { id: 1, file_name: 'secret.png.good', mime_type: 'image/avif', file_size: 5, is_image: true,
+    is_private: true, url: '/private-normal', version: '1', image: private_image,
     has_redacted: true, redacted_url: '/public-redacted', redacted_image: public_image }
   const denied = { ... owner, id: 2, file_name: 'denied.png.good', url: '/private-denied', has_redacted: false, redacted_url: null, redacted_image: undefined }
-  const ordinary = { ... owner, id: 3, file_name: 'public.png', url: '/public', is_private: false, image: public_image, encryption_key: undefined }
+  const ordinary = { ... owner, id: 3, file_name: 'public.png', url: '/public', is_private: false, image: public_image }
   preview.attachments.value = [owner, denied, ordinary]
   expect(preview.render_result.value.html).toContain('BLOCK_SECRET')
   expect(preview.render_result.value.images).toEqual(['/private-normal', '/private-denied', 'https://static.test/public'])
@@ -77,8 +77,7 @@ it('switches the whole preview to the public body and attachment representation 
   expect(/class="image-carousel" data-line="(\d+)"/.exec(html)?.[1]).toBe('6')
   expect(images).toEqual(['https://static.test/public-redacted', 'https://static.test/public'])
   expect(preview.preview_attachments.value[0]).not.toHaveProperty('image')
-  expect(preview.preview_attachments.value[0]).not.toHaveProperty('encryption_key')
-  expect(owner).toMatchObject({ url: '/private-normal', image: private_image, encryption_key: 'PRIVATE_KEY' })
+  expect(owner).toMatchObject({ url: '/private-normal', image: private_image })
   preview.public_mode.value = false
   expect(preview.render_result.value.html).toContain('BLOCK_SECRET')
   expect(preview.render_result.value.images).toEqual(['/private-normal', '/private-denied', 'https://static.test/public'])
@@ -102,7 +101,7 @@ it('renders reactive markdown and references through the existing preset without
   const preview = setup('---\ntitle: hidden\n---\n\n# Heading\n\n![](att://images/a.png)\n\n[](att://images)')
   expect(preview.body_markdown.value).not.toContain('hidden')
   expect(preview.render_result.value.html).toContain('附件不存在或引用无效')
-  preview.attachments.value = [{ file_name: 'images/a.png', url: '/a.png', is_image: true, is_encrypted: false, mime_type: 'image/png', file_size: 1, version: '1' }]
+  preview.attachments.value = [{ file_name: 'images/a.png', url: '/a.png', is_image: true, mime_type: 'image/png', file_size: 1, version: '1' }]
   preview.folder_openable.value = true
   expect(preview.render_result.value.images).toEqual(['https://static.test/a.png'])
   expect(preview.render_result.value.html).toContain('data-folder-card="images"')

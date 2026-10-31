@@ -126,6 +126,9 @@ export async function workspace_transaction<T extends { refresh?: WorkspaceChang
       if (receipts[0].fingerprint !== fingerprint || receipts[0].expired)
         throw new ApiError(409, '请求内容已变化或请求已过期，请重新确认当前状态')
       outcome = typeof receipts[0].result === 'string' ? JSON.parse(receipts[0].result) : receipts[0].result
+      // A compacted receipt remains rejected even if the database clock moves back.
+      if (Object.keys(outcome).length === 0)
+        throw new ApiError(409, '请求内容已变化或请求已过期，请重新确认当前状态')
     }
     else {
       await connection.query('SAVEPOINT workspace_effects')

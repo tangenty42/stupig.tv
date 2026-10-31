@@ -15,7 +15,7 @@ export function public_preview_attachments(attachments: ContentStoryAttachment[]
   return attachments.map((attachment) => {
     if (! attachment_is_restricted(attachment))
       return attachment
-    const { image: _image, encryption_key: _key, ... public_fields } = attachment
+    const { image: _image, ... public_fields } = attachment
     return { ... public_fields, url: null, is_redacted_view: Boolean(attachment.redacted_url && attachment.redacted_image) }
   })
 }
@@ -173,9 +173,9 @@ export const file_icon_names = [
 
 // The names carry the collection prefix so Nuxt Icon's client-bundle scan
 // (which matches literal `lucide:*` strings) picks them up. Admin surfaces
-// (this list, menus, completions) mark encrypted attachments with the plain
+// (this list, menus, completions) mark confidential attachments with the plain
 // lock; the keyhole variants belong to rendered content (see link-cards).
-export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'> & { encryption_key?: string }) {
+export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'>) {
   if (is_encrypted_attachment(attachment.file_name))
     return 'lucide:lock'
   const mime_type = attachment.mime_type ?? ''

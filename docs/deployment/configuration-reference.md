@@ -72,6 +72,7 @@ Nuxt dev/build/preview 显式指定 --dotenv。Compose 插值单独通过 `--env
 | aliyun.esaPurge | 管理请求 15000 ms |
 | app.backgroundRunner | app 模式，退出 30000 ms；image/oss/esa/notification 每进程槽为 1/2/1/1 |
 | app.contentSync | 扫描 1 s，每批 50，租约 30 s，发布 10000 ms，重试 5–300 s |
+| app.contentReceipts | 启用，扫描 60 s，每批最多 100；仅压缩过期结果，保留去重墓碑 |
 | app.contentUploads | 扫描 5 s，每批 20 |
 | app.contentRetirement | 扫描 5 s，每批 20，租约 300 s，重试 30–3600 s，查询 5 s，任务 600 s |
 | app.contentImages | 扫描 5 s，并发 1，每批 20，租约 120 s，心跳 20 s，profileVersion 1 |

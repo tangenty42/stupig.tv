@@ -1,14 +1,14 @@
-import { runtime_config } from '@config/loader'
+import { load_database_config } from '@config/loader'
 import mysql from 'mysql2/promise'
 
-const config = runtime_config()
+const config = load_database_config()
 
 const pool = mysql.createPool({
-  host: config.db.host,
-  port: config.db.port,
-  user: config.db.user,
-  password: config.db.password,
-  database: config.db.name,
+  host: config.host,
+  port: config.port,
+  user: config.user,
+  password: config.password,
+  database: config.name,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,

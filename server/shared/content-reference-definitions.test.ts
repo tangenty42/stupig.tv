@@ -38,10 +38,10 @@ describe('reference definitions through render, dependency, lint and rewrite ent
     expect(source.slice(changes[0]!.from, changes[0]!.to)).toBe('att://a.txt')
   })
 
-  it('collects a shared target once and keeps IDs and labels unchanged through ordered steps', () => {
+  it('collects a shared target once and updates only default labels while keeping definition IDs', () => {
     const source = '[a.txt][f] [f][] [f]\n\n[f]: att://a.txt'
     expect(extract_attachment_names(source)).toEqual(['a.txt'])
-    expect(rename_attachment_references(source, 'a.txt', 'b.txt')).toBe('[a.txt][f] [f][] [f]\n\n[f]: att://b.txt')
+    expect(rename_attachment_references(source, 'a.txt', 'b.txt')).toBe('[b.txt][f] [f][] [f]\n\n[f]: att://b.txt')
     const locations: string[] = []
     map_content_refs(source, (destination, from, to) => {
       locations.push(source.slice(from, to))

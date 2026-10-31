@@ -132,7 +132,7 @@ it('uses the same capability projection for menu, selection and drag fences', ()
 
 it('opens the public variant without granting any private owner mutation', () => {
   const attachment = { id: 3, file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 10, version: 'v1',
-    url: null, is_image: true, is_private: true, is_encrypted: false, has_redacted: true, is_redacted_view: true, redacted_url: '/read?role=redacted' }
+    url: null, is_image: true, is_private: true, has_redacted: true, is_redacted_view: true, redacted_url: '/read?role=redacted' }
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file' as const, version: 'v1', attachment } }
   const options = { readonly: false, can_private: false, pending: false }
@@ -154,7 +154,7 @@ it('allows deleting referenced targets and reports independent redaction restric
 })
 
 it('reports permission, pending and unfinished session reasons without changing capability rules', () => {
-  const file = { file_name: 'a.png.good', mime_type: 'image/png', file_size: 1, is_image: true, version: 'v1', url: null, is_private: true, is_encrypted: false }
+  const file = { file_name: 'a.png.good', mime_type: 'image/png', file_size: 1, is_image: true, version: 'v1', url: null, is_private: true }
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: file.file_name, path: file.file_name, node: { id: 3, parent_id: 1, name: file.file_name, path: file.file_name, kind: 'file' as const, version: 'v1', attachment: file }, session: { id: 'pending' } as ContentUploadSession }
   const result = workspace_capabilities(row, { readonly: false, can_private: false, pending: true })
   expect(result).toMatchObject({ open: false, rename: false, replace: false, private: false, redact: false })
@@ -165,7 +165,7 @@ it('reports permission, pending and unfinished session reasons without changing 
 
 it.each([true, false])('reports only the root read restriction when private permission is %s', (can_private) => {
   const attachment = { file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 1, version: 'v1',
-    url: null, is_image: true, is_private: true, is_encrypted: false }
+    url: null, is_image: true, is_private: true }
   const row: WorkspaceListRow = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file', version: 'v1', attachment } }
   const cap = workspace_capabilities(row, { readonly: true, can_private, pending: false })
@@ -177,7 +177,7 @@ it.each([true, false])('reports only the root read restriction when private perm
 })
 
 it.each(['image/gif', 'image/svg+xml', 'image/tiff', 'image/x-other'])('keeps original %s previewable but gives an accurate disabled editor reason', (mime) => {
-  const attachment = { id: 3, file_name: 'kept-name.jpg.good', mime_type: mime, file_size: 10, version: 'v1', url: '/read', is_image: true, is_private: true, is_encrypted: false }
+  const attachment = { id: 3, file_name: 'kept-name.jpg.good', mime_type: mime, file_size: 10, version: 'v1', url: '/read', is_image: true, is_private: true }
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file' as const, version: 'v1', attachment } }
   const result = workspace_capabilities(row, { readonly: false, can_private: true, pending: false })

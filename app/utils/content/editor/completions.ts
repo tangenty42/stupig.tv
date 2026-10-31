@@ -8,7 +8,7 @@ import type { ContentItemPresentation } from '~/utils/content/item-presentation'
 import { autocompletion } from '@codemirror/autocomplete'
 import { syntaxTree } from '@codemirror/language'
 import { html_no_markdown_tags } from '@shared/content-html'
-import { attachment_folder_of, compare_attachment_items } from '@shared/content-markdown'
+import { attachment_folder_of, compare_attachment_items, rewrite_default_reference_label } from '@shared/content-markdown'
 import { attachment_ref_scheme, format_attachment_ref, format_story_ref, story_ref_scheme } from '@shared/content-reference'
 import { content_rating_tiers, pinned_label, rating_label } from '@shared/types/content'
 import { alert_labels, alert_types } from '~/utils/content/alerts'
@@ -28,7 +28,7 @@ export interface EditorCompletionSources {
   folders: () => string[]
 }
 
-const reference_destination_pattern = /!?\[[^\]]*\]\(\s*([^)\s<>]*)$/
+const reference_destination_pattern = /!?\[([^\]]*)\]\(\s*([^)\s<>]*)$/
 const bare_reference_pattern = /(?:^|[\s(])(@[^/)\s<>]*)$/u
 const at_reference_valid = /^@[^/)\s<>]*$/u
 const reference_query_valid = /^[^/)\s<>]*$/u
@@ -56,7 +56,7 @@ export function reference_completion_source(sources: EditorCompletionSources) {
     const before = context.state.sliceDoc(0, context.pos)
     const destination_match = reference_destination_pattern.exec(before)
     const bare_match = destination_match ? null : bare_reference_pattern.exec(before)
-    const token = destination_match?.[1] ?? bare_match?.[1]
+    const token = destination_match?.[2] ?? bare_match?.[1]
     if (token === undefined)
       return null
     const in_link = Boolean(destination_match)
@@ -86,9 +86,21 @@ export function reference_completion_source(sources: EditorCompletionSources) {
       (view: EditorView, _completion: Completion, start: number, end: number) => {
         const insert = in_link ? `${destination})` : markdown
         const trailing = in_link && view.state.doc.sliceString(end, end + 1) === ')'
+        const changes = [{ from: start, to: trailing ? end + 1 : end, insert }]
+        let label_delta = 0
+        if (destination_match) {
+          const label = destination_match[1]!
+          const destination_start = context.pos - token.length
+          const next_label = rewrite_default_reference_label(label, view.state.doc.sliceString(destination_start, end), view.state.doc.sliceString(destination_start, start) + destination)
+          if (next_label !== label) {
+            const label_start = destination_match.index + (destination_match[0].startsWith('!') ? 2 : 1)
+            changes.unshift({ from: label_start, to: label_start + label.length, insert: next_label })
+            label_delta = next_label.length - label.length
+          }
+        }
         view.dispatch({
-          changes: { from: start, to: trailing ? end + 1 : end, insert },
-          selection: { anchor: start + insert.length - (folder ? 1 : 0) },
+          changes,
+          selection: { anchor: start + insert.length + label_delta - (folder ? 1 : 0) },
           userEvent: 'input.complete',
         })
       }

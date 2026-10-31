@@ -4,6 +4,10 @@ import { public_config_from } from '../../config/lib/loader'
 
 export { public_config_from }
 
+export function load_database_config() {
+  return runtime_config().db
+}
+
 export function runtime_config(): AppConfig {
   const environment = process.env
   const path = environment.STUPIG_E2E_RUNTIME

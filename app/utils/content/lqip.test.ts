@@ -2,7 +2,7 @@ import type { ContentStoryAttachment } from '@shared/types/content'
 import { describe, expect, it } from 'vitest'
 import { image_lqip_style, observe_image_placeholders, reset_image_placeholder } from './lqip'
 
-const file = { url: '/attachment', is_private: false, is_encrypted: false, image: { revision: 1, width: 10, height: 20, lqip: 'data:image/jpeg;base64,/9j/2Q==' } } as ContentStoryAttachment
+const file = { url: '/attachment', is_private: false, image: { revision: 1, width: 10, height: 20, lqip: 'data:image/jpeg;base64,/9j/2Q==' } } as ContentStoryAttachment
 describe('inline JPEG placeholder', () => {
   it('uses only readable, bounded JPEG data for CSS', () => {
     expect(image_lqip_style(file)).toBe('--content-lqip:url(data:image/jpeg;base64,/9j/2Q==)')

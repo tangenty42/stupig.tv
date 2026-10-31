@@ -1,10 +1,35 @@
 ﻿# 阿里云资源台账与生产收敛方案
 
-本页记录 ACR、OSS、ESA、RAM 的实际配置与生产准备差异。操作细节见 [ACR](github-acr.md)、[OSS](oss.md)、[ESA 规则](esa.md)、[函数发布](esa-functions.md)和 [RAM](ram.md)。
+本页保留 ACR、OSS、ESA、RAM 的带日期核对记录，并区分后续发布信息。操作细节见 [ACR](github-acr.md)、[OSS](oss.md)、[ESA 规则](esa.md)、[函数发布](esa-functions.md)和 [RAM](ram.md)。
+
+## 截至 2026-11-01 的发布信息
+
+已通过 GitHub Actions API 核对 [PR #54](https://github.com/tangenty42/stupig.tv/pull/54) 对应 [Deploy run 41219529204](https://github.com/tangenty42/stupig.tv/actions/runs/41219529204) 为 `success`，SHA 为 `8980d2771910258b1e2e6452cccf126f7f973ae2`。该结果证明工作流完成；实际容器、数据库与恢复材料的核对另行记录，不能从工作流状态推出全部业务验收通过。
+
+2026-11-01 另经 SSH 只读核对：应用与专用 MQTT 容器均 healthy，运行镜像身份与上述 Deploy artifact 的应用／broker digest 对应；生产迁移账本 30 项均 completed 且有 finished_at，最新为 `20261030120000_shared_content_drafts.sql`。应用回执为 `cloud-v1`，ESA 发布回执为 `deployed`。本轮未进行生产业务写入、真实账号撤销或重新读取 OSS／ESA 控制台策略；自动清理／预热开关与业务验收不能由这些结果推断。下文未另注日期的资源值、在线版本、计数和“本轮”操作均属于 2026-10-25 历史记录，不作为最新生产状态。
+
+## 生产业务验收记录与范围
+
+2026-11-01 用户在生产环境手动完成前述验收清单后，最初反馈“没毛病”，随后补充报告取消机密后正文引用／预览仍显示旧名称；该问题已在 #55 补修：默认完整路径／basename 标签随目标同步，包含引用式 Markdown、未保存草稿输入和自动补全；自定义说明保留。部署后仍需复验此生产场景。本轮其余业务场景按用户确认无异常记录：普通／机密附件上传与替换、图片编辑覆盖／另存为／删减版及原图读取、双页草稿保存与编辑权交接、测试附件删除、测试账号退出后旧机密链接拒绝。该结论来自用户手动验收；代理浏览器此前受验证码及工具网址识别错误阻塞，未执行这些生产写入，也没有逐请求 HTTP／Range 或缓存诊断日志。
+
+下表保留后续发布的复验要求，不把用户的业务确认扩大为每个协议边界都已有独立证据。生产冷回源、预热额度／启用和恢复演练仍按各自范围验收。
+
+复验时在专用测试档案中逐项记录时间、发布 SHA、账号权限类别和结果；不要记录正文、凭据或完整签名 URL。上传、替换、图片编辑和删除会写生产数据，须由操作者选择测试范围后执行；开发测试账号不能用于生产。
+
+| 场景 | 验收结果要求 |
+| --- | --- |
+| 上传与替换 | 普通／机密附件发布后内容正确；替换沿用目标身份并更新版本；旧页面不能覆盖新结果 |
+| 图片编辑 | 覆盖、另存为及删减版遵守独立原图／同 row 表示；来源版本变化时拒绝旧编辑 |
+| 删除 | 正文引用保护与确认符合预期；删除后新请求拒绝，退役与刷新分别核对 |
+| 草稿与授权通知 | 两个合法会话互斥编辑、保存和交接；匿名私有 WSS 拒绝；权限撤销后 API 拒绝 |
+| 会话撤销 | 缓存已命中的普通／原图／删减版按权限检查，新 GET／HEAD／Range 均遵守撤销 |
+| 冷回源及预热 | 生产冷读取字节一致、后续缓存复用正确；启用预热前核对共享配额与预算 |
+
+恢复材料的现存性、定期备份与隔离恢复缺口集中见[备份恢复](../operations/backup-recovery.md#2026-11-01-只读核对与缺口)。
 
 ## 核对范围与证据边界
 
-2026-10-25 先使用 `tmp.env` 临时 RAM 身份只读核对云资源，随后按用户授权重建项目 RAM、收紧生产桶和 Content 规则、发布并验收开发函数；之后按用户授权进入生产维护窗口，完成数据副本预演、停写备份、Content 正式迁移、新应用和生产函数上线。下文以最新状态为准。
+2026-10-25 先使用 `tmp.env` 临时 RAM 身份只读核对云资源，随后按用户授权重建项目 RAM、收紧生产桶和 Content 规则、发布并验收开发函数；之后按用户授权进入生产维护窗口，完成数据副本预演、停写备份、Content 正式迁移、新应用和生产函数上线。以下保留该日各阶段的回执与验收边界。
 
 - 账号 `1225000469589595`，审计身份 RAM `tmp`，附加 `AdministratorAccess`。凭据只在本机进程内加载，输出与快照均脱敏。
 - OSS：核对两个 Content 桶的 ACL、版本、生命周期、CORS、桶策略、阻止公共访问、加密、日志和基础元数据；后续正式迁移生成并完整读回 297 个生产目标对象，旧源对象未删除。
@@ -36,7 +61,7 @@
 
 原生交付规则合并覆盖两环境已生效，身份和配置文件仍需按环境管理。静态资源也已迁入两环境新桶；旧 Rains S3 只保留历史恢复材料，不再承担日常业务读取或写入。
 
-## 上线结果与待补验收
+## 上线结果与待补验收（2026-10-25 记录）
 
 | 优先级 | 当前事实 | 关闭条件 |
 | --- | --- | --- |
@@ -45,7 +70,7 @@
 | 已完成 | 生产对象复制及完整读回 | 9 篇档案、107 个文件、297 个目标对象，旧文件指针为零 |
 | 待协作 | 真实生产用户的上传、替换、编辑、删除与会话撤销 | 使用合法生产账号验收；未使用开发账号或发送测试短信 |
 | 已完成 | 两环境各 13 个图标和头像对象迁入新桶，静态配置与头像写入已切换 | 28 项交付检查、头像写读删除探针通过；生产首页所有图标加载，旧存储请求为零 |
-| 待交付 | 本次镜像来自尚未提交的工作区快照 | 下次自动 Deploy 前提交当前代码、配置及密文，避免部署旧实现 |
+| 历史交付方式 | 当日镜像来自尚未提交的工作区快照 | 相关 Content 迁移与对账实现随后随 [PR #23](https://github.com/tangenty42/stupig.tv/pull/23) 合并；后续发布身份按对应 Deploy 回执核验 |
 
 初次只读审计的随机不存在路径 HEAD 为 dev 503 / prod 599；这是发布前快照，不代表当前状态。开发正式发布后，无签名、篡改、过期、未来时间、失效引用版本及已撤销会话均返回 403。生产正式发布后合法读取为 200/206，无签名及篡改为 403；未重做的生产会话撤销不得引用开发结果代替。
 
@@ -148,9 +173,9 @@ crpi-kadmhbmp7xfn6991.cn-guangzhou.personal.cr.aliyuncs.com/tangenty42/stupig-tv
 
 后续静态资源切换已上线 tag `20261025-abbaa0e9`，当时镜像身份为 `sha256:a004616641295594d7b1656a5ed9d87c216b2b8df217f31964fcc4018f94821e`。源码快照摘要为 `f52ee7c70dd1c0d3f07fc9bb5c58f1f579b13af3e35956ab672e4671e10bf0ad`；运行环境不含 `OSS_PUBLIC_*` / `OSS_PRIVATE_*`。静态迁移与交付回执在 `.data/content-prod-20261025/static-copy.json`、`static-delivery.json`、`static-release/public-smoke.json`。
 
-当前 `latest` 和正式容器已更新为全桶对账版本 `20261025-e9f50d4e`，镜像身份为 `sha256:0d6b0331172631f908d017f189becc3b92ca96d028039574991bad080c5f69c1`，源码快照摘要 `23255c1c34127ae82b900de66c80fc4d3fa68e3c207fe713e4c5e21ffd67b8d2`。迁移账本 25 项 completed，候选与公开入口各 8 项交付检查通过，生产首轮对账检查 405 个引用和 313 个对象且无异常。应用 OSS RAM 策略 v3 增加指定桶的 `oss:ListObjects`；函数版本未改动。该工作区仍需提交后才能由后续 CI 正确交付。
+2026-10-25 后续全桶对账发布时，`latest` 和正式容器更新为 `20261025-e9f50d4e`，镜像身份为 `sha256:0d6b0331172631f908d017f189becc3b92ca96d028039574991bad080c5f69c1`，源码快照摘要 `23255c1c34127ae82b900de66c80fc4d3fa68e3c207fe713e4c5e21ffd67b8d2`。迁移账本 25 项 completed，候选与公开入口各 8 项交付检查通过，生产首轮对账检查 405 个引用和 313 个对象且无异常。应用 OSS RAM 策略 v3 增加指定桶的 `oss:ListObjects`；函数版本未改动。当时交付的是工作区快照，相关实现随后已随 PR #23 合并；此镜像身份仅保留为历史恢复证据。
 
-后续建议保留不可变发布 tag/digest。个人版目标资源形如 `acs:cr:cn-guangzhou:1225000469589595:repository/tangenty42/stupig-tv`；仓库 RAM 策略见[官方访问控制](https://help.aliyun.com/zh/acr/user-guide/repository-access-control)。当前 workflow 仍只推 latest，CI 与服务器共用 GitHub `ACR_USERNAME/PASSWORD`，不需要独立 pull Secrets。Registry 密码不能用 `tmp.env` 的管理员 AccessKey 代替。
+当前 [Deploy workflow](../../.github/workflows/deploy.yml) 推送应用 SHA tag 与 broker `mqtt-SHA` tag，同时保留 `latest`／`mqtt` 兼容别名；运行配置固定到实际 RepoDigest，`.data/releases/production.json` 记录提交、镜像、schema、共享 settings 摘要及草稿协议。个人版目标资源形如 `acs:cr:cn-guangzhou:1225000469589595:repository/tangenty42/stupig-tv`；仓库 RAM 策略见[官方访问控制](https://help.aliyun.com/zh/acr/user-guide/repository-access-control)。CI 与服务器共用 GitHub `ACR_USERNAME/PASSWORD`，不需要独立 pull Secrets。Registry 密码不能用 `tmp.env` 的管理员 AccessKey 代替。
 
 ## 配置怎样统一
 

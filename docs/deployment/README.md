@@ -42,7 +42,7 @@
 | 时点 | 操作与需保留的证据 |
 | --- | --- |
 | 提交 / 审阅前 | 按 CSS 审阅范围逐项核对 diff，保留同一工作区中的其他功能变更边界；记录候选源码身份、锁文件、关键配置及本机测试结果，重新检出后重跑必要检查 |
-| 发布前 | 关闭 CSS 入口列明的兼容未完成项，通过待发布代码树的远端 Check。生产 CSS profile 位于 Check 第一 browser 分片，旧引擎 profile 仍需带已安装历史二进制的验证环境 |
+| 发布前 | 关闭 CSS 入口列明的兼容未完成项，通过待发布代码树的远端 Check。[Check workflow](../../.github/workflows/check.yml) 的独立 `browser-css` job 依次运行 `tests/css-production.config.ts` 与 `tests/css.config.ts`，并纳入 `check`／`verified-tree` 汇总门禁；应用 browser 仍分为三个分片。旧引擎 profile 仍需带已安装历史二进制的验证环境 |
 | 构建与切换 | body ID / Tailwind selector、preset、静态 CSS、客户端 chunk 和 SSR 随同一镜像交付。记录实际 checkout SHA、镜像身份、配置 / Compose 和旧版本恢复材料；沿用现有 Deploy，不单独替换一份 CSS |
 | 交付验收 | 核对真实 HTML 的 body ID、首屏 / hydration、Dialog / ConfirmPopup 定位与动画、六级标题和编辑器；冷加载与已有标签页导航都能取得匹配的 CSS / JS chunk，无 404 或样式混用 |
 | 缓存核对 | 读取主站 HTML 与 `/_nuxt/` 的实际响应头、回源和旧资产保留行为；本站 Content 域名 `/content/` 的 ESA 规则不证明这些前端资产已安全缓存，不能直接套用该规则 |

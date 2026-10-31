@@ -71,6 +71,15 @@ describe('deployment configuration', () => {
     for (const invalid of [{ scanLimit: 0 }, { scanLimit: 101 }, { leaseSeconds: 10 }, { publishTimeoutMs: 30000 }, { maxRetrySeconds: 1 }])
       expect(deployment_config_schema.safeParse({ ... config, app: { ... config.app, contentSync: { ... config.app.contentSync, ... invalid } } }).success).toBe(false)
   })
+  it('loads bounded receipt compaction independently of cloud consumers and keeps it server-only', () => {
+    const config = load_config(deployment_env)
+    expect(config.app.contentReceipts).toEqual({ enabled: true, sweepIntervalSeconds: 60, scanLimit: 100 })
+    expect(public_config_from(config)).not.toHaveProperty('app.contentReceipts')
+    expect(deployment_config_schema.safeParse({ ... config, aliyun: { ... config.aliyun, oss: null },
+      app: { ... config.app, contentReceipts: { ... config.app.contentReceipts, enabled: false } } }).success).toBe(true)
+    for (const invalid of [{ scanLimit: 0 }, { scanLimit: 101 }, { scanLimit: 1.5 }, { sweepIntervalSeconds: 0 }, { enabled: 'invalid' }])
+      expect(deployment_config_schema.safeParse({ ... config, app: { ... config.app, contentReceipts: { ... config.app.contentReceipts, ... invalid } } }).success).toBe(false)
+  })
   it('loads upload lifecycle budgets independently of images and keeps them server-only', () => {
     const config = load_config(deployment_env)
     expect(config.app.contentUploads).toEqual({ enabled: true, sweepIntervalSeconds: 5, scanLimit: 20 })
@@ -314,6 +323,31 @@ describe('deployment configuration', () => {
 
   it('loads database configuration without unrelated services or secrets', () => {
     expect(load_database_config(database_env)).toEqual({ host: 'db', port: 3306, password: 'placeholder', user: 'stupig_tv', name: 'stupig_tv' })
+  })
+
+  it('preserves an explicit runtime database target without overriding a supplied environment', async () => {
+    vi.resetModules()
+    for (const [key, value] of Object.entries(deployment_env))
+      vi.stubEnv(key, value)
+    const loader = await import('./loader')
+    const runtime = loader.runtime_config()
+    const target = { host: '127.0.0.1', port: 3306, user: 'root', password: 'qa-password', name: `stupig_cloud_draft_qa_${'a'.repeat(32)}` }
+    runtime.db = target
+    expect(loader.load_database_config()).toEqual(target)
+    expect(loader.load_database_config(database_env)).toEqual({ host: 'db', port: 3306, password: 'placeholder', user: 'stupig_tv', name: 'stupig_tv' })
+    // Once selected, the DB target must not reread unrelated YAML or credentials.
+    const cwd = vi.spyOn(process, 'cwd').mockImplementation(() => {
+      throw new Error('Configuration must not be reloaded')
+    })
+    try {
+      vi.stubEnv('ALIYUN_OSS_ACCESS_KEY_ID', undefined)
+      expect(loader.load_database_config()).toEqual(target)
+      runtime.db = { ... target, port: 0 }
+      expect(() => loader.load_database_config()).toThrow(/db\.port/)
+    }
+    finally {
+      cwd.mockRestore()
+    }
   })
 
   it('projects only public deployment fields out of the full configuration', () => {
