@@ -17,9 +17,9 @@
 | Secret | `SSH_KNOWN_HOSTS` | 经独立渠道核实的 SSH 主机公钥，采用 OpenSSH known_hosts 格式，含主机名和端口 |
 | Secret | `ENV_PASSPHRASE` | 解密已提交 `.env.prod.gpg` 的口令 |
 
-GitHub Ruleset 的必需状态检查：`check`、`changes`、`migrations`、`mqtt` 与三个 `browser (N/3)` 状态共七项，均来自 GitHub Actions；同时启用"合并前分支必须最新"（strict），创建分支/仓库时不强制检查。普通 job 被 `if` 跳过时按成功上报，但跳过整个矩阵不会展开分片名；因此三个固定浏览器状态由轻量 `browser-status` 矩阵上报，应用验证需要运行时必须等待全部 `browser-tests` 分片成功。纯文档或已确认复用的代码树可以跳过重型测试；`verified-tree` 未列入必需项。
+GitHub Ruleset 的必需状态检查：`check`、`changes`、`unit`、`migrations`、`mqtt`、`browser-css` 与三个 `browser (N/3)` 状态共九项，均限定来自 GitHub Actions；2026-10-31 已按 [PR #52](https://github.com/tangenty42/stupig.tv/pull/52) 的检查结构新增 `unit` 和 `browser-css`，并通过 API 读回确认。仍启用"合并前分支必须最新"（strict），创建分支/仓库时不强制检查。普通 job 被 `if` 跳过时按成功上报，但跳过整个矩阵不会展开分片名；因此三个固定浏览器状态由轻量 `browser-status` 矩阵上报，应用验证需要运行时必须等待全部 `browser-tests` 分片成功。纯文档或已确认复用的代码树可以跳过重型测试；`verified-tree` 未列入必需项。
 
-`unit` 执行 lint、类型和单元／组件检查；`browser-css` 与三个应用浏览器分片并行。原必需状态 `check` 汇总 unit、MQTT、浏览器、CSS 和迁移结果，任一失败或意外跳过都会失败，因此拆出 CSS 后无须更改已有 Ruleset 即可维持合并门槛。
+`unit` 执行 lint、类型和单元／组件检查；`browser-css` 与三个应用浏览器分片并行。原必需状态 `check` 汇总 unit、MQTT、浏览器、CSS 和迁移结果，任一失败或意外跳过都会失败；仓库规则同时显式要求独立的 `unit` 与 `browser-css` 状态。尚未接入该流水线的旧分支不会上报这两项，须更新到包含 #52 的 main 并重新检查。
 
 Actions 权限选择 "Allow tangenty42, and select non-tangenty42, actions and reusable workflows"，勾选 "Allow actions created by GitHub"，允许列表加入 `pnpm/action-setup@*`（各工作流唯一的非 GitHub 官方 action，缺失它相关工作流会拒绝启动），并启用 "Require actions to be pinned to a full-length commit SHA"；各工作流的 action 引用已全部固定到完整提交 SHA。Linux 部署主机需有 Docker Compose、`flock` 和 `sha256sum`。
 
