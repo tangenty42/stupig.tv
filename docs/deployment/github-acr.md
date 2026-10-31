@@ -19,6 +19,8 @@
 
 GitHub Ruleset 的必需状态检查：`check`、`changes`、`migrations`、`mqtt` 与三个 `browser (N/3)` 分片共七项，均来自 GitHub Actions；同时启用"合并前分支必须最新"（strict），创建分支/仓库时不强制检查。被 `if` 跳过的 job 在分支保护中按成功上报，因此纯文档 PR 跳过应用检查也能满足全部必需检查；`verified-tree` 未列入必需项。
 
+`unit` 执行 lint、类型和单元／组件检查；`browser-css` 与三个应用浏览器分片并行。原必需状态 `check` 汇总 unit、MQTT、浏览器、CSS 和迁移结果，任一失败或意外跳过都会失败，因此拆出 CSS 后无须更改已有 Ruleset 即可维持合并门槛。
+
 Actions 权限选择 "Allow tangenty42, and select non-tangenty42, actions and reusable workflows"，勾选 "Allow actions created by GitHub"，允许列表加入 `pnpm/action-setup@*`（各工作流唯一的非 GitHub 官方 action，缺失它相关工作流会拒绝启动），并启用 "Require actions to be pinned to a full-length commit SHA"；各工作流的 action 引用已全部固定到完整提交 SHA。Linux 部署主机需有 Docker Compose、`flock` 和 `sha256sum`。
 
 ### SSH 主机身份

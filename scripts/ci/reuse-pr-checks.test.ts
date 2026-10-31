@@ -4,7 +4,7 @@ import { has_verified_pr, verified_jobs } from './reuse-pr-checks.mjs'
 const tree = 'a'.repeat(40)
 const sha = 'b'.repeat(40)
 const head = 'c'.repeat(40)
-const names = ['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser (2/3)', 'browser (3/3)', `verified-tree-${tree}`]
+const names = ['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser (2/3)', 'browser (3/3)', 'browser-css', `verified-tree-${tree}`]
 const jobs = names.map(name => ({ name, status: 'completed', conclusion: 'success' }))
 
 function api_with(overrides: { pull?: object, run?: object, jobs?: object[] } = {}) {
@@ -22,7 +22,7 @@ describe('reusing PR checks on main', () => {
     expect(await has_verified_pr({ api: api_with(), repository: 'owner/repo', sha, tree })).toBe(true)
   })
 
-  it.each(['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser (2/3)', 'browser (3/3)', `verified-tree-${tree}`])('requires a successful %s job', (name) => {
+  it.each(names)('requires a successful %s job', (name) => {
     expect(verified_jobs(jobs.filter(job => job.name !== name), tree)).toBe(false)
     expect(verified_jobs(jobs.map(job => job.name === name ? { ... job, conclusion: 'skipped' } : job), tree)).toBe(false)
   })

@@ -38,6 +38,8 @@
     "test:tools": "vitest run --project tools",
     "test:component": "vitest run --config vitest.component.config.ts",
     "test:e2e": "playwright test",
+    "test:e2e:legacy": "playwright test --config tests/css-legacy.config.ts",
+    "test:css:legacy": "playwright test --config tests/css-legacy-utilities.config.ts",
     "test:all": "pnpm test && pnpm test:e2e"
   },
   "dependencies": {
