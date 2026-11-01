@@ -13,6 +13,7 @@ app:
       tokenName: stupig_session
       userName: login
     bcryptRounds: 12
+    syncPollIntervalSeconds: 30
   otp:
     expiresMinutes: 10
     tier1:

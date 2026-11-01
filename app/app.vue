@@ -255,6 +255,7 @@ import type { LoginUser } from '~/composables/useAuth'
 import { Form } from '@primevue/forms'
 import { zodResolver } from '@primevue/forms/resolvers/zod'
 import { form_default, form_schema } from '@shared/schemas'
+import { settings } from '@shared/settings'
 import { sync_resource } from '@shared/types/sync'
 import { confirm_popup_transition } from '~/composables/useMyConfirm'
 
@@ -494,6 +495,9 @@ await useSyncedData(
   sync_current_user,
   synced_user,
   {
+    // Account notifications are hints: publisher restarts can lose an event
+    // while the browser's persistent broker session remains intact.
+    polling_interval: settings.app.auth.syncPollIntervalSeconds * 1000,
     on_data: (profile) => {
       if (! profile || ! user.value) {
         return

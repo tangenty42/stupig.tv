@@ -126,6 +126,7 @@ export async function editor_text(page: Page) {
 export async function set_page_visibility(page: Page, state: 'visible' | 'hidden') {
   await page.evaluate((state) => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' })
     document.dispatchEvent(new Event('visibilitychange'))
   }, state)
 }

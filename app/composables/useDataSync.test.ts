@@ -84,6 +84,115 @@ describe('data sync transport', () => {
     return { id, type: 'refresh', resource: 'profile:1', timestamp: Date.now() }
   }
 
+  function acknowledge(client: Client, error: Error | null = null, qos = 1) {
+    const call = client.subscribe.mock.calls.at(- 1)!
+    call[2](error, call[0].map((topic: string) => ({ topic, qos })))
+  }
+
+  it.each(['local', 'remote'])('only requests private credentials while a %s draft subscription needs them', async (owner) => {
+    const transport = create_data_sync_transport('ws://broker', true)
+    transports.push(transport)
+    transport.start({ user: ref(null), identity_changed: vi.fn(), handle_remote_logout: vi.fn() })
+    await vi.advanceTimersByTimeAsync(settings.app.client.sync.resourceGatherDelayMs)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(clients).toHaveLength(0)
+    const channel = Channel.instances.at(- 1)!
+    const drop = owner === 'local' ? transport.subscribe('content_draft:needed', vi.fn()) : () => channel.receive({ type: 'release_resources', tab_id: 'other' })
+    if (owner === 'remote')
+      channel.receive({ type: 'report_resources', tab_id: 'other', resources: ['content_draft:needed'] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledOnce()
+    const client = clients.at(- 1)!
+    client.connected = true
+    client.emit('connect', { sessionPresent: false })
+    acknowledge(client)
+    drop()
+    expect(client.end).toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(10 * settings.app.client.sync.reconnectDelayMs)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(clients).toHaveLength(1)
+  })
+
+  it.each([false, true])('rechecks after SUBACK even when the broker resumes an old session, private=%s', async (private_mode) => {
+    const resource = private_mode ? 'content_draft:opaque' : 'auth_user:1'
+    const { transport, client } = await start(private_mode, [resource])
+    let current = 'before'
+    let observed = ''
+    const read = vi.fn(() => {
+      observed = current
+    })
+    transport.subscribe(resource, read)
+    expect(read).not.toHaveBeenCalled()
+    acknowledge(client)
+    expect(observed).toBe('before')
+
+    client.connected = false
+    client.emit('close')
+    // A publisher restart loses the event before it reaches the broker.
+    current = 'after'
+    await vi.advanceTimersByTimeAsync(settings.app.client.sync.reconnectDelayMs)
+    const resumed = clients.at(- 1)!
+    resumed.connected = true
+    resumed.emit('connect', { sessionPresent: true })
+    expect(observed).toBe('before')
+    acknowledge(resumed)
+    expect(observed).toBe('after')
+    expect(read).toHaveBeenCalledTimes(2)
+  })
+
+  it('rechecks only newly acknowledged subscriptions and ignores acknowledgements from an old connection', async () => {
+    const { transport, client } = await start(false, ['profile:1'])
+    const first = vi.fn()
+    const second = vi.fn()
+    transport.subscribe('profile:1', first)
+    acknowledge(client)
+    transport.subscribe('profile:2', second)
+    expect(second).not.toHaveBeenCalled()
+    acknowledge(client)
+    expect(first).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledOnce()
+    const old_ack = client.subscribe.mock.calls.at(- 1)![2]
+    client.emit('close')
+    old_ack(null, [{ qos: 1 }])
+    expect(second).toHaveBeenCalledOnce()
+  })
+
+  it.each(['error', 'denied', 'throw'])('reconnects after a subscription %s instead of staying silently open', async (failure) => {
+    const { transport, client } = await start(false, ['auth_user:1'])
+    const read = vi.fn()
+    transport.subscribe('auth_user:1', read)
+    if (failure === 'throw') {
+      client.subscribe.mockImplementationOnce(() => {
+        throw new Error('subscribe failed')
+      })
+      transport.subscribe('profile:2', vi.fn())
+    }
+    else {
+      acknowledge(client, failure === 'error' ? new Error('subscribe failed') : null, failure === 'denied' ? 128 : 1)
+    }
+    expect(read).not.toHaveBeenCalled()
+    expect(transport.status.value).not.toBe('open')
+    await vi.advanceTimersByTimeAsync(settings.app.client.sync.reconnectDelayMs)
+    const recovered = clients.at(- 1)!
+    expect(recovered).not.toBe(client)
+    recovered.connected = true
+    recovered.emit('connect', { sessionPresent: true })
+    acknowledge(recovered)
+    expect(read).toHaveBeenCalledOnce()
+  })
+
+  it('rechecks immediately when visible even while MQTT is unavailable', async () => {
+    const { transport } = await start(false, ['auth_user:1'])
+    const read = vi.fn()
+    transport.subscribe('auth_user:1', read)
+    browser_document.hidden = true
+    browser_document.dispatchEvent(new Event('visibilitychange'))
+    expect(read).not.toHaveBeenCalled()
+    browser_document.hidden = false
+    browser_document.dispatchEvent(new Event('visibilitychange'))
+    expect(read).toHaveBeenCalledOnce()
+  })
+
   it.each([false, true])('keeps the topic prefix across initial, dynamic and reconnect subscriptions, private=%s', async (private_mode) => {
     const prefix = private_mode ? settings.integrations.mqtt.privateTopicPrefix : settings.integrations.mqtt.topicPrefix
     const first = private_mode ? 'content_drafts:v1.first' : 'profile:1'
