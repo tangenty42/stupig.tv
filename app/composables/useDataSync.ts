@@ -409,17 +409,11 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     mqtt_client = null
 
     if (client) {
-    // End (which clears the connack timer) BEFORE removing listeners. If we strip
-    // listeners first, a connack timer that fires during teardown emits 'error'
-    // with no listener and Node throws "Uncaught Error: connack timeout".
+      // end() closes the stream asynchronously. Keep MQTT's internal close
+      // handler, which clears the connack deadline, and our stale-client error
+      // handler until that close finishes. Identity guards ignore late events.
       try {
         client.end(true)
-      }
-      catch {
-      }
-
-      try {
-        client.removeAllListeners()
       }
       catch {
       }
