@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { computed, effectScope, onScopeDispose, reactive, ref, watch } from 'vue'
 import { accept_attachment_snapshot } from '~/utils/content/attachment-snapshot'
 
-const mocks = vi.hoisted(() => ({ execute: vi.fn(), toast: vi.fn(), uploads: {} as { sessions: ContentUploadSession[], reservations: ContentUploadReservation[], identity_key: string, start: ReturnType<typeof vi.fn> } }))
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), toast: vi.fn(), uploads: {} as { sessions: ContentUploadSession[], reservations: ContentUploadReservation[], identity_key: string, admission_error: string, admitting: boolean, start: ReturnType<typeof vi.fn> } }))
 vi.mock('~/stores/contentUploads', () => ({ useContentUploadsStore: () => mocks.uploads }))
 const { useAttachmentPanel } = await import('./useAttachmentPanel')
 let scope: ReturnType<typeof effectScope>
@@ -20,7 +20,7 @@ const success: ContentWorkspaceCommandResult = { succeeded: ['qa.txt'], skipped:
 
 beforeEach(() => {
   vi.resetAllMocks()
-  mocks.uploads = reactive({ sessions: [], reservations: [], identity_key: '7:25', start: vi.fn() })
+  mocks.uploads = reactive({ sessions: [], reservations: [], identity_key: '7:25', admission_error: '', admitting: false, start: vi.fn() })
   scope = effectScope()
   for (const [name, value] of Object.entries({ computed, ref, watch }))
     vi.stubGlobal(name, value)
@@ -44,6 +44,59 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 const mount = () => scope.run(() => useAttachmentPanel(25, () => ''))!
+
+it('keeps uncertain commands after closing their dialog and retries the same receipt', async () => {
+  const panel = await mount()
+  panel.expanded.value.add(2)
+  mocks.execute.mockRejectedValueOnce(new Error('请求参数不合法！')).mockRejectedValueOnce(new Error('请求参数不合法！'))
+  await panel.execute(action)
+  expect(panel.failure_visible.value).toBe(true)
+  const row = panel.rows.value.find(row => row.node?.id === 3)!
+  expect(panel.command_failed(row)).toBe(true)
+  panel.failure_visible.value = false
+  expect(panel.request_error.value).toBe('请求参数不合法！')
+  expect(panel.capabilities(row).delete).toBe(false)
+  await panel.execute(action)
+  expect(panel.failure_visible.value).toBe(true)
+  expect(mocks.execute).toHaveBeenCalledTimes(1)
+  panel.failure_visible.value = false
+  await panel.submit()
+  expect(panel.failure_visible.value).toBe(true)
+  expect(mocks.execute.mock.calls[1]![0]).toEqual(mocks.execute.mock.calls[0]![0])
+  await panel.submit()
+  expect(panel.failure_visible.value).toBe(false)
+  expect(panel.request_error.value).toBe('')
+})
+
+it('reopens unresolved upload errors on another selection and closes after reconciliation or identity reset', async () => {
+  const panel = await mount()
+  mocks.uploads.admission_error = '请求参数不合法！'
+  expect(panel.failure_visible.value).toBe(true)
+  panel.failure_visible.value = false
+  mocks.uploads.start.mockRejectedValueOnce(new Error('请先处理上一批上传的受理结果'))
+  await panel.start([{ file: new File(['test'], 'test.txt'), file_name: 'test.txt' }])
+  expect(panel.failure_visible.value).toBe(true)
+  expect(mocks.toast).not.toHaveBeenCalled()
+  mocks.uploads.admitting = true
+  mocks.uploads.admission_error = ''
+  expect(panel.failure_visible.value).toBe(true)
+  mocks.uploads.admitting = false
+  expect(panel.failure_visible.value).toBe(false)
+  mocks.uploads.admission_error = '新的错误'
+  expect(panel.failure_visible.value).toBe(true)
+  mocks.uploads.identity_key = '8:25'
+  expect(panel.failure_visible.value).toBe(false)
+})
+
+it('opens the dialog for another failed command even when its message matches the first unresolved error', async () => {
+  const panel = await mount()
+  mocks.execute.mockRejectedValue(new Error('请求参数不合法！'))
+  await panel.execute(action)
+  panel.failure_visible.value = false
+  await panel.execute({ operation: 'rename', target: { id: 4, version: 'v1' }, name: 'next.txt' })
+  expect(mocks.execute).toHaveBeenCalledTimes(2)
+  expect(panel.failure_visible.value).toBe(true)
+})
 
 it.each(['delete', 'rename'] as const)('applies the committed %s snapshot before ending pending without waiting for notifications', async (operation) => {
   let finish!: (value: typeof success) => void
