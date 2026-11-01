@@ -2,6 +2,21 @@
   "Version": "1",
   "Statement": [
     {
+      "Sid": "VerifyPrivateImagePersistence",
+      "Effect": "Allow",
+      "Action": "oss:GetBucketAcl",
+      "Resource": "acs:oss:*:1225000469589595:stupig-static-dev"
+    },
+    {
+      "Sid": "PersistContentImages",
+      "Effect": "Allow",
+      "Action": "oss:PostProcessTask",
+      "Resource": [
+        "acs:oss:*:1225000469589595:stupig-static-dev/content/att/staging/*",
+        "acs:oss:*:1225000469589595:stupig-static-dev/content/att/images/*"
+      ]
+    },
+    {
       "Sid": "AuditBucketInventory",
       "Effect": "Allow",
       "Action": "oss:ListObjects",
