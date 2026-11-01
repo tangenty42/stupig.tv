@@ -429,7 +429,7 @@ function submit_delete() {
 function menu_for(row: WorkspaceListRow): AttachmentMenuItem[] {
   const { selected, single } = attachment_menu_context(row, model.selected_rows)
   if (selected.every(item => item.preparation)) {
-    return [{ label: '取消这批准备', icon_name: 'lucide:x', disabled: ! model.uploads.can_cancel_preparation, command: () => model.uploads.cancel_preparation() }]
+    return [{ label: '取消准备', icon_name: 'lucide:x', disabled: ! model.uploads.can_cancel_preparation, command: () => model.uploads.cancel_preparation() }]
   }
   const cap = model.capabilities(row)
   const blocked = (operation: keyof typeof cap.reasons, targets = [row]) => targets.flatMap(target => model.capabilities(target).reasons[operation])
