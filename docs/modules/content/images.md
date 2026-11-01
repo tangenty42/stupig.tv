@@ -149,6 +149,8 @@ pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/image-performance.
 
 所有输出均验证为 AVIF、1536×1024；Q98／Q100 在此图上字节摘要相同。诊断与本机 Sharp 基线共用源文件、sRGB／白底 RGB 像素规则；Sharp quality 65 的本机 PSNR 为 39.21 dB、AVIF 为 137,267 字节。OSS Q65 与 Sharp quality 65 明显不是相同标尺，不能把更快且更小直接描述成保持同等画质；Q98 只是在本样本诊断中更高，也不构成视觉等价保证。云端没有对应 Sharp effort 的已验证映射。[OSS 质量参数说明](https://www.alibabacloud.com/help/en/oss/user-guide/adjust-image-quality)区分相对 `q` 与绝对 `Q`，并要求 PNG 等先转为有损目标格式后再调整质量。
 
+质量诊断后，用户选择后续云端 AVIF 方案采用 **Q100**；JPEG／LQIP 继续按 Q85／Q40 验证。此图 Q100 的上述单次 GET 为 644ms，输出 180,251 字节（约 176KiB），不是纯编码耗时或完整持久化延迟。该决策尚未接入运行时，正式 Sharp 参数保持原状。
+
 现有开发应用身份执行 `sys/saveas` 已实测返回 HTTP 403，服务明确指出缺少 `oss:PostProcessTask`。完整持久化脚本已准备为 AVIF → 从最终 AVIF 派生 JPEG／LQIP → 分别 HEAD 确认；仅凭 SDK Promise 没有抛错不能标记成功，当前 `ali-oss` 的 `processObjectSave` 还需检查 HTTP 状态及目标对象回执。临时权限方案仅覆盖本轮随机前缀，由用户在 RAM 控制台添加后再执行，不扩大生产桶权限。
 
 本轮 GET 试验没有改应用配置、写数据库或读取既有生产附件。两份临时源对象均已软删除，当前 HEAD 确认 404；旧版本仍由桶的实际生命周期保留，没有永久删除或扩大版本删除权限。返回的测试产物与摘要保存在本机忽略目录，不提交图片到仓库。
