@@ -65,9 +65,55 @@
 
 封面和正文图片共用加载状态与动效样式。已处理图片先显示透明度缓慢呼吸的对应版本 LQIP，并提供旋转的加载图标；没有 LQIP 的 GIF／SVG 等也使用加载反馈。图片淡入期间保留其下方的 LQIP，遮罩随之淡出，避免切换时露出底色；系统启用减少动态效果时立即切换。解码失败或引用无效时替换图片区域为占位符，保持原有图片项与 caption 结构。编辑预览增量更新时复用未变化的媒体节点，避免每次输入都重载整篇图片。
 
+## 转换性能基线（2026-11-01）
+
+本轮按用户选择先测量，正式画质、处理提供方和云资源均未调整。基线为 #61 后的 `15ac9f4`，使用真实 `process_image_variants`，只在独立基准进程中计时；不连接数据库、不访问生产对象。脚本不进入应用启动或 CI 性能门禁。
+
+### 重复测量
+
+```powershell
+$env:NODE_ENV = 'development'
+pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/image-performance.ts --output .data/image-performance.json
+pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/image-performance.ts --input .data/photo.jpeg --efforts 4,2 --runs 2 --quality --output .data/photo-performance.json
+```
+
+输出目录需预先存在。默认顺序处理两张确定性纹理图（1280×800、2400×1600），每个 effort 4／2／0 各运行两次；`--input` 可重复指定自备文件，`--runs` 限制为 1–5。只加载图片配置子树，不需要数据库或云端凭据。报告保留输入 basename、配置、环境、耗时、输出字节、进程 CPU 时间、采样 RSS 和事件循环延迟，不保存转换产物；自行选用不含敏感名称的测试文件。
+
+阶段为源 metadata、AVIF、JPEG、LQIP、最终 metadata。AVIF 阶段包含解码、方向和色彩转换及编码；JPEG／LQIP 阶段各自包含最终 AVIF 的解码，不能把阶段值当作纯编码器耗时。工具委托真实管线，并校验阶段调用数量；管线调整后必须复核标签。`--quality` 另作 sRGB／白底像素 PSNR 诊断，诊断不计入处理耗时，但可能影响后续缓存状态；PSNR 不能代替视觉验收，`null` 表示诊断像素完全一致。
+
+### 本机结果与边界
+
+环境为 Windows ARM64、Node 24.22.1、Sharp 0.35.5／libvips 8.18.7／AOM 3.15.1，12 个可用逻辑处理器，Sharp concurrency 12，libuv 线程池默认。保持 quality 65、JPEG quality 85、24px LQIP，仅比较 effort；后台领域并发 1 不代表编码器只用一个线程。
+
+| 输入 | effort | 全管线 ms | AVIF 阶段 ms | JPEG ms | LQIP ms | AVIF 字节 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2400×1600 纹理 | 4 | 2,059 | 1,525 | 281 | 251 | 1,116,774 |
+| 同上 | 2 | 702 | 212 | 265 | 223 | 1,068,000 |
+| 2400×1560 照片 | 4 | 872 | 639 | 125 | 106 | 198,228 |
+| 同上 | 2 | 434 | 156 | 147 | 129 | 241,634 |
+| 3924×2550 照片 | 4 | 1,837 | 1,222 | 335 | 276 | 552,331 |
+| 同上 | 2 | 1,080 | 366 | 392 | 320 | 619,108 |
+
+纹理计时取不启用 `--quality` 的两次均值，照片启用诊断；1000 万像素组每种 effort 仅一次，其余组各两次。未隔离其他进程负载，顺序固定，未做随机顺序／冷缓存对照，不具备 p95 或生产 SLA 含义。照片来自[阿里云高级压缩示例](https://www.alibabacloud.com/help/en/oss/user-guide/advanced-compression-of-heif-or-avif-images)中的[公开原图](https://image-demo-oss-zhangjiakou.oss-cn-zhangjiakou.aliyuncs.com/pics/compression-demo.jpeg)，2,195,428 字节，SHA-256 为 `c0e0bf371f74023ead5bb1c394b19ff7a4a715ea023a4062cdcd20a963b2c6c6`；小图由其 `resize({ width: 2400, height: 1600, fit: 'inside' }).jpeg({ quality: 92 })` 生成。没有下载生产附件。
+
+两组照片的 effort 4 → 2 减少约 50%／41% 墙钟时间和约 79%／78% 进程 CPU 时间，AVIF 分别增大约 22%／12%；PSNR 分别从 40.38 → 40.20、39.99 → 39.82 dB。纹理在 effort 2 下反而更小，PSNR 则从 33.85 降到 32.88 dB；不能将某一张图的体积变化推广到全部输入。effort 0 的两组较小输入为 543／344ms，仍须另评画质；[Sharp 的 effort 定义](https://sharp.pixelplumbing.com/api-output/#avif)是速度与压缩投入的取舍，不是画质保证。
+
+首次探索的 380 万像素纹理耗时 9.8 秒，随后两组复测约 2.06／2.07 秒，产物字节一致；首轮异常的负载／缓存原因未隔离，不能当稳定基线。1000 万像素组观察到进程 RSS 约 500–584MiB，包含此前任务、分配器／缓存及质量诊断的影响；25ms 采样也不能保证捕捉绝对峰值，更不能据此认定每张图固定占用该内存。尚未测试 2400 万像素上限、生产机器、并发压力或前后台混合负载。
+
+### 排队、I/O 与云端选择
+
+代码确认当前是每 5 秒扫描、图片并发 1、单批最多 20 个任务，扫描期间占用 runner 的 image／OSS 资源槽。长批次处理完才释放，处理中新到任务也不在已有快照里；可感知等待可能同时包含轮询和排队，不能把上述编码时间当作选择文件到最终发布的总耗时。输入下载／Buffer 拼接、两个产物顺序上传、原图归档、数据库采用和预热也未纳入本基准。下一步先记录排队年龄及各外部阶段耗时，再评估入队唤醒和有界批次；数据库池／在线授权延迟目前只是待测风险。
+
+当前 JPEG 与 LQIP 分别解码一次最终 AVIF；effort 降低后这部分占比更高。可实验复用解码，但必须保持二者源自最终 AVIF 的合同，并复测内存和像素。`image-processing.ts` 属于冻结迁移依赖，未来运行时优化需另建入口并按需推进处理 profile；不能直接改历史实现或重算 digest。
+
+阿里云标准 OSS IMG 的[公开限制](https://help.aliyun.com/zh/oss/user-guide/overview-17/)为原图不超过 20MB、AVIF 输出宽不超过 4096px 且总像素不超过 9,437,184。当前应用接受 50MiB／2400 万像素，上述 3924×2550 照片也超过标准 AVIF 像素限制，因此不能直接全量替换；需本地回退、其他计算服务或工单确认更高限额。没有测量云端实际速度、费用或本账号权限。
+
+若选云端持久化处理，还须保留私有对象、尝试身份／租约、完整角色后原子采用及迟到结果清理；JPEG／LQIP 仍须从最终 AVIF 派生。[sys/saveas](https://www.alibabacloud.com/help/en/oss/user-guide/sys-or-saveas)需要来源处理权限及目标写权限，输出继承目标桶 ACL，不能用公开转换 URL 绕过当前读取授权。
+
 ## 源码与验证
 
 - 图片领域：[`image-job.service.ts`](../../../server/services/content/image-job.service.ts)、[`image-original-object.ts`](../../../server/services/content/image-original-object.ts)、[`redacted-variant.ts`](../../../server/services/content/redacted-variant.ts)。
+- 本地转换基准：[`image-performance.ts`](../../../scripts/verify/image-performance.ts)；真实 CLI 回归检查报告、资源参数及失败后的计时恢复，不以耗时数值作为通过门槛。
 - 画布：[`ImageEditor.vue`](../../../app/components/MyContent/Attachment/ImageEditor.vue)、[`useImageEditSession.ts`](../../../app/composables/useImageEditSession.ts)、[`useImageEditorViewport.ts`](../../../app/composables/useImageEditorViewport.ts)、[`image-edit.ts`](../../../app/utils/content/image-edit.ts)。
 - 展示：[`image-presentation.ts`](../../../server/services/content/image-presentation.ts)、[`lqip.ts`](../../../app/utils/content/lqip.ts)。
 
