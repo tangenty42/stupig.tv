@@ -1,3 +1,4 @@
+import { wake_background } from '@server/services/background/wakeup'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const boundary = vi.hoisted(() => ({ mode: 'app', real_receipts: false, execute: vi.fn(), images: vi.fn(), uploads: vi.fn(), retirement: vi.fn(), preload: vi.fn(), sync: vi.fn(), receipts: vi.fn(), storage_audit: vi.fn(), log: vi.fn(), dispatch: vi.fn() }))
@@ -62,10 +63,26 @@ it.each(['worker', 'disabled'])('starts no app consumer in %s mode', async (mode
   const host = { hooks: { hook: vi.fn() } }
   for (const adapter of content_background_adapters())
     register_content_background(host, adapter.id)
+  wake_background('images')
   await vi.advanceTimersByTimeAsync(10000)
   expect(host.hooks.hook).not.toHaveBeenCalled()
   for (const key of ['images', 'uploads', 'retirement', 'preload', 'sync', 'receipts', 'storage_audit'] as const)
     expect(boundary[key]).not.toHaveBeenCalled()
+})
+
+it('delivers local image hints through the app runner and removes them on close', async () => {
+  const host = { hooks: { hook: vi.fn() } }
+  register_content_background(host, 'images')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(boundary.images).toHaveBeenCalledOnce()
+  wake_background('images')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(boundary.images).toHaveBeenCalledTimes(2)
+  await host.hooks.hook.mock.calls[0]![1]()
+  wake_background('images')
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(boundary.images).toHaveBeenCalledTimes(2)
+  expect(local_background_status()).toBeNull()
 })
 
 it('does not let a hanging ESA sweep block notification delivery or app shutdown', async () => {

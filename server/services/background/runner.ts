@@ -17,6 +17,7 @@ interface Entry {
   failures: number
   error: 'sweep_failed' | 'shutdown_timeout' | null
   active: Promise<void> | null
+  wake_pending: boolean
 }
 
 /** Execution shell only. Domain adapters still own durable claims and checkpoints. */
@@ -64,6 +65,11 @@ export function create_background_runner(options: { shutdownTimeoutMs: number, r
         entry.phase = 'idle'
         entry.active = null
         resources.forEach(([key, weight]) => used[key]! -= weight)
+        if (entry.wake_pending && ! closed) {
+          entry.wake_pending = false
+          entry.phase = 'queued'
+          queue.push(entry)
+        }
         drain()
       })
     }
@@ -84,9 +90,25 @@ export function create_background_runner(options: { shutdownTimeoutMs: number, r
     }
     const timer = setInterval(tick, adapter.intervalSeconds * 1000)
     timer.unref()
-    entry = { adapter, timer, controller: new AbortController(), phase: 'idle', started: null, finished: null, runs: 0, failures: 0, error: null, active: null }
+    entry = { adapter, timer, controller: new AbortController(), phase: 'idle', started: null, finished: null, runs: 0, failures: 0, error: null, active: null, wake_pending: false }
     entries.set(adapter.id, entry)
     tick()
+  }
+  /** Coalesce admission hints without bypassing slots or overlapping a sweep. */
+  function wake(id: string) {
+    const entry = entries.get(id)
+    if (closed || ! entry)
+      return false
+    if (entry.phase === 'running') {
+      // The active sweep may already have read its bounded candidate list.
+      entry.wake_pending = true
+    }
+    else if (entry.phase === 'idle') {
+      entry.phase = 'queued'
+      queue.push(entry)
+      drain()
+    }
+    return true
   }
   function snapshot() {
     return { closed, resources: Object.fromEntries(Object.entries(options.resources).map(([key, capacity]) => [key, { capacity, used: used[key]! }])),
@@ -102,6 +124,7 @@ export function create_background_runner(options: { shutdownTimeoutMs: number, r
     for (const entry of entries.values()) {
       clearInterval(entry.timer)
       entry.controller.abort()
+      entry.wake_pending = false
       if (entry.phase === 'queued')
         entry.phase = 'idle'
     }
@@ -124,5 +147,5 @@ export function create_background_runner(options: { shutdownTimeoutMs: number, r
     })()
     return closing
   }
-  return { register, snapshot, close }
+  return { register, wake, snapshot, close }
 }

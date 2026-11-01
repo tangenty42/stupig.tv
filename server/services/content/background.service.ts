@@ -4,6 +4,7 @@ import { db } from '@server/lib/db'
 import { log_error } from '@server/lib/log'
 import { publish_sync_confirmed } from '@server/lib/mqtt'
 import { create_background_runner } from '@server/services/background/runner'
+import { register_background_wakeup } from '@server/services/background/wakeup'
 import { sweep_storage_audit } from '@server/services/storage-audit/service'
 import { create_content_receipt_compactor } from './command-receipts.service'
 import { sweep_object_retirements } from './object-retirement.service'
@@ -45,7 +46,9 @@ export function register_content_background(host: Host, id: string) {
     hosts.set(host, state)
     local = state.runner
     const runner = state.runner
+    const remove_wakeup = register_background_wakeup(runner)
     host.hooks.hook('close', async () => {
+      remove_wakeup()
       await runner.close()
       if (local === runner)
         local = null

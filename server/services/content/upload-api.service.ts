@@ -4,6 +4,7 @@ import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { create_aliyun_oss } from '@server/lib/aliyun-oss'
 import { db } from '@server/lib/db'
+import { wake_background } from '@server/services/background/wakeup'
 import { settings } from '@shared/settings'
 import { get_attachment_workspace } from './attachment-workspace.service'
 import { admit_upload_batch } from './upload-admission.service'
@@ -74,7 +75,11 @@ export async function operate_upload_session(operation: 'get' | 'initialize' | '
     await uploads.get(session, actor)
     await uploads.images.retry(session, actor)
   }
-  return uploads.images.state(await uploads[operation](session, actor))
+  const state = await uploads.images.state(await uploads[operation](session, actor))
+  // seal/retry have committed before a consumer can inspect their new intent.
+  if ((operation === 'seal' || operation === 'resume') && ['queued', 'ready'].includes(state.image_status ?? ''))
+    wake_background('images')
+  return state
 }
 export async function sign_upload_session_part(session: string, actor: number, part: number, md5: string) {
   return (await service()).sign(session, actor, part, md5)
