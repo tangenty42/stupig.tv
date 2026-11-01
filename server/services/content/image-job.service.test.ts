@@ -17,13 +17,13 @@ const base = {
   scope_id: 1, actor_id: 1, mode: 'upload', is_private: false, source: null,
   input: { key: 'content/att/staging/abc/def', etag: 'etag', version_id: 'version', size: 20, sha256: 'a'.repeat(64) },
   original_name: 'image.png', original_mime: 'image/png', profile_version: 1,
-  profile: { maxInputBytes: 100, maxPixels: 100, avifQuality: 60, avifEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 30, timeoutSeconds: 10 },
+  profile: { maxInputBytes: 100, maxPixels: 100, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 30, timeoutSeconds: 10 },
 }
 describe('durable image intent', () => {
   it('requires a confidential source for redaction and preserves privacy on ordinary copies', () => {
     expect(image_job_intent_schema.safeParse(base).success).toBe(true)
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'redacted' }).success).toBe(false)
-    const source = { id: 2, revision: 1, node_revision: 3, key: 'content/att/images/a.avif', is_private: true }
+    const source = { id: 2, revision: 1, node_revision: 3, key: 'content/att/images/a.webp', is_private: true }
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'redacted', source }).success).toBe(true)
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'redacted', source, is_private: true }).success).toBe(false)
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'copy', source }).success).toBe(false)
@@ -31,7 +31,7 @@ describe('durable image intent', () => {
   })
   it('does not accept arbitrary external input URLs or invalid encoding profiles', () => {
     expect(image_job_intent_schema.safeParse({ ... base, input: { ... base.input, key: 'https://other/secret' } }).success).toBe(false)
-    expect(image_job_intent_schema.safeParse({ ... base, profile: { ... base.profile, avifEffort: 99 } }).success).toBe(false)
+    expect(image_job_intent_schema.safeParse({ ... base, profile: { ... base.profile, webpEffort: 99 } }).success).toBe(false)
   })
 })
 
@@ -44,7 +44,7 @@ async function pipeline(cloud?: typeof create_oss_image_processor) {
     job: { id: 'c'.repeat(32), scope_id: 1, status: 'queued', execution_epoch: 0, executor_id: null as string | null, active_attempt_id: null as string | null,
       intent: { ... base, input, profile: { ... base.profile, maxInputBytes: 1000 } } as ImageJobIntent,
       result: null as Record<string, unknown> | null, attachment_id: null as number | null },
-    attempts: [] as { id: string, job_id: string, avif_key: string, jpeg_key: string, cleanup_required: number, adopted: number }[],
+    attempts: [] as { id: string, job_id: string, display_key: string, fallback_key: string, cleanup_required: number, adopted: number }[],
     attachment: { id: 2, story_id: 1, object_key: input.key, storage_provider: 'aliyun', encryption_key: null, node_revision: 1, is_private: 0, original_key: null } as Record<string, unknown>,
     retired: [] as string[],
     preloads: [] as string[],
@@ -78,11 +78,11 @@ async function pipeline(cloud?: typeof create_oss_image_processor) {
     if (sql.startsWith('SELECT * FROM content_image_attempts'))
       return [state.attempts.filter(a => a.id === values[0] && a.job_id === values[1])]
     if (sql.includes('FROM content_story_attachments')) {
-      const live = ['object_key', 'original_key', 'avif_key', 'jpeg_key', 'redacted_avif_key', 'redacted_jpeg_key'].some(key => state.attachment[key] === values[0])
+      const live = ['object_key', 'original_key', 'display_key', 'fallback_key', 'redacted_display_key', 'redacted_fallback_key'].some(key => state.attachment[key] === values[0])
       return [sql.includes('WHERE object_key') ? live ? [state.attachment] : [] : [structuredClone(state.attachment)]]
     }
     if (sql.startsWith('INSERT INTO content_image_attempts')) {
-      state.attempts.push({ id: String(values[0]), job_id: String(values[1]), avif_key: String(values[3]), jpeg_key: String(values[4]), cleanup_required: 1, adopted: 0 })
+      state.attempts.push({ id: String(values[0]), job_id: String(values[1]), display_key: String(values[3]), fallback_key: String(values[4]), cleanup_required: 1, adopted: 0 })
     }
     else if (sql.startsWith('UPDATE content_image_attempts SET cleanup_required')) {
       state.attempts.filter(a => ! a.adopted).forEach(a => a.cleanup_required = 1)
@@ -108,17 +108,17 @@ async function pipeline(cloud?: typeof create_oss_image_processor) {
     else if (sql.includes('SET status = \'completed\'')) {
       Object.assign(state.job, { status: 'completed', attachment_id: values[0] })
     }
-    else if (sql.startsWith('UPDATE content_story_attachments SET redacted_avif_key = NULL')) {
-      Object.assign(state.attachment, { redacted_avif_key: null, redacted_jpeg_key: null, redacted_metadata: null,
+    else if (sql.startsWith('UPDATE content_story_attachments SET redacted_display_key = NULL')) {
+      Object.assign(state.attachment, { redacted_display_key: null, redacted_fallback_key: null, redacted_metadata: null,
         redacted_revision: Number(state.attachment.redacted_revision ?? 0) + 1 })
     }
-    else if (sql.startsWith('UPDATE content_story_attachments SET redacted_avif_key')) {
-      Object.assign(state.attachment, { redacted_avif_key: values[0], redacted_jpeg_key: values[1], redacted_metadata: JSON.parse(String(values[2])),
-        redacted_lqip_jpeg: values[3], redacted_revision: Number(state.attachment.redacted_revision ?? 0) + 1,
+    else if (sql.startsWith('UPDATE content_story_attachments SET redacted_display_key')) {
+      Object.assign(state.attachment, { redacted_display_key: values[0], redacted_fallback_key: values[1], redacted_metadata: JSON.parse(String(values[2])),
+        redacted_lqip: values[3], redacted_revision: Number(state.attachment.redacted_revision ?? 0) + 1,
         node_revision: Number(state.attachment.node_revision) + 1 })
     }
     else if (sql.startsWith('UPDATE content_story_attachments SET original_key')) {
-      Object.assign(state.attachment, { original_key: values[0], avif_key: values[1], jpeg_key: values[2], parent_avif_key: values[3], image_metadata: JSON.parse(String(values[5])), object_key: values[7],
+      Object.assign(state.attachment, { original_key: values[0], display_key: values[1], fallback_key: values[2], source_display_key: values[3], image_metadata: JSON.parse(String(values[5])), object_key: values[7],
         node_revision: Number(state.attachment.node_revision) + 1, image_revision: Number(state.attachment.image_revision ?? 0) + 1 })
     }
     else if (sql.startsWith('INSERT IGNORE INTO content_object_retirements')) {
@@ -199,7 +199,7 @@ it.each([true, false])('publishes the verified original and both variants with a
   expect(f.connection.execute.mock.calls.find(([sql]) => sql.startsWith('INSERT IGNORE INTO content_object_retirements'))?.[1])
     .toEqual([f.input.key, 1, 'image-input', 'dev', 'https://oss.example.test', '123', 'https://edge.example.test'])
   expect(f.state.job.status).toBe('completed')
-  expect(f.state.preloads).toEqual([f.state.attachment.avif_key, f.state.attachment.jpeg_key])
+  expect(f.state.preloads).toEqual([f.state.attachment.display_key, f.state.attachment.fallback_key])
   expect(f.state.preloads).not.toContain(f.state.attachment.original_key)
   await f.adopt()
   expect(f.state.preloads).toHaveLength(2)
@@ -216,60 +216,60 @@ it('owns cloud targets before execution and adopts cloud receipts through the ex
   f.state.job.intent.profile_version = 2
   encode.mockImplementation(async (request) => {
     expect(f.state.attempts).toHaveLength(1)
-    expect(f.state.attempts[0]).toMatchObject({ avif_key: `${request.prefix}.avif`, jpeg_key: `${request.prefix}.jpg`, adopted: 0 })
-    const avif_bytes = await sharp(request.bytes).avif({ effort: 0 }).toBuffer()
-    const jpeg_bytes = await sharp(avif_bytes).jpeg().toBuffer()
+    expect(f.state.attempts[0]).toMatchObject({ display_key: `${request.prefix}.webp`, fallback_key: `${request.prefix}.jpg`, adopted: 0 })
+    const webp_bytes = await sharp(request.bytes).webp({ effort: 0 }).toBuffer()
+    const jpeg_bytes = await sharp(webp_bytes).jpeg().toBuffer()
     const put = async (key: string, bytes: Buffer, mime: string) => ({ key, ... await request.storage.put_object(key, bytes, mime, 'private'), size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
-    const avif = await put(`${request.prefix}.avif`, avif_bytes, 'image/avif')
-    const jpeg = await put(`${request.prefix}.jpg`, jpeg_bytes, 'image/jpeg')
+    const display = await put(`${request.prefix}.webp`, webp_bytes, 'image/webp')
+    const fallback = await put(`${request.prefix}.jpg`, jpeg_bytes, 'image/jpeg')
     await request.checkpoint()
-    return { avif: { ... avif, version_id: avif.version_id! }, jpeg: { ... jpeg, version_id: jpeg.version_id! }, width: 4, height: 3, lqip: jpeg_bytes }
+    return { display: { ... display, version_id: display.version_id! }, fallback: { ... fallback, version_id: fallback.version_id! }, width: 4, height: 3, lqip: jpeg_bytes }
   })
   await f.jobs.run(f.state.job.id, 1)
   expect(encode).toHaveBeenCalledOnce()
   expect(f.state.job.status).toBe('ready')
   await f.adopt()
   expect(f.state.job.status).toBe('completed')
-  expect(f.state.attachment.avif_key).toBe(f.state.attempts[0]!.avif_key)
+  expect(f.state.attachment.display_key).toBe(f.state.attempts[0]!.display_key)
   expect(f.state.attachment.original_key).toBe(image_original_key(f.state.job.id, f.state.job.active_attempt_id!))
 })
 
 it('publishes a redacted pair on its private owner without changing its normal pixels or archive', async () => {
   const f = await pipeline()
-  Object.assign(f.state.attachment, { avif_key: 'private.avif', jpeg_key: 'private.jpg', object_key: 'private.avif', original_key: 'raw', is_private: 1,
-    image_revision: 1, redacted_avif_key: 'old-redacted.avif', redacted_jpeg_key: 'old-redacted.jpg', redacted_revision: 1 })
-  Object.assign(f.state.job.intent, { mode: 'redacted', source: { id: 2, revision: 1, node_revision: 1, key: 'private.avif', is_private: true } })
+  Object.assign(f.state.attachment, { display_key: 'private.webp', fallback_key: 'private.jpg', object_key: 'private.webp', original_key: 'raw', is_private: 1,
+    image_revision: 1, redacted_display_key: 'old-redacted.webp', redacted_fallback_key: 'old-redacted.jpg', redacted_revision: 1 })
+  Object.assign(f.state.job.intent, { mode: 'redacted', source: { id: 2, revision: 1, node_revision: 1, key: 'private.webp', is_private: true } })
   await f.jobs.run(f.state.job.id, 1)
-  const result = f.state.job.result as { avif: { key: string }, jpeg: { key: string } }
+  const result = f.state.job.result as { display: { key: string }, fallback: { key: string } }
   await f.adopt()
-  expect(f.state.attachment).toMatchObject({ id: 2, object_key: 'private.avif', avif_key: 'private.avif', jpeg_key: 'private.jpg', original_key: 'raw',
-    is_private: 1, image_revision: 1, redacted_avif_key: result.avif.key, redacted_jpeg_key: result.jpeg.key, redacted_revision: 2 })
-  expect(f.state.preloads).toEqual([result.avif.key, result.jpeg.key])
+  expect(f.state.attachment).toMatchObject({ id: 2, object_key: 'private.webp', display_key: 'private.webp', fallback_key: 'private.jpg', original_key: 'raw',
+    is_private: 1, image_revision: 1, redacted_display_key: result.display.key, redacted_fallback_key: result.fallback.key, redacted_revision: 2 })
+  expect(f.state.preloads).toEqual([result.display.key, result.fallback.key])
   expect(f.connection.execute.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO content_story_attachments'))).toBe(false)
-  expect(f.state.retired).toEqual(['old-redacted.avif', 'old-redacted.jpg', f.input.key])
+  expect(f.state.retired).toEqual(['old-redacted.webp', 'old-redacted.jpg', f.input.key])
   await f.adopt()
   expect(f.state.attachment.redacted_revision).toBe(2)
 })
 
 it.each(['keep', 'discard'] as const)('honors the %s decision when overwriting normal pixels', async (policy) => {
   const f = await pipeline()
-  Object.assign(f.state.attachment, { avif_key: 'normal.avif', jpeg_key: 'normal.jpg', object_key: 'normal.avif', original_key: 'raw', image_revision: 1,
-    redacted_avif_key: 'redacted.avif', redacted_jpeg_key: 'redacted.jpg', redacted_revision: 1 })
-  Object.assign(f.state.job.intent, { mode: 'overwrite', source: { id: 2, revision: 1, node_revision: 1, key: 'normal.avif', is_private: false }, redacted_policy: policy })
+  Object.assign(f.state.attachment, { display_key: 'normal.webp', fallback_key: 'normal.jpg', object_key: 'normal.webp', original_key: 'raw', image_revision: 1,
+    redacted_display_key: 'redacted.webp', redacted_fallback_key: 'redacted.jpg', redacted_revision: 1 })
+  Object.assign(f.state.job.intent, { mode: 'overwrite', source: { id: 2, revision: 1, node_revision: 1, key: 'normal.webp', is_private: false }, redacted_policy: policy })
   await f.jobs.run(f.state.job.id, 1)
   await f.adopt()
   expect(f.state.attachment.original_key).toBe('raw')
-  expect(f.state.attachment.redacted_avif_key).toBe(policy === 'keep' ? 'redacted.avif' : null)
-  expect(f.state.retired.includes('redacted.avif')).toBe(policy === 'discard')
+  expect(f.state.attachment.redacted_display_key).toBe(policy === 'keep' ? 'redacted.webp' : null)
+  expect(f.state.retired.includes('redacted.webp')).toBe(policy === 'discard')
 })
 
 async function copy_pipeline() {
   const f = await pipeline()
   const source = { id: 77, story_id: 1, storage_provider: 'aliyun', encryption_key: null, is_private: 0,
-    object_key: 'source.avif', avif_key: 'source.avif', image_revision: 1, node_revision: 1, original_key: 'source-original' }
+    object_key: 'source.webp', display_key: 'source.webp', image_revision: 1, node_revision: 1, original_key: 'source-original' }
   f.state.job.intent.mode = 'copy'
-  f.state.attachment.file_name = 'docs/副本.avif'
-  f.state.job.intent.source = { id: 77, revision: 1, node_revision: 1, key: source.avif_key, is_private: false }
+  f.state.attachment.file_name = 'docs/副本.webp'
+  f.state.job.intent.source = { id: 77, revision: 1, node_revision: 1, key: source.display_key, is_private: false }
   const execute = f.connection.execute.getMockImplementation()!
   f.connection.execute.mockImplementation(async (sql, values = []) => {
     if (sql.includes('FROM content_story_attachments') && Number(values[0]) === source.id)
@@ -279,18 +279,18 @@ async function copy_pipeline() {
   return { f, source }
 }
 
-it('publishes an independent edited copy with its own initial AVIF archive and no source pointers', async () => {
+it('publishes an independent edited copy with its own initial WebP archive and no source pointers', async () => {
   const { f, source } = await copy_pipeline()
   await f.jobs.run(f.state.job.id, 1)
   const key = image_original_key(f.state.job.id, f.state.job.active_attempt_id!)
-  const avif = f.state.job.result!.avif as { key: string, size: number, sha256: string }
-  expect(f.state.job.result?.original).toMatchObject({ key, size: avif.size, sha256: avif.sha256 })
-  expect(key).not.toBe(avif.key)
-  expect(f.objects.get(key)?.bytes).toEqual(f.objects.get(avif.key)?.bytes)
-  expect(f.storage.copy_object).toHaveBeenCalledExactlyOnceWith(avif.key, key, 'private')
+  const display = f.state.job.result!.display as { key: string, size: number, sha256: string }
+  expect(f.state.job.result?.original).toMatchObject({ key, size: display.size, sha256: display.sha256 })
+  expect(key).not.toBe(display.key)
+  expect(f.objects.get(key)?.bytes).toEqual(f.objects.get(display.key)?.bytes)
+  expect(f.storage.copy_object).toHaveBeenCalledExactlyOnceWith(display.key, key, 'private')
   await f.adopt()
-  expect(f.state.attachment).toMatchObject({ original_key: key, avif_key: avif.key, jpeg_key: expect.stringMatching(/\.jpg$/), parent_avif_key: null,
-    image_metadata: { original: { key, name: '副本.avif', mime: 'image/avif' }, source_id: null, source_revision: null, redaction_source_id: null } })
+  expect(f.state.attachment).toMatchObject({ original_key: key, display_key: display.key, fallback_key: expect.stringMatching(/\.jpg$/), source_display_key: null,
+    image_metadata: { original: { key, name: '副本.webp', mime: 'image/webp' }, source_id: null, source_revision: null, redaction_source_id: null } })
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_id')
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_key')
   source.original_key = 'replaced-source-original'
@@ -315,14 +315,14 @@ it('keeps the initial copy archive through subsequent overwrite edits and retire
   Object.assign(f.state.attachment.image_metadata as object, { archive_source_id: 77, archive_source_key: 'obsolete' })
   const archive = String(f.state.attachment.original_key)
   const initial = Buffer.from(f.objects.get(archive)!.bytes)
-  const avif = String(f.state.attachment.avif_key)
-  const jpeg = String(f.state.attachment.jpeg_key)
+  const display = String(f.state.attachment.display_key)
+  const fallback = String(f.state.attachment.fallback_key)
   const input = { ... f.input, key: 'content/att/staging/overwrite/pixels' }
   const uploaded = await f.storage.put_object(input.key, f.bytes)
   Object.assign(input, uploaded)
   Object.assign(f.state.job, { id: 'd'.repeat(32), status: 'queued', result: null })
   Object.assign(f.state.job.intent, { mode: 'overwrite', input,
-    source: { id: 2, revision: Number(f.state.attachment.image_revision), node_revision: Number(f.state.attachment.node_revision), key: avif, is_private: false } })
+    source: { id: 2, revision: Number(f.state.attachment.image_revision), node_revision: Number(f.state.attachment.node_revision), key: display, is_private: false } })
   await f.jobs.run(f.state.job.id, 1)
   expect(f.state.job.result?.original).toBeNull()
   await f.adopt(Number(f.state.attachment.node_revision))
@@ -330,7 +330,7 @@ it('keeps the initial copy archive through subsequent overwrite edits and retire
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_id')
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_key')
   expect(f.objects.get(archive)?.bytes).toEqual(initial)
-  expect(f.state.retired).toEqual(expect.arrayContaining([avif, jpeg, input.key]))
+  expect(f.state.retired).toEqual(expect.arrayContaining([display, fallback, input.key]))
   expect(f.state.retired).not.toContain(archive)
 })
 
@@ -356,7 +356,7 @@ it('rolls back both the original pointer and input retirement when publication f
   expect(f.objects.has(f.input.key)).toBe(true)
 })
 
-it.each(['original', 'avif', 'jpeg'])('refuses publication of a retiring image %s role', async (role) => {
+it.each(['original', 'display', 'fallback'])('refuses publication of a retiring image %s role', async (role) => {
   const f = await pipeline()
   await f.jobs.run(f.state.job.id, 1)
   const result = f.state.job.result![role] as { key: string }

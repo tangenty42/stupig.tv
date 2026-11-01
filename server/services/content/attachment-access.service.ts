@@ -1,11 +1,13 @@
 import type { StorageBucket } from '@server/lib/storage'
 import type { AuthUser } from '@server/types/auth'
+import type { ContentImageRole } from '@shared/content-image-format'
 import type { RowDataPacket } from 'mysql2/promise'
 import { createHash } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { create_esa } from '@server/lib/esa'
 import { attachment_access_version } from '@server/services/content-attachments.service'
+import { content_image_formats } from '@shared/content-image-format'
 import { attachment_download_name } from '@shared/content-markdown'
 import { has_permission } from '@shared/permissions'
 import { settings } from '@shared/settings'
@@ -23,24 +25,24 @@ export interface ImageAccessRow {
   is_private: number
   encryption_key: string | null
   original_key?: string | null
-  avif_key?: string | null
-  jpeg_key?: string | null
+  display_key?: string | null
+  fallback_key?: string | null
   image_metadata?: unknown
-  redacted_avif_key?: string | null
-  redacted_jpeg_key?: string | null
+  redacted_display_key?: string | null
+  redacted_fallback_key?: string | null
   redacted_revision?: number
   redacted_metadata?: unknown
   read_revision?: number | string
 }
-export type ImageReadRole = 'auto' | 'avif' | 'jpeg' | 'original' | 'redacted_avif' | 'redacted_jpeg' | 'redacted'
+export type ImageReadRole = 'auto' | 'display' | 'fallback' | 'original' | 'redacted_display' | 'redacted_fallback' | 'redacted'
 export function require_attachment_read(row: ImageAccessRow, viewer: AuthUser | null) {
   if (row.storage_provider !== 'aliyun' || row.encryption_key !== null)
     throw new ApiError(503, '附件尚未完成迁移')
   if (row.is_private && ! has_permission(viewer, 'content_private', 'read'))
     throw new ApiError(403, '你没有机密附件的读取权限')
 }
-export function image_download_name(name: string, extension: 'avif' | 'jpg') {
-  return `${attachment_download_name(name).replace(/\.[^.]+$/, '')}.${extension}`
+export function image_download_name(name: string, role: ContentImageRole) {
+  return `${attachment_download_name(name).replace(/\.[^.]+$/, '')}.${content_image_formats[role].extension}`
 }
 export async function resolve_attachment_role(row: ImageAccessRow, role: ImageReadRole, viewer: AuthUser | null, authorize?: (row: ImageAccessRow) => Promise<void>) {
   const redacted = (role === 'redacted' || role.startsWith('redacted_')) || (row.is_private && ! has_permission(viewer, 'content_private', 'read') && role !== 'original')
@@ -51,8 +53,8 @@ export async function resolve_attachment_role(row: ImageAccessRow, role: ImageRe
     const public_row = { ... row, is_private: 0 }
     require_attachment_read(public_row, viewer)
     await authorize?.(public_row)
-    const jpeg = role === 'jpeg' || role === 'redacted_jpeg'
-    return { key: (jpeg ? row.redacted_jpeg_key : row.redacted_avif_key)!, name: image_download_name(row.file_name, jpeg ? 'jpg' : 'avif') }
+    const fallback = role === 'fallback' || role === 'redacted_fallback'
+    return { key: (fallback ? row.redacted_fallback_key : row.redacted_display_key)!, name: image_download_name(row.file_name, fallback ? 'fallback' : 'display') }
   }
   async function check(current: ImageAccessRow) {
     if (authorize) {
@@ -69,9 +71,9 @@ export async function resolve_attachment_role(row: ImageAccessRow, role: ImageRe
     const metadata = typeof row.image_metadata === 'string' ? JSON.parse(row.image_metadata) : row.image_metadata as { original?: { name?: string } } | null
     return { key: row.original_key, name: attachment_download_name(metadata?.original?.name ?? row.file_name) }
   }
-  if (row.avif_key && row.jpeg_key) {
-    const jpeg = role === 'jpeg'
-    return { key: jpeg ? row.jpeg_key : row.avif_key, name: image_download_name(row.file_name, jpeg ? 'jpg' : 'avif') }
+  if (row.display_key && row.fallback_key) {
+    const fallback = role === 'fallback'
+    return { key: fallback ? row.fallback_key : row.display_key, name: image_download_name(row.file_name, fallback ? 'fallback' : 'display') }
   }
   if (role !== 'auto')
     throw new ApiError(409, '图片尚未处理就绪')
@@ -92,8 +94,8 @@ export async function resolve_attachment_delivery(row: ImageAccessRow, role: Ima
     if (! Number.isSafeInteger(Number(current.id)) || Number(current.id) <= 0 || ! /^[1-9]\d*$/.test(String(current.read_revision)))
       throw new ApiError(503, '附件读取身份不完整')
     dependencies.set(Number(current.id), [current.id, String(current.read_revision), attachment_access_version(current),
-      current.original_key ?? null, current.avif_key ?? null, current.jpeg_key ?? null, current.image_metadata ?? null,
-      current.redacted_avif_key ?? null, current.redacted_jpeg_key ?? null, current.redacted_revision ?? 0])
+      current.original_key ?? null, current.display_key ?? null, current.fallback_key ?? null, current.image_metadata ?? null,
+      current.redacted_display_key ?? null, current.redacted_fallback_key ?? null, current.redacted_revision ?? 0])
   })
   const revision = createHash('sha256').update(JSON.stringify([... dependencies.values()])).digest('hex')
   return { ... object, grant: { id: Number(row.id), revision, role, session: viewer?.session_id ?? 0, generation: viewer?.token_generation_id ?? 0 } }
@@ -113,7 +115,7 @@ export async function attachment_redirect(id: number, version: string, viewer: A
     throw new ApiError(403, '你没有机密附件的读取权限')
   if (! version || attachment_access_version(row) !== version)
     throw new ApiError(409, '附件版本已变化，请刷新后重试')
-  const selected = role === 'redacted' ? accept.includes('image/avif') ? 'redacted_avif' : 'redacted_jpeg' : role === 'auto' && row.avif_key && ! accept.includes('image/avif') ? 'jpeg' : role
+  const selected = role === 'redacted' ? accept.includes(content_image_formats.display.mime) ? 'redacted_display' : 'redacted_fallback' : role === 'auto' && row.display_key && ! accept.includes(content_image_formats.display.mime) ? 'fallback' : role
   const object = await resolve_attachment_delivery(row, selected, viewer)
   return create_esa().signed_read_url(object.key, settings.app.content.read.urlTtlSeconds, method, object.name, 'inline', object.grant)
 }
@@ -124,17 +126,17 @@ export async function image_editor_source(id: number, version: string, viewer: A
   if (! row)
     throw new ApiError(404, '图片不存在')
   require_attachment_read(row, viewer)
-  if (attachment_access_version(row) !== version || ! row.avif_key || ! row.jpeg_key)
+  if (attachment_access_version(row) !== version || ! row.display_key || ! row.fallback_key)
     throw new ApiError(409, '图片尚未处理就绪或版本已变化')
   const base = `/api/content/attachments/${id}?version=${version}`
-  const avif_url = `${base}&role=${redacted && has_redacted_variant(row) ? 'redacted_avif' : 'avif'}`
+  const display_url = `${base}&role=${redacted && has_redacted_variant(row) ? 'redacted_display' : 'display'}`
   try {
     await resolve_attachment_role(row, 'original', viewer)
-    return { avif_url, original_url: `${base}&role=original`, original_reason: '' }
+    return { display_url, original_url: `${base}&role=original`, original_reason: '' }
   }
   catch (error) {
     if (! (error instanceof ApiError) || ! [403, 404].includes(error.statusCode))
       throw error
-    return { avif_url, original_url: null, original_reason: error.message }
+    return { display_url, original_url: null, original_reason: error.message }
   }
 }

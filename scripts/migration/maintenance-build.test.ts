@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
-import { cp, mkdir, readFile, rm } from 'node:fs/promises'
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -17,13 +17,15 @@ const run = promisify(execFile)
 // 真的构建并运行一次产物。
 const project_root = resolve(import.meta.dirname, '../..')
 const work_dir = resolve(tmpdir(), 'stupig-maintenance-bundle-test')
-const build_output = resolve(project_root, '.output/server/maintenance/cleanup.mjs')
-const bundle = resolve(work_dir, 'cleanup.mjs')
+const build_output = resolve(project_root, '.output/server/maintenance/migrate.mjs')
+const bundle = resolve(work_dir, 'migrate.mjs')
 
 beforeAll(async () => {
   await rm(work_dir, { recursive: true, force: true })
   await mkdir(work_dir, { recursive: true })
   await cp(resolve(project_root, 'config'), resolve(work_dir, 'config'), { recursive: true })
+  await mkdir(dirname(build_output), { recursive: true })
+  await writeFile(resolve(dirname(build_output), 'cleanup.mjs'), '// obsolete cleanup fixture\n')
   if (process.platform === 'win32') {
     await run(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'pnpm maintenance:build'], { cwd: project_root })
   }
@@ -104,7 +106,7 @@ describe('维护脚本产物', () => {
 
     let failure: { stderr?: string, stdout?: string } | undefined
     try {
-      await run(process.execPath, [bundle], { cwd: work_dir, env })
+      await run(process.execPath, [bundle, '--status'], { cwd: work_dir, env })
     }
     catch (error) {
       failure = error as typeof failure
@@ -127,11 +129,15 @@ describe('维护脚本产物', () => {
     expect(scripts['content:private:migrate']).toBeUndefined()
     expect(scripts['content:storage:migrate']).toBeUndefined()
     expect(scripts['content:refs:migrate']).toBeUndefined()
+    expect(scripts['storage:cleanup']).toBeUndefined()
+    await expect(readFile(resolve(dirname(build_output), 'cleanup.mjs'))).rejects.toMatchObject({ code: 'ENOENT' })
     const manifest = JSON.parse(await readFile(resolve(project_root, '.output/server/maintenance/migration-scripts/manifest.json'), 'utf8'))
     expect(manifest.scripts.map((item: { filename: string }) => item.filename)).toEqual([
       '20261024210100_content_references.ts',
       '20261024210200_content_workspace.ts',
       '20261028210100_reference_journal_entries.ts',
+      '20261101133000_content_webp.ts',
+      '20261101143000_retire_legacy_content.ts',
     ])
   })
 

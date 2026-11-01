@@ -1,5 +1,5 @@
 import type { create_aliyun_oss } from './aliyun-oss'
-import type { ImageProcessingOptions } from './image-processing'
+import type { ImageProcessingOptions } from './webp-image-processing'
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import sharp from 'sharp'
@@ -12,7 +12,7 @@ vi.mock('ali-oss', () => ({ default: class {
   constructor(config: Record<string, unknown>) { cloud.clients.push(config) }
 } }))
 const config = { bucket: 'private-test', region: 'oss-cn-shenzhen', endpoint: 'https://oss-cn-shenzhen.aliyuncs.com', publicBaseUrl: 'https://edge.test', accessKeyId: 'test', accessKeySecret: 'test', timeoutMs: 20000, copyPartSizeMb: 64, uploadRoleArn: null }
-const profile: ImageProcessingOptions = { maxInputBytes: 20971520, maxPixels: 9437184, avifQuality: 100, avifEffort: 4, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 60 }
+const profile: ImageProcessingOptions = { maxInputBytes: 20971520, maxPixels: 9437184, webpQuality: 100, webpEffort: 4, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 60 }
 beforeEach(() => {
   vi.resetAllMocks()
   cloud.clients.length = 0
@@ -38,7 +38,7 @@ async function fixture() {
   }
   cloud.getStream.mockImplementation(async (source: string, { process: operation }: { process: string }) => {
     const image = sharp(objects.get(source)!.bytes)
-    const bytes = operation.includes('format,avif') ? await image.avif({ effort: 0 }).toBuffer() : operation.includes('resize') ? await image.resize({ width: 24, height: 24, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 40 }).toBuffer() : await image.jpeg().toBuffer()
+    const bytes = operation.includes('format,webp') ? await image.webp({ effort: 0 }).toBuffer() : operation.includes('resize') ? await image.resize({ width: 24, height: 24, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 40 }).toBuffer() : await image.jpeg().toBuffer()
     return { res: { status: 200 }, stream: Readable.from([bytes]) }
   })
   const controller = new AbortController()
@@ -47,24 +47,24 @@ async function fixture() {
   return { run, request, storage, objects, controller }
 }
 
-it('persists both roles and derives JPEG/LQIP from the verified final AVIF using server credentials', async () => {
+it('persists both roles and derives JPEG/LQIP from the verified final WebP using server credentials', async () => {
   const f = await fixture()
   const result = await f.run()
-  expect(result).toMatchObject({ width: 32, height: 16, avif: { key: `${f.request.prefix}.avif`, sha256: expect.stringMatching(/^[a-f\d]{64}$/) }, jpeg: { key: `${f.request.prefix}.jpg` } })
+  expect(result).toMatchObject({ width: 32, height: 16, display: { key: `${f.request.prefix}.webp`, sha256: expect.stringMatching(/^[a-f\d]{64}$/) }, fallback: { key: `${f.request.prefix}.jpg` } })
   expect(cloud.getStream.mock.calls).toEqual([
-    [f.request.input.key, { process: 'image/auto-orient,1/format,avif/quality,Q_100', headers: { 'If-Match': '"source"' } }],
-    [result.avif.key, { process: 'image/format,jpg/quality,Q_85', headers: { 'If-Match': `"${result.avif.etag}"` } }],
-    [result.avif.key, { process: 'image/resize,m_lfit,w_24,h_24,limit_1/format,jpg/quality,Q_40', headers: { 'If-Match': `"${result.avif.etag}"` } }],
+    [f.request.input.key, { process: 'image/auto-orient,1/format,webp/quality,Q_100', headers: { 'If-Match': '"source"' } }],
+    [result.display.key, { process: 'image/format,jpg/quality,Q_85', headers: { 'If-Match': `"${result.display.etag}"` } }],
+    [result.display.key, { process: 'image/resize,m_lfit,w_24,h_24,limit_1/format,jpg/quality,Q_40', headers: { 'If-Match': `"${result.display.etag}"` } }],
   ])
-  expect(f.storage.put_object.mock.calls.map(call => call[0])).toEqual([result.avif.key, result.jpeg.key])
-  expect(f.storage.put_object).toHaveBeenCalledWith(result.avif.key, expect.any(Buffer), 'image/avif', 'private')
+  expect(f.storage.put_object.mock.calls.map(call => call[0])).toEqual([result.display.key, result.fallback.key])
+  expect(f.storage.put_object).toHaveBeenCalledWith(result.display.key, expect.any(Buffer), 'image/webp', 'private')
   expect(cloud.clients[0]).toMatchObject({ secure: true, authorizationV4: true, timeout: 20000 })
   expect(await sharp(result.lqip).metadata()).toMatchObject({ format: 'jpeg', width: 24, height: 12 })
 })
 
 it('rejects public output ACLs before dependent conversion or publication', async () => {
   const f = await fixture()
-  f.storage.get_object_access.mockImplementation(async (key?: string) => key?.endsWith('.avif') ? 'public-read' : 'private')
+  f.storage.get_object_access.mockImplementation(async (key?: string) => key?.endsWith('.webp') ? 'public-read' : 'private')
   await expect(f.run()).rejects.toThrow('来源校验失败')
   expect(cloud.getStream).toHaveBeenCalledOnce()
 })
@@ -88,7 +88,7 @@ it('stops after a sent write if cancellation arrives and leaves its owned target
   await expect(f.run()).rejects.toThrow()
   expect(cloud.getStream).toHaveBeenCalledOnce()
   expect(f.storage.put_object).toHaveBeenCalledOnce()
-  expect(f.objects.has(`${f.request.prefix}.avif`)).toBe(true)
+  expect(f.objects.has(`${f.request.prefix}.webp`)).toBe(true)
 })
 
 it('rejects a changed input identity before submitting processing', async () => {

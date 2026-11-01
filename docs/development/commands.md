@@ -2,9 +2,9 @@
 
 事实源：[package.json](../../package.json)、[scripts](../../scripts/)、[Check](../../.github/workflows/check.yml)、[Deploy](../../.github/workflows/deploy.yml)、[Dockerfile](../../Dockerfile)。本页说明用途与调用关系，具体操作步骤由对应模块手册维护。
 
-2026-11-01 精简：package.json 从 **38 个入口减少到 34 个**，其中 2 个是安装钩子。`check` 是本地与 CI unit job 的共同质量入口，`typecheck` 统一应用、工具和浏览器测试的类型检查。文件数量不等于需要手动记住的命令数量。
+2026-11-01 精简：package.json 从 **38 个入口减少到 33 个**，其中 2 个是安装钩子；先前精简到 34 个后，本轮再移除旧 S3 盘点入口。`check` 是本地与 CI unit job 的共同质量入口，`typecheck` 统一应用、工具和浏览器测试的类型检查。文件数量不等于需要手动记住的命令数量。
 
-ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校验入口，移除重复别名与未使用的静态生成命令。存储盘点、样本导出和开发重置的运维改名仍是待实施建议。
+ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校验入口，移除重复别名与未使用的静态生成命令。旧存储盘点已删除；样本导出和开发重置的运维改名仍是待实施建议。
 
 ## package.json 全部入口
 
@@ -31,7 +31,6 @@ ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校�
 | `background:worker` | 独立进程运行后台任务；要求 `app.backgroundRunner.mode=worker` | 保留；当前精简生产镜像未打包此入口，不能据此认为容器已有 worker 命令 |
 | `background:status` | 查询领域账本及全桶对账进度；`--storage-findings` 附带当前目标前 100 个未关闭异常 | 保留；查询和执行保持分开，不另设 cron |
 | `content:preload:check` | 查 ESA 额度、分层缓存、配置与预热账本；`--policy` 只输出建议 RAM 策略，不提交预热任务 | 保留；后续将 policy 分支改为只加载 ESA 配置，避免要求无关 DB/应用参数 |
-| `storage:cleanup` | **旧 S3 存储只读盘点**，报告孤儿对象、暂存、multipart、头像等；`--delete` 已拒绝执行 | 建议改为 `storage:audit`，显式说明 legacy 范围；当前不是新 Aliyun OSS 全量审计器 |
 | `db:dump:dev` | 从所选库导出开发用 SQL，仅替换手机号、bcrypt 和 IPv4，可 `--gzip` | 建议改为 `db:export-sample`；名字中的 dev 目前是导出用途，不固定源库，容易误解 |
 | `content:dev:reset` | 开发 Content 重置，默认盘点；`--apply` 执行删除，支持清理记录续跑 | 建议改为 `content:reset:dev`，真正固定 dev 参数；继续保留环境/库/桶保护 |
 | `lint` | 全仓库 ESLint 检查 | 保留 |
@@ -69,7 +68,6 @@ CI unit job 直接运行 `pnpm check`。`pnpm typecheck` 依次执行 Nuxt、scr
 | [`background/worker.ts`](../../scripts/background/worker.ts) | 独立 worker 适配器注册、保活、退出清理 | 保留 |
 | [`background/status.ts`](../../scripts/background/status.ts) | 领域账本状态查询及 DB 关闭 | 保留 |
 | [`content/preload-check.ts`](../../scripts/content/preload-check.ts) | 预热状态/额度/分层缓存检查及 RAM policy 输出 | 保留，按内容预热归属 content/ |
-| [`storage/audit.ts`](../../scripts/storage/audit.ts) | 旧 S3 只读盘点；package 命令及 maintenance build 都引用 | 不能当无调用方删除；旧源全部退役后再评估去除 |
 | [`db/export-sample.ts`](../../scripts/db/export-sample.ts) | mysqldump 流式替换及可选 gzip；db:dump:dev 调用 | 保留；需补明确源库/容器选择，并修正 pnpm 命令的误导命名 |
 | [`content/reset-dev.ts`](../../scripts/content/reset-dev.ts) | 开发重置盘点、保护条件、数据库清除和对象清理续跑 | 保留；不并入日常迁移或普通清理 |
 | [`migration/maintenance-build.ts`](../../scripts/migration/maintenance-build.ts) | 只调用 migration/build.ts 的 build_maintenance | 可将 CLI 入口放进 build.ts 后移除薄包装；保持 production 产物合同 |
@@ -113,7 +111,7 @@ CI unit job 直接运行 `pnpm check`。`pnpm typecheck` 依次执行 Nuxt、scr
 
 ### 后续：修正运维命名
 
-将 `storage:cleanup` 改为 `storage:audit`、`db:dump:dev` 改为 `db:export-sample`、`content:dev:reset` 改为 `content:reset:dev`，仍需同步调用方与实际环境选择；本轮没有改名。完整脚本职责及其保护边界见上表。
+将 `db:dump:dev` 改为 `db:export-sample`、`content:dev:reset` 改为 `content:reset:dev`，仍需同步调用方与实际环境选择；本轮没有改名。旧 S3 `storage:cleanup`、对应脚本和 `cleanup.mjs` 打包入口已随五张旧表退役删除，不再改名保留。完整脚本职责及其保护边界见上表。
 
 ### 已完成：按职责收拢 scripts
 

@@ -79,7 +79,7 @@ it.each([true, false])('offers a separate redacted preview to an unprivileged re
   const source = readFileSync(new URL('../../components/MyContent/Attachment/Workspace.vue', import.meta.url), 'utf8')
   const builder = source.slice(source.indexOf('function menu_for('), source.indexOf('\nfunction replaced('))
   const row: WorkspaceListRow = { ... rows[1]!, node: { ... rows[1]!.node!, attachment: {
-    id: 3, file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 20, version: 'v1', is_image: true, is_private: true,
+    id: 3, file_name: 'photo.png.good', mime_type: 'image/webp', file_size: 20, version: 'v1', is_image: true, is_private: true,
     url: null, is_redacted_view: has_redacted, has_redacted, redacted_url: has_redacted ? '/redacted' : null,
   } } }
   const calls: unknown[][] = []
@@ -104,7 +104,7 @@ it.each([true, false])('offers a separate redacted preview to an unprivileged re
     expect(redacted).toMatchObject({ icon_name: 'lucide:eye-off' })
     expect(redacted?.disabled).not.toBe(true)
     redacted!.command!({ originalEvent: new Event('click'), item: redacted! })
-    expect(calls).toEqual([[row, 'redacted_avif']])
+    expect(calls).toEqual([[row, 'redacted_display']])
   }
   else {
     expect(redacted).toBeUndefined()
@@ -160,7 +160,7 @@ it.each(['file', 'folder', 'image', 'image_copy', 'replacement', 'upload', 'read
   const file: WorkspaceListRow = { ... rows[2]!, node: { ... rows[2]!.node!, attachment: {
     file_name: 'b.txt', mime_type: 'text/plain', file_size: 1, version: 'v', url: '/b.txt', is_image: false,
   } } }
-  const image = { ... file, node: { ... file.node!, attachment: { is_image: true, image: { has_original: scenario !== 'image_copy' }, url: '/image.avif' } } } as WorkspaceListRow
+  const image = { ... file, node: { ... file.node!, attachment: { is_image: true, image: { has_original: scenario !== 'image_copy' }, url: '/image.webp' } } } as WorkspaceListRow
   const upload = { ... rows[4]!, session: { id: 'upload', status: 'receiving' } } as WorkspaceListRow
   const replacement = project_workspace_rows([file.node!], [{ ... upload.session!, purpose: 'replace', source_id: file.node!.id, path: 'replacement.gif', parent_id: 1 }], 1, new Set())[0]!
   const selected = scenario === 'folder' || scenario === 'readonly_folder'
@@ -202,7 +202,7 @@ it('confirms redacted deletion before executing and keeps ordinary deletion inde
   const builder = source.slice(source.indexOf('function menu_for('), source.indexOf('\nfunction replaced('))
   const submit = source.slice(source.indexOf('function submit_delete('), source.indexOf('\nfunction menu_for('))
   const row: WorkspaceListRow = { ... rows[2]!, node: { ... rows[2]!.node!, attachment: {
-    file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 1, version: 'v1', url: '/normal', is_image: true,
+    file_name: 'photo.png.good', mime_type: 'image/webp', file_size: 1, version: 'v1', url: '/normal', is_image: true,
     is_private: true, has_redacted: true,
   } } }
   const requests: unknown[] = []

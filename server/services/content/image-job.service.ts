@@ -4,8 +4,9 @@ import type { ImageAccessRow } from './attachment-access.service'
 import type { RedactedVariantRow } from './redacted-variant'
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
-import { image_processing_options_schema, process_image_variants } from '@server/lib/image-processing'
 import { create_oss_image_processor } from '@server/lib/oss-image-processing'
+import { image_processing_options_schema, process_image_variants } from '@server/lib/webp-image-processing'
+import { content_image_formats } from '@shared/content-image-format'
 import { settings } from '@shared/settings'
 import { z } from 'zod'
 import { image_download_name, resolve_attachment_role } from './attachment-access.service'
@@ -27,7 +28,7 @@ export const image_job_intent_schema = z.strictObject({
   source: z.strictObject({ id: z.number().int().positive(), revision: z.number().int().positive(), node_revision: z.number().int().positive(), key: z.string().min(1).max(512), is_private: z.boolean() }).nullable(),
   profile_version: z.number().int().positive(), profile: image_processing_options_schema,
   processor: z.literal('oss').optional(),
-  input_basis: z.enum(['avif', 'original']).optional(),
+  input_basis: z.enum(['display', 'original']).optional(),
   redacted_policy: z.enum(['keep', 'discard']).optional(),
 }).superRefine((value, ctx) => {
   if ((value.mode === 'upload') !== (value.source === null)
@@ -38,7 +39,7 @@ export const image_job_intent_schema = z.strictObject({
 })
 export type ImageJobIntent = z.infer<typeof image_job_intent_schema>
 const produced = z.strictObject({
-  avif: object_identity, jpeg: object_identity, width: z.number().int().positive(), height: z.number().int().positive(),
+  display: object_identity, fallback: object_identity, width: z.number().int().positive(), height: z.number().int().positive(),
   original: object_identity.nullable(),
   lqip: z.string().max(Math.ceil(settings.app.content.image.lqipMaxBytes / 3) * 4),
 })
@@ -107,7 +108,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
     if (intent.source && check_source) {
       const [rows] = await connection.execute<RowDataPacket[]>('SELECT * FROM content_story_attachments WHERE id = ? AND story_id = ? FOR UPDATE', [intent.source.id, intent.scope_id])
       const row = rows[0]
-      if (! row || row.storage_provider !== 'aliyun' || row.encryption_key !== null || row.avif_key !== intent.source.key || Number(row.image_revision) !== intent.source.revision
+      if (! row || row.storage_provider !== 'aliyun' || row.encryption_key !== null || row.display_key !== intent.source.key || Number(row.image_revision) !== intent.source.revision
         || Number(row.node_revision) !== intent.source.node_revision || Boolean(row.is_private) !== intent.source.is_private) {
         throw conflict()
       }
@@ -175,7 +176,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       const attempt = uuid()
       const prefix = `content/att/images/${id}/${attempt}`
       await connection.execute('UPDATE content_image_attempts SET cleanup_required = 1 WHERE job_id = ? AND adopted = 0', [id])
-      await connection.execute(`INSERT INTO content_image_attempts (id, job_id, execution_epoch, avif_key, jpeg_key) VALUES (?, ?, ?, ?, ?)`, [attempt, id, epoch, `${prefix}.avif`, `${prefix}.jpg`])
+      await connection.execute(`INSERT INTO content_image_attempts (id, job_id, execution_epoch, display_key, fallback_key) VALUES (?, ?, ?, ?, ?)`, [attempt, id, epoch, `${prefix}.${content_image_formats.display.extension}`, `${prefix}.${content_image_formats.fallback.extension}`])
       await connection.execute(`UPDATE content_image_jobs SET status = 'processing', execution_epoch = ?, executor_id = ?, active_attempt_id = ?,
         lease_until = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)), result = NULL, error_code = NULL WHERE id = ?`, [epoch, executor, attempt, lease_seconds, id])
       await changed(connection, id, intent.scope_id)
@@ -238,20 +239,20 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
             jpeg_bytes(result.lqip.toString('base64'))
             abort.signal.throwIfAborted()
             await renew()
-            const avif = await output(`${claim.prefix}.avif`, result.avif, 'image/avif')
-            const jpeg = await output(`${claim.prefix}.jpg`, result.jpeg, 'image/jpeg')
-            return { ... result, avif, jpeg }
+            const display = await output(`${claim.prefix}.${content_image_formats.display.extension}`, result.display, content_image_formats.display.mime)
+            const fallback = await output(`${claim.prefix}.${content_image_formats.fallback.extension}`, result.fallback, content_image_formats.fallback.mime)
+            return { ... result, display, fallback }
           })()
-      const { avif, jpeg } = result
+      const { display, fallback } = result
       jpeg_bytes(result.lqip.toString('base64'))
-      const archive = claim.intent.mode === 'upload' ? { ... input, sha256 } : claim.intent.mode === 'copy' ? avif : null
+      const archive = claim.intent.mode === 'upload' ? { ... input, sha256 } : claim.intent.mode === 'copy' ? display : null
       const original = archive
         ? await copy_image_original(storage, archive, image_original_key(id, claim.attempt), abort.signal)
         : null
       await renew()
       await with_job(id, actor, async (connection) => {
         const [updated] = await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'ready', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`,
-          [JSON.stringify({ avif, jpeg, original, width: result.width, height: result.height, lqip: result.lqip.toString('base64') }), ... values])
+          [JSON.stringify({ display, fallback, original, width: result.width, height: result.height, lqip: result.lqip.toString('base64') }), ... values])
         if (updated.affectedRows !== 1)
           throw conflict()
         await changed(connection, id, claim.intent.scope_id)
@@ -328,52 +329,52 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       throw conflict()
     }
     if (intent.mode === 'redacted') {
-      await require_adoptable_objects(connection, [result.avif.key, result.jpeg.key])
-      await connection.execute(`UPDATE content_story_attachments SET redacted_avif_key = ?, redacted_jpeg_key = ?,
-        redacted_revision = redacted_revision + 1, redacted_metadata = CAST(? AS JSON), redacted_lqip_jpeg = ?,
+      await require_adoptable_objects(connection, [result.display.key, result.fallback.key])
+      await connection.execute(`UPDATE content_story_attachments SET redacted_display_key = ?, redacted_fallback_key = ?,
+        redacted_revision = redacted_revision + 1, redacted_metadata = CAST(? AS JSON), redacted_lqip = ?,
         read_revision = read_revision + 1, node_revision = node_revision + 1 WHERE id = ?`,
-      [result.avif.key, result.jpeg.key, JSON.stringify({ avif: result.avif, jpeg: result.jpeg, width: result.width, height: result.height }), jpeg_bytes(result.lqip), attachment_id])
+      [result.display.key, result.fallback.key, JSON.stringify({ display: result.display, fallback: result.fallback, width: result.width, height: result.height }), jpeg_bytes(result.lqip), attachment_id])
       for (const key of redacted_object_keys(row))
         await enqueue_object_retirement(connection, key, intent.scope_id, 'redacted-overwrite')
       await enqueue_object_retirement(connection, intent.input.key, intent.scope_id, 'image-input')
       await connection.execute('UPDATE content_image_attempts SET adopted = 1, cleanup_required = 0 WHERE id = ? AND job_id = ?', [job.active_attempt_id, id])
       await connection.execute('UPDATE content_image_jobs SET status = \'completed\', attachment_id = ? WHERE id = ?', [attachment_id, id])
-      await enqueue_preload(connection, intent.scope_id, attachment_id, [result.avif, result.jpeg])
+      await enqueue_preload(connection, intent.scope_id, attachment_id, [result.display, result.fallback])
       return
     }
     const previous = typeof row.image_metadata === 'string' ? JSON.parse(row.image_metadata) : row.image_metadata
-    const archive = intent.mode === 'upload' ? intent.input : intent.mode === 'copy' ? result.avif : null
+    const archive = intent.mode === 'upload' ? intent.input : intent.mode === 'copy' ? result.display : null
     if (!! archive !== !! result.original || (result.original && (result.original.key !== image_original_key(id, job.active_attempt_id!)
       || (archive!.sha256 !== null && result.original.sha256 !== archive!.sha256) || result.original.size !== archive!.size))) {
       throw conflict()
     }
     const original = archive ? result.original!.key : intent.mode === 'overwrite' ? row.original_key : null
-    await require_adoptable_objects(connection, [result.avif.key, result.jpeg.key, original])
-    const metadata = { avif: result.avif, jpeg: result.jpeg, width: result.width, height: result.height, profile_version: intent.profile_version,
-      original: archive ? { ... result.original!, name: intent.mode === 'copy' ? image_download_name(row.file_name, 'avif') : intent.original_name, mime: intent.mode === 'copy' ? 'image/avif' : intent.original_mime } : intent.mode === 'overwrite' ? previous?.original ?? null : null,
+    await require_adoptable_objects(connection, [result.display.key, result.fallback.key, original])
+    const metadata = { display: result.display, fallback: result.fallback, width: result.width, height: result.height, profile_version: intent.profile_version,
+      original: archive ? { ... result.original!, name: intent.mode === 'copy' ? image_download_name(row.file_name, 'display') : intent.original_name, mime: intent.mode === 'copy' ? content_image_formats.display.mime : intent.original_mime } : intent.mode === 'overwrite' ? previous?.original ?? null : null,
       source_id: intent.mode === 'copy' ? null : intent.source?.id ?? null, source_revision: intent.mode === 'copy' ? null : intent.source?.revision ?? null,
-      input_basis: intent.input_basis ?? (intent.mode === 'upload' ? 'original' : 'avif'),
+      input_basis: intent.input_basis ?? (intent.mode === 'upload' ? 'original' : 'display'),
       redaction_source_id: null }
-    await connection.execute(`UPDATE content_story_attachments SET original_key = ?, avif_key = ?, jpeg_key = ?, parent_avif_key = ?,
-      image_revision = image_revision + 1, is_edited = ?, image_metadata = CAST(? AS JSON), lqip_jpeg = ?,
-      object_key = ?, version = ?, oss_version_id = ?, file_size = ?, mime_type = 'image/avif', node_revision = node_revision + 1 WHERE id = ?`,
-    [original, result.avif.key, result.jpeg.key, intent.mode === 'copy' ? null : intent.source?.key ?? null, intent.mode === 'upload' ? 0 : 1, JSON.stringify(metadata), jpeg_bytes(result.lqip),
-      result.avif.key, result.avif.etag, result.avif.version_id, result.avif.size, attachment_id])
+    await connection.execute(`UPDATE content_story_attachments SET original_key = ?, display_key = ?, fallback_key = ?, source_display_key = ?,
+      image_revision = image_revision + 1, is_edited = ?, image_metadata = CAST(? AS JSON), lqip = ?,
+      object_key = ?, version = ?, oss_version_id = ?, file_size = ?, mime_type = '${content_image_formats.display.mime}', node_revision = node_revision + 1 WHERE id = ?`,
+    [original, result.display.key, result.fallback.key, intent.mode === 'copy' ? null : intent.source?.key ?? null, intent.mode === 'upload' ? 0 : 1, JSON.stringify(metadata), jpeg_bytes(result.lqip),
+      result.display.key, result.display.etag, result.display.version_id, result.display.size, attachment_id])
     if (intent.mode === 'overwrite') {
       if (has_redacted_variant(row) && ! intent.redacted_policy)
         throw new ApiError(409, '已有删减版，请重新选择保留或删除')
       if (intent.redacted_policy === 'discard') {
-        await connection.execute('UPDATE content_story_attachments SET redacted_avif_key = NULL, redacted_jpeg_key = NULL, redacted_metadata = NULL, redacted_lqip_jpeg = NULL, redacted_revision = redacted_revision + 1, read_revision = read_revision + 1 WHERE id = ?', [attachment_id])
+        await connection.execute('UPDATE content_story_attachments SET redacted_display_key = NULL, redacted_fallback_key = NULL, redacted_metadata = NULL, redacted_lqip = NULL, redacted_revision = redacted_revision + 1, read_revision = read_revision + 1 WHERE id = ?', [attachment_id])
         for (const key of redacted_object_keys(row))
           await enqueue_object_retirement(connection, key, intent.scope_id, 'redacted-discard')
       }
-      for (const key of [row.avif_key, row.jpeg_key].filter(Boolean))
+      for (const key of [row.display_key, row.fallback_key].filter(Boolean))
         await enqueue_object_retirement(connection, key, intent.scope_id, 'image-overwrite')
     }
     await enqueue_object_retirement(connection, intent.input.key, intent.scope_id, 'image-input')
     await connection.execute('UPDATE content_image_attempts SET adopted = 1, cleanup_required = 0 WHERE id = ? AND job_id = ?', [job.active_attempt_id, id])
     await connection.execute('UPDATE content_image_jobs SET status = \'completed\', attachment_id = ? WHERE id = ?', [attachment_id, id])
-    await enqueue_preload(connection, intent.scope_id, attachment_id, [result.avif, result.jpeg])
+    await enqueue_preload(connection, intent.scope_id, attachment_id, [result.display, result.fallback])
   }
   const cleanup = create_image_attempt_cleanup(pool, storage)
   return { enqueue, enqueue_in_transaction, run, cancel, retry, adopt, cleanup, fail_publication }

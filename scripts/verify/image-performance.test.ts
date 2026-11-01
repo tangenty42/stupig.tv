@@ -25,8 +25,8 @@ it('benchmarks the real CLI without deployment credentials and keeps its report 
     for (const row of report.records) {
       expect(row).toMatchObject({ label: 'fixture.png', width: 8, height: 4, run: 0 })
       expect(row.wall_ms).toBeGreaterThanOrEqual(row.stages.reduce((sum: number, stage: { ms: number }) => sum + stage.ms, 0))
-      expect(row.stages.map((stage: { phase: string }) => stage.phase)).toEqual(['source_metadata', 'avif', 'jpeg', 'lqip', 'final_metadata'])
-      expect(row.avif_bytes).toBeGreaterThan(0)
+      expect(row.stages.map((stage: { phase: string }) => stage.phase)).toEqual(['source_metadata', 'webp', 'jpeg', 'lqip', 'final_metadata'])
+      expect(row.webp_bytes).toBeGreaterThan(0)
       expect(row.jpeg_bytes).toBeGreaterThan(0)
       expect(row.lqip_bytes).toBeGreaterThan(0)
       expect(row.rss_observed_max_bytes).toBeGreaterThanOrEqual(row.rss_before_bytes)

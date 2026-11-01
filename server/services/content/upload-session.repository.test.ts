@@ -45,12 +45,12 @@ it('does not adopt an unverified or mismatched object', async () => {
   expect(execute).toHaveBeenCalledOnce()
 })
 
-it('requires the completed linked image receipt before adopting AVIF instead of the uploaded PNG', async () => {
+it('requires the completed linked image receipt before adopting WebP instead of the uploaded PNG', async () => {
   const image_session = { ... session, actor_id: 7, status: 'verifying', intent: { image: {} }, result: { key: 'png', etag: 'png-etag' } } as UploadRow
-  const receipt = { attachment_id: 2, object_key: 'a.avif', version: 'avif-etag' }
+  const receipt = { attachment_id: 2, object_key: 'a.webp', version: 'webp-etag' }
   execute.mockResolvedValueOnce([[attempt]]).mockResolvedValueOnce([[]])
   await expect(adopt_upload_in_transaction(connection, image_session, receipt)).rejects.toMatchObject({ statusCode: 409 })
-  execute.mockResolvedValueOnce([[attempt]]).mockResolvedValueOnce([[{ attachment_id: 2, result: { avif: { key: 'a.avif', etag: 'avif-etag' } } }]]).mockResolvedValue([{ affectedRows: 1 }])
+  execute.mockResolvedValueOnce([[attempt]]).mockResolvedValueOnce([[{ attachment_id: 2, result: { display: { key: 'a.webp', etag: 'webp-etag' } } }]]).mockResolvedValue([{ affectedRows: 1 }])
   await adopt_upload_in_transaction(connection, image_session, receipt)
   expect(execute.mock.calls.at(- 2)![1]).toEqual([JSON.stringify(receipt), session.id])
 })

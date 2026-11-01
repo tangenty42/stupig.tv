@@ -1,4 +1,3 @@
-import type { runtime_config } from '@config/loader'
 import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
 import type { Connection, Pool } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
@@ -8,9 +7,9 @@ import { expect, it, vi } from 'vitest'
 import { create_upload_images } from './upload-image.service'
 
 vi.mock('@server/lib/db', () => ({ db: {} }))
-const options: ReturnType<typeof runtime_config>['app']['contentImages'] = {
+const options: Parameters<typeof create_upload_images>[2] & { profile: import('@server/lib/webp-image-processing').ImageProcessingOptions } = {
   enabled: true, leaseSeconds: 60, heartbeatSeconds: 10, concurrency: 1, scanLimit: 10, sweepIntervalSeconds: 5, profileVersion: 1,
-  profile: { maxInputBytes: 1000, maxPixels: 1000, avifQuality: 60, avifEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 },
+  profile: { maxInputBytes: 1000, maxPixels: 1000, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 },
 }
 const storage = {} as ReturnType<typeof create_aliyun_oss>
 
@@ -34,7 +33,7 @@ it('refreshes only execution budgets on explicit failed-image retry and preserve
     scope_id: 1, actor_id: 7, mode: 'upload', is_private: false, source: null,
     original_name: 'photo.jpg', original_mime: 'image/jpeg', profile_version: 1,
     input: { key: 'content/att/staging/a/b', etag: 'etag', version_id: 'version', size: 50, sha256: 'a'.repeat(64) },
-    profile: { ... options.profile, maxPixels: 10, maxInputBytes: 100, timeoutSeconds: 5, avifQuality: 45 },
+    profile: { ... options.profile, maxPixels: 10, maxInputBytes: 100, timeoutSeconds: 5, webpQuality: 45 },
   }
   const execute = vi.fn(async (sql: string, _values?: unknown[]) => {
     if (sql.includes('FROM content_stories'))
@@ -77,7 +76,7 @@ it.each([false, true])('commits one versioned processing intent before linking i
     return [{ affectedRows: 1 }]
   })
   const pool = { getConnection: vi.fn() } as unknown as Pool
-  const cloud = { enabled: cloud_enabled, profileVersion: 2, profile: { ... options.profile, avifQuality: 100 } }
+  const cloud = { enabled: cloud_enabled, profileVersion: 2, profile: { ... options.profile, webpQuality: 100 } }
   const pipeline = create_upload_images(pool, storage, { ... options, cloud })
   const row = { id: randomUUID().replaceAll('-', ''), scope_id: 1, actor_id: 7,
     intent: { target_access: 'public', image: { mode: 'upload', source: null, original_name: 'a.png', original_mime: 'image/png' } },
@@ -85,7 +84,7 @@ it.each([false, true])('commits one versioned processing intent before linking i
   await pipeline.sealed({ execute } as unknown as Connection, row)
   const insert = execute.mock.calls.find(([sql]) => sql.includes('INSERT IGNORE INTO content_image_jobs'))!
   const intent = JSON.parse(insert[1]![5] as string)
-  expect(intent).toMatchObject({ profile_version: cloud_enabled ? 2 : 1, mode: 'upload', input: { version_id: 'version' }, profile: cloud_enabled ? cloud.profile : options.profile })
+  expect(intent).toMatchObject({ profile_version: 2, mode: 'upload', input: { version_id: 'version' }, profile: cloud.profile })
   expect(intent.processor).toBe(cloud_enabled ? 'oss' : undefined)
   expect(execute.mock.calls.at(- 1)).toEqual(['INSERT IGNORE INTO content_upload_images (session_id, job_id) VALUES (?, ?)', [row.id, expect.any(String)]])
   expect(pool.getConnection).not.toHaveBeenCalled()

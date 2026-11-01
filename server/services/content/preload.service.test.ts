@@ -15,7 +15,7 @@ const quota = { total: 10000, used: 0, total30: 0, used30: 0 }
 // run unchanged; real MySQL verification additionally checks the SQL contracts.
 function fixture() {
   let now = Date.now()
-  const job = { id: 1, scope_id: 7, attachment_id: 8, object_key: 'content/att/image.avif', phase: 'queued',
+  const job = { id: 1, scope_id: 7, attachment_id: 8, object_key: 'content/att/image.webp', phase: 'queued',
     task_id: null as string | null, requested_at: null as Date | null, submissions: 0, age: 0, next: 0, error: null as string | null }
   const state = { job, token: null as string | null, until: 0, next: 0, error: null as string | null, budget: 0, live: true }
   const esa = {

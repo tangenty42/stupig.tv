@@ -26,7 +26,7 @@ export default defineEventHandler(async (event) => {
       throw error
   }
   const role = getQuery(event).role ?? 'auto'
-  if (! ['auto', 'avif', 'jpeg', 'original', 'redacted_avif', 'redacted_jpeg', 'redacted'].includes(String(role)))
+  if (! ['auto', 'display', 'fallback', 'original', 'redacted_display', 'redacted_fallback', 'redacted'].includes(String(role)))
     throw createError({ statusCode: 400, statusMessage: 'Invalid image role' })
-  return sendRedirect(event, await attachment_redirect(id, version, viewer, method, role as 'auto' | 'avif' | 'jpeg' | 'original' | 'redacted_avif' | 'redacted_jpeg' | 'redacted', getHeader(event, 'accept') ?? ''), 302)
+  return sendRedirect(event, await attachment_redirect(id, version, viewer, method, role as 'auto' | 'display' | 'fallback' | 'original' | 'redacted_display' | 'redacted_fallback' | 'redacted', getHeader(event, 'accept') ?? ''), 302)
 })

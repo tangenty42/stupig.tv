@@ -165,12 +165,12 @@ app:
       timeoutSeconds: 60
     cloud:
       enabled: true
-      profileVersion: 2
+      profileVersion: 3
       profile:
         maxInputBytes: 20971520
         maxPixels: 9437184
-        avifQuality: 100
-        avifEffort: 4
+        webpQuality: 100
+        webpEffort: 4
         jpegQuality: 85
         jpegBackground: '#ffffff'
         lqipMaxDimension: 24

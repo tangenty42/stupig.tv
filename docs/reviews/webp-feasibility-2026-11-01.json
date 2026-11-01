@@ -1,0 +1,232 @@
+{
+  "date": "2026-11-01",
+  "scope": "Development-only native OSS WebP persistence feasibility; not production application latency",
+  "input": "User-provided 1536x1024 PNG and generated 128x96 transparent AVIF",
+  "runs": [
+    {
+      "label": "photo",
+      "quality": 90,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "post_status": 200,
+      "post_ms": 405.7638999999999,
+      "output_bytes": 269632,
+      "format": "webp",
+      "has_alpha": false,
+      "acl": "default",
+      "anonymous_status": 403,
+      "versioned": true,
+      "psnr_srgb_white_db": 41.44647315657607
+    },
+    {
+      "label": "photo",
+      "quality": 100,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "post_status": 200,
+      "post_ms": 597.0468000000001,
+      "output_bytes": 583292,
+      "format": "webp",
+      "has_alpha": false,
+      "acl": "default",
+      "anonymous_status": 403,
+      "versioned": true,
+      "psnr_srgb_white_db": 45.24266266955215
+    },
+    {
+      "label": "existing-avif-alpha",
+      "quality": 90,
+      "input_bytes": 467,
+      "width": 128,
+      "height": 96,
+      "post_status": 200,
+      "post_ms": 44.99800000000005,
+      "output_bytes": 142,
+      "format": "webp",
+      "has_alpha": true,
+      "acl": "default",
+      "anonymous_status": 403,
+      "versioned": true,
+      "psnr_srgb_white_db": 52.90201615587573
+    },
+    {
+      "label": "existing-avif-alpha",
+      "quality": 100,
+      "input_bytes": 467,
+      "width": 128,
+      "height": 96,
+      "post_status": 200,
+      "post_ms": 39.898699999999735,
+      "output_bytes": 140,
+      "format": "webp",
+      "has_alpha": true,
+      "acl": "default",
+      "anonymous_status": 403,
+      "versioned": true,
+      "psnr_srgb_white_db": 52.90201615587573
+    }
+  ],
+  "cleanup_current_missing": true,
+  "historical_versions": "retained",
+  "application_path": "bounded authenticated IMG GET plus private PUT; native saveas not yet integrated",
+  "stock_conversion": "explicit maintenance migration; original archives and old private representations retained",
+  "production_readonly_plan": {
+    "sampled_at": "2026-11-01T13:41:55.083Z",
+    "mode": "read-only aggregate SQL; no production object bytes read or writes",
+    "normal_variants": 117,
+    "redacted_variants": 2,
+    "max_normal_width": 4096,
+    "max_normal_height": 6781,
+    "max_normal_pixels": 12582912,
+    "max_redacted_pixels": 2181974,
+    "transfers": 0,
+    "pending_or_failed_image_jobs": 0,
+    "active_draft_leases": 0,
+    "migration_pixel_budget": 24000000,
+    "production_conversion_executed": false
+  },
+  "application_adapter_test": {
+    "mode": "real development OSS, complete authenticated GET + private PUT adapter; no database, queue or archive",
+    "runs": [
+      {
+        "label": "photo",
+        "adapter_ms": 1427.823,
+        "checkpoints": 12,
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "roles": [
+          {
+            "role": "display",
+            "format": "webp",
+            "bytes": 583292,
+            "has_alpha": false,
+            "anonymous_status": 403
+          },
+          {
+            "role": "fallback",
+            "format": "jpeg",
+            "bytes": 287912,
+            "has_alpha": false,
+            "anonymous_status": 403
+          }
+        ]
+      },
+      {
+        "label": "alpha",
+        "adapter_ms": 582.6664000000001,
+        "checkpoints": 12,
+        "input_bytes": 121,
+        "width": 32,
+        "height": 16,
+        "roles": [
+          {
+            "role": "display",
+            "format": "webp",
+            "bytes": 118,
+            "has_alpha": true,
+            "anonymous_status": 403
+          },
+          {
+            "role": "fallback",
+            "format": "jpeg",
+            "bytes": 290,
+            "has_alpha": false,
+            "anonymous_status": 403
+          }
+        ]
+      }
+    ],
+    "cleanup_current_missing": true
+  },
+  "png_fallback_comparison": {
+    "mode": "same final OSS WebP Q100 as input for every fallback; dev-only",
+    "display_bytes": 583292,
+    "cloud": [
+      {
+        "operation": "image/format,png",
+        "ms": 474.56309999999985,
+        "bytes": 2423705,
+        "sha256": "bbfd44a10f0392f50611358cf2180eff3776316261a32f940ad94d98976bc777",
+        "pixels_identical": true,
+        "psnr_vs_final_webp_db": "infinite"
+      },
+      {
+        "operation": "image/format,png/quality,Q_30",
+        "ms": 337.02030000000013,
+        "bytes": 2423705,
+        "sha256": "bbfd44a10f0392f50611358cf2180eff3776316261a32f940ad94d98976bc777",
+        "pixels_identical": true,
+        "psnr_vs_final_webp_db": "infinite"
+      },
+      {
+        "operation": "image/format,png/quality,Q_85",
+        "ms": 322.9315999999999,
+        "bytes": 2423705,
+        "sha256": "bbfd44a10f0392f50611358cf2180eff3776316261a32f940ad94d98976bc777",
+        "pixels_identical": true,
+        "psnr_vs_final_webp_db": "infinite"
+      },
+      {
+        "operation": "image/format,jpg/quality,Q_85",
+        "ms": 123.57040000000006,
+        "bytes": 287912,
+        "sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+        "pixels_identical": false,
+        "psnr_vs_final_webp_db": 40.11663337533517
+      }
+    ],
+    "local": [
+      {
+        "options": {
+          "compressionLevel": 6,
+          "adaptiveFiltering": false
+        },
+        "ms": 134.1305000000002,
+        "bytes": 3269719,
+        "palette": false,
+        "pixels_identical": true,
+        "psnr_vs_final_webp_db": "infinite"
+      },
+      {
+        "options": {
+          "compressionLevel": 9,
+          "adaptiveFiltering": true
+        },
+        "ms": 485.3584999999998,
+        "bytes": 2250401,
+        "palette": false,
+        "pixels_identical": true,
+        "psnr_vs_final_webp_db": "infinite"
+      },
+      {
+        "options": {
+          "compressionLevel": 9,
+          "palette": true,
+          "quality": 90
+        },
+        "ms": 549.4260999999997,
+        "bytes": 864239,
+        "palette": true,
+        "pixels_identical": false,
+        "psnr_vs_final_webp_db": 40.595400062739614
+      },
+      {
+        "options": {
+          "compressionLevel": 9,
+          "palette": true,
+          "quality": 100
+        },
+        "ms": 572.6832000000004,
+        "bytes": 864239,
+        "palette": true,
+        "pixels_identical": false,
+        "psnr_vs_final_webp_db": 40.595400062739614
+      }
+    ],
+    "cleanup_current_missing": true,
+    "decision": "User chose JPEG fallback to prioritize size; no PNG runtime fallback enabled"
+  }
+}

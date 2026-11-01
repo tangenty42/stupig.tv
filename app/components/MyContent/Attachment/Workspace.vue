@@ -438,7 +438,7 @@ function menu_for(row: WorkspaceListRow): AttachmentMenuItem[] {
     if (row.node.kind === 'file' && row.node.attachment?.is_image) {
       read_entries.push(attachment_action_item({ label: '预览', icon_name: 'lucide:eye', disabled: ! cap.preview, command: () => model.preview(row) }, blocked('preview')))
       if (cap.preview_redacted)
-        read_entries.push({ label: '预览删减版', icon_name: 'lucide:eye-off', command: () => model.preview(row, 'redacted_avif') })
+        read_entries.push({ label: '预览删减版', icon_name: 'lucide:eye-off', command: () => model.preview(row, 'redacted_display') })
     }
     else if (row.node.kind === 'file' && (row.node.attachment?.mime_type?.startsWith('audio/') || row.node.attachment?.mime_type?.startsWith('video/'))) {
       read_entries.push(attachment_action_item({ label: '打开', icon_name: 'lucide:external-link', disabled: ! cap.open, command: () => model.open(row) }, blocked('open')))
@@ -448,7 +448,7 @@ function menu_for(row: WorkspaceListRow): AttachmentMenuItem[] {
     if (row.node.attachment?.image?.has_original && cap.download)
       read_entries.push({ label: '下载原图', icon_name: 'lucide:download', command: () => void model.download(row, 'original') })
     if (row.node.attachment?.has_redacted)
-      read_entries.push({ label: '下载删减版', icon_name: 'lucide:download', command: () => void model.download(row, 'redacted_avif') })
+      read_entries.push({ label: '下载删减版', icon_name: 'lucide:download', command: () => void model.download(row, 'redacted_display') })
   }
   if (! model.readonly) {
     if (selected.every(item => item.node))
@@ -581,7 +581,7 @@ function resumed(event: Event) {
     void model.uploads.resume(resume_id, input.files[0]).catch(ex => error(ex.message))
   input.value = ''
 }
-function save_image(file: File, mode: ImageSaveMode, name: string, basis: 'avif' | 'original') {
+function save_image(file: File, mode: ImageSaveMode, name: string, basis: 'display' | 'original') {
   image_editor_visible.value = false
   if (image_editor_row.value)
     void model.edit_image(image_editor_row.value, file, mode, name, basis)

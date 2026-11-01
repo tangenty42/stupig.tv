@@ -112,9 +112,9 @@ function fixture(override = {}) {
 describe('bucket reconciliation', () => {
   it('checks every attachment role, avatars and configured static assets, without downloading bodies', async () => {
     const f = fixture({ staticKeys: ['imgs/logo.svg'] })
-    f.state.files.push({ id: 1, object_key: 'content/att/a', original_key: 'content/att/original', avif_key: 'content/att/avif', jpeg_key: null, redacted_avif_key: 'content/att/redacted', redacted_jpeg_key: null, file_size: 3 })
+    f.state.files.push({ id: 1, object_key: 'content/att/a', original_key: 'content/att/original', display_key: 'content/att/webp', fallback_key: null, redacted_display_key: 'content/att/redacted', redacted_fallback_key: null, file_size: 3 })
     f.state.users.push({ id: 1, avatar_file: '1.png' })
-    for (const key of ['content/att/a', 'content/att/original', 'content/att/avif', 'content/att/redacted', 'avatar/1.png', 'imgs/logo.svg']) f.add(key)
+    for (const key of ['content/att/a', 'content/att/original', 'content/att/webp', 'content/att/redacted', 'avatar/1.png', 'imgs/logo.svg']) f.add(key)
     await f.auditor.sweep()
     expect(f.state.target.phase).toBe('completed')
     expect(f.state.target.references_checked).toBe(6)

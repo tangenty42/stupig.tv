@@ -62,6 +62,8 @@ const frozen_migrations: Record<string, string> = {
 const migrations_dir = resolve(import.meta.dirname, '../../migrations')
 // Pin the bundled dependency closure, not just the entry file. Add each TS artifact digest here.
 const frozen_scripts: Record<string, string> = {
+  '20261101143000_retire_legacy_content.ts': '647a6b44fe5d1fe6e05c8e510efca6cdc8eab6e116d7d475ffbb1619f6eec742',
+  '20261101133000_content_webp.ts': '7943eba877398996549450222d2d773a77bbc01625641a9fbe09383e12144481',
   '20261028210100_reference_journal_entries.ts': 'c03f27cc348baf8f3ea47b44039681e518d2eee818afa2838c1749350424dba7',
   '20261024210100_content_references.ts': '46a3187bb96e7ecc1a91130cbed3372d76364fde873060cb92d0205f8c668018',
   '20261024210200_content_workspace.ts': '89b4db2f71b225500ef1bcedbf8ef859819ca41755ef0f2cf46284095f1a8bc1',

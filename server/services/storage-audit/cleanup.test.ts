@@ -78,6 +78,6 @@ describe('observed orphan retirement', () => {
     const pattern = new RegExp(cleanup_key_pattern)
     for (const key of ['avatar/a.png', 'imgs/logo.svg', 'content/att/custom', 'content/att/../file', 'content/att/staging/', 'content-upload/file'])
       expect(pattern.test(key)).toBe(false)
-    expect(pattern.test(`content/att/images/${'a'.repeat(32)}/${'b'.repeat(32)}.avif`)).toBe(true)
+    expect(pattern.test(`content/att/images/${'a'.repeat(32)}/${'b'.repeat(32)}.webp`)).toBe(true)
   })
 })

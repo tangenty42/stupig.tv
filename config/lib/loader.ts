@@ -143,6 +143,16 @@ export function load_migration_image_profile(env = environment()) {
   }
 }
 
+/** Current WebP profile; the older profile above belongs to frozen migrations. */
+export function load_webp_image_profile(env = environment()) {
+  const merged = read_yaml_config(node_env_of(env))
+  const app = is_config_object(merged) && is_config_object(merged.app) ? merged.app : undefined
+  const images = app && is_config_object(app.contentImages) ? app.contentImages : undefined
+  const cloud = images && is_config_object(images.cloud) ? images.cloud : undefined
+  const parsed = parse_config(deployment_config_schema.shape.app.shape.contentImages.shape.cloud, interpolate_config(cloud, env, 'app.contentImages.cloud'), 'app.contentImages.cloud')
+  return { profile: parsed.profile, profile_version: parsed.profileVersion }
+}
+
 export function load_content_migration_options(env = environment()) {
   const merged = read_yaml_config(node_env_of(env))
   const app = is_config_object(merged) && is_config_object(merged.app) ? merged.app : undefined

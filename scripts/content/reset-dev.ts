@@ -70,12 +70,12 @@ export async function inventory_aliyun_content(client: Pick<OSS, 'listV2' | 'lis
   return objects
 }
 
-export function reset_attachment_objects(row: { object_key?: string | null, original_key?: string | null, avif_key?: string | null, jpeg_key?: string | null, redacted_avif_key?: string | null, redacted_jpeg_key?: string | null, storage_provider?: string, storage_bucket?: string }) {
+export function reset_attachment_objects(row: { object_key?: string | null, original_key?: string | null, display_key?: string | null, fallback_key?: string | null, redacted_display_key?: string | null, redacted_fallback_key?: string | null, storage_provider?: string, storage_bucket?: string }) {
   const location: ResetObject['location'] = row.storage_provider === 'aliyun' ? 'aliyun' : row.storage_bucket as 'public' | 'private'
-  return [... new Set([row.object_key, row.original_key, row.avif_key, row.jpeg_key, row.redacted_avif_key, row.redacted_jpeg_key].filter((key): key is string => !! key))].map(key => ({ key, location }))
+  return [... new Set([row.object_key, row.original_key, row.display_key, row.fallback_key, row.redacted_display_key, row.redacted_fallback_key].filter((key): key is string => !! key))].map(key => ({ key, location }))
 }
 
-export function reset_image_attempt_objects(row: { id: string, job_id: string, avif_key: string, jpeg_key: string }) {
+export function reset_image_attempt_objects(row: { id: string, job_id: string, display_key: string, fallback_key: string }) {
   return reset_attachment_objects({ ... row, original_key: image_original_key(row.job_id, row.id), storage_provider: 'aliyun' })
 }
 
@@ -96,16 +96,14 @@ export async function reset_development_content(apply: boolean, all_content_obje
       const [rows] = await connection.query<RowDataPacket[]>(`SELECT COUNT(*) AS count FROM \`${name}\``)
       counts[name] = Number(rows[0]!.count)
     }
-    const [attachments] = await connection.execute<(RowDataPacket & Parameters<typeof reset_attachment_objects>[0])[]>('SELECT object_key, original_key, avif_key, jpeg_key, redacted_avif_key, redacted_jpeg_key, storage_provider, storage_bucket FROM content_story_attachments WHERE object_key IS NOT NULL')
-    const [staging] = await connection.execute<RowDataPacket[]>('SELECT staging_key, staging_provider, staging_bucket, upload_id FROM content_task_items WHERE staging_key IS NOT NULL')
+    const [attachments] = await connection.execute<(RowDataPacket & Parameters<typeof reset_attachment_objects>[0])[]>('SELECT object_key, original_key, display_key, fallback_key, redacted_display_key, redacted_fallback_key, storage_provider, storage_bucket FROM content_story_attachments WHERE object_key IS NOT NULL')
     const [attempts] = await connection.execute<RowDataPacket[]>('SELECT a.target_key, a.upload_id, s.target_location FROM content_transfer_attempts a JOIN content_transfer_sessions s ON s.id = a.session_id')
     const objects: ResetObject[] = [
       ... attachments.flatMap(reset_attachment_objects),
-      ... staging.map(row => ({ key: String(row.staging_key), location: row.staging_provider === 'aliyun' ? 'aliyun' as const : row.staging_bucket as 'public' | 'private', upload_id: row.upload_id ? String(row.upload_id) : undefined })),
       ... attempts.map(row => ({ key: String(row.target_key), location: row.target_location === 'aliyun' ? 'aliyun' as const : row.target_location === 'legacy_public' ? 'public' as const : 'private' as const, upload_id: row.upload_id ? String(row.upload_id) : undefined })),
     ]
     if (names.includes('content_image_attempts')) {
-      const [image_attempts] = await connection.execute<(RowDataPacket & Parameters<typeof reset_image_attempt_objects>[0])[]>('SELECT id, job_id, avif_key, jpeg_key FROM content_image_attempts')
+      const [image_attempts] = await connection.execute<(RowDataPacket & Parameters<typeof reset_image_attempt_objects>[0])[]>('SELECT id, job_id, display_key, fallback_key FROM content_image_attempts')
       objects.push(... image_attempts.flatMap(reset_image_attempt_objects))
       const [jobs] = await connection.execute<RowDataPacket[]>('SELECT intent FROM content_image_jobs')
       for (const job of jobs) {

@@ -8,7 +8,6 @@
     "esa:deploy:dev": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/esa/cli.ts --env=dev",
     "esa:deploy:prod": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/esa/cli.ts --env=prod",
     "build": "nuxt build --dotenv .env.prod",
-    "storage:cleanup": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/storage/audit.ts",
     "db:dump:dev": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/db/export-sample.ts",
     "dev": "docker compose --env-file .env.dev -f docker-compose.dev.yml up -d && node --import tsx scripts/dev/cli.ts",
     "dev:app": "nuxt dev --dotenv .env.dev --host 127.0.0.1",

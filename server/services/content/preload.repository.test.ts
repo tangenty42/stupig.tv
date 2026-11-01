@@ -11,10 +11,10 @@ beforeEach(() => {
 
 it('captures the exact destination and display object identity inside the publishing connection', async () => {
   const execute = vi.fn()
-  await enqueue_preload({ execute } as unknown as Connection, 7, 8, [{ key: 'content/att/image.avif', size: 20 }])
+  await enqueue_preload({ execute } as unknown as Connection, 7, 8, [{ key: 'content/att/image.webp', size: 20 }])
   expect(execute.mock.calls[0]![1]).toEqual([preload_destination('123', 'https://edge.example.test'), '123', 'https://edge.example.test'])
   expect(execute.mock.calls[1]![0]).toContain('INSERT IGNORE INTO content_preload_jobs')
-  expect(execute.mock.calls[1]![1]).toEqual([preload_destination('123', 'https://edge.example.test'), 7, 8, 'content/att/image.avif'])
+  expect(execute.mock.calls[1]![1]).toEqual([preload_destination('123', 'https://edge.example.test'), 7, 8, 'content/att/image.webp'])
 })
 
 it('does not enqueue disabled, oversized, empty or malformed representations', async () => {

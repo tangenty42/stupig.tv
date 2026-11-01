@@ -4,7 +4,7 @@ import { z } from 'zod'
 export const esa_read_grant = z.strictObject({
   id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   revision: z.string().regex(/^[a-f\d]{64}$/),
-  role: z.enum(['auto', 'avif', 'jpeg', 'original', 'redacted_avif', 'redacted_jpeg', 'redacted']),
+  role: z.enum(['auto', 'display', 'fallback', 'original', 'redacted_display', 'redacted_fallback', 'redacted']),
   session: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 }).refine(value => (value.session === 0) === (value.generation === 0), 'Session and generation must be bound together')

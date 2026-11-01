@@ -9,8 +9,8 @@ describe('editor native decoding fence', () => {
     await expect(decode_editor_image(new Blob())).rejects.toThrow('请升级或更换浏览器')
   })
 
-  it('decodes the actual AVIF source rather than substituting a JPEG', async () => {
-    const source = new Blob(['avif sample'], { type: 'image/avif' })
+  it('decodes the actual WebP source rather than substituting a JPEG', async () => {
+    const source = new Blob(['webp sample'], { type: 'image/webp' })
     const bitmap = { width: 2, height: 2 }
     const decode = vi.fn().mockResolvedValue(bitmap)
     vi.stubGlobal('createImageBitmap', decode)
@@ -21,7 +21,7 @@ describe('editor native decoding fence', () => {
   it('blocks a failed actual decode even when the API exists', async () => {
     const decode = vi.fn().mockRejectedValue(new DOMException('Unsupported image'))
     vi.stubGlobal('createImageBitmap', decode)
-    await expect(decode_editor_image(new Blob(['avif'], { type: 'image/avif' }))).rejects.toBeInstanceOf(ImageEditorDecodeError)
+    await expect(decode_editor_image(new Blob(['webp'], { type: 'image/webp' }))).rejects.toBeInstanceOf(ImageEditorDecodeError)
     expect(decode).toHaveBeenCalledTimes(1)
   })
 })

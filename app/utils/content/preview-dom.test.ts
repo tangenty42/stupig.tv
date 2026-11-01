@@ -112,9 +112,9 @@ it('keeps duplicate images distinct and carousel state intact through repeated e
 })
 
 it('replaces changed representations and removes media that is no longer readable', () => {
-  const image = element('img', { src: '/private.avif', srcset: '/private.jpg 1x' })
+  const image = element('img', { src: '/private.webp', srcset: '/private.jpg 1x' })
   const { root, update } = setup(element('p', {}, image))
-  const redacted = element('img', { src: '/redacted.avif', srcset: '/redacted.jpg 1x' })
+  const redacted = element('img', { src: '/redacted.webp', srcset: '/redacted.jpg 1x' })
   update(element('p', {}, redacted))
   expect(image.parentNode).toBeNull()
   expect(root.childNodes[0]?.firstChild).toBe(redacted)

@@ -254,7 +254,7 @@ export function useApi() {
     },
 
     /** Signs a short-lived object GET that saves the attachment under its row name. */
-    async sign_attachment_download(story_id: number, file_name: string, role: 'avif' | 'original' | 'redacted_avif' = 'avif') {
+    async sign_attachment_download(story_id: number, file_name: string, role: 'display' | 'original' | 'redacted_display' = 'display') {
       return trpc_call(trpc.content.signAttachmentDownload.mutate({ story_id, file_name, role }))
     },
     async image_editor_source(id: number, version: string, redacted = false) {

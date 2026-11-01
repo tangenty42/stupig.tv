@@ -46,7 +46,7 @@ export function create_upload_lifecycle(pool: Pick<Pool, 'execute' | 'getConnect
   }
   async function retire(connection: Connection, row: UploadRow, attempt: Attempt) {
     const key = owned_key(attempt)
-    const [live] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_attachments WHERE object_key = ? OR original_key = ? OR avif_key = ? OR jpeg_key = ? LIMIT 1 FOR UPDATE', [key, key, key, key])
+    const [live] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_attachments WHERE object_key = ? OR original_key = ? OR display_key = ? OR fallback_key = ? LIMIT 1 FOR UPDATE', [key, key, key, key])
     if (live.length)
       return false
     // Same scope/session locks as adoption. The tombstone prevents any later

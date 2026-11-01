@@ -47,12 +47,12 @@ export async function publish_uploaded_attachment(connection: Connection, sessio
     }
     await connection.execute(`UPDATE content_story_attachments SET parent_id = ?, name = ?, name_key = ?, file_name = ?,
       object_key = ?, mime_type = ?, file_size = ?, version = ?, oss_version_id = ?, is_private = ?, node_revision = node_revision + 1
-      , original_key = NULL, avif_key = NULL, jpeg_key = NULL, parent_avif_key = NULL, image_metadata = NULL, lqip_jpeg = NULL, is_edited = 0
+      , original_key = NULL, display_key = NULL, fallback_key = NULL, source_display_key = NULL, image_metadata = NULL, lqip = NULL, is_edited = 0
       WHERE id = ?`, [parent.id, final_name, attachment_name_key(final_name), name, object.key, mime, object.size, object.etag,
       object.oss_version_id, session.intent.target_access === 'private' ? 1 : 0, replaced.id])
     const retained = session.intent.redacted_policy === 'keep' ? redacted_object_keys(replaced) : []
     if (! retained.length) {
-      await connection.execute('UPDATE content_story_attachments SET redacted_avif_key = NULL, redacted_jpeg_key = NULL, redacted_metadata = NULL, redacted_lqip_jpeg = NULL, redacted_revision = redacted_revision + 1, read_revision = read_revision + 1 WHERE id = ?', [replaced.id])
+      await connection.execute('UPDATE content_story_attachments SET redacted_display_key = NULL, redacted_fallback_key = NULL, redacted_metadata = NULL, redacted_lqip = NULL, redacted_revision = redacted_revision + 1, read_revision = read_revision + 1 WHERE id = ?', [replaced.id])
     }
     for (const key of attachment_owned_object_keys(replaced).filter(key => ! retained.includes(key)))
       await enqueue_object_retirement(connection, key, session.scope_id, 'replacement')

@@ -47,15 +47,15 @@ it('preserves the caret when forbidden characters are removed', async () => {
 
 it('renders a locked suffix separately and forwards input attributes and model events', async () => {
   const wrapper = await mountSuspended(MyFileNameInput, {
-    props: { modelValue: 'photo', suffix: '.avif', disabled: true },
+    props: { modelValue: 'photo', suffix: '.webp', disabled: true },
     attrs: { 'aria-label': '文件名' },
   })
   wrappers.push(wrapper)
-  expect(wrapper.get('[aria-label="固定后缀"]').text()).toBe('.avif')
+  expect(wrapper.get('[aria-label="固定后缀"]').text()).toBe('.webp')
   expect(wrapper.get('input').attributes('aria-label')).toBe('文件名')
   expect(wrapper.get('input').element.disabled).toBe(true)
   await wrapper.setProps({ disabled: false })
   await wrapper.get('input').setValue('new/name')
   expect(wrapper.emitted('update:modelValue')?.at(- 1)).toEqual(['new_name'])
-  expect(wrapper.get('[aria-label="固定后缀"]').text()).toBe('.avif')
+  expect(wrapper.get('[aria-label="固定后缀"]').text()).toBe('.webp')
 })

@@ -106,8 +106,8 @@ describe('online ESA authorization before cached bytes', () => {
   })
 
   it('keeps a detached copy and its own archive readable after the source changes or disappears', async () => {
-    Object.assign(row(), { original_key: 'content/att/copy-original', avif_key: 'content/att/copy.avif', jpeg_key: 'content/att/copy.jpg',
-      image_metadata: { original: { name: 'copy.avif' }, source_id: null, archive_source_id: null, archive_source_key: null } })
+    Object.assign(row(), { original_key: 'content/att/copy-original', display_key: 'content/att/copy.webp', fallback_key: 'content/att/copy.jpg',
+      image_metadata: { original: { name: 'copy.webp' }, source_id: null, archive_source_id: null, archive_source_key: null } })
     state.rows.set(22, { ... row(), id: 22, original_key: 'content/att/source-original' })
     const urls = [await signed(), await signed('original')]
     state.rows.get(22)!.is_private = 1

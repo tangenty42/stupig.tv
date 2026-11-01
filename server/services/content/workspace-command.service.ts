@@ -107,7 +107,7 @@ export async function execute_workspace_command(actor: number, command: Workspac
         if (node.is_folder)
           throw new ApiError(400, '仅支持图片附件')
         await require_workspace_actor(actor, true, connection)
-        await connection.execute('UPDATE content_story_attachments SET redacted_avif_key = NULL, redacted_jpeg_key = NULL, redacted_metadata = NULL, redacted_lqip_jpeg = NULL, redacted_revision = redacted_revision + 1, read_revision = read_revision + 1, node_revision = node_revision + 1 WHERE id = ?', [node.id])
+        await connection.execute('UPDATE content_story_attachments SET redacted_display_key = NULL, redacted_fallback_key = NULL, redacted_metadata = NULL, redacted_lqip = NULL, redacted_revision = redacted_revision + 1, read_revision = read_revision + 1, node_revision = node_revision + 1 WHERE id = ?', [node.id])
         for (const key of redacted_object_keys(node)) await enqueue_object_retirement(connection, key, command.scope_id, 'redacted-delete')
         report.succeeded.push(node.file_name)
         continue

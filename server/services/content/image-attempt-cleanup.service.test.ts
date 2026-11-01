@@ -11,8 +11,8 @@ vi.mock('@config/loader', () => ({ runtime_config: () => ({ aliyun: {
 function fixture() {
   const job = { id: 'a'.repeat(32), scope_id: 1, status: 'failed', active_attempt_id: 'b'.repeat(32) as string | null }
   const attempt = { id: 'b'.repeat(32), job_id: job.id, cleanup_required: 1, adopted: 0,
-    avif_key: `content/att/images/${job.id}/${'b'.repeat(32)}.avif`, jpeg_key: `content/att/images/${job.id}/${'b'.repeat(32)}.jpg` }
-  const keys = [attempt.avif_key, attempt.jpeg_key, image_original_key(job.id, attempt.id)]
+    display_key: `content/att/images/${job.id}/${'b'.repeat(32)}.webp`, fallback_key: `content/att/images/${job.id}/${'b'.repeat(32)}.jpg` }
+  const keys = [attempt.display_key, attempt.fallback_key, image_original_key(job.id, attempt.id)]
   const live = new Set<string>()
   const objects = new Set<string>()
   interface Retirement { phase: string, scope: number, bucket: string, endpoint: string, site: string, base: string, lease: boolean }
@@ -203,7 +203,7 @@ it('rolls back the whole role set on retirement insertion failure before calling
 
 it('rejects foreign object ownership and malformed cursors without touching storage', async () => {
   const f = fixture()
-  f.attempt.avif_key = 'content/att/images/foreign.avif'
+  f.attempt.display_key = 'content/att/images/foreign.webp'
   await expect(f.cleanup()).rejects.toMatchObject({ statusCode: 409 })
   expect(f.retirements.size).toBe(0)
   await expect(create_image_attempt_cleanup(f.pool, f.storage)('invalid')).rejects.toMatchObject({ statusCode: 400 })

@@ -19,6 +19,8 @@
 
 GitHub Ruleset 只要求 GitHub Actions 的 `check` 状态，仍启用“合并前分支必须最新”（strict），创建分支/仓库时不强制检查；签名、线性历史及 squash 合并约束保持独立。
 
+调整工作流后，核对实际 Check Run 的 `name` 与来源 App，并读回 main 的有效规则；当前为 `check`、GitHub Actions（App ID 15368）。界面中的 `Check / … (pull_request)` 是展示组合，不作为完整 context 填入；无需给汇总门槛覆盖的每个分片重复添加 Required。重命名汇总 job 时必须同步规则，普通子检查改名仍由汇总依赖负责。
+
 `check` 始终等待 `changes`、`unit`、MQTT、三个应用浏览器分片、生产 CSS 与迁移验证。分类失败、取消或代码验证中的意外跳过都会使总门槛失败；只有已成功分类的纯文档变更或可信 main 复用允许跳过重型测试。三个旧浏览器状态包装与独立 `verified-tree` job 已移除，普通代码 PR 展示 9 个实际 job。PR 的代码树证明位于 `check` 的成功步骤中；复用同时要求每个实际验证 job 及该匹配树步骤成功，查询失败或验证规则变更时退回全量。
 
 Actions 权限选择 "Allow tangenty42, and select non-tangenty42, actions and reusable workflows"，勾选 "Allow actions created by GitHub"，允许列表加入 `pnpm/action-setup@*`（各工作流唯一的非 GitHub 官方 action，缺失它相关工作流会拒绝启动），并启用 "Require actions to be pinned to a full-length commit SHA"；各工作流的 action 引用已全部固定到完整提交 SHA。Linux 部署主机需有 Docker Compose、`flock` 和 `sha256sum`。
