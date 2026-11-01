@@ -30,8 +30,8 @@ beforeEach(() => {
     if (sql.includes('FROM content_stories'))
       return [[mocks.story].filter(row => row.id)]
     if (sql.includes('FROM content_story_attachments')) {
-      return [[{ id: 4, story_id: 1, file_name: 'cover.png', object_key: mocks.cover_key, avif_key: mocks.cover_key, jpeg_key: 'jpeg',
-        image_revision: 1, image_metadata: { width: 60, height: 40 }, lqip_jpeg: Buffer.from([255, 216, 255, 217]) }]]
+      return [[{ id: 4, story_id: 1, file_name: 'cover.png', object_key: mocks.cover_key, display_key: mocks.cover_key, fallback_key: 'jpeg',
+        image_revision: 1, image_metadata: { width: 60, height: 40 }, lqip: Buffer.from([255, 216, 255, 217]) }]]
     }
     throw new Error(`Unexpected body query: ${sql}`)
   })

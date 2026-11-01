@@ -17,13 +17,13 @@ describe('development Content reset boundary', () => {
   it('includes originals from attempt ownership even when no attachment was published', () => {
     const job_id = 'a'.repeat(32)
     const id = 'b'.repeat(32)
-    expect(reset_image_attempt_objects({ id, job_id, avif_key: 'content/att/a.avif', jpeg_key: 'content/att/a.jpg' })).toContainEqual({ key: `content/att/originals/${job_id}/${id}`, location: 'aliyun' })
-    expect(() => reset_image_attempt_objects({ id: '../escape', job_id, avif_key: '', jpeg_key: '' })).toThrow()
+    expect(reset_image_attempt_objects({ id, job_id, display_key: 'content/att/a.webp', fallback_key: 'content/att/a.jpg' })).toContainEqual({ key: `content/att/originals/${job_id}/${id}`, location: 'aliyun' })
+    expect(() => reset_image_attempt_objects({ id: '../escape', job_id, display_key: '', fallback_key: '' })).toThrow()
   })
 
   it('includes every owned image role without treating provenance as an owned file', () => {
-    expect(reset_attachment_objects({ storage_provider: 'aliyun', object_key: 'content/a.avif', avif_key: 'content/a.avif', jpeg_key: 'content/a.jpg', original_key: 'content/raw.png' })).toEqual([
-      { key: 'content/a.avif', location: 'aliyun' }, { key: 'content/raw.png', location: 'aliyun' }, { key: 'content/a.jpg', location: 'aliyun' },
+    expect(reset_attachment_objects({ storage_provider: 'aliyun', object_key: 'content/a.webp', display_key: 'content/a.webp', fallback_key: 'content/a.jpg', original_key: 'content/raw.png' })).toEqual([
+      { key: 'content/a.webp', location: 'aliyun' }, { key: 'content/raw.png', location: 'aliyun' }, { key: 'content/a.jpg', location: 'aliyun' },
     ])
   })
 

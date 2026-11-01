@@ -30,7 +30,7 @@ mockNuxtImport('useImageEditSession', () => (options: {
 const wrappers: { unmount: () => void }[] = []
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.load.mockResolvedValue({ avif_url: '/view?role=avif', original_url: '/view?role=original', original_reason: '' })
+  mocks.load.mockResolvedValue({ display_url: '/view?role=display', original_url: '/view?role=original', original_reason: '' })
 })
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 
@@ -51,12 +51,12 @@ it('connects authorized loading, copy naming, confirmation and canvas export', a
   wrapper.getComponent(Select).vm.$emit('update:modelValue', 'copy')
   await flushPromises()
   await wrapper.get('input[aria-label="新图片名称"]').setValue('new/name')
-  expect(wrapper.get('[aria-label="固定后缀"]').text()).toBe('.avif')
+  expect(wrapper.get('[aria-label="固定后缀"]').text()).toBe('.webp')
   await wrapper.findAll('button').find(button => button.text() === '保存')!.trigger('click')
   expect(mocks.confirm.mock.calls[0]![1]).toBe('将另存为新图，确认保存？')
   mocks.confirm.mock.calls[0]![2]()
   expect(mocks.exported).toHaveBeenCalledOnce()
-  expect(wrapper.emitted('save')?.at(- 1)).toEqual([expect.any(File), 'copy', 'new_name.avif', 'avif'])
+  expect(wrapper.emitted('save')?.at(- 1)).toEqual([expect.any(File), 'copy', 'new_name.webp', 'display'])
 })
 
 it('keeps redacted saving directed to the original attachment', async () => {
@@ -66,7 +66,7 @@ it('keeps redacted saving directed to the original attachment', async () => {
   expect(wrapper.get('input').element.disabled).toBe(true)
   await wrapper.findAll('button').find(button => button.text() === '保存')!.trigger('click')
   mocks.confirm.mock.calls[0]![2]()
-  expect(wrapper.emitted('save')?.at(- 1)).toEqual([expect.any(File), 'redacted', 'photo.png.good', 'avif'])
+  expect(wrapper.emitted('save')?.at(- 1)).toEqual([expect.any(File), 'redacted', 'photo.png.good', 'display'])
 })
 
 it('does not export after the dialog closes while confirmation is open', async () => {

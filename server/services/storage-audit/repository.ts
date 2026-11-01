@@ -17,7 +17,7 @@ export type AuditPool = Pick<Pool, 'execute' | 'getConnection'>
 export function audit_destination(bucket: string, endpoint: string) {
   return createHash('sha256').update(JSON.stringify([bucket, new URL(endpoint).origin])).digest('hex')
 }
-export const audit_roles = ['object_key', 'original_key', 'avif_key', 'jpeg_key', 'redacted_avif_key', 'redacted_jpeg_key'] as const
+export const audit_roles = ['object_key', 'original_key', 'display_key', 'fallback_key', 'redacted_display_key', 'redacted_fallback_key'] as const
 export const audit_key = (key: Buffer | string | null) => key === null ? '' : key.toString()
 
 export function create_audit_repository(pool: AuditPool, destination: { bucket: string, endpoint: string }, lease_seconds: number) {
@@ -103,7 +103,7 @@ export function create_audit_catalog(pool: Pick<Pool, 'execute'>, destination: {
         return { size: null }
       const [files] = await pool.execute<RowDataPacket[]>(`SELECT IF(object_key=?,file_size,NULL) AS expected_size FROM content_story_attachments
         WHERE storage_provider='aliyun' AND is_folder=0 AND story_id IS NOT NULL
-        AND (object_key=? OR original_key=? OR avif_key=? OR jpeg_key=? OR redacted_avif_key=? OR redacted_jpeg_key=?) LIMIT 1`, [key, key, key, key, key, key, key])
+        AND (object_key=? OR original_key=? OR display_key=? OR fallback_key=? OR redacted_display_key=? OR redacted_fallback_key=?) LIMIT 1`, [key, key, key, key, key, key, key])
       if (files.length)
         return { size: files[0]!.expected_size === null ? null : Number(files[0]!.expected_size) }
       if (key.startsWith('avatar/')) {
@@ -122,8 +122,8 @@ export function create_audit_catalog(pool: Pick<Pool, 'execute'>, destination: {
       }
       const [tracked] = await pool.execute<RowDataPacket[]>(`SELECT 1 FROM (
         SELECT CAST(target_key AS BINARY) AS k FROM content_transfer_attempts WHERE status<>'adopted' OR cleanup_required=1
-        UNION ALL SELECT CAST(avif_key AS BINARY) FROM content_image_attempts WHERE adopted=0
-        UNION ALL SELECT CAST(jpeg_key AS BINARY) FROM content_image_attempts WHERE adopted=0
+        UNION ALL SELECT CAST(display_key AS BINARY) FROM content_image_attempts WHERE adopted=0
+        UNION ALL SELECT CAST(fallback_key AS BINARY) FROM content_image_attempts WHERE adopted=0
         UNION ALL SELECT CAST(CONCAT('content/att/originals/',job_id,'/',id) AS BINARY) FROM content_image_attempts WHERE adopted=0
         UNION ALL SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(intent,'$.input.key')) AS BINARY) FROM content_image_jobs WHERE status IN ('queued','processing','ready','failed')
         UNION ALL SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(intent,'$.source.key')) AS BINARY) FROM content_image_jobs WHERE status IN ('queued','processing','ready','failed')

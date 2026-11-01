@@ -1,9 +1,10 @@
 import type { create_aliyun_oss } from './aliyun-oss'
-import type { ImageProcessingOptions } from './image-processing'
+import type { ImageProcessingOptions } from './webp-image-processing'
 import { createHash } from 'node:crypto'
 import { addAbortSignal, Readable } from 'node:stream'
 import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
+import { content_image_formats } from '@shared/content-image-format'
 import { image_upload_error } from '@shared/content-image-upload'
 import { settings } from '@shared/settings'
 import OSS from 'ali-oss'
@@ -89,15 +90,14 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
       await guard()
       return Buffer.concat(chunks)
     }
-    const persist = async (source: ImageObjectIdentity, target: string, operation: string, format: 'heif' | 'jpeg') => {
-      // AVIF saveas is unsupported on the tested endpoint. IMG GET + private PUT
-      // keeps encoding in OSS and preserves the existing owned-attempt ledger.
-      const body = await processed(source, operation, settings.app.content.image.uploadMaxBytes * (format === 'heif' ? 1 : 4))
+    const persist = async (source: ImageObjectIdentity, target: string, operation: string, format: 'webp' | 'jpeg') => {
+      // Retain the bounded verification and owned-attempt publication contract.
+      const body = await processed(source, operation, settings.app.content.image.uploadMaxBytes * (format === 'webp' ? 1 : 4))
       const info = await open(body).metadata()
-      if (info.format !== format || (format === 'heif' && info.compression !== 'av1') || (info.pages ?? 1) !== 1 || info.width !== expected.width || info.height !== expected.height)
+      if (info.format !== format || (info.pages ?? 1) !== 1 || info.width !== expected.width || info.height !== expected.height)
         throw fail()
       await guard()
-      const receipt = await storage.put_object(target, body, format === 'heif' ? 'image/avif' : 'image/jpeg', 'private')
+      const receipt = await storage.put_object(target, body, format === 'webp' ? content_image_formats.display.mime : content_image_formats.fallback.mime, 'private')
       if (! receipt.version_id)
         throw fail()
       const object = { key: target, ... receipt, version_id: receipt.version_id, size: body.length, sha256: createHash('sha256').update(body).digest('hex') }
@@ -106,19 +106,19 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
       return object
     }
     try {
-      const avif = await persist(input, `${prefix}.avif`, `image/auto-orient,1/format,avif/quality,Q_${profile.avifQuality}`, 'heif')
-      const jpeg = await persist(avif, `${prefix}.jpg`, `image/format,jpg/quality,Q_${profile.jpegQuality}`, 'jpeg')
+      const display = await persist(input, `${prefix}.${content_image_formats.display.extension}`, `image/auto-orient,1/format,webp/quality,Q_${profile.webpQuality}`, 'webp')
+      const fallback = await persist(display, `${prefix}.${content_image_formats.fallback.extension}`, `image/format,jpg/quality,Q_${profile.jpegQuality}`, 'jpeg')
       await guard()
-      const lqip = await processed(avif, `image/resize,m_lfit,w_${profile.lqipMaxDimension},h_${profile.lqipMaxDimension},limit_1/format,jpg/quality,Q_${profile.lqipQuality}`, settings.app.content.image.lqipMaxBytes)
+      const lqip = await processed(display, `image/resize,m_lfit,w_${profile.lqipMaxDimension},h_${profile.lqipMaxDimension},limit_1/format,jpg/quality,Q_${profile.lqipQuality}`, settings.app.content.image.lqipMaxBytes)
       const mini = await open(lqip).metadata()
       if (mini.format !== 'jpeg' || ! mini.width || ! mini.height || mini.width > profile.lqipMaxDimension || mini.height > profile.lqipMaxDimension)
         throw fail()
       await unchanged(input)
-      // Later stages must not have replaced the adopted final AVIF or JPEG.
-      for (const object of [avif, jpeg])
+      // Later stages must not have replaced the adopted final WebP or JPEG.
+      for (const object of [display, fallback])
         await unchanged(object)
       await guard()
-      return { avif, jpeg, ... expected, lqip }
+      return { display, fallback, ... expected, lqip }
     }
     catch (error) {
       if (error instanceof ApiError || signal.aborted)

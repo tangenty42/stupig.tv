@@ -11,7 +11,7 @@ vi.mock('@alicloud/openapi-client', () => {
 const { create_esa_preload } = await import('./esa-preload')
 const config = { accessKeyId: 'id', accessKeySecret: 'secret', siteId: '123', regionId: 'cn-hangzhou' as const, endpoint: 'esa.cn-hangzhou.aliyuncs.com' as const, timeoutMs: 15000 }
 const base = 'https://edge.example.test'
-const key = 'content/att/image.avif'
+const key = 'content/att/image.webp'
 const client = () => create_esa_preload(config, 60)
 beforeEach(() => vi.clearAllMocks())
 

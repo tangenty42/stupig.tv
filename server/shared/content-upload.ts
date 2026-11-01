@@ -20,7 +20,7 @@ export const upload_intent_schema = z.strictObject({
   source: workspace_target_schema.optional(),
   replacement: workspace_target_schema.optional(),
   redacted_policy: z.enum(['keep', 'discard']).optional(),
-  image: z.strictObject({ mode: z.enum(['upload', 'copy', 'overwrite', 'redacted']), source: image_source_schema.nullable(), original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255), input_basis: z.enum(['avif', 'original']).optional(), redacted_policy: z.enum(['keep', 'discard']).optional() }).optional(),
+  image: z.strictObject({ mode: z.enum(['upload', 'copy', 'overwrite', 'redacted']), source: image_source_schema.nullable(), original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255), input_basis: z.enum(['display', 'original']).optional(), redacted_policy: z.enum(['keep', 'discard']).optional() }).optional(),
 })
 export const upload_batch_schema = z.strictObject({
   request_id: z.uuid(), scope_id: z.number().int().positive(),
@@ -30,7 +30,7 @@ export const upload_batch_schema = z.strictObject({
     purpose: z.enum(['create', 'replace', 'redact']).default('create'), access: z.enum(['public', 'private']).default('public'),
     source: workspace_target_schema.optional(), replacement: workspace_target_schema.optional(),
     image_mode: image_save_mode_schema.optional(),
-    image_input_basis: z.enum(['avif', 'original']).optional(),
+    image_input_basis: z.enum(['display', 'original']).optional(),
     original_name: z.string().min(1).max(255).optional(),
     content_type: z.string().max(255).optional(),
     selection_root: z.string().min(1).max(4096).optional(),

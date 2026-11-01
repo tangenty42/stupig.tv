@@ -2,6 +2,7 @@ import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
 import type { Connection, Pool, RowDataPacket } from 'mysql2/promise'
 import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
+import { content_image_formats } from '@shared/content-image-format'
 import { settings } from '@shared/settings'
 import { image_original_key } from './image-original-object'
 import { enqueue_object_retirement, requeue_late_object } from './object-retirement.repository'
@@ -52,12 +53,12 @@ export function create_image_attempt_cleanup(pool: Pick<Pool, 'getConnection'>, 
         }
         const prefix = `content/att/images/${job.id}/${attempt.id}`
         if (attempt.job_id !== job.id || ! /^[\da-f]{32}$/.test(job.id) || ! /^[\da-f]{32}$/.test(attempt.id)
-          || attempt.avif_key !== `${prefix}.avif` || attempt.jpeg_key !== `${prefix}.jpg`) {
+          || ! [`${prefix}.${content_image_formats.display.extension}`, `${prefix}.avif`].includes(attempt.display_key) || attempt.fallback_key !== `${prefix}.${content_image_formats.fallback.extension}`) {
           throw new ApiError(409, '图片清理对象与账本不符')
         }
         const keys: string[] = []
-        for (const key of [attempt.avif_key, attempt.jpeg_key, image_original_key(job.id, attempt.id)]) {
-          const [live] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_attachments WHERE object_key = ? OR original_key = ? OR avif_key = ? OR jpeg_key = ? OR redacted_avif_key = ? OR redacted_jpeg_key = ? LIMIT 1 FOR UPDATE', [key, key, key, key, key, key])
+        for (const key of [attempt.display_key, attempt.fallback_key, image_original_key(job.id, attempt.id)]) {
+          const [live] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_attachments WHERE object_key = ? OR original_key = ? OR display_key = ? OR fallback_key = ? OR redacted_display_key = ? OR redacted_fallback_key = ? LIMIT 1 FOR UPDATE', [key, key, key, key, key, key])
           if (live.length) {
             pending ++
             continue

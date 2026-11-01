@@ -222,11 +222,18 @@ export const image_processing_options_schema = z.strictObject({
   lqipMaxDimension: z.number().int().positive(), lqipQuality: z.number().int().min(1).max(100),
   timeoutSeconds: z.number().int().positive(),
 })
+export const webp_processing_options_schema = z.strictObject({
+  maxInputBytes: z.number().int().positive(), maxPixels: z.number().int().positive(),
+  webpQuality: z.number().int().min(1).max(100), webpEffort: z.number().int().min(0).max(6),
+  jpegQuality: z.number().int().min(1).max(100), jpegBackground: z.string().regex(/^#[0-9a-f]{6}$/i),
+  lqipMaxDimension: z.number().int().positive(), lqipQuality: z.number().int().min(1).max(100),
+  timeoutSeconds: z.number().int().positive(),
+})
 const content_images_config_schema = z.object({
   enabled: boolean_value, sweepIntervalSeconds: positive_integer, concurrency: positive_integer.max(4), scanLimit: positive_integer.max(100),
   leaseSeconds: positive_integer.max(600), heartbeatSeconds: positive_integer, profileVersion: positive_integer,
   profile: image_processing_options_schema,
-  cloud: z.object({ enabled: boolean_value, profileVersion: positive_integer, profile: image_processing_options_schema }).optional(),
+  cloud: z.object({ enabled: boolean_value, profileVersion: positive_integer, profile: webp_processing_options_schema }),
 }).refine(value => value.heartbeatSeconds < value.leaseSeconds, 'Image heartbeat must be shorter than its lease')
   .refine(value => ! value.cloud?.enabled || value.cloud.profileVersion > value.profileVersion, 'Cloud encoding must use a newer profile version')
 

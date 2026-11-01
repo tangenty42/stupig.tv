@@ -8,8 +8,8 @@ const stroke: ImageEditAction = { kind: 'stroke', stroke: { width: 2, points: [{
 
 describe('image edit operations', () => {
   it('suggests names accepted by upload admission without reserved whitespace', () => {
-    expect(suggested_image_name('folder/photo.PNG.good', 'copy')).toBe('photo_副本.avif')
-    expect(suggested_image_name('folder/photo.PNG.good', 'redacted')).toBe('photo_删减版.avif')
+    expect(suggested_image_name('folder/photo.PNG.good', 'copy')).toBe('photo_副本.webp')
+    expect(suggested_image_name('folder/photo.PNG.good', 'redacted')).toBe('photo_删减版.webp')
     expect(attachment_path_violation(suggested_image_name('photo.png', 'copy'))).toBeNull()
   })
   it('keeps geometry across brush and clear operations', () => {
@@ -67,7 +67,7 @@ describe('image edit operations', () => {
     toBlob.mockImplementationOnce(callback => callback(png))
     expect(await export_editor_blob(canvas, 'image/png')).toBe(png)
     toBlob.mockImplementationOnce(callback => callback(png))
-    await expect(export_editor_blob(canvas, 'image/avif')).rejects.toThrow('无法导出指定图片格式')
+    await expect(export_editor_blob(canvas, 'image/webp')).rejects.toThrow('无法导出指定图片格式')
     toBlob.mockImplementationOnce(callback => callback(null))
     await expect(export_editor_blob(canvas, 'image/png')).rejects.toThrow('无法导出指定图片格式')
     toBlob.mockImplementationOnce(callback => callback(new Blob([], { type: 'image/png' })))

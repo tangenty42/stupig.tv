@@ -27,17 +27,17 @@ export type DbExecutor = Connection
 // uploads), so rename/move are pure row updates.
 
 interface AttachmentRow extends RowDataPacket {
-  redacted_avif_key?: string | null
-  redacted_jpeg_key?: string | null
+  redacted_display_key?: string | null
+  redacted_fallback_key?: string | null
   redacted_revision?: number
   redacted_metadata?: unknown
-  redacted_lqip_jpeg?: Buffer | null
+  redacted_lqip?: Buffer | null
   original_key?: string | null
-  avif_key?: string | null
-  jpeg_key?: string | null
+  display_key?: string | null
+  fallback_key?: string | null
   image_revision?: number
   image_metadata?: unknown
-  lqip_jpeg?: Buffer | null
+  lqip?: Buffer | null
   id: number
   story_id: number | null
   is_folder: number
@@ -108,7 +108,7 @@ export async function get_scope_attachment_by_id(story_id: number, id: number) {
 /** Every object key owned by a story (delete_story collects before removing rows). */
 export async function get_story_object_keys(story_id: number, executor: DbExecutor = db) {
   const [rows] = await executor.execute<AttachmentRow[]>(
-    'SELECT object_key, original_key, avif_key, jpeg_key, redacted_avif_key, redacted_jpeg_key, storage_bucket, storage_provider FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
+    'SELECT object_key, original_key, display_key, fallback_key, redacted_display_key, redacted_fallback_key, storage_bucket, storage_provider FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
     [story_id],
   )
   return rows.flatMap(row => attachment_owned_object_keys(row).map(key => ({ bucket: row.storage_bucket, key, ... (row.storage_provider === 'aliyun' ? { provider: 'aliyun' as const } : {}) })))
@@ -175,8 +175,8 @@ export async function list_cover_presentations(covers: { story_id: number, file_
     return urls
   const [rows] = await executor.execute<AttachmentRow[]>(
     `SELECT id, story_id, file_name, object_key, version, storage_bucket, storage_provider, oss_version_id, is_private,
-      avif_key, jpeg_key, image_revision, image_metadata, lqip_jpeg,
-      redacted_avif_key, redacted_jpeg_key, redacted_revision, redacted_metadata, redacted_lqip_jpeg
+      display_key, fallback_key, image_revision, image_metadata, lqip,
+      redacted_display_key, redacted_fallback_key, redacted_revision, redacted_metadata, redacted_lqip
       FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND id IN (${ids.map(() => '?').join(', ')})`,
     ids,
   )

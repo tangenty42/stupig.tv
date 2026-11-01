@@ -160,7 +160,7 @@ describe('version-bound JPEG placeholders', () => {
   })
 })
 
-it.each(['gif', 'svg', 'avif'])('renders a loading mask without requiring an LQIP for %s images', (extension) => {
+it.each(['gif', 'svg', 'webp'])('renders a loading mask without requiring an LQIP for %s images', (extension) => {
   const name = `raw.${extension}`
   const result = render(`![](att://${name})`, [attachment(name, true)])
   expect(result.html).toContain('class="image-loading-mask"')

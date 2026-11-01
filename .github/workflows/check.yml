@@ -402,7 +402,9 @@ jobs:
           # The verifier uses in-memory OSS; these are schema-only fixtures.
           ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
           ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
-        run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.ts
+        run: |
+          pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.ts
+          pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/webp-migration.ts
 
       - name: Verify shared drafts and private MQTT on isolated resources
         env:

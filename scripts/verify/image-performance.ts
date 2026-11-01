@@ -1,4 +1,4 @@
-import type { ImageProcessingOptions } from '@server/lib/image-processing'
+import type { ImageProcessingOptions } from '@server/lib/webp-image-processing'
 import type { Sharp } from 'sharp'
 import { readFile, writeFile } from 'node:fs/promises'
 import { availableParallelism } from 'node:os'
@@ -6,8 +6,8 @@ import { basename, resolve } from 'node:path'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { load_migration_image_profile } from '@config/loader'
-import { process_image_variants } from '@server/lib/image-processing'
+import { load_webp_image_profile } from '@config/loader'
+import { process_image_variants } from '@server/lib/webp-image-processing'
 import sharp from 'sharp'
 
 /** Deterministic texture, not a photograph or a production workload. */
@@ -29,7 +29,7 @@ async function synthetic(width: number, height: number) {
 
 let profiling = false
 
-/** Delegate to the real frozen pipeline; instrument only this standalone process. */
+/** Delegate to the real current pipeline; instrument only this standalone process. */
 async function measure(input: Buffer, profile: ImageProcessingOptions) {
   if (profiling)
     throw new Error('Image profiling must run sequentially')
@@ -39,7 +39,7 @@ async function measure(input: Buffer, profile: ImageProcessingOptions) {
   type Method = (this: Sharp, ... args: unknown[]) => Promise<unknown>
   const prototype = sharp.prototype as unknown as Record<typeof methods[number], Method>
   const originals = { metadata: prototype.metadata, toBuffer: prototype.toBuffer }
-  const names = { metadata: ['source_metadata', 'final_metadata'], toBuffer: ['avif', 'jpeg', 'lqip'] }
+  const names = { metadata: ['source_metadata', 'final_metadata'], toBuffer: ['webp', 'jpeg', 'lqip'] }
   const counts = { metadata: 0, toBuffer: 0 }
   const lag = monitorEventLoopDelay({ resolution: 10 })
   const rss_before = process.memoryUsage().rss
@@ -104,11 +104,11 @@ export async function image_performance(args: string[]) {
   const runs = Number(values.runs)
   const efforts = values.efforts!.split(',').map(Number)
   if (! Number.isSafeInteger(runs) || runs < 1 || runs > 5 || ! efforts.length
-    || values.efforts!.split(',').some(value => ! /^\d$/.test(value)) || new Set(efforts).size !== efforts.length) {
-    throw new Error('Use 1-5 runs and distinct AVIF efforts from 0 to 9')
+    || values.efforts!.split(',').some(value => ! /^[0-6]$/.test(value)) || new Set(efforts).size !== efforts.length) {
+    throw new Error('Use 1-5 runs and distinct WebP efforts from 0 to 6')
   }
   const environment = process.env.NODE_ENV ?? 'development'
-  const { profile, profile_version } = load_migration_image_profile({ NODE_ENV: environment })
+  const { profile, profile_version } = load_webp_image_profile({ NODE_ENV: environment })
   const records = []
   const inputs = values.input?.length
     ? values.input.map(path => ({ label: basename(path), load: () => readFile(path) }))
@@ -123,10 +123,10 @@ export async function image_performance(args: string[]) {
     const reference = values.quality ? await pixels(bytes, profile) : null
     for (const effort of efforts) {
       for (let run = 0; run < runs; run ++) {
-        const { variants, timing } = await measure(bytes, { ... profile, avifEffort: effort })
+        const { variants, timing } = await measure(bytes, { ... profile, webpEffort: effort })
         records.push({ label: input.label, effort, run, width: variants.width, height: variants.height,
-          input_bytes: bytes.length, avif_bytes: variants.avif.length, jpeg_bytes: variants.jpeg.length, lqip_bytes: variants.lqip.length,
-          ... timing, ... (reference ? { psnr_db: psnr(reference, await pixels(variants.avif, profile)) } : {}) })
+          input_bytes: bytes.length, webp_bytes: variants.display.length, jpeg_bytes: variants.fallback.length, lqip_bytes: variants.lqip.length,
+          ... timing, ... (reference ? { psnr_db: psnr(reference, await pixels(variants.display, profile)) } : {}) })
       }
     }
   }

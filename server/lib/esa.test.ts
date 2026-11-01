@@ -35,9 +35,9 @@ describe('eSA signed Content reads', () => {
 
   it('uses canonical encoded paths, bounded expiry and metadata bound into the signature', async () => {
     vi.useFakeTimers().setSystemTime(new Date('2026-10-17T00:00:00Z'))
-    const url = new URL(create_esa(config).signed_read_url('content/att/中文 #%.avif', 3600, 'HEAD', '报告 (1).avif', 'inline'))
+    const url = new URL(create_esa(config).signed_read_url('content/att/中文 #%.webp', 3600, 'HEAD', '报告 (1).webp', 'inline'))
     expect(url.origin).toBe(config.baseUrl)
-    expect(decodeURIComponent(url.pathname)).toBe('/content/att/中文 #%.avif')
+    expect(decodeURIComponent(url.pathname)).toBe('/content/att/中文 #%.webp')
     expect([... url.searchParams.keys()]).toEqual(['auth_key', 'response-content-disposition'])
     const [version, timestamp, expires_at, nonce, hash] = url.searchParams.get('auth_key')!.split('-')
     expect(version).toBe('v2')
@@ -122,7 +122,7 @@ describe('eSA signed Content reads', () => {
     const handler = create_content_bypass(config.authKey, 300, respond)
     try {
       for (const method of ['GET', 'HEAD'] as const) {
-        const url = create_esa(config).signed_read_url('content/att/key', 300, method, '中文 #%.avif', 'inline')
+        const url = create_esa(config).signed_read_url('content/att/key', 300, method, '中文 #%.webp', 'inline')
         expect(await handler(new Request(url, { method, headers: { Range: 'bytes=1-4' } }))).toEqual({ allowed: true, status: 200 })
       }
       expect(fetch).not.toHaveBeenCalled()
@@ -143,8 +143,8 @@ describe('eSA signed Content reads', () => {
       (u: URL) => u.searchParams.append('response-content-disposition', u.searchParams.get('response-content-disposition')!),
       (u: URL) => u.searchParams.append('auth_key', u.searchParams.get('auth_key')!),
       (u: URL) => u.searchParams.set('version', '2'),
-      (u: URL) => u.searchParams.set('x-oss-process', 'image/format,avif/quality,Q_100'),
-      (u: URL) => u.searchParams.set('x-oss-process', 'style/avif'),
+      (u: URL) => u.searchParams.set('x-oss-process', 'image/format,webp/quality,Q_100'),
+      (u: URL) => u.searchParams.set('x-oss-process', 'style/webp'),
       (u: URL) => { u.search = u.search.replace('auth_key=', '%61uth_key=') },
     ]
     for (const change of variants) {

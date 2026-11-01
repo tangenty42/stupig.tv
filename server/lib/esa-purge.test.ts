@@ -13,7 +13,7 @@ vi.mock('@alicloud/openapi-client', () => {
 const { create_esa_purge, retirement_url } = await import('./esa-purge')
 const config = { accessKeyId: 'id', accessKeySecret: 'secret', siteId: '123', regionId: 'cn-hangzhou' as const, endpoint: 'esa.cn-hangzhou.aliyuncs.com' as const, timeoutMs: 15000 }
 const base = 'https://dev.example.test'
-const key = 'content/att/中文 #%.avif'
+const key = 'content/att/中文 #%.webp'
 beforeEach(() => vi.clearAllMocks())
 
 it('uses a single canonical unsigned file URL and the configured site', async () => {
@@ -21,7 +21,7 @@ it('uses a single canonical unsigned file URL and the configured site', async ()
   expect(await create_esa_purge(config).submit(base, key)).toBe('task-1')
   const [params, request] = boundary.call.mock.calls[0]!
   expect(params).toMatchObject({ action: 'PurgeCaches', method: 'POST', version: '2024-09-10' })
-  expect(request.query).toEqual({ SiteId: '123', Type: 'file', Content: JSON.stringify({ Files: [`${base}/content/att/%E4%B8%AD%E6%96%87%20%23%25.avif`] }) })
+  expect(request.query).toEqual({ SiteId: '123', Type: 'file', Content: JSON.stringify({ Files: [`${base}/content/att/%E4%B8%AD%E6%96%87%20%23%25.webp`] }) })
 })
 
 it('rejects missing credentials, non-Content paths and non-origin ESA addresses before requesting', () => {

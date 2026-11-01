@@ -132,6 +132,7 @@ describe('维护脚本产物', () => {
       '20261024210100_content_references.ts',
       '20261024210200_content_workspace.ts',
       '20261028210100_reference_journal_entries.ts',
+      '20261101133000_content_webp.ts',
     ])
   })
 

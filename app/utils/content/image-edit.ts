@@ -1,11 +1,12 @@
 import type { RedactionStroke } from './redact'
+import { content_image_formats } from '@shared/content-image-format'
 import { attachment_base_name, decrypted_attachment_name, sanitize_attachment_path } from '@shared/content-markdown'
 import { settings } from '@shared/settings'
 import { paint_redaction_stroke } from './redact'
 
 export function suggested_image_name(file_name: string, mode: 'copy' | 'redacted') {
   const stem = attachment_base_name(decrypted_attachment_name(file_name)).replace(/\.[^.]+$/, '')
-  return sanitize_attachment_path(`${stem}_${mode === 'redacted' ? '删减版' : '副本'}.avif`, settings.app.content.link.fileNameMaxBytes)
+  return sanitize_attachment_path(`${stem}_${mode === 'redacted' ? '删减版' : '副本'}.${content_image_formats.display.extension}`, settings.app.content.link.fileNameMaxBytes)
 }
 
 export interface ImageSize { width: number, height: number }

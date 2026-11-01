@@ -86,9 +86,9 @@ beforeEach(() => {
       const row = rows.find(row => row.id === args[1])!
       Object.assign(row, { is_private: args[0], read_revision: Number(row.read_revision) + 1, node_revision: Number(row.node_revision) + 1 })
     }
-    if (sql.startsWith('UPDATE content_story_attachments SET redacted_avif_key')) {
+    if (sql.startsWith('UPDATE content_story_attachments SET redacted_display_key')) {
       const row = rows.find(row => row.id === args[0])!
-      Object.assign(row, { redacted_avif_key: null, redacted_jpeg_key: null, redacted_metadata: null, redacted_lqip_jpeg: null,
+      Object.assign(row, { redacted_display_key: null, redacted_fallback_key: null, redacted_metadata: null, redacted_lqip: null,
         redacted_revision: Number(row.redacted_revision) + 1, read_revision: Number(row.read_revision) + 1, node_revision: Number(row.node_revision) + 1 })
     }
     return [{ affectedRows: 1 }]
@@ -108,7 +108,7 @@ const updates = () => mocks.execute.mock.calls.filter(([sql]) => String(sql).sta
 const resources = () => mocks.refresh.mock.calls.map(([event]) => event.resource).sort()
 
 it('uses the privacy command for a whole directory, preserves independent markers and redacted keys, and replays once', async () => {
-  Object.assign(rows[2]!, { parent_id: 2, file_name: 'docs/a.txt', redacted_avif_key: 'kept-avif', redacted_jpeg_key: 'kept-jpeg' })
+  Object.assign(rows[2]!, { parent_id: 2, file_name: 'docs/a.txt', redacted_display_key: 'kept-webp', redacted_fallback_key: 'kept-jpeg' })
   Object.assign(rows[3]!, { parent_id: 2, name: 'b.txt.good', name_key: 'b.txt.good', file_name: 'docs/b.txt.good', is_private: 1 })
   rows.push({ ... rows[1]!, id: 5, parent_id: 2, name: 'nested', name_key: 'nested', file_name: 'docs/nested' },
     { ... rows[2]!, id: 6, parent_id: 5, name: 'deep.txt', name_key: 'deep.txt', file_name: 'docs/nested/deep.txt' },
@@ -131,7 +131,7 @@ it('uses the privacy command for a whole directory, preserves independent marker
   await execute_workspace_command(7, command([2, 4], false))
   expect(rows[1]).toMatchObject({ name: 'docs', is_private: 0, read_revision: 3 })
   expect(rows[2]).toMatchObject({ file_name: 'docs/a.txt', is_private: 0, read_revision: 3,
-    redacted_avif_key: 'kept-avif', redacted_jpeg_key: 'kept-jpeg' })
+    redacted_display_key: 'kept-webp', redacted_fallback_key: 'kept-jpeg' })
   expect(rows[3]).toMatchObject({ file_name: 'docs/b.txt.good', is_private: 1, read_revision: 1 })
   expect(rows[5]).toMatchObject({ file_name: 'docs/nested/deep.txt', is_private: 0, read_revision: 3 })
   expect(rows[6]).toMatchObject({ file_name: 'docs/own.good', is_private: 1, read_revision: 1 })
@@ -241,8 +241,8 @@ it('blocks directory ACL changes during a reserved child upload', async () => {
 })
 
 function redacted_command() {
-  Object.assign(rows[3]!, { original_key: 'archive', avif_key: 'normal-avif', jpeg_key: 'normal-jpeg',
-    redacted_avif_key: 'redacted-avif', redacted_jpeg_key: 'redacted-jpeg', redacted_revision: 2, redacted_metadata: { width: 20 }, redacted_lqip_jpeg: Buffer.from('preview') })
+  Object.assign(rows[3]!, { original_key: 'archive', display_key: 'normal-webp', fallback_key: 'normal-jpeg',
+    redacted_display_key: 'redacted-webp', redacted_fallback_key: 'redacted-jpeg', redacted_revision: 2, redacted_metadata: { width: 20 }, redacted_lqip: Buffer.from('preview') })
   return workspace_command_schema.parse({ operation: 'delete_redacted', scope_id: 1, request_id: crypto.randomUUID(),
     target: { id: 4, version: node_version(rows, rows[3]!) } })
 }
@@ -253,10 +253,10 @@ it('deletes only the redacted pair, preserves the owner and archive, and replays
   const report = await execute_workspace_command(7, input)
   expect(report.succeeded).toEqual(['b.txt'])
   expect(rows[3]).toMatchObject({ id: owner.id, file_name: owner.file_name, object_key: owner.object_key,
-    original_key: 'archive', avif_key: 'normal-avif', jpeg_key: 'normal-jpeg', redacted_avif_key: null, redacted_jpeg_key: null,
-    redacted_metadata: null, redacted_lqip_jpeg: null, redacted_revision: 3, read_revision: 2, node_revision: 2 })
+    original_key: 'archive', display_key: 'normal-webp', fallback_key: 'normal-jpeg', redacted_display_key: null, redacted_fallback_key: null,
+    redacted_metadata: null, redacted_lqip: null, redacted_revision: 3, read_revision: 2, node_revision: 2 })
   const retired = () => mocks.execute.mock.calls.filter(([sql]) => String(sql).startsWith('INSERT IGNORE INTO content_object_retirements'))
-  expect(retired().map(([, args]) => args[0]).sort()).toEqual(['redacted-avif', 'redacted-jpeg'])
+  expect(retired().map(([, args]) => args[0]).sort()).toEqual(['redacted-jpeg', 'redacted-webp'])
   expect(mocks.execute.mock.calls.some(([sql]) => String(sql).startsWith('DELETE FROM content_story_attachments'))).toBe(false)
   expect(resources()).toEqual(['content_attachments:1'])
   await expect(execute_workspace_command(7, input)).resolves.toEqual(report)
@@ -268,7 +268,7 @@ it('requires private management permission to remove a retained variant even whe
   const input = redacted_command()
   admin = false
   await expect(execute_workspace_command(7, input)).rejects.toMatchObject({ statusCode: 403 })
-  expect(rows[3]!.redacted_avif_key).toBe('redacted-avif')
+  expect(rows[3]!.redacted_display_key).toBe('redacted-webp')
   expect(mocks.commit).not.toHaveBeenCalled()
   expect(resources()).toEqual([])
 })
@@ -278,7 +278,7 @@ it('rejects an outdated variant deletion decision before changing pixels or reti
   rows[3]!.node_revision ++
   await expect(execute_workspace_command(7, input)).rejects.toMatchObject({ statusCode: 409,
     public_data: { details: { items: [expect.objectContaining({ code: 'SOURCE_CHANGED' })] } } })
-  expect(rows[3]!.redacted_avif_key).toBe('redacted-avif')
+  expect(rows[3]!.redacted_display_key).toBe('redacted-webp')
   // Rejected commands persist their error receipt, but no attachment mutation.
   expect(mocks.execute.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE content_story_attachments'))).toBe(false)
   expect(mocks.execute.mock.calls.some(([sql]) => String(sql).startsWith('INSERT IGNORE INTO content_object_retirements'))).toBe(false)

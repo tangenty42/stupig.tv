@@ -54,7 +54,7 @@ it('switches the whole preview to the public body and attachment representation 
   const private_image = { revision: 1, width: 1200, height: 800, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: true }
   const public_image = { revision: 2, width: 20, height: 10, lqip: 'data:image/jpeg;base64,/9j/AA==', has_original: false }
   const preview = setup('<good>\nBLOCK_SECRET\n</good>\n\ninline <good>INLINE_SECRET</good> text\n\n![caption](att://secret.png.good)\n\n![](att://denied.png.good)\n\n![](att://public.png)')
-  const owner: ContentStoryAttachment = { id: 1, file_name: 'secret.png.good', mime_type: 'image/avif', file_size: 5, is_image: true,
+  const owner: ContentStoryAttachment = { id: 1, file_name: 'secret.png.good', mime_type: 'image/webp', file_size: 5, is_image: true,
     is_private: true, url: '/private-normal', version: '1', image: private_image,
     has_redacted: true, redacted_url: '/public-redacted', redacted_image: public_image }
   const denied = { ... owner, id: 2, file_name: 'denied.png.good', url: '/private-denied', has_redacted: false, redacted_url: null, redacted_image: undefined }

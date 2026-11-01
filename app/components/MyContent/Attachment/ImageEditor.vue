@@ -182,7 +182,7 @@
               <Select v-else v-model="mode" size="small" input-id="image-save-mode" aria-label="保存模式" :options="modes" option-label="label" option-value="value" />
             </div>
             <div class="w-full max-w-sm">
-              <MyFileNameInput v-model="display_name" :disabled="mode !== 'copy'" :suffix="mode === 'copy' ? '.avif' : original_name.locked" aria-label="新图片名称" />
+              <MyFileNameInput v-model="display_name" :disabled="mode !== 'copy'" :suffix="mode === 'copy' ? '.webp' : original_name.locked" aria-label="新图片名称" />
             </div>
           </div>
         </div>
@@ -224,7 +224,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
-  'save': [file: File, mode: ImageSaveMode, name: string, basis: 'avif' | 'original']
+  'save': [file: File, mode: ImageSaveMode, name: string, basis: 'display' | 'original']
 }>()
 
 const { error: toast_error } = useMyToast()

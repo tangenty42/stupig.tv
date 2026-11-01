@@ -1,5 +1,6 @@
 import type { runtime_config } from '@config/loader'
 import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
+import type { ImageProcessingOptions } from '@server/lib/webp-image-processing'
 import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { Connection, Pool, RowDataPacket } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
@@ -8,9 +9,11 @@ import { ApiError } from '@server/errors/ApiError'
 import { create_image_jobs } from './image-job.service'
 import { publish_uploaded_attachment } from './upload-publication.service'
 
-type Options = ReturnType<typeof runtime_config>['app']['contentImages']
+type RuntimeOptions = ReturnType<typeof runtime_config>['app']['contentImages']
+type Options = Omit<RuntimeOptions, 'profile' | 'cloud'> & { profile: RuntimeOptions['profile'] | ImageProcessingOptions, cloud?: RuntimeOptions['cloud'] }
 /** Upload reservation and image intent are committed together, before any encoding. */
 export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection'>, storage: ReturnType<typeof create_aliyun_oss>, options: Options) {
+  const current = options.cloud ?? { enabled: false, profileVersion: options.profileVersion, profile: options.profile as ImageProcessingOptions }
   const jobs = create_image_jobs(pool, storage, options.leaseSeconds, options.heartbeatSeconds)
   async function sealed(connection: Connection, row: UploadRow) {
     if (! row.intent.image)
@@ -25,8 +28,8 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
       scope_id: Number(row.scope_id), actor_id: Number(row.actor_id), ... row.intent.image,
       is_private: row.intent.target_access === 'private',
       input: { key: input.key, etag: input.etag, version_id: input.oss_version_id, size: input.size, sha256: input.sha256 },
-      profile_version: options.profileVersion, profile: options.profile,
-      ... (options.cloud?.enabled ? { processor: 'oss' as const, profile_version: options.cloud.profileVersion, profile: options.cloud.profile } : {}),
+      profile_version: current.profileVersion, profile: current.profile,
+      ... (current.enabled ? { processor: 'oss' as const } : {}),
     })
     await connection.execute('INSERT IGNORE INTO content_upload_images (session_id, job_id) VALUES (?, ?)', [row.id, job.id])
   }
@@ -50,13 +53,13 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
     if (! job || ! ['ready', 'completed'].includes(job.status))
       throw new ApiError(409, '图片仍在处理或处理失败，请查看上传状态')
     const result = typeof job.result === 'string' ? JSON.parse(job.result) : job.result
-    return publish_uploaded_attachment(connection, row, { key: result.avif.key, etag: result.avif.etag,
+    return publish_uploaded_attachment(connection, row, { key: result.display.key, etag: result.display.etag,
       adopt: (connection, attachment, revision) => jobs.adopt(connection, job.id, row.actor_id, attachment, revision) })
   }
   async function retry(session: string, actor: number) {
     const [rows] = await pool.execute<RowDataPacket[]>(`SELECT j.id, j.status FROM content_upload_images u JOIN content_image_jobs j ON j.id = u.job_id WHERE u.session_id = ? AND j.actor_id = ?`, [session, actor])
     if (rows[0]?.status === 'failed')
-      await jobs.retry(String(rows[0].id), actor, options.cloud?.enabled ? options.cloud.profile : options.profile)
+      await jobs.retry(String(rows[0].id), actor, current.profile)
   }
   async function sweep(uploads: ReturnType<typeof create_upload_sessions>, signal?: AbortSignal) {
     if (! options.enabled || signal?.aborted)

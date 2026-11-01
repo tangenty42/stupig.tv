@@ -11,7 +11,7 @@ afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 async function open(redacted = false) {
   const props = reactive({ visible: false, pending: false, redacted,
     attachment: { id: 1, file_name: 'docs/photo.png.good', url: '/read?version=v1' } as ContentStoryAttachment })
-  const load = vi.fn().mockResolvedValue({ avif_url: '/view?role=avif', original_url: '/view?role=original', original_reason: '' })
+  const load = vi.fn().mockResolvedValue({ display_url: '/view?role=display', original_url: '/view?role=original', original_reason: '' })
   const save = vi.fn()
   const confirm = vi.fn()
   let dialog!: ReturnType<typeof useImageEditorDialog>
@@ -27,7 +27,7 @@ async function open(redacted = false) {
   return { props, load, save, confirm, dialog, wrapper }
 }
 
-it('loads the authorized source and emits a copy name with its fixed AVIF suffix', async () => {
+it('loads the authorized source and emits a copy name with its fixed WebP suffix', async () => {
   const { dialog, load, save } = await open()
   expect(load).toHaveBeenCalledWith(1, 'v1', false)
   dialog.mode.value = 'copy'
@@ -35,7 +35,7 @@ it('loads the authorized source and emits a copy name with its fixed AVIF suffix
   dialog.display_name.value = '改名.v2'
   const file = new File(['pixels'], 'edited.png')
   dialog.save(file)
-  expect(save).toHaveBeenCalledWith(file, 'copy', '改名.v2.avif', 'avif')
+  expect(save).toHaveBeenCalledWith(file, 'copy', '改名.v2.webp', 'display')
   dialog.display_name.value = ' '
   dialog.save(file)
   expect(save).toHaveBeenCalledOnce()
@@ -67,7 +67,7 @@ it.each(['closed', 'pending', 'changed', 'unmounted'])('ignores stale confirmati
     wrapper.unmount()
   await flushPromises()
   accept()
-  expect(dialog.input_basis.value).toBe('avif')
+  expect(dialog.input_basis.value).toBe('display')
 })
 
 it('discards a source response from a previous attachment', async () => {
@@ -78,7 +78,7 @@ it('discards a source response from a previous attachment', async () => {
   await flushPromises()
   props.attachment = { ... props.attachment, id: 3 }
   await flushPromises()
-  finish({ avif_url: '/stale', original_url: null, original_reason: '' })
+  finish({ display_url: '/stale', original_url: null, original_reason: '' })
   await flushPromises()
-  expect(dialog.source_url.value).toBe('/view?role=avif')
+  expect(dialog.source_url.value).toBe('/view?role=display')
 })

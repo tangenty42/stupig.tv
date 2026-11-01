@@ -168,9 +168,9 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
         toast.error(error instanceof Error ? error.message : '无法开始上传')
     }
   }
-  async function download(row: WorkspaceListRow, role: 'avif' | 'original' | 'redacted_avif' = 'avif') {
+  async function download(row: WorkspaceListRow, role: 'display' | 'original' | 'redacted_display' = 'display') {
     const file = row.node?.attachment
-    if (! file || (role === 'redacted_avif' ? ! file.has_redacted : ! capabilities(row).download))
+    if (! file || (role === 'redacted_display' ? ! file.has_redacted : ! capabilities(row).download))
       return
     try {
       save_url_as((await content.sign_attachment_download(scope, row.path, role)).url)
@@ -179,12 +179,12 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
       toast.error(error instanceof Error ? error.message : '无法下载')
     }
   }
-  function preview(row: WorkspaceListRow, role: 'avif' | 'redacted_avif' = 'avif') {
+  function preview(row: WorkspaceListRow, role: 'display' | 'redacted_display' = 'display') {
     const file = row.node?.attachment
     const cap = capabilities(row)
-    if (! file || (role === 'redacted_avif' ? ! cap.preview_redacted : ! cap.preview))
+    if (! file || (role === 'redacted_display' ? ! cap.preview_redacted : ! cap.preview))
       return
-    preview_images.value = [role === 'redacted_avif' ? file.redacted_url! : file.url!]
+    preview_images.value = [role === 'redacted_display' ? file.redacted_url! : file.url!]
     preview_visible.value = true
   }
   function open(row: WorkspaceListRow) {
@@ -194,7 +194,7 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     if (! file)
       return
     if (file.is_image)
-      return preview(row, capabilities(row).preview ? 'avif' : 'redacted_avif')
+      return preview(row, capabilities(row).preview ? 'display' : 'redacted_display')
     if (! capabilities(row).open)
       return
     if (attachment_is_media(file)) {
@@ -212,7 +212,7 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     const path = normalized_attachment_extension(attachment_path_join(folder, name))
     return start([{ file, file_name: path, purpose: 'replace', source: target(row) }])
   }
-  function edit_image(row: WorkspaceListRow, file: File, mode: ImageSaveMode, name: string, basis: 'avif' | 'original') {
+  function edit_image(row: WorkspaceListRow, file: File, mode: ImageSaveMode, name: string, basis: 'display' | 'original') {
     const folder = attachment_folder_of(row.path)
     const path = mode !== 'copy' ? decrypted_attachment_name(row.path) : `${folder ? `${folder}/` : ''}${name}`
     return start([{ file, file_name: path, purpose: ({ copy: 'create', overwrite: 'replace', redacted: 'redact' } as const)[mode], source: target(row), image_mode: mode, image_input_basis: basis }])

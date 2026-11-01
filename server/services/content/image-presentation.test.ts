@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { image_presentation } from './image-presentation'
 
-const row = { is_private: true, image_revision: 2, image_metadata: { width: 40, height: 30 }, lqip_jpeg: Buffer.from([255, 216, 255, 217]), avif_key: 'a', jpeg_key: 'b', object_key: 'a' }
+const row = { is_private: true, image_revision: 2, image_metadata: { width: 40, height: 30 }, lqip: Buffer.from([255, 216, 255, 217]), display_key: 'a', fallback_key: 'b', object_key: 'a' }
 describe('authorized image presentation', () => {
   it('omits the entire private presentation before parsing metadata', () => {
     expect(image_presentation({ ... row, image_metadata: 'invalid-private-json' }, false)).toBeUndefined()
@@ -14,9 +14,9 @@ describe('authorized image presentation', () => {
   })
   it('never projects incomplete/stale roles or invalid JPEG bytes', () => {
     expect(image_presentation({ ... row, object_key: 'old' }, true)).toBeUndefined()
-    expect(image_presentation({ ... row, jpeg_key: null }, true)).toBeUndefined()
+    expect(image_presentation({ ... row, fallback_key: null }, true)).toBeUndefined()
     expect(image_presentation({ ... row, image_metadata: { width: 0, height: 2 } }, true)).toBeUndefined()
-    expect(image_presentation({ ... row, lqip_jpeg: Buffer.from('invalid') }, true)?.lqip).toBeNull()
-    expect(image_presentation({ ... row, lqip_jpeg: Buffer.alloc(8193) }, true)?.lqip).toBeNull()
+    expect(image_presentation({ ... row, lqip: Buffer.from('invalid') }, true)?.lqip).toBeNull()
+    expect(image_presentation({ ... row, lqip: Buffer.alloc(8193) }, true)?.lqip).toBeNull()
   })
 })

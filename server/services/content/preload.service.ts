@@ -35,7 +35,7 @@ export function create_preloader(pool: Pick<Pool, 'execute' | 'getConnection'>, 
     const key = job.object_key
     const [rows] = await connection.execute<RowDataPacket[]>(`SELECT a.id FROM content_story_attachments a INNER JOIN content_stories s ON s.id = a.story_id
       WHERE a.id = ? AND a.story_id = ? AND a.is_folder = 0 AND a.storage_provider = 'aliyun' AND a.encryption_key IS NULL
-      AND (a.object_key = ? OR a.avif_key = ? OR a.jpeg_key = ? OR a.redacted_avif_key = ? OR a.redacted_jpeg_key = ?)
+      AND (a.object_key = ? OR a.display_key = ? OR a.fallback_key = ? OR a.redacted_display_key = ? OR a.redacted_fallback_key = ?)
       AND NOT EXISTS (SELECT 1 FROM content_object_retirements r WHERE r.object_key = ?)`,
     [job.attachment_id, job.scope_id, key, key, key, key, key, key])
     return rows.length > 0

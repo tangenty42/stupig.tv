@@ -68,10 +68,10 @@ export async function admit_upload_batch(actor: number, input: UploadBatch) {
           issue = workspace_issue(target, 'other', 'INVALID_REDACTION', '请从图片菜单编辑当前附件的删减版本')
         if (entry.purpose === 'redact' && source && (! source.is_private || (! entry.image_mode && (! processable_image_mime(source.mime_type ?? attachment_mime_type(decrypted_attachment_name(source.file_name))) || ! redactable_attachment_mime(source.file_name) || attachment_name_key(entry.path) !== attachment_name_key(decrypted_attachment_name(source.file_name))))))
           issue = workspace_issue(target, 'other', 'INVALID_REDACTION', '删减版必须对应机密原图及相同格式')
-        if (entry.image_mode && (! source?.avif_key || ! source.image_revision || (entry.image_mode === 'overwrite' && attachment_name_key(target) !== attachment_name_key(decrypted_attachment_name(source.file_name)))))
+        if (entry.image_mode && (! source?.display_key || ! source.image_revision || (entry.image_mode === 'overwrite' && attachment_name_key(target) !== attachment_name_key(decrypted_attachment_name(source.file_name)))))
           issue = workspace_issue(target, 'other', 'INVALID_IMAGE_EDIT', '图片尚未处理就绪或覆盖目标名称已变化')
-        if (entry.image_mode === 'copy' && split_attachment_editable_name(target).locked !== '.avif')
-          issue = workspace_issue(target, 'other', 'INVALID_IMAGE_COPY_NAME', '图片副本的后缀固定为 .avif')
+        if (entry.image_mode === 'copy' && split_attachment_editable_name(target).locked !== '.webp')
+          issue = workspace_issue(target, 'other', 'INVALID_IMAGE_COPY_NAME', '图片副本的后缀固定为 .webp')
         if (replacement && entry.image_mode !== 'redacted' && has_redacted_variant(replacement) && ! ['keep', 'discard'].includes(input.on_error.redacted))
           issue = workspace_issue(target, 'redacted', 'REDACTED_EXISTS', '已有删减版，请选择保留或删除；关闭可取消此次覆盖')
         const requested_private = source && (entry.purpose === 'replace' || entry.image_mode) ? Boolean(source.is_private) : entry.access === 'private'
@@ -136,9 +136,9 @@ export async function admit_upload_batch(actor: number, input: UploadBatch) {
       const image = entry.image_mode || processable_image_mime(mime)
         ? {
             mode: entry.image_mode ?? 'upload' as const,
-            source: entry.image_mode && source ? { id: Number(source.id), revision: Number(source.image_revision), node_revision: Number(source.node_revision), key: source.avif_key!, is_private: Boolean(source.is_private) } : null,
+            source: entry.image_mode && source ? { id: Number(source.id), revision: Number(source.image_revision), node_revision: Number(source.node_revision), key: source.display_key!, is_private: Boolean(source.is_private) } : null,
             original_name: attachment_base_name(entry.original_name ?? entry.path), original_mime: entry.image_mode ? 'image/png' : mime ?? 'application/octet-stream',
-            input_basis: entry.image_mode ? entry.image_input_basis ?? 'avif' : undefined,
+            input_basis: entry.image_mode ? entry.image_input_basis ?? 'display' : undefined,
             redacted_policy: ['keep', 'discard'].includes(input.on_error.redacted) ? input.on_error.redacted as 'keep' | 'discard' : undefined,
           }
         : undefined

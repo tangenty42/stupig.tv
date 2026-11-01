@@ -76,7 +76,7 @@ export function create_object_retirement(pool: Pick<Pool, 'execute' | 'getConnec
             blocked = 'audit_object_tracked'
         }
         // Current reads plus the retirement-row lock arbitrate with every adopter.
-        const [live] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_attachments WHERE object_key = ? OR original_key = ? OR avif_key = ? OR jpeg_key = ? OR redacted_avif_key = ? OR redacted_jpeg_key = ? LIMIT 1 FOR UPDATE', [key, key, key, key, key, key])
+        const [live] = await connection.execute<RowDataPacket[]>('SELECT id FROM content_story_attachments WHERE object_key = ? OR original_key = ? OR display_key = ? OR fallback_key = ? OR redacted_display_key = ? OR redacted_fallback_key = ? LIMIT 1 FOR UPDATE', [key, key, key, key, key, key])
         const [jobs] = await connection.execute<RowDataPacket[]>(`SELECT id FROM content_image_jobs WHERE status IN ('queued', 'processing', 'ready', 'failed')
           AND (JSON_UNQUOTE(JSON_EXTRACT(intent, '$.input.key')) = ? OR JSON_UNQUOTE(JSON_EXTRACT(intent, '$.source.key')) = ?) LIMIT 1 FOR UPDATE`, [key, key])
         const [preloads] = await connection.execute<RowDataPacket[]>(`SELECT id FROM content_preload_jobs WHERE object_key = ? AND phase IN ('submitting', 'polling') LIMIT 1`, [key])

@@ -137,7 +137,7 @@ export const api_schema = {
     sign_attachment_download: z.object({
       story_id: z.coerce.number().int().positive(),
       file_name: z.string().min(1).max(255),
-      role: z.enum(['avif', 'original', 'redacted_avif']).default('avif'),
+      role: z.enum(['display', 'original', 'redacted_display']).default('display'),
     }),
   },
 }

@@ -24,10 +24,10 @@ beforeEach(() => {
     const root = { id: 1, story_id: 1, parent_id: 0, name: '', name_key: '', file_name: '', is_folder: 1, node_revision: 1 }
     const folder = { ... root, id: 2, parent_id: 1, name: 'folder', name_key: 'folder', file_name: 'folder' }
     const file = { id: 11, story_id: 1, parent_id: 2, name: 'private.png.good', name_key: 'private.png.good', file_name: 'folder/private.png.good', is_folder: 0, object_key: 'key', storage_provider: 'aliyun', storage_bucket: 'public', oss_version_id: 'v1', mime_type: 'image/png', file_size: 12, version: 'v1', encryption_key: mocks.private_plaintext ? null : 'secret-key', is_private: 1, node_revision: 1 }
-    Object.assign(file, { avif_key: 'key', jpeg_key: 'fallback', image_revision: 1, image_metadata: { width: 40, height: 30 }, lqip_jpeg: Buffer.from([255, 216, 255, 217]) })
+    Object.assign(file, { display_key: 'key', fallback_key: 'fallback', image_revision: 1, image_metadata: { width: 40, height: 30 }, lqip: Buffer.from([255, 216, 255, 217]) })
     if (mocks.redacted) {
-      Object.assign(file, { redacted_avif_key: 'redacted', redacted_jpeg_key: 'redacted-jpg', redacted_revision: 2,
-        redacted_metadata: { width: 12, height: 8 }, redacted_lqip_jpeg: Buffer.from([255, 216, 0, 255, 217]) })
+      Object.assign(file, { redacted_display_key: 'redacted', redacted_fallback_key: 'redacted-jpg', redacted_revision: 2,
+        redacted_metadata: { width: 12, height: 8 }, redacted_lqip: Buffer.from([255, 216, 0, 255, 217]) })
     }
     return [sql.includes('is_folder = 0') ? [file] : [root, folder, file]]
   })

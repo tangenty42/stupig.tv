@@ -79,7 +79,7 @@ it('previews and downloads only the redacted pixels for a guest of a private own
   vi.stubGlobal('document', { createElement: () => ({ click, href: '', download: '' }), removeEventListener: vi.fn() })
   vi.stubGlobal('useApi', () => ({ content: { execute_workspace_command: mocks.execute, sign_attachment_download: sign } }))
   vi.stubGlobal('useAuth', () => ({ user: ref(null) }))
-  const attachment = { id: 3, file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 20, version: 'v1',
+  const attachment = { id: 3, file_name: 'photo.png.good', mime_type: 'image/webp', file_size: 20, version: 'v1',
     url: null, is_image: true, is_private: true, has_redacted: true, is_redacted_view: true, redacted_url: '/read?role=redacted' }
   const panel = await mount()
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
@@ -90,10 +90,10 @@ it('previews and downloads only the redacted pixels for a guest of a private own
   panel.open(row)
   expect(panel.preview_images.value).toEqual(['/read?role=redacted'])
   expect(panel.preview_visible.value).toBe(true)
-  await panel.download(row, 'redacted_avif')
+  await panel.download(row, 'redacted_display')
   await panel.download(row)
   await panel.download(row, 'original')
-  expect(sign.mock.calls).toEqual([[25, attachment.file_name, 'redacted_avif']])
+  expect(sign.mock.calls).toEqual([[25, attachment.file_name, 'redacted_display']])
   expect(click).toHaveBeenCalledOnce()
   expect(mocks.toast).not.toHaveBeenCalled()
 })
@@ -108,14 +108,14 @@ it.each([true, false])('downloads the explicitly selected normal, archive, or re
   const panel = await mount()
   const row: WorkspaceListRow = { key: 'node:3', parent_id: 1, depth: 0, name: 'photo.png', path: 'photo.png', node: {
     id: 3, parent_id: 1, name: 'photo.png', path: 'photo.png', kind: 'file', version: 'v1', attachment: {
-      id: 3, file_name: 'photo.png', mime_type: 'image/avif', file_size: 20, version: 'v1', is_image: true,
+      id: 3, file_name: 'photo.png', mime_type: 'image/webp', file_size: 20, version: 'v1', is_image: true,
       is_private, url: '/normal', has_redacted: true, redacted_url: '/redacted',
     },
   } }
   await panel.download(row)
   await panel.download(row, 'original')
-  await panel.download(row, 'redacted_avif')
-  expect(sign.mock.calls).toEqual([[25, row.path, 'avif'], [25, row.path, 'original'], [25, row.path, 'redacted_avif']])
+  await panel.download(row, 'redacted_display')
+  expect(sign.mock.calls).toEqual([[25, row.path, 'display'], [25, row.path, 'original'], [25, row.path, 'redacted_display']])
   expect(click).toHaveBeenCalledTimes(3)
 })
 
@@ -131,7 +131,7 @@ it.each([
   const panel = await mount()
   const row: WorkspaceListRow = { key: 'node:3', parent_id: 1, depth: 0, name: 'photo.png', path: 'photo.png', node: {
     id: 3, parent_id: 1, name: 'photo.png', path: 'photo.png', kind: 'file', version: 'v1', attachment: {
-      id: 3, file_name: 'photo.png', mime_type: 'image/avif', file_size: 20, version: 'v1', is_image: true,
+      id: 3, file_name: 'photo.png', mime_type: 'image/webp', file_size: 20, version: 'v1', is_image: true,
       is_private: scenario.private, url: scenario.normal, has_redacted: !! scenario.redacted, redacted_url: scenario.redacted,
     },
   } }
@@ -140,7 +140,7 @@ it.each([
   expect(panel.preview_images.value).toEqual(scenario.expected ? [scenario.expected] : [])
   panel.preview_visible.value = false
   panel.preview_images.value = []
-  panel.preview(row, 'redacted_avif')
+  panel.preview(row, 'redacted_display')
   expect(panel.preview_visible.value).toBe(!! scenario.redacted)
   expect(panel.preview_images.value).toEqual(scenario.redacted ? [scenario.redacted] : [])
   expect(mocks.toast).not.toHaveBeenCalled()

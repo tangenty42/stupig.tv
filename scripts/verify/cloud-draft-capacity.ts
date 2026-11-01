@@ -118,7 +118,8 @@ export async function verify_draft_capacity(actor: AuthUser) {
     },
     copy_object: async (source: string, target: string) => storage.put_object(target, objects.get(source)!),
   }
-  const image_config = runtime_config().app.contentImages
+  const image_settings = runtime_config().app.contentImages
+  const image_config = { ... image_settings, ... image_settings.cloud }
   const images = create_image_jobs(db, storage as unknown as ReturnType<typeof create_aliyun_oss>, image_config.leaseSeconds, image_config.heartbeatSeconds)
   const image_jobs: string[] = []
   for (let image = 0; image < 2; image ++) {
@@ -233,7 +234,7 @@ export async function verify_draft_capacity(actor: AuthUser) {
   while ((await pending()).n) await dispatch()
   const [[image_count]] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS n FROM content_image_jobs WHERE status = \'ready\'')
   assert.equal(Number(image_count!.n), 2)
-  console.log(`cloud-draft capacity: images=2, pixels=512x512, content=random_RGB, avif_effort=${image_config.profile.avifEffort}`)
+  console.log(`cloud-draft capacity: images=2, pixels=512x512, content=random_RGB, webp_effort=${image_config.profile.webpEffort}`)
   console.log(`cloud-draft capacity: pool_wait_max_ms=${Math.max(... connection_waits).toFixed(1)}, enqueue_events=${queue_events}, lock_wait_peak=${lock_peak}, outbox_peak=${outbox_peak}, oldest_outbox_ms=${outbox_age.toFixed(1)}, delivered=${deliveries}, final_outbox=0, ready_images=2, authorized_reads=40`)
   for (const [kind, values] of [['save', saves], ['renew', renewals]] as const) {
     values.sort((a, b) => a - b)

@@ -96,7 +96,7 @@ beforeEach(() => {
     if (sql.startsWith('UPDATE content_story_attachments SET parent_id')) {
       Object.assign(rows.find(row => row.id === args[10])!, { parent_id: args[0], name: args[1], name_key: args[2], file_name: args[3],
         object_key: args[4], mime_type: args[5], file_size: args[6], version: args[7], oss_version_id: args[8], is_private: args[9], node_revision: 2,
-        original_key: null, avif_key: null, jpeg_key: null, parent_avif_key: null, image_metadata: null, lqip_jpeg: null, is_edited: 0 })
+        original_key: null, display_key: null, fallback_key: null, source_display_key: null, image_metadata: null, lqip: null, is_edited: 0 })
     }
     if (sql.startsWith('UPDATE content_stories SET markdown'))
       Object.assign(story, { markdown: args[0], cover: args[1], cover_version: args[2] })
@@ -207,8 +207,8 @@ it('refuses publication if a parent acquired private access after admission', as
 })
 
 it.each(['keep', 'discard'] as const)('requires explicit %s resolution before admitting an overwrite with a redacted version', async (choice) => {
-  Object.assign(rows[1]!, { avif_key: 'source.avif', jpeg_key: 'source.jpg', image_revision: 1,
-    redacted_avif_key: 'redacted.avif', redacted_jpeg_key: 'redacted.jpg', redacted_revision: 1 })
+  Object.assign(rows[1]!, { display_key: 'source.webp', fallback_key: 'source.jpg', image_revision: 1,
+    redacted_display_key: 'redacted.webp', redacted_fallback_key: 'redacted.jpg', redacted_revision: 1 })
   const input = upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(), entries: [{
     path: 'existing.txt', purpose: 'replace', source: { id: 2, version: node_version(rows, rows[1]!) },
     original_name: 'replacement.gif', content_type: 'image/gif', size: 10,
@@ -246,7 +246,7 @@ it.each([
 it.each([
   ['image/jpeg', 'Selected.GIF', 'image/gif'],
   ['image/gif', 'Selected.PNG', 'image/png'],
-  ['', 'Selected.AVIF', 'image/avif'],
+  ['', 'Selected.WebP', 'image/webp'],
   ['', 'Selected.PNG', 'image/png'],
 ])('uses the selected %s file rather than a replacement target suffix', async (declared, original, expected) => {
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
@@ -260,9 +260,9 @@ it.each([
 
 it.each([
   ['copy.jpg', 'INVALID_IMAGE_COPY_NAME'], ['copy', 'INVALID_IMAGE_COPY_NAME'],
-  ['.avif', 'INVALID_NAME'], ['copy.svg', 'INVALID_IMAGE_COPY_NAME'],
-])('rejects an edited copy target without a fixed AVIF extension: %s', async (path, code) => {
-  Object.assign(rows[1]!, { avif_key: 'source.avif', jpeg_key: 'source.jpg', image_revision: 1 })
+  ['.webp', 'INVALID_NAME'], ['copy.svg', 'INVALID_IMAGE_COPY_NAME'],
+])('rejects an edited copy target without a fixed WebP extension: %s', async (path, code) => {
+  Object.assign(rows[1]!, { display_key: 'source.webp', fallback_key: 'source.jpg', image_revision: 1 })
   const source = { id: 2, version: node_version(rows, rows[1]!) }
   await expect(begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
     entries: [{ path, original_name: 'edited.png', content_type: 'image/png', image_mode: 'copy', source, size: 10 }] })))
@@ -270,12 +270,12 @@ it.each([
   expect(boundary.execute.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO content_transfer_sessions'))).toBe(false)
 })
 
-it('admits an edited AVIF copy while retaining PNG as its temporary pixel input', async () => {
-  Object.assign(rows[1]!, { avif_key: 'source.avif', jpeg_key: 'source.jpg', image_revision: 1 })
+it('admits an edited WebP copy while retaining PNG as its temporary pixel input', async () => {
+  Object.assign(rows[1]!, { display_key: 'source.webp', fallback_key: 'source.jpg', image_revision: 1 })
   const source = { id: 2, version: node_version(rows, rows[1]!) }
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path: '副本.AVIF', original_name: 'edited.png', content_type: 'image/png', image_mode: 'copy', source, size: 10 }] }))
-  expect(result.accepted[0]?.path).toBe('副本.avif')
+    entries: [{ path: '副本.WebP', original_name: 'edited.png', content_type: 'image/png', image_mode: 'copy', source, size: 10 }] }))
+  expect(result.accepted[0]?.path).toBe('副本.webp')
   expect(session.intent.image).toMatchObject({ mode: 'copy', original_mime: 'image/png', original_name: 'edited.png' })
 })
 
@@ -299,8 +299,8 @@ it.each([
   ['Selected.GIF', 'image/gif'],
   ['Existing.SVG', 'image/svg+xml'],
 ])('replaces a processed image at %s using the selected file MIME %s without reencoding', async (path, mime) => {
-  Object.assign(rows[1]!, { name: 'Existing.JPG', name_key: 'existing.jpg', file_name: 'Existing.JPG', mime_type: 'image/avif',
-    object_key: 'old-avif', avif_key: 'old-avif', jpeg_key: 'old-jpeg', original_key: 'old-original', image_revision: 1, image_metadata: { width: 10, height: 10 } })
+  Object.assign(rows[1]!, { name: 'Existing.JPG', name_key: 'existing.jpg', file_name: 'Existing.JPG', mime_type: 'image/webp',
+    object_key: 'old-webp', display_key: 'old-webp', fallback_key: 'old-jpeg', original_key: 'old-original', image_revision: 1, image_metadata: { width: 10, height: 10 } })
   const source = { id: 2, version: node_version(rows, rows[1]!) }
   const original = mime === 'image/gif' ? 'Selected.GIF' : 'Selected.SVG'
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
@@ -312,9 +312,9 @@ it.each([
   expect(published.attachment_id).toBe(2)
   expect(published.attachment).toMatchObject({ file_name: path.replace(/\.[^.]+$/, extension => extension.toLowerCase()), mime_type: mime, is_image: true })
   expect(published.attachment?.image).toBeUndefined()
-  expect(rows[1]).toMatchObject({ object_key: 'raw-selected-file', avif_key: null, jpeg_key: null, original_key: null, image_metadata: null })
+  expect(rows[1]).toMatchObject({ object_key: 'raw-selected-file', display_key: null, fallback_key: null, original_key: null, image_metadata: null })
   const retired = boundary.execute.mock.calls.filter(([sql]) => sql.startsWith('INSERT IGNORE INTO content_object_retirements')).map(([, args]) => args[0])
-  expect(retired).toEqual(expect.arrayContaining(['old-avif', 'old-jpeg', 'old-original']))
+  expect(retired).toEqual(expect.arrayContaining(['old-webp', 'old-jpeg', 'old-original']))
 })
 
 it.each([false, true])('publishes exactly the affected projections and replays the durable receipt (cover=%s)', async (cover) => {
@@ -450,8 +450,8 @@ it.each([false, true])('adopts a recovered ready image and publishes its exact r
     story.cover = 'new.png'
   const job = { id: 'd'.repeat(32), status: 'ready', attachment_id: 0, active_attempt_id: 'e'.repeat(32),
     intent: { scope_id: 1, actor_id: 7, ... session.intent.image, is_private: false, input, profile_version: 1,
-      profile: { maxInputBytes: 1000, maxPixels: 1000, avifQuality: 60, avifEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 } },
-    result: { avif: { ... input, key: 'content/att/image.avif', etag: 'avif-v1' }, jpeg: { ... input, key: 'content/att/image.jpg' },
+      profile: { maxInputBytes: 1000, maxPixels: 1000, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 } },
+    result: { display: { ... input, key: 'content/att/image.webp', etag: 'webp-v1' }, fallback: { ... input, key: 'content/att/image.jpg' },
       original: { ... input, key: `content/att/originals/${'d'.repeat(32)}/${'e'.repeat(32)}` }, width: 10, height: 10, lqip: '/9j/2Q==' },
   }
   const execute = boundary.execute.getMockImplementation()!
@@ -465,8 +465,8 @@ it.each([false, true])('adopts a recovered ready image and publishes its exact r
     if (sql.includes('FROM content_story_attachments WHERE id = ?'))
       return [structuredClone(rows.filter(row => row.id === args[0]))]
     if (sql.startsWith('UPDATE content_story_attachments SET original_key')) {
-      Object.assign(rows.find(row => row.id === args[11])!, { original_key: args[0], avif_key: args[1], jpeg_key: args[2], image_revision: 1,
-        image_metadata: args[5], lqip_jpeg: args[6], object_key: args[7], version: args[8], oss_version_id: args[9], file_size: args[10], node_revision: 2 })
+      Object.assign(rows.find(row => row.id === args[11])!, { original_key: args[0], display_key: args[1], fallback_key: args[2], image_revision: 1,
+        image_metadata: args[5], lqip: args[6], object_key: args[7], version: args[8], oss_version_id: args[9], file_size: args[10], node_revision: 2 })
     }
     if (sql.startsWith('UPDATE content_image_jobs SET status'))
       Object.assign(job, { status: 'completed', attachment_id: args[0] })
@@ -477,8 +477,8 @@ it.each([false, true])('adopts a recovered ready image and publishes its exact r
   expect(resources()).toEqual(expected)
   expect(session.status).toBe('completed')
   expect(job.status).toBe('completed')
-  expect(rows[2]).toMatchObject({ object_key: job.result.avif.key, version: job.result.avif.etag, image_revision: 1 })
-  expect(session.result).toMatchObject({ object_key: job.result.avif.key, refresh: { attachments: true, ... (cover ? { story: true, stories: true } : {}) } })
+  expect(rows[2]).toMatchObject({ object_key: job.result.display.key, version: job.result.display.etag, image_revision: 1 })
+  expect(session.result).toMatchObject({ object_key: job.result.display.key, refresh: { attachments: true, ... (cover ? { story: true, stories: true } : {}) } })
   boundary.publish.mockClear()
   await sweep_content_images()
   expect(resources()).toEqual(expected)

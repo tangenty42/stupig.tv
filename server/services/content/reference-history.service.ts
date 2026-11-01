@@ -52,7 +52,7 @@ export async function begin_namespace_change(connection: Connection, story_id: n
   if (! stories[0])
     throw new ApiError(404, '档案不存在或已被删除')
   const [nodes] = await connection.execute<NamespaceNode[]>(
-    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, storage_provider, oss_version_id, node_revision, encryption_key, redacted_avif_key, redacted_jpeg_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [story_id],
+    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, storage_provider, oss_version_id, node_revision, encryption_key, redacted_display_key, redacted_fallback_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [story_id],
   )
   return { story_id, revision: Number(stories[0].namespace_revision), nodes }
 }
@@ -60,7 +60,7 @@ export async function begin_namespace_change(connection: Connection, story_id: n
 /** Snapshot deltas omit temporary paths; a whole batch is one simultaneous step. */
 export async function finish_namespace_change(connection: Connection, before: Awaited<ReturnType<typeof begin_namespace_change>>, folder_moves: { from: string, to: string }[] = []): Promise<WorkspaceChange> {
   const [nodes] = await connection.execute<NamespaceNode[]>(
-    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, storage_provider, oss_version_id, node_revision, encryption_key, redacted_avif_key, redacted_jpeg_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [before.story_id],
+    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, storage_provider, oss_version_id, node_revision, encryption_key, redacted_display_key, redacted_fallback_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [before.story_id],
   )
   const current = new Map(nodes.map(node => [Number(node.id), node]))
   const previous_ids = new Set(before.nodes.map(node => Number(node.id)))

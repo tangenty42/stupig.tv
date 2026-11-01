@@ -122,7 +122,7 @@ export async function adopt_upload_in_transaction(connection: Connection, sessio
     const [jobs] = await connection.execute<RowDataPacket[]>(`SELECT j.result, j.attachment_id FROM content_upload_images u JOIN content_image_jobs j ON j.id = u.job_id
       WHERE u.session_id = ? AND j.status = 'completed' AND j.actor_id = ?`, [session.id, session.actor_id])
     const image = typeof jobs[0]?.result === 'string' ? JSON.parse(jobs[0].result) : jobs[0]?.result
-    if (Number(jobs[0]?.attachment_id) !== result.attachment_id || image?.avif?.key !== result.object_key || image?.avif?.etag !== result.version)
+    if (Number(jobs[0]?.attachment_id) !== result.attachment_id || image?.display?.key !== result.object_key || image?.display?.etag !== result.version)
       throw new ApiError(409, '图片发布回执与上传会话不一致')
   }
   else if (! ('key' in session.result) || session.result.key !== result.object_key || session.result.etag !== result.version) {

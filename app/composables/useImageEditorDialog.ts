@@ -1,5 +1,6 @@
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ContentStoryAttachment } from '@shared/types/content'
+import { content_image_formats } from '@shared/content-image-format'
 import { split_attachment_editable_name } from '@shared/content-markdown'
 import { suggested_image_name } from '~/utils/content/image-edit'
 
@@ -13,13 +14,13 @@ interface DialogProps {
 interface DialogOptions {
   load: ReturnType<typeof useApi>['content']['image_editor_source']
   confirm: ReturnType<typeof useMyConfirm>['confirm_require']
-  save: (file: File, mode: ImageSaveMode, name: string, basis: 'avif' | 'original') => void
+  save: (file: File, mode: ImageSaveMode, name: string, basis: 'display' | 'original') => void
 }
 
 /** Owns source authorization and save intent; bitmap history belongs to useImageEditSession. */
 export function useImageEditorDialog(props: Readonly<DialogProps>, options: DialogOptions) {
   const mode = ref<ImageSaveMode>(props.redacted ? 'redacted' : 'overwrite')
-  const input_basis = ref<'avif' | 'original'>('avif')
+  const input_basis = ref<'display' | 'original'>('display')
   const base_ready = ref(false)
   const output_name = ref('')
   const original_name = computed(() => split_attachment_editable_name(props.attachment?.file_name ?? ''))
@@ -30,7 +31,7 @@ export function useImageEditorDialog(props: Readonly<DialogProps>, options: Dial
         output_name.value = value
     },
   })
-  const save_name = computed(() => mode.value === 'copy' ? `${output_name.value}.avif` : props.attachment?.file_name ?? '')
+  const save_name = computed(() => mode.value === 'copy' ? `${output_name.value}.${content_image_formats.display.extension}` : props.attachment?.file_name ?? '')
   const save_confirmation = computed(() => mode.value === 'overwrite' ? '将覆盖原图，确认保存？' : mode.value === 'copy' ? '将另存为新图，确认保存？' : '将另存为删减版，确认保存？')
   const source_url = ref<string | null>(null)
   const source_error = ref('')
@@ -55,7 +56,7 @@ export function useImageEditorDialog(props: Readonly<DialogProps>, options: Dial
   watch(() => [props.visible, props.attachment, props.redacted] as const, async ([open, attachment]) => {
     const epoch = ++ generation
     mode.value = props.redacted ? 'redacted' : 'overwrite'
-    input_basis.value = 'avif'
+    input_basis.value = 'display'
     base_ready.value = false
     source_url.value = original_url.value = null
     source_error.value = ''
@@ -70,7 +71,7 @@ export function useImageEditorDialog(props: Readonly<DialogProps>, options: Dial
       const source = await options.load(attachment.id, version, Boolean(props.redacted))
       if (disposed || epoch !== generation)
         return
-      source_url.value = source.avif_url
+      source_url.value = source.display_url
       original_url.value = source.original_url
       original_reason.value = source.original_reason
     }

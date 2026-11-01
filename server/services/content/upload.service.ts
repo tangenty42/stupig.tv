@@ -13,7 +13,7 @@ import { resolve_attachment_delivery } from './attachment-access.service'
  * ESA rechecks the signed capability against current authorization before each
  * read, including cache hits. Filename metadata is covered by the signature.
  */
-export async function sign_attachment_download(story_id: number, file_name: string, viewer: AuthUser | null = null, role: 'avif' | 'original' | 'redacted_avif' = 'avif') {
+export async function sign_attachment_download(story_id: number, file_name: string, viewer: AuthUser | null = null, role: 'display' | 'original' | 'redacted_display' = 'display') {
   const [stories] = await db.execute<RowDataPacket[]>('SELECT id FROM content_stories WHERE id = ?', [story_id])
   if (! stories.length)
     throw new ApiError(404, '档案不存在或已被删除')
@@ -24,9 +24,9 @@ export async function sign_attachment_download(story_id: number, file_name: stri
   // Retired storage and encrypted rows must be migrated before signing.
   if (row.encryption_key !== null || row.storage_provider !== 'aliyun')
     throw new ApiError(503, '附件尚未完成迁移')
-  if (row.is_private && role !== 'redacted_avif' && ! has_permission(viewer, 'content_private', 'read'))
+  if (row.is_private && role !== 'redacted_display' && ! has_permission(viewer, 'content_private', 'read'))
     throw new ApiError(403, '你没有机密附件的读取权限')
 
-  const object = await resolve_attachment_delivery(row, role === 'redacted_avif' ? role : role === 'original' ? 'original' : row.avif_key ? 'avif' : 'auto', viewer)
+  const object = await resolve_attachment_delivery(row, role === 'redacted_display' ? role : role === 'original' ? 'original' : row.display_key ? 'display' : 'auto', viewer)
   return { url: create_esa().signed_read_url(object.key, settings.app.content.download.urlTtlSeconds, 'GET', object.name, 'attachment', object.grant) }
 }

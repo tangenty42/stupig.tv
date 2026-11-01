@@ -13,8 +13,8 @@ import { enqueue_workspace_change } from './workspace-sync.service'
 
 export interface WorkspaceRow extends RowDataPacket, RedactedVariantRow {
   original_key?: string | null
-  avif_key?: string | null
-  jpeg_key?: string | null
+  display_key?: string | null
+  fallback_key?: string | null
   image_revision?: number
   id: number
   story_id: number

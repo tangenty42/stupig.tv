@@ -14,7 +14,7 @@ import { image_upload_size } from '~/utils/content/image-upload'
 
 export interface UploadEntry extends AttachmentUploadPick {
   image_mode?: ImageSaveMode
-  image_input_basis?: 'avif' | 'original'
+  image_input_basis?: 'display' | 'original'
   purpose?: 'create' | 'replace' | 'redact'
   access?: 'public' | 'private'
   source?: { id: number, version: string }

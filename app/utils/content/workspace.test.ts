@@ -144,7 +144,7 @@ it('uses the same capability projection for menu, selection and drag fences', ()
 })
 
 it('opens the public variant without granting any private owner mutation', () => {
-  const attachment = { id: 3, file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 10, version: 'v1',
+  const attachment = { id: 3, file_name: 'photo.png.good', mime_type: 'image/webp', file_size: 10, version: 'v1',
     url: null, is_image: true, is_private: true, has_redacted: true, is_redacted_view: true, redacted_url: '/read?role=redacted' }
   const row = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file' as const, version: 'v1', attachment } }
@@ -177,7 +177,7 @@ it('reports permission, pending and unfinished session reasons without changing 
 })
 
 it.each([true, false])('reports only the root read restriction when private permission is %s', (can_private) => {
-  const attachment = { file_name: 'photo.png.good', mime_type: 'image/avif', file_size: 1, version: 'v1',
+  const attachment = { file_name: 'photo.png.good', mime_type: 'image/webp', file_size: 1, version: 'v1',
     url: null, is_image: true, is_private: true }
   const row: WorkspaceListRow = { key: 'node:3', parent_id: 1, depth: 0, name: attachment.file_name, path: attachment.file_name,
     node: { id: 3, parent_id: 1, name: attachment.file_name, path: attachment.file_name, kind: 'file', version: 'v1', attachment } }

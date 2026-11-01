@@ -523,7 +523,7 @@ export function attachment_mime_type(file_name: string) {
   return attachment_mime_by_extension[file_name.slice(dot + 1).toLowerCase()] ?? null
 }
 
-/** Formats admitted to the existing single-frame AVIF/JPEG processing pipeline. */
+/** Accepted inputs; normalized display output is WebP with a JPEG fallback. */
 export function processable_image_mime(mime: string | null | undefined) {
   return ['image/jpeg', 'image/png', 'image/webp', 'image/avif'].includes(mime ?? '')
 }
