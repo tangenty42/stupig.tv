@@ -1,6 +1,6 @@
 import type { ContentWorkspaceNode } from '@shared/types/content'
 import type { ContentUploadReservation, ContentUploadSession } from '@shared/types/content-upload'
-import type { WorkspaceListRow } from './workspace'
+import type { UploadPreparation, WorkspaceListRow } from './workspace'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { find_delete_references } from '@shared/content-delete-impact'
@@ -8,6 +8,19 @@ import { decrypted_attachment_name, split_attachment_editable_name } from '@shar
 import ts from 'typescript'
 import { expect, it, vi } from 'vitest'
 import { project_workspace_rows, workspace_capabilities, workspace_command_footprint } from './workspace'
+
+it('projects local preparations without granting stored-file actions and hands off by actual session identity', () => {
+  const preparation: UploadPreparation = { id: 'local', path: 'docs/large.bin', size: 9000, loaded: 100, phase: 'hashing' }
+  const before = project_workspace_rows([], [], 1, new Set(), [preparation])
+  expect(before).toHaveLength(1)
+  expect(before[0]).toMatchObject({ key: 'preparing:local', path: preparation.path, preparation })
+  expect(workspace_capabilities(before[0]!, { readonly: false, can_private: true, pending: false })).toMatchObject({ open: false, move: false, delete: false })
+  const session = { id: 'actual-session', path: preparation.path, parent_id: 50, size: preparation.size, status: 'queued' } as ContentUploadSession
+  const after = project_workspace_rows([], [session], 1, new Set(), [{ ... preparation, session_id: session.id, phase: 'admitting' }])
+  expect(after).toHaveLength(1)
+  expect(after[0]).toMatchObject({ key: `session:${session.id}`, parent_id: 1, session })
+  expect(after[0]?.preparation).toBeUndefined()
+})
 
 it.each([true, false])('protects both subtrees when folder privacy changes to %s', (private_value) => {
   const name = private_value ? 'docs' : 'docs.good'

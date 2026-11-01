@@ -2,6 +2,7 @@ import type { ContentAttachmentWorkspace } from '@shared/types/content'
 import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { UploadSessionApi } from '~/utils/content/browser-upload'
 import { error_policy_schema } from '@shared/content-workspace'
+import { settings } from '@shared/settings'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { computed, effectScope, reactive, ref, watch } from 'vue'
@@ -52,6 +53,84 @@ beforeEach(() => {
   state.api.get_upload_session.mockResolvedValue(session)
   state.run.mockResolvedValue(session)
   state.api.adopt_upload_session.mockResolvedValue({ attachment: { id: 9, file_name: 'a.txt' } })
+})
+
+it('shows all selected files before hashing or admission and updates the current progress', async () => {
+  let finish!: (digest: string) => void
+  let report!: (progress: { phase: 'hashing', loaded: number, total: number }) => void
+  state.hash.mockImplementationOnce((_file, _signal, progress) => {
+    report = progress
+    return new Promise(resolve => finish = resolve)
+  })
+  const store = useContentUploadsStore(24)
+  const pending = store.start(['large.bin', 'small.txt'].map(name => ({ file: new File(['abc'], name), file_name: name })))
+  expect(store.preparations.map(item => [item.path, item.phase])).toEqual([['large.bin', 'hashing'], ['small.txt', 'waiting']])
+  expect(store.sessions).toEqual([])
+  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+  report({ phase: 'hashing', loaded: 2, total: 3 })
+  expect(store.preparations[0]?.loaded).toBe(2)
+  expect(store.can_cancel_preparation).toBe(true)
+  finish(session.sha256)
+  await pending
+  expect(store.preparations).toEqual([])
+})
+
+it('cancels local preparation without admission and fences its late result from a new selection', async () => {
+  let finish!: (digest: string) => void
+  let signal!: AbortSignal
+  state.hash.mockImplementationOnce((_file, abort) => {
+    signal = abort
+    return new Promise(resolve => finish = resolve)
+  })
+  const store = useContentUploadsStore(24)
+  const old = store.start([{ file: new File(['abc'], 'old.bin'), file_name: 'old.bin' }])
+  store.cancel_preparation()
+  expect(signal.aborted).toBe(true)
+  expect(store.preparations).toEqual([])
+  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+  const next = store.start([{ file: new File(['abc'], 'new.bin'), file_name: 'new.bin' }])
+  finish(session.sha256)
+  await Promise.all([old, next])
+  expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
+  expect(state.api.begin_upload_batch.mock.calls[0]![0].entries[0].path).toBe('new.bin')
+})
+
+it('keeps read failures visible and can clear them without creating a server session', async () => {
+  state.hash.mockRejectedValueOnce(new Error('file unavailable'))
+  const store = useContentUploadsStore(24)
+  await expect(store.start([{ file: new File(['abc'], 'large.bin'), file_name: 'large.bin' }])).rejects.toThrow('file unavailable')
+  expect(store.preparations[0]).toMatchObject({ phase: 'failed', error: 'file unavailable' })
+  expect(store.can_cancel_preparation).toBe(true)
+  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+  store.cancel_preparation()
+  expect(store.preparations).toEqual([])
+})
+
+it('rejects over-limit selections before scanning file bytes', async () => {
+  const file = new File(['abc'], 'oversized.bin')
+  Object.defineProperty(file, 'size', { value: settings.app.content.upload.maxSizeMb * 1024 ** 2 + 1 })
+  const store = useContentUploadsStore(24)
+  await expect(store.start([{ file, file_name: file.name }])).rejects.toThrow('上传上限')
+  expect(state.hash).not.toHaveBeenCalled()
+  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+  store.cancel_preparation()
+  await expect(store.start(Array.from({ length: settings.app.content.workspace.batchLimit + 1 }, () => ({ file, file_name: file.name })))).rejects.toThrow('分批上传')
+  expect(state.hash).not.toHaveBeenCalled()
+})
+
+it('does not pretend to cancel an unknown admission result and retries its original identity', async () => {
+  state.api.begin_upload_batch.mockRejectedValueOnce(new Error('reply lost'))
+  const store = useContentUploadsStore(24)
+  await store.start([{ file: new File(['abc'], 'file.bin'), file_name: 'file.bin' }])
+  expect(store.can_cancel_preparation).toBe(false)
+  expect(store.preparations[0]?.phase).toBe('admitting')
+  store.cancel_preparation()
+  expect(store.preparations).toHaveLength(1)
+  const request = state.api.begin_upload_batch.mock.calls[0]![0].request_id
+  await store.submit()
+  expect(state.api.begin_upload_batch.mock.calls[1]![0].request_id).toBe(request)
+  expect(state.hash).toHaveBeenCalledOnce()
+  expect(store.preparations).toEqual([])
 })
 
 it('publishes only after verified upload and delivers the returned attachment once', async () => {

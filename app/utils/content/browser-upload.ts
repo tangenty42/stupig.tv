@@ -1,8 +1,8 @@
 import type { ContentUploadPartGrant, ContentUploadSession } from '@shared/types/content-upload'
+import type { UploadHashMessage } from './upload-hash'
 import { md5 } from '@noble/hashes/legacy.js'
-import { sha256 } from '@noble/hashes/sha2.js'
-import { bytesToHex } from '@noble/hashes/utils.js'
 import { settings } from '@shared/settings'
+import { calculate_upload_sha256 } from './upload-hash'
 
 export interface UploadSessionApi {
   resume: () => Promise<ContentUploadSession>
@@ -13,22 +13,73 @@ export interface UploadSessionApi {
 }
 export interface UploadProgress { phase: 'hashing' | 'uploading' | 'verifying' | 'ready', loaded: number, total: number, confirmed?: number }
 
-/** Bounded memory, including a reselected multi-GB file. Never trust its name/size alone. */
-export async function upload_file_sha256(file: Blob, signal?: AbortSignal, progress?: (value: UploadProgress) => void) {
-  const hash = sha256.create()
-  const chunk_size = settings.app.content.upload.partSizeMb * 1024 ** 2
+const file_digests = new WeakMap<Blob, string>()
+
+async function hash_in_worker(file: Blob, chunk_size: number, signal?: AbortSignal, progress?: (loaded: number) => void): Promise<string | null> {
+  // Tiny selections should not pay for a new worker per file.
+  if (typeof Worker === 'undefined' || file.size < chunk_size)
+    return null
+  let worker: Worker
   try {
-    for (let offset = 0; offset < file.size; offset += chunk_size) {
-      signal?.throwIfAborted()
-      hash.update(new Uint8Array(await file.slice(offset, offset + chunk_size).arrayBuffer()))
-      progress?.({ phase: 'hashing', loaded: Math.min(offset + chunk_size, file.size), total: file.size })
+    worker = new Worker(new URL('./upload-hash.worker.ts', import.meta.url), { type: 'module' })
+  }
+  catch { return null }
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (result: string | null, error?: Error) => {
+      if (settled)
+        return
+      settled = true
+      signal?.removeEventListener('abort', abort)
+      worker.terminate()
+      worker.onmessage = worker.onerror = null
+      if (error)
+        reject(error)
+      else
+        resolve(result)
     }
-    signal?.throwIfAborted()
-    return bytesToHex(hash.digest())
+    function abort() {
+      finish(null, new DOMException('准备上传已取消', 'AbortError'))
+    }
+    worker.onmessage = ({ data }: MessageEvent<UploadHashMessage>) => {
+      if (settled)
+        return
+      if (data?.type === 'progress' && Number.isFinite(data.loaded) && data.loaded >= 0 && data.loaded <= file.size)
+        progress?.(data.loaded)
+      else if (data?.type === 'done' && /^[a-f0-9]{64}$/.test(data.sha256))
+        finish(data.sha256)
+      else
+        finish(null, new Error('无法读取所选文件，请重新选择后上传'))
+    }
+    // Older engines or a blocked worker retain the incremental compatibility path.
+    worker.onerror = (event) => {
+      event.preventDefault()
+      finish(null)
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted)
+      return abort()
+    try {
+      worker.postMessage({ file, chunk_size })
+    }
+    catch { finish(null) }
+  })
+}
+
+/** Hash an immutable Blob once; a newly selected File must still be verified. */
+export async function upload_file_sha256(file: Blob, signal?: AbortSignal, progress?: (value: UploadProgress) => void) {
+  signal?.throwIfAborted()
+  const cached = file_digests.get(file)
+  if (cached) {
+    progress?.({ phase: 'hashing', loaded: file.size, total: file.size })
+    return cached
   }
-  finally {
-    hash.destroy()
-  }
+  const chunk_size = settings.app.content.upload.partSizeMb * 1024 ** 2
+  const report = (loaded: number) => progress?.({ phase: 'hashing', loaded, total: file.size })
+  const digest = await hash_in_worker(file, chunk_size, signal, report) ?? await calculate_upload_sha256(file, chunk_size, signal, report)
+  signal?.throwIfAborted()
+  file_digests.set(file, digest)
+  return digest
 }
 
 /**

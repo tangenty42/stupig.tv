@@ -48,8 +48,8 @@
         <div v-if="upload && upload.status !== 'error'" class="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" :title="upload_status_text">
           {{ upload_status_text }}
         </div>
-        <span v-else-if="upload" class="mt-0.5 block truncate text-xs text-red-600 dark:text-red-400" :title="`上传失败：${upload.message}`">
-          上传失败：{{ upload.message }}
+        <span v-else-if="upload" class="mt-0.5 block truncate text-xs text-red-600 dark:text-red-400" :title="`${row.source.preparation ? '准备失败' : '上传失败'}：${upload.message}`">
+          {{ row.source.preparation ? '准备失败' : '上传失败' }}：{{ upload.message }}
         </span>
       </div>
     </template>
@@ -93,7 +93,7 @@ const folder = computed(() => data.value.kind === 'folder' ? data.value : null)
 const folder_private = computed(() => !! folder.value && attachment_path_is_private(folder.value.path))
 const file_row = computed(() => data.value.kind === 'folder' ? null : data.value)
 const progress_percent = computed(() => upload.value && ! ['error', 'queued'].includes(upload.value.status) ? upload.value.progress : null)
-const row_pending = computed(() => state.value.pending || upload.value?.status === 'queued' || upload.value?.status === 'uploading')
+const row_pending = computed(() => state.value.pending || (props.row.source.preparation ? ['hashing', 'admitting'].includes(props.row.source.preparation.phase) : upload.value?.status === 'queued' || upload.value?.status === 'uploading'))
 const row_progress_text = computed(() => upload.value?.status === 'paused' ? `${format_bytes(upload.value.file_size * upload.value.progress / 100)} / ${format_bytes(upload.value.file_size)}` : null)
 const upload_status_text = computed(() => upload.value?.label ?? '')
 const display_name = computed(() => folder.value ? folder.value.name : props.displayPath ? file_row.value?.file_name ?? '' : attachment_base_name(file_row.value?.file_name ?? ''))

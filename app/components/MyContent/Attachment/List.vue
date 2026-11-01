@@ -36,11 +36,12 @@
         outlined
         aria-label="添加"
         :aria-busy="upload_busy"
+        :disabled="upload_busy"
         :title="upload_busy ? '正在准备上传' : undefined"
         @click="add_menu?.toggle($event)"
       >
         <template #icon>
-          <MyIcon :name="upload_busy ? 'lucide:loader-circle' : 'lucide:plus'" :class="{ 'animate-spin': upload_busy }" />
+          <MyIcon name="lucide:plus" />
         </template>
       </Button>
       <ContextMenu v-if="context_menu" ref="add_menu" :model="add_menu_items">
@@ -59,6 +60,7 @@
         <MyContentAttachmentCard
           class="pointer-events-auto"
           :row="row"
+          :display-path="!! row.source.preparation || (!! row.source.session && row.depth === 0 && row.source.path.includes('/'))"
           :menu_items="menu_items(row)"
           :readonly="readonly"
           :context_menu="context_menu"

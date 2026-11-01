@@ -1,8 +1,9 @@
 <template>
   <div class="flex w-full flex-col">
-    <p class="sr-only" role="status">
-      {{ model.uploads.preparing ? `校验文件：${model.uploads.preparing.path}` : model.uploads.admitting ? '正在准备上传' : '' }}
-    </p>
+    <div v-if="model.uploads.preparations.length" class="mb-2 flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400" role="status">
+      <span>{{ model.uploads.preparing ? '正在准备上传' : model.uploads.admitting ? '正在确认上传' : '所选文件等待处理' }} · {{ model.uploads.preparations.length }} 个文件</span>
+      <Button label="取消这批准备" size="small" text severity="secondary" :disabled="! model.uploads.can_cancel_preparation" @click="model.uploads.cancel_preparation()" />
+    </div>
     <div v-if="model.request_error || model.uploads.admission_error" class="mb-3 flex items-center gap-2 text-sm text-red-600" role="alert">
       <span>{{ model.request_error || model.uploads.admission_error }}</span>
       <Button label="重试" size="small" text @click="model.request_error ? model.submit() : model.uploads.submit()" />
@@ -10,7 +11,7 @@
     <MyContentAttachmentList
       ref="list"
       class="flex-1"
-      :rows="list_rows" :menu_items="row => menu_for(row.source)" :upload_busy="!! model.uploads.preparing || model.uploads.admitting"
+      :rows="list_rows" :menu_items="row => menu_for(row.source)" :upload_busy="model.uploads.preparations.length > 0 || model.uploads.admitting"
       :readonly="model.readonly" :layout="layout" :root_drag_over="drag_parent === model.root_id"
       @files-picked="model.start($event)" @create-folder="new_folder(parent_id($event))"
       @row-click="row_click" @row-contextmenu="row_contextmenu" @toggle-selection="toggle_selection"
@@ -156,20 +157,30 @@ const list_rows = computed<MyContentAttachmentRow[]>(() => model.rows.map((row, 
   const cap = model.capabilities(row)
   const file = row.node?.attachment
   const session = row.session
+  const preparation = row.preparation
   const message = session ? model.uploads.errors.get(session.id) ?? session.image_error ?? null : null
-  const upload = session
+  const upload = preparation
     ? {
-        status: message || session.image_status === 'failed' ? 'error' as const : model.uploads.queued.has(session.id) ? 'queued' as const : model.uploads.active.has(session.id) || !! session.image_status ? 'uploading' as const : 'paused' as const,
-        progress: percent(row), file_size: session.size, message, label: status(row),
+        status: preparation.phase === 'failed' ? 'error' as const : ['waiting', 'ready'].includes(preparation.phase) ? 'queued' as const : 'uploading' as const,
+        progress: preparation.size ? Math.min(100, preparation.loaded / preparation.size * 100) : 100,
+        file_size: preparation.size, message: preparation.error ?? null,
+        label: preparation.phase === 'hashing'
+          ? `正在准备上传 · ${Math.floor(preparation.size ? preparation.loaded / preparation.size * 100 : 100)}%`
+          : preparation.phase === 'waiting' ? '等待准备' : preparation.phase === 'ready' ? '准备完成，等待这批文件确认' : '正在确认上传',
       }
-    : null
+    : session
+      ? {
+          status: message || session.image_status === 'failed' ? 'error' as const : model.uploads.queued.has(session.id) ? 'queued' as const : model.uploads.active.has(session.id) || !! session.image_status ? 'uploading' as const : 'paused' as const,
+          progress: percent(row), file_size: session.size, message, label: status(row),
+        }
+      : null
   return {
     key: row.key, depth: row.depth, source: row, upload,
     data: row.node?.kind === 'folder'
       ? { kind: 'folder', path: row.path, name: row.name, collapsed: ! model.expanded.has(row.node.id), count: (model.catalog.data?.nodes ?? []).filter(node => node.path.startsWith(`${row.path}/`)).length, drop_target: drag_parent.value === row.node.id, drop_disabled: false }
       : file
         ? { ... file, kind: 'stored' }
-        : { kind: 'upload', file_name: row.path, file_size: session?.size ?? 0, mime_type: attachment_mime_type(row.path) },
+        : { kind: 'upload', file_name: row.path, file_size: preparation?.size ?? session?.size ?? 0, mime_type: attachment_mime_type(row.path) },
     state: { selected: model.selected.has(row.key), selection_edges: attachment_selection_edges(model.rows, index, model.selected), pending: model.command_pending(row), move_pending: model.command_moving(row), draggable: cap.move },
   }
 }))
@@ -421,6 +432,9 @@ function submit_delete() {
 }
 function menu_for(row: WorkspaceListRow): AttachmentMenuItem[] {
   const { selected, single } = attachment_menu_context(row, model.selected_rows)
+  if (selected.every(item => item.preparation)) {
+    return [{ label: '取消这批准备', icon_name: 'lucide:x', disabled: ! model.uploads.can_cancel_preparation, command: () => model.uploads.cancel_preparation() }]
+  }
   const cap = model.capabilities(row)
   const blocked = (operation: keyof typeof cap.reasons, targets = [row]) => targets.flatMap(target => model.capabilities(target).reasons[operation])
   const read_entries: AttachmentMenuItem[] = []
