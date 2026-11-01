@@ -191,13 +191,13 @@ export async function command_draft(actor: AuthUser, input: DraftCommand): Promi
           receipt = { ... receipt, main_revision: result.revision }
         }
       }
-      if (receipt.ok && input.kind === 'reset') {
+      if (receipt.ok && input.kind === 'reset' && row.story_id) {
         const [mains] = row.story_id ? await connection.execute<RowDataPacket[]>('SELECT markdown, revision, namespace_revision FROM content_stories WHERE id = ?', [row.story_id]) : [[]]
         await connection.execute(`UPDATE content_story_drafts SET markdown = ?, published_main_revision = ?, namespace_revision = ?, title_revision = ?,
           draft_revision = draft_revision + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP(3), unpublished_changes = ? WHERE id = ?`,
         [mains[0]?.markdown ?? story_markdown_template(new Date().toISOString().slice(0, 10).replaceAll('-', '/')), mains[0]?.revision ?? null, mains[0]?.namespace_revision ?? 0, title!.revision, actor.id, mains[0] ? 0 : 1, input.id])
       }
-      if (receipt.ok && input.kind === 'delete') {
+      if (receipt.ok && (input.kind === 'delete' || (input.kind === 'reset' && ! row.story_id))) {
         if (row.story_id)
           await delete_story(Number(row.story_id), actor.id, { connection, title: title! })
         else

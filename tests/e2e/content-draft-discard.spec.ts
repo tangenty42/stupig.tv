@@ -1,0 +1,42 @@
+import type { DraftResult } from '@shared/types/content-draft'
+import { expect } from '@playwright/test'
+import { content_mutation, content_query, create_story, draft_timeout, editor_text, login, markdown, ready, test } from '../support/e2e-browser'
+
+test('discards new drafts by deleting them while existing story drafts reset to main', async ({ page }) => {
+  test.setTimeout(180_000)
+  await login(page)
+  const story = await create_story(page)
+  const editor = page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true })
+  const edited = markdown(story.title, 'discard this unpublished modification')
+  await editor.fill(edited)
+  await expect.poll(async () => (await content_mutation<DraftResult>(page, 'getDraft', { story_id: Number(story.id) })).snapshot!.markdown).toBe(edited)
+  await expect(page.getByRole('button', { name: '删除', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '舍弃草稿', exact: true }).click()
+  await expect(page.getByText('确定要舍弃草稿吗？', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '确定', exact: true }).click()
+  await expect.poll(() => editor_text(page)).toContain('E2E initial body')
+  expect((await content_query<{ markdown: string }>(page, 'getStoryBody', { id: Number(story.id) })).markdown).toContain('E2E initial body')
+
+  await page.goto('/content/new/edit')
+  await ready(page)
+  await expect(page).toHaveURL(/\/content\/draft-[a-f0-9]{32}\/edit$/, { timeout: draft_timeout })
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
+  const draft_id = /draft-([a-f0-9]{32})/.exec(page.url())![1]!
+  expect((await content_mutation<DraftResult>(page, 'getDraft', { id: draft_id })).snapshot!.story_id).toBeNull()
+  await expect(page.getByRole('button', { name: '删除', exact: true })).toHaveCount(0)
+  const discard = page.getByRole('button', { name: '舍弃草稿', exact: true })
+  await expect(discard).toBeVisible()
+  await discard.click()
+  await expect(page.getByText('确定要舍弃草稿吗？', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  expect((await content_mutation<DraftResult>(page, 'getDraft', { id: draft_id })).snapshot!.id).toBe(draft_id)
+  await discard.click()
+  await expect(page.getByText('确定要舍弃草稿吗？', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '确定', exact: true }).click()
+  await expect(page).toHaveURL(/\/content$/)
+  const response = await page.request.post('/api/trpc/content.getDraft', { data: { id: draft_id } })
+  expect(response.status()).toBe(404)
+  await page.getByRole('button', { name: '未发布草稿', exact: true }).click()
+  await expect(page.locator(`a[href="/content/draft-${draft_id}/edit"]`)).toHaveCount(0)
+  expect((await content_query<{ markdown: string }>(page, 'getStoryBody', { id: Number(story.id) })).markdown).toContain('E2E initial body')
+})
