@@ -4,6 +4,7 @@ import type { UploadSessionApi } from '~/utils/content/browser-upload'
 import { error_policy_schema } from '@shared/content-workspace'
 import { settings } from '@shared/settings'
 import { createPinia, setActivePinia } from 'pinia'
+import sharp from 'sharp'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { computed, effectScope, reactive, ref, watch } from 'vue'
 import { project_workspace_rows } from '~/utils/content/workspace'
@@ -37,6 +38,8 @@ vi.mock('~/utils/content/upload-file-handle', async original => ({
 }))
 const { useContentUploadsStore } = await import('./contentUploads')
 const session = { id: 'a'.repeat(32), scope_id: 24, status: 'ready', path: 'a.txt', size: 3, parts: [], target: { bucket: 'test', region: 'test', endpoint: 'https://test' }, key: 'staging/key', upload_id: 'upload', part_size: 262144, object_etag: 'etag' } satisfies ContentUploadSession
+const png = new Uint8Array(await sharp({ create: { width: 2, height: 1, channels: 3, background: '#123456' } }).png().toBuffer())
+const image_file = (name: string, type?: string) => new File([png], name, type ? { type } : {})
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.resetAllMocks()
@@ -97,6 +100,37 @@ it('rejects over-limit selections before reading bytes or creating sessions', as
   expect(read).not.toHaveBeenCalled()
 })
 
+it('keeps oversized images in the existing preparation error row without admission or a thrown popup error', async () => {
+  const header = new Uint8Array(32)
+  const view = new DataView(header.buffer)
+  view.setUint32(0, 0x89504E47)
+  view.setUint32(4, 0x0D0A1A0A)
+  view.setUint32(12, 0x49484452)
+  view.setUint32(16, 4097)
+  view.setUint32(20, 2)
+  const file = new File([header], 'wide.png', { type: 'image/png' })
+  const store = useContentUploadsStore(24)
+  await expect(store.start([{ file, file_name: file.name }])).resolves.toBeUndefined()
+  expect(store.preparations[0]).toMatchObject({ path: 'wide.png', phase: 'failed', error: expect.stringContaining('4097×2') })
+  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+  expect(state.run).not.toHaveBeenCalled()
+  expect(store.can_cancel_preparation).toBe(true)
+})
+
+it('cancels an in-flight header read without letting it admit the old selection', async () => {
+  const file = image_file('cancel.png')
+  const read = deferred<ArrayBuffer>()
+  vi.spyOn(file, 'slice').mockReturnValue({ arrayBuffer: () => read.promise } as Blob)
+  const store = useContentUploadsStore(24)
+  const pending = store.start([{ file, file_name: file.name }])
+  expect(store.can_cancel_preparation).toBe(true)
+  store.cancel_preparation()
+  read.resolve(png.slice(0, 32).buffer)
+  await pending
+  expect(store.preparations).toEqual([])
+  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+})
+
 it('does not pretend to cancel an unknown admission result and retries its original identity', async () => {
   state.api.begin_upload_batch.mockRejectedValueOnce(new Error('reply lost'))
   const store = useContentUploadsStore(24)
@@ -150,7 +184,7 @@ it('fences the complete seal/receipt/landing interval while leaving byte transfe
 it('keeps background image publication fenced through a delayed completion receipt', async () => {
   const store = useContentUploadsStore(24)
   state.run.mockResolvedValue({ ... session, image_status: 'queued' })
-  await store.start([{ file: new File(['abc'], 'a.png'), file_name: 'a.png' }])
+  await store.start([{ file: image_file('a.png'), file_name: 'a.png' }])
   await vi.waitFor(() => expect(store.active.size).toBe(0))
   expect(store.finalizing.has(session.id)).toBe(true)
   let publish!: (value: unknown) => void
@@ -189,7 +223,7 @@ it.each([false, true])('passes .good file and directory declarations through rea
   state.api.begin_upload_batch.mockResolvedValue({ accepted: [], sessions: [], succeeded: [], skipped: [], renamed: [] })
   const paths = folder ? ['album.good/sub/Photo.PNG', 'album.good/sub/other.txt.good'] : ['public.PNG', 'secret.PNG.good', 'second.GIF.good']
   const store = useContentUploadsStore(24)
-  await store.start(paths.map(path => ({ file: new File(['abc'], path.split('/').at(- 1)!), file_name: path, ... (folder ? { selection_root: 'album.good' } : {}) })))
+  await store.start(paths.map(path => ({ file: image_file(path.split('/').at(- 1)!), file_name: path, ... (folder ? { selection_root: 'album.good' } : {}) })))
   const input = state.api.begin_upload_batch.mock.calls[0]![0]
   expect(input.entries.map((entry: { path: string }) => entry.path)).toEqual(paths.map(path => path.replace('.PNG', '.png').replace('.GIF', '.gif')))
   expect(input.entries.every((entry: { selection_root?: string }) => entry.selection_root === (folder ? 'album.good' : undefined))).toBe(true)
@@ -251,7 +285,7 @@ it('leaves encoding to the server and receives completion through synchronized s
   const store = useContentUploadsStore(24)
   const on_landed = vi.fn()
   state.run.mockResolvedValue({ ... session, image_status: 'queued' })
-  await store.start([{ file: new File(['abc'], 'image.png'), file_name: 'image.png', on_landed }])
+  await store.start([{ file: image_file('image.png'), file_name: 'image.png', on_landed }])
   await vi.waitFor(() => expect(store.active.size).toBe(0))
   expect(store.sessions[0]?.image_status).toBe('queued')
   expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
@@ -275,7 +309,7 @@ it('retries a failed image job using the existing sealed input without requiring
 
 it('records the selected original filename independently of a replacement logical path', async () => {
   const store = useContentUploadsStore(24)
-  await store.start([{ file: new File(['abc'], 'camera.PNG', { type: 'image/png' }), file_name: 'old.jpg', purpose: 'replace', source: { id: 9, version: 'v1' } }])
+  await store.start([{ file: image_file('camera.PNG', 'image/png'), file_name: 'old.jpg', purpose: 'replace', source: { id: 9, version: 'v1' } }])
   expect(state.api.begin_upload_batch.mock.calls[0]![0].entries[0]).toMatchObject({ path: 'old.jpg', original_name: 'camera.PNG', content_type: 'image/png' })
   await vi.waitFor(() => expect(store.active.size).toBe(0))
 })
@@ -288,7 +322,7 @@ it.each([
   ['replace', 'Camera/SelectedName.PDF', 'Camera/SelectedName.pdf', undefined],
 ] as const)('normalizes the %s admission path %s while preserving the source File', async (purpose, path, expected, selection_root) => {
   const store = useContentUploadsStore(24)
-  const file = new File(['abc'], 'Original.JPG')
+  const file = image_file('Original.JPG')
   await store.start([{ file, file_name: path, purpose, selection_root, ... (purpose === 'replace' ? { source: { id: 9, version: 'v1' } } : {}) }])
   expect(state.api.begin_upload_batch.mock.calls[0]![0].entries[0]).toMatchObject({ path: expected, original_name: 'Original.JPG', purpose })
   expect(file.name).toBe('Original.JPG')

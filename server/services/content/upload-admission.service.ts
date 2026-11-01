@@ -2,6 +2,7 @@ import type { UploadBatch } from '@shared/content-upload'
 import type { WorkspaceIssue, WorkspaceReport } from '@shared/content-workspace'
 import { randomUUID } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
+import { image_upload_error } from '@shared/content-image-upload'
 import { attachment_base_name, attachment_folder_of, attachment_mime_type, attachment_path_is_private, decrypted_attachment_name, link_file_name_byte_length, normalized_attachment_extension, processable_image_mime, redactable_attachment_mime, split_attachment_editable_name } from '@shared/content-markdown'
 import { upload_content_mime } from '@shared/content-upload'
 import { attachment_name_key, resolve_workspace_name, workspace_issue } from '@shared/content-workspace'
@@ -78,6 +79,11 @@ export async function admit_upload_batch(actor: number, input: UploadBatch) {
         await require_workspace_actor(actor, access === 'private' || Boolean(source?.is_private) || Boolean(replacement?.is_private), connection)
         if (entry.size <= 0 || entry.size > settings.app.content.upload.maxSizeMb * 1024 ** 2)
           issue = workspace_issue(target, 'other', 'INVALID_SIZE', '文件为空或超过上传大小上限')
+        if (entry.image_mode || processable_image_mime(upload_content_mime(entry))) {
+          const message = image_upload_error(entry.size)
+          if (message)
+            issue = workspace_issue(target, 'other', 'INVALID_IMAGE_SIZE', message)
+        }
         const protected_ids = [source?.id, replacement?.id].filter(Boolean).map(Number)
         if (reservations.some(item => protected_ids.includes(Number(item.source_attachment_id)) || protected_ids.includes(Number(item.replacement_attachment_id))) || plans.some((plan) => {
           const planned = input.entries[plan.index]!

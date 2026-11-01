@@ -26,6 +26,7 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
       is_private: row.intent.target_access === 'private',
       input: { key: input.key, etag: input.etag, version_id: input.oss_version_id, size: input.size, sha256: input.sha256 },
       profile_version: options.profileVersion, profile: options.profile,
+      ... (options.cloud?.enabled ? { processor: 'oss' as const, profile_version: options.cloud.profileVersion, profile: options.cloud.profile } : {}),
     })
     await connection.execute('INSERT IGNORE INTO content_upload_images (session_id, job_id) VALUES (?, ?)', [row.id, job.id])
   }
@@ -55,7 +56,7 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
   async function retry(session: string, actor: number) {
     const [rows] = await pool.execute<RowDataPacket[]>(`SELECT j.id, j.status FROM content_upload_images u JOIN content_image_jobs j ON j.id = u.job_id WHERE u.session_id = ? AND j.actor_id = ?`, [session, actor])
     if (rows[0]?.status === 'failed')
-      await jobs.retry(String(rows[0].id), actor, options.profile)
+      await jobs.retry(String(rows[0].id), actor, options.cloud?.enabled ? options.cloud.profile : options.profile)
   }
   async function sweep(uploads: ReturnType<typeof create_upload_sessions>, signal?: AbortSignal) {
     if (! options.enabled || signal?.aborted)

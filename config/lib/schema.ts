@@ -60,7 +60,10 @@ export const settings_schema = z.strictObject({
       read: z.strictObject({ urlTtlSeconds: positive_integer }),
       redact: z.strictObject({ maxDimension: positive_integer }),
       imageEditor: z.strictObject({ maxPixels: positive_integer, maxActions: positive_integer, maxStrokePoints: positive_integer }),
-      image: z.strictObject({ lqipMaxBytes: positive_integer.max(8192) }),
+      image: z.strictObject({
+        lqipMaxBytes: positive_integer.max(8192), uploadMaxBytes: positive_integer.max(20971520),
+        uploadMaxDimension: positive_integer.max(4096), uploadMaxPixels: positive_integer.max(9437184),
+      }),
       encrypt: z.strictObject({ maxSizeMb: positive_integer }),
     }),
   }),
@@ -223,7 +226,9 @@ const content_images_config_schema = z.object({
   enabled: boolean_value, sweepIntervalSeconds: positive_integer, concurrency: positive_integer.max(4), scanLimit: positive_integer.max(100),
   leaseSeconds: positive_integer.max(600), heartbeatSeconds: positive_integer, profileVersion: positive_integer,
   profile: image_processing_options_schema,
+  cloud: z.object({ enabled: boolean_value, profileVersion: positive_integer, profile: image_processing_options_schema }).optional(),
 }).refine(value => value.heartbeatSeconds < value.leaseSeconds, 'Image heartbeat must be shorter than its lease')
+  .refine(value => ! value.cloud?.enabled || value.cloud.profileVersion > value.profileVersion, 'Cloud encoding must use a newer profile version')
 
 export const deployment_config_schema = z.object({
   db: database_config_schema,

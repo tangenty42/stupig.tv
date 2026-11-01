@@ -28,6 +28,13 @@ let receipts: Map<string, { fingerprint: string, result: string }>
 const session_id = 'a'.repeat(32)
 const resources = () => boundary.publish.mock.calls.map(([event]) => event.resource).sort()
 
+it('rejects image byte budgets at admission even when the browser gate is bypassed', async () => {
+  await expect(begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
+    entries: [{ path: 'oversized.png', original_name: 'oversized.png', content_type: 'image/png', size: 20971521 }],
+  }))).rejects.toMatchObject({ statusCode: 409, public_data: { code: 'BATCH_REJECTED', details: { items: [expect.objectContaining({ code: 'INVALID_IMAGE_SIZE' })] } } })
+  expect(boundary.execute.mock.calls.some(([sql]) => String(sql).startsWith('INSERT INTO content_transfer_sessions'))).toBe(false)
+})
+
 beforeEach(() => {
   preload_fixture.enabled = false
   vi.clearAllMocks()
