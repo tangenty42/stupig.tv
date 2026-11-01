@@ -14,7 +14,8 @@
 | `pnpm test:e2e:legacy` | Chromium 80 / Firefox 78 和现代 Chromium；隔离生产构建下的页面与交互 |
 | `pnpm test:css:legacy` | Chromium 80 / Firefox 78；暗色背景工具类与 CSS 压缩兼容，不启动应用或数据库 |
 | `pnpm exec playwright test --config tests/css-production.config.ts` | 完整 production 前端构建；保留 legacy、CSS 目标、压缩和分块，复用隔离业务配置 |
-| `pnpm test:all` | 执行单元、工具、组件和浏览器测试 |
+| `pnpm check` | 生成检查、lint、三组类型检查和单元／工具／组件测试 |
+| `pnpm typecheck` | Nuxt 应用、scripts、tests 三个类型项目 |
 | `pnpm lint` | 代码、测试和文档规范 |
 | `pnpm exec nuxt typecheck` | 应用类型 |
 | `pnpm exec tsc --project scripts/tsconfig.json --noEmit` | 工具类型 |
@@ -34,11 +35,11 @@
 
 ## 浏览器测试的隔离
 
-CI 的 `unit` 负责 lint、类型和单元／组件测试，`check` 保留为既有必需状态的最终门槛；它等待包括 `browser-css` 在内的全部应用检查，并拒绝失败或意外跳过的结果。
+CI 的 `unit` 运行与本地相同的 `pnpm check`。唯一必需状态 `check` 始终上报，等待分类及包括 `browser-css` 在内的全部应用检查，拒绝失败、取消和代码变更中意外跳过的结果；只允许已成功分类的纯文档变更或已验证 main 复用跳过重型测试。代码树证明位于该总门槛的成功 PR 步骤内，不再通过额外 job 上报。
 
 首次执行 `pnpm exec playwright install chromium`。运行前需要本地开发 MySQL、Redis、支持 TCP 发布及 WebSocket 订阅的 MQTT broker，以及 `MYSQL_DEV_ROOT_PASSWORD`。CI 在独立服务中提供它们，不需要真实云端密钥；应用浏览器用例按 `--shard` 拆成三个 job，并与独立的 `browser-css` job 并行，Playwright 浏览器包按版本进 Actions 缓存。只改 `docs/**` 或 Markdown 的 PR 由 `changes` job 识别并跳过应用测试——PR 的门槛只能放在 job 条件上，加在 `on.pull_request.paths` 会让必需检查永远停在 Pending。纯文档提交推送到 `main` 时，push 路径过滤不启动 Check，也不触发依赖它的 Deploy；与代码混合的提交仍执行正常检查流程。
 
-非纯文档提交在 `main` 上仍启动 Check，以便部署等待同一提交的验证结果。若合并 PR 的完整检查、三个浏览器分片和 `browser-css` 均成功，且 PR 实际测试的 Git tree 与合并结果一致，则复用全部结果，跳过 `check`、`migrations`、浏览器和 MQTT 的重复运行；找不到完整成功记录、代码树不同、验证规则自身变更或 GitHub 查询失败时，`main` 会完整重跑。GitHub 的路径过滤只检查变更列表中的前 3,000 个文件；超大推送应拆分，避免代码文件落在过滤范围之外，详见 [GitHub 工作流触发说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。
+非纯文档提交在 `main` 上仍启动 Check，以便部署等待同一提交的验证结果。若合并 PR 的完整检查、三个浏览器分片和 `browser-css` 均成功，且 PR 实际测试的 Git tree 与合并结果一致，则复用全部结果，跳过 unit、迁移、浏览器和 MQTT 的重型执行，`check` 仍上报复用后的汇总结果；找不到完整成功记录、代码树不同、验证规则自身变更或 GitHub 查询失败时，`main` 会完整重跑。GitHub 的路径过滤只检查前 3,000 个文件；超大推送应拆分，避免代码文件落在过滤范围之外，详见 [GitHub 工作流触发说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。
 
 测试启动器创建随机命名的 `stupig_e2e_*` 数据库，执行完整迁移并创建开发测试账号；复制应用源码到临时目录，构建后在本分片的端口启动独立 Nuxt（未分片为 3142，`--shard=i/n` 使用 `3142 + i - 1`，规则见 `scripts/testing/e2e-target.ts`）。已有端口被占用时拒绝运行，不接管未知服务。结束时停止自己的进程树、删除本轮数据库并清理临时运行凭据。
 
@@ -60,7 +61,7 @@ Markdown 诊断入口先加载 FormatJS 的标准 `Intl.Segmenter` polyfill，�
 
 启动器从实际 Vite `configResolved` 记录目标、minifier、分块及插件，检查最终 CSS 和 legacy JS 资产；报告保存在本轮 `.dev/e2e/<run>/css-build.json`。该 profile 运行 SSR（禁用页面 JS）与 hydration、分页器、延迟路由 / 懒加载组件 CSS、Dialog / ConfirmPopup 动画、六级吸顶标题与全屏编辑滚动，以及媒体渐变中间帧、加载 / 失败、权限表示、深浅色、窄容器和重渲染恢复。测试专用页面仅属于 E2E Nuxt layer，额外 utility class 仅加入夹具构建的 Tailwind content，不写入产品配置。CI 的独立 `browser-css` job 与三个应用分片并行执行此 profile，并在失败时保留 `.dev/css-production/`。它验证现代 Chromium 上的生产产物，不代替最低版本引擎或发布缓存验收。
 
-CSS 官方 API 的独立浏览器夹具可用 `pnpm exec playwright test --config tests/css.config.ts` 运行，不启动应用或数据库。它挂载真实 PrimeVue / CodeMirror，并对 Tailwind selector 策略、Teleport、行内尺寸、主题更新及静态 CSS 压缩结果做对照；CI 在 `browser-css` job 的生产验收后执行此入口。普通 E2E 不收集 `css-*.spec.ts`，避免专用场景的跳过项和快速组件测试影响分片分配。该入口不验证 Nuxt SSR/hydration、完整生产构建或真实旧引擎，具体结果与边界见[验证记录](../reviews/css-official-apis-validation-2026-10-29.md)。
+CSS 官方 API 的独立浏览器夹具可用 `pnpm exec playwright test --config tests/css.config.ts` 运行，不启动应用或数据库。它挂载真实 PrimeVue / CodeMirror，并对 Tailwind selector 策略、Teleport、行内尺寸、主题更新及静态 CSS 压缩结果做对照；CI 在 `browser-css` job 的生产验收后执行此入口。普通 E2E 不收集 `css-*.spec.ts` 及三个生产布局场景（吸顶标题、全屏滚动对齐、iframe/carousel），避免跨 profile 重复执行；完整共享草稿场景只归业务分片，生产 profile 保留布局场景已有的登录、编辑与保存流程。三套 profile 的实际 CLI 文件选择由 browser-profiles.test.ts 检查互不重叠。该入口不验证 Nuxt SSR/hydration、完整生产构建或真实旧引擎，具体结果与边界见[验证记录](../reviews/css-official-apis-validation-2026-10-29.md)。
 
 历史工具类的独立回归使用 `pnpm test:css:legacy`，同样不启动应用或数据库。它在真实 Chromium 80 / Firefox 78 中检查实际应用配置的普通及局部 `!` 暗色背景类，覆盖 PostCSS 原始和 Lightning CSS 压缩后的四种引擎 / 输出组合。实际配置关闭全局 important，保留普通 dark variant；组件覆盖由 preset、PT 和局部 `!` 验证。原 `application-local` 候选已合入正式 `application` 夹具，不再维护重复实验模式。
 

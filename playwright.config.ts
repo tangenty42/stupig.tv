@@ -9,8 +9,8 @@ const artifacts = target.shard.total > 1 ? `-shard-${target.shard.current}` : ''
 
 export default defineConfig({
   testDir: './tests/e2e',
-  // Dedicated CSS profiles run separately so skipped/fast cases do not skew shards.
-  testIgnore: '**/css-*.spec.ts',
+  // Production owns layout cases; application shards own the complete draft workflow.
+  testIgnore: ['**/css-*.spec.ts', '**/content-sticky-headings.spec.ts', '**/content-editor-scroll-alignment.spec.ts', '**/content-iframe-carousel.spec.ts'],
   globalSetup: './scripts/testing/browser.ts',
   workers: 1,
   fullyParallel: false,

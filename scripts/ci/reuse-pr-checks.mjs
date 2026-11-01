@@ -3,18 +3,15 @@ import { appendFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const required_jobs = ['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser (2/3)', 'browser (3/3)', 'browser-css']
+const required_jobs = ['check', 'unit', 'migrations', 'mqtt', 'browser-tests (1/3)', 'browser-tests (2/3)', 'browser-tests (3/3)', 'browser-css']
 
 // A successful workflow alone is insufficient: skipped jobs also yield success.
 export function verified_jobs(jobs, tree) {
   const successful = item => item.status === 'completed' && item.conclusion === 'success'
   if (! required_jobs.every(name => jobs.some(job => job.name === name && successful(job))))
     return false
-  return jobs.some(job => successful(job) && (
-    job.name === `verified-tree-${tree}`
-    || (job.name === 'verified-tree' && Array.isArray(job.steps)
-      && job.steps.some(step => step.name === `verified-tree-${tree}` && successful(step)))
-  ))
+  return jobs.some(job => job.name === 'check' && successful(job) && Array.isArray(job.steps)
+    && job.steps.some(step => step.name === `verified-tree-${tree}` && successful(step)))
 }
 
 async function find_verified_pr({ api, repository, sha, tree }) {
@@ -70,7 +67,7 @@ async function main() {
     console.log(`No reusable PR verification: ${error.message}`)
   }
   appendFileSync(process.env.GITHUB_OUTPUT, `reuse=${reuse}\n`)
-  console.log(reuse ? 'Reusing browser and MQTT checks for the identical verified tree.' : 'Running browser and MQTT checks on main.')
+  console.log(reuse ? 'Reusing all checks for the identical verified tree.' : 'Running all checks on main.')
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
