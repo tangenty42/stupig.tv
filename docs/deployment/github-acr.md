@@ -87,6 +87,42 @@ pnpm env:check
 
 普通 Deploy 仍由成功的 main Check 触发；独立的 **Maintenance Deploy** 使用 `workflow_dispatch`，只允许从 main 运行。重新交付旧提交须核实其实际 checkout SHA、schema 与草稿协议；旧流程没有 SHA tag，不能假定重跑最新 workflow 会选旧代码。`application-production-receipt` artifact 记录 commit、应用（含 maintenance 包）和 broker digest、schema、共享 settings 摘要及 cloud-v1 标记，保留 30 天；须另备长期恢复材料并核验镜像仍存在。该记录证明构建身份，不证明生产健康或外部反代已验收。
 
+## 已核对的发布材料（2026-11-01）
+
+本轮从 GitHub 下载当前及上一版的应用／ESA 回执，经 SSH 核对生产主机及 ACR manifest，再通过现有生产发布身份只读核对 ESA。以下关键身份纳入 Git 保存，不再只依赖 30 天 artifact；这是带日期的保留点，不是自动归档或整套回退验收。未切换生产版本、修改云端规则或启动生产业务写入。
+
+镜像仓库统一为 `crpi-kadmhbmp7xfn6991.cn-guangzhou.personal.cr.aliyuncs.com/tangenty42/stupig-tv`，下表 digest 均在此前缀后使用 `@sha256:<摘要>`。两版 app／broker 共 4 个镜像在生产主机可检查，ACR 可返回对应 digest 的 manifest；本轮未重新拉取全部远端镜像层，不承诺云端长期保留策略。
+
+| 保留点 | 源码／Deploy | app digest | broker digest | ESA production 版本 |
+| --- | --- | --- | --- | --- |
+| 当前 | [3fdc491](https://github.com/tangenty42/stupig.tv/commit/3fdc4912620a4deb5ee58f5a2346e5a78ab6c09d)／[41228238034](https://github.com/tangenty42/stupig.tv/actions/runs/41228238034) | `09260adc432fcada1987f9866772b2df34c6aac12a598eaa884071690d6d84f8` | `9f8e528d5bc4f6b0b234a6cae2969e60ee9b4416880b12513332b05a31e32a4b` | `1793470672060752869` |
+| 上一版 | [8980d27](https://github.com/tangenty42/stupig.tv/commit/8980d2771910258b1e2e6452cccf126f7f973ae2)／[41219529204](https://github.com/tangenty42/stupig.tv/actions/runs/41219529204) | `3d3936cd24d8e87e656ce2fab3ead665d4c46230f396657d03facba092238a03` | `8072f970148c0771027b87eb9da45e44c38df2e576a2c863572891ad5e1b5e22` | `1793464220639045157` |
+
+两版回执的 schema 均为 `20261030120000_shared_content_drafts.sql`，协议为 `cloud-v1`，settings SHA-256 均为 `e06d9ed3099eeef689adcbc6ea07595e92f88e055889d847482672801143ac1c`。服务器 `.env.prod` 的发布身份匹配当前版，`.env.prod.bak` 匹配上一版；文件权限均为 600，app／emqx 均 running、healthy。`.bak` 会被后续部署覆盖，不能把它视为多版本配置档案。
+
+### 回执、配置与密钥位置
+
+- 两版 `application-production-receipt`／`esa-production-receipt` 均未过期且实际下载成功。GitHub API 返回的到期时间分别为当前版 **2026-11-30 18:17:57–58 UTC**、上一版 **2026-11-30 16:30:26–27 UTC**。仓库默认 artifact／log 保留为 90 天，但 workflow 显式指定 30 天；不能按默认值推断这四份回执的期限。
+- 对应提交保存 Compose、分层 YAML、函数源码、锁文件及 `.env.prod.gpg`。两版生产密文的 Git blob 同为 `e8b8c9b2318ab29edc4fc87d2d1ad0f99599e962`。本机用现有受控口令成功解密，并与本机 `.env.prod` 逐字节比较一致，临时解密副本已删除。本轮未验证口令的独立异地保管。
+- 解密口令在 GitHub Repository Secret `ENV_PASSPHRASE`，本机工具也可从进程环境或 `.env.dev` 读取。首次 `pnpm env:check` 因进程继承的不同口令覆盖本机值而报 `Bad session key`；显式使用现有 `.env.dev` 口令后通过，没有重加密或轮换。排查时检查口令来源与优先级，不输出值，不覆盖已验证密文。
+- `ACR_USERNAME/PASSWORD`、`SSH_PRIVATE_KEY`、`SSH_KNOWN_HOSTS` 的 GitHub 名称均存在；这里只核对元数据，GitHub 不允许读回 Secret 值。生产主机只接收剥除 ESA 发布凭据的运行配置，本机／CI 完整配置的保管边界见[配置手册](configuration.md)。
+
+### ESA 版本与配置
+
+两版 `stupig-content-auth-bypass-prod` 的上述版本都能通过发布身份取得版本元数据，状态为 Available；当前版本占 production 流量 100%。两份回执中的函数源码 SHA-256 同为 `f8ed3d6e33b542cf0370c37682bbd53dbe6ad153fee255607e6f7718ae51df86`，与各自 Git 提交的 `config/esa/content-auth.mjs` 一致。本轮没有读回线上源码字节。
+
+当前路由通过实际发布预检：SiteId `181553031729356`，完整 `stupig-static.oss.tangenty.cn/content/` 范围，custom、enabled、bypass on、fallback off。普通变量回调 `https://www.stupig.tv/api/content/authorize` 及超时 `5000` 与本机配置匹配；`ALIYUN_ESA_AUTH_KEY` 只能验证 secret_text 存在，无法读回验证值。恢复同环境变量应使用该提交的受控密文，不能只选旧版本号；本轮未导出或重验整个站点的 DNS／缓存／回源／响应头规则。
+
+### 静态资源与旧标签页边界
+
+使用无网络、只读、无生产环境变量的临时容器分别检查两版镜像内的 `/app/.output/public/_nuxt/`，未启动应用，临时容器已自动删除。两版各有 376 个文件，283 个路径共有，上一版独有 93 个文件，其中 92 个为 JS；共有路径中只有可变的 `builds/latest.json` 内容变化。旧 JS 仍在旧镜像内，可随同版本镜像取得，但不在当前镜像中。
+
+公开 HEAD 抽查：当前 `/_nuxt/0ov02JXI.js` 为 200，上一版独有的现代 JS `/_nuxt/2Kr_2MIL.js` 为 404。因此当前交付没有为这份旧资源提供跨版本保留，不能保证部署后旧标签页仍能懒加载旧 chunk。Nuxt 有 chunk 错误／新 manifest 重载机制，但本轮没有验证其与未保存编辑的配合，也没有复现用户可见故障；旧浏览器验证仍暂停。
+
+用户随后确认：当前更新安排在凌晨，宣传尚未铺开，预计几乎没有其他用户长期保持标签页，因此本阶段接受上述风险，暂不补旧资源保留或跨发布旧标签页验证，不作为当前收尾阻塞。这是阶段性取舍，不把尚未验证的重载／编辑保留行为记录为通过；用户规模或使用方式变化、实际出现故障时再评估。
+
+整版本回退仍须核对数据库兼容性；镜像／ESA 版本存在不等于已演练完整切换。后续选择新保留点时更新本节关键身份，继续独立管理镜像、云配置和密钥；本轮未新增自动归档调度或完整恢复平台。
+
 ## 授权维护发布
 
 1. 查看被拦截的 Deploy 日志，核对提交、待执行迁移及其影响，并取得 64 位计划 ID。维护窗口中应用和随应用运行的任务将停止；外部 worker／cron 必须由操作者提前停用。合并 PR、普通 Deploy 重跑不构成停写授权。
