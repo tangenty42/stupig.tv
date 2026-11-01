@@ -1,5 +1,5 @@
 <template>
-  <NuxtLink :to="story ? `/content/${story.id}` : `/content/draft-${draft!.id}/edit`" class="story-card watermark" :style="watermark_style">
+  <NuxtLink :to="story ? `/content/${story.id}` : draft!.story_id ? `/content/${draft!.story_id}/edit` : `/content/draft-${draft!.id}/edit`" class="story-card watermark" :style="watermark_style">
     <span v-if="story?.cover" class="story-card-cover">
       <MyContentStoryCover
         :src="story_front_cover_url(static_url, story.cover, story.cover_url)"
