@@ -38,6 +38,12 @@ pnpm content:preload:check --env=prod
 
 ESA 发布检查不会发布代码；预热检查需要对应数据库可达，但不提交任务。OSS 上传/替换/删除、短信受控号码、ACR 推拉仍需各自验收，不能用审计管理员成功代替应用身份。开发默认保持 OTP debug，不对开发测试号码发送真实短信。
 
+## 图片原生持久化权限
+
+两份 OSS 应用策略在既有对象读写权限外，仅增加指定桶的 `oss:GetBucketAcl`（验证私有桶）和 `content/att/staging/*`、`content/att/images/*` 来源的 `oss:PostProcessTask`。不需要 `PutBucket`、公开 ACL 或历史版本永久删除。图片保存目标由已有的 `content/att/*` PutObject 权限覆盖，应用只生成尝试拥有的 images key。
+
+2026-11-01 用户已确认在 RAM 更新开发、生产两份绑定策略。两环境均用应用身份完成 GetBucketAcl、staging→images WebP、images→images JPEG 原生保存及私有访问验收。开发使用样图与合成图；生产仅使用 122 字节的 32×16 合成 PNG，生成 112 字节 WebP 和 289 字节 JPEG，不挂到档案、不写数据库、不读取现有用户对象，三个专用测试对象均已软删除并确认当前缺失。实际权限验证不能等同于管理员策略完整读回，真实账号上传／编辑发布仍在部署验收时补齐。固定样本及清理结果见[对照记录](../reviews/oss-native-persistence-2026-11-01.json)。
+
 ## 三个容易配错的地方
 
 - **ESA 共用站点**：缓存策略作用于整站，发布策略作用于账号支持的函数操作；两个用户名并不提供 RAM 层面的 dev/prod 隔离。CI 的完整生产 env 含发布凭据，服务器与应用只接收剔除发布凭据的运行配置；首次切换前和失败回滚后的旧配置、备份仍需留意，见[权限参考](ram-reference.md)。

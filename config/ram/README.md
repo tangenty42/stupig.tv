@@ -20,4 +20,6 @@
 
 后续 v3 增加指定桶的 `oss:ListObjects`，供 runner 全桶元数据对账；不扩大对象内容读取、写入或删除范围。
 
+当前图片原生持久化补充指定桶的 `oss:GetBucketAcl`，以及 `content/att/staging/*`／`content/att/images/*` 的 `oss:PostProcessTask`。2026-11-01 用户确认已更新两环境绑定策略；开发样图对照及生产未采用合成小图的原生读写均通过。权限及验收边界见[图片持久化清单](../../docs/deployment/ram.md#图片原生持久化权限)，不授予 PutBucket 或永久删除。
+
 当前浏览器上传使用精确 UploadPart 签名，不使用 AssumeRole。原先两份未使用的上传角色策略已移除，旧云角色已清理；dev/prod 的保留字段 `uploadRoleArn` 均设为 null。源码冻结迁移引用的材料不属于本目录，不能跟随清理修改。

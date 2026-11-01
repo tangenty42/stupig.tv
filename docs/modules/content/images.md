@@ -31,7 +31,11 @@
 
 图片尝试先记录任务、尝试身份及来源，生成 WebP，再从该 WebP 生成 JPEG 与小尺寸 LQIP。首次上传还把原始字节独立归档。对象私有权限、身份、大小与摘要经过验证后，才允许在数据库事务中采用一组完整角色。
 
-新任务在 intent 中冻结 `processor: oss` 和 cloud profile 3：WebP Q100、JPEG Q85、24px JPEG LQIP Q40。后台使用 OSS V4 请求头鉴权的 IMG GET，读取有上限、可中断的处理结果，核对格式和尺寸后通过既有 `put_object(..., private)` 持久化 WebP／JPEG；LQIP 仍作为现有数据库字段保存。JPEG／LQIP 均读取已确认版本的最终 WebP。没有浏览器转换 URL、任意参数签名接口或新增云权限；用户继续走现有 Content／ESA 成品读取授权。本地 WebP 测试／维护编码使用 effort 4；OSS 没有对应的已验证 effort 参数。[Safari 14 才新增 WebP 支持](https://developer.apple.com/documentation/safari-release-notes/safari-14-release-notes)，按项目 Safari 13.1 起的兼容范围继续保留 JPEG 协商回退。`contentImages.profile` 仍保存冻结迁移所需的 AVIF profile 1；当前本地与云端处理均使用 `contentImages.cloud.profile` 的 WebP 合同，不会在关闭云端编码时改回 AVIF。
+新任务在 intent 中冻结 `processor: oss` 和 cloud profile 3：WebP Q100、JPEG Q85、24px JPEG LQIP Q40。后台使用 OSS V4 请求头鉴权的 `processObjectSave`（`sys/saveas`），在 OSS 内直接持久化 WebP／JPEG；LQIP 使用有界 IMG GET，仍作为现有数据库字段保存。JPEG／LQIP 均读取已确认版本的最终 WebP。编码参数与先前中转方案相同，不另增 profile 或修改冻结迁移。没有浏览器转换 URL 或任意参数签名接口；用户继续走现有 Content／ESA 成品读取授权。本地 WebP 测试／维护编码使用 effort 4；OSS 没有对应的已验证 effort 参数。[Safari 14 才新增 WebP 支持](https://developer.apple.com/documentation/safari-release-notes/safari-14-release-notes)，按项目 Safari 13.1 起的兼容范围继续保留 JPEG 协商回退。`contentImages.profile` 仍保存冻结迁移所需的 AVIF profile 1；当前本地与云端处理均使用 `contentImages.cloud.profile` 的 WebP 合同，不会在关闭云端编码时改回 AVIF。
+
+直接持久化前逐次验证目标桶为 private、来源版本／ETag／大小／ACL 未变且尝试目标不存在，成功后显式钉住对象 private ACL。每份成品只作一次有界回读，核对真实字节的 SHA-256、格式、尺寸、大小和版本；服务器不再上传转换后的图片字节。SDK 的原生保存接口不能传入来源 If-Match，故仅使用尝试拥有的不可变来源，保存前后仍核对完整版本身份；JPEG／LQIP 生成后再次验证全部角色。响应丢失、取消或租约失效不自动重发 POST，也不降级回中转；未采用及迟到对象继续由既有尝试账本负责。
+
+[原生保存继承桶 ACL，不能自定义对象 ACL](https://help.aliyun.com/zh/oss/user-guide/sys-or-saveas)，所以 private 桶是创建前置条件。它也不复制源对象的 Cache-Control；浏览器的 `private, no-store` 继续由 OSS 签名读取的 `response-cache-control` 与 [ESA 出站响应规则](../../deployment/esa.md#esa-到客户端响应头)保证，不为补元数据自拷贝产生额外历史版本。RAM 仅补指定桶的 `GetBucketAcl` 及 staging／images 来源前缀的 `PostProcessTask`，目标仍使用原有 PutObject 权限，见 [RAM 清单](../../deployment/ram.md#图片原生持久化权限)。
 
 失败、取消或过期尝试不覆盖正式行；旧尝试的迟到写入由账本继续跟踪和清理。对象发布同时登记预热及旧对象退役意图，见[对象生命周期](object-lifecycle.md)。
 
@@ -87,11 +91,22 @@
 
 `content_webp_migration_objects` 的[退出合同](../../operations/migrations.md#webp-回执表64的退出合同)规定生产完成及验收后至少保留 30 日，归档读回、责任交接后才通过独立维护迁移删除；不自动清表，不随回执删除旧对象或释放 pin。下一条旧 Content 退役迁移只删除五张已废弃且为空的旧表，保留本次 WebP 恢复明细。
 
-本轮开发桶原生 `processObjectSave` 可行性测试：1536×1024 PNG 生成 WebP Q100 并直接保存，单次 POST 约 597ms、583,292 字节；Q90 为约 406ms、269,632 字节。另以透明 AVIF 验证转 WebP 仍保留透明通道；产物匿名 HEAD 均为 403。样本、顺序和参数固定的单次测量不代表生产 p95；临时对象已软删除。**当前应用仍沿用有界 IMG GET + 私有 PUT 的校验／发布合同，原生 saveas 尚未接入运行链路**；后续接入还需最小 RAM 授权、默认桶私有验证及相同的对象身份／迟到副作用保障。该原生试验不等于已取消应用的读取／转存。
+2026-11-01 生产维护发布已完成上述存量转换和五张旧空表退役，回执表保留；备份、隔离恢复与只读交付验收见[云端台账](../../deployment/aliyun.md#2026-11-01-webp-维护发布与原生持久化权限)。这次维护使用冻结的本地编码器，不代表后续原生持久化代码已经部署。
+
+早先开发桶原生可行性测试中，1536×1024 PNG 生成 WebP Q100 的单次 POST 约 597ms、583,292 字节；该值不含校验、JPEG、LQIP 或发布，不能代表完整适配器耗时。当前原生链路的对照验收如下。
 
 PNG 回退也已按同一份最终 WebP 试验：OSS PNG 为 2,423,705 字节，JPEG Q85 为 287,912 字节。PNG 默认、Q30、Q85 的字节及 SHA-256 完全相同，像素与最终 WebP 一致；[OSS quality 不作用于 PNG](https://help.aliyun.com/zh/oss/user-guide/adjust-image-quality)。本地 PNG 压缩等级 9＋自适应过滤仍为 2,250,401 字节；调色板 PNG 约 864,239 字节，但已减色并损失像素，`quality: 100` 也不是无损。用户据此选择保留 JPEG 回退、优先体积；没有启用 PNG 回退。
 
-实际当前适配器的开发 OSS 验证使用照片及透明 PNG：照片整段约 1.43 秒，包含 IMG GET、两个私有 PUT、大小／格式／摘要及版本校验；仍不含数据库、排队和原图归档。验证最终 WebP 保留透明通道，JPEG 以白底展平，匿名读取产物为 403；本轮六个对象已软删除并确认当前缺失。具体结果见[测量记录](../../reviews/webp-feasibility-2026-11-01.json)。
+早先中转适配器的照片单次约 1.43 秒，历史测量见[记录](../../reviews/webp-feasibility-2026-11-01.json)。本次同机、同桶、相同编码参数比较旧中转和新原生适配器；照片三轮交替先后顺序，其他样本各一轮。完整适配器计时包括持久化、角色校验和 LQIP，不含首次上传、排队、数据库、原图归档或额外验收读取。
+
+| 样本 | 中转链路 | 原生链路 | 原生省去的成品上传字节 |
+| --- | --- | --- | --- |
+| 照片 1536×1024，三轮中位数 | 1,619ms | 1,583ms | 871,204 |
+| 半透明 PNG 32×16 | 650ms | 961ms | 408 |
+| EXIF 6 JPEG，方向校正后 200×320 | 843ms | 996ms | 62,555 |
+| 最大像素预算 PNG 4096×2304 | 3,948ms | 3,500ms | 2,553,027 |
+
+十二次运行的 WebP、JPEG 和 LQIP 均与对应中转结果逐字节一致，透明／白底及方向正确。每份成品匿名 HEAD 为 403，OSS 签名 HEAD 为 200 且 `private, no-store`；两桶 BucketACL 读回均 private。36 个开发测试对象已软删除并确认当前缺失，历史版本保留。另以生产应用身份完成一张未采用的 32×16 合成图原生处理，输出 MIME、版本、私有 ACL 和签名缓存策略通过，三个专用对象同样软删除；未读取现有生产用户对象或写数据库。原生节省了服务器上传带宽，但多次 HEAD／ACL 和一次 SHA-256 回读仍有延迟，小图未见提速；单机小样本不代表生产 p95 或并发收益。脱敏数据见[原生对照记录](../../reviews/oss-native-persistence-2026-11-01.json)。代码发布及真实账号上传／编辑仍待验收。
 
 以下 AVIF 测量与实现选择属于此前方案的历史证据，当前 WebP 行为以上述合同为准。
 

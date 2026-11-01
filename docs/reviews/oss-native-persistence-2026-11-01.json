@@ -1,0 +1,471 @@
+{
+  "measured_at": "2026-11-01T15:37:45.398Z",
+  "environment": "Windows client to development OSS; sequential calls",
+  "scope": "adapter including native persist/readback or relay GET/PUT, checks, and LQIP; excludes input upload, queue, DB, original archive, extra acceptance reads",
+  "relay_baseline_commit": "8eda573b4a4d3edd3064ec1c3791eb96e03d4978",
+  "profile": {
+    "maxInputBytes": 20971520,
+    "maxPixels": 9437184,
+    "webpQuality": 100,
+    "webpEffort": 4,
+    "jpegQuality": 85,
+    "jpegBackground": "#ffffff",
+    "lqipMaxDimension": 24,
+    "lqipQuality": 40,
+    "timeoutSeconds": 60
+  },
+  "bucket_acl": "private",
+  "production_bucket_acl": "private",
+  "runs": [
+    {
+      "label": "photo",
+      "run": 1,
+      "mode": "relay",
+      "adapter_ms": 1528,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "output_puts": 2,
+      "output_upload_bytes": 871204,
+      "stored_readbacks": 0,
+      "stored_readback_bytes": 0,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 583292,
+          "sha256": "0f2416c2b3b07c42a3f78664d04dbe20c00e836c26d00e87bd29a20ab6a5bc49",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 287912,
+          "sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40"
+    },
+    {
+      "label": "photo",
+      "run": 1,
+      "mode": "native",
+      "adapter_ms": 1583,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "output_puts": 0,
+      "output_upload_bytes": 0,
+      "stored_readbacks": 2,
+      "stored_readback_bytes": 871204,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 583292,
+          "sha256": "0f2416c2b3b07c42a3f78664d04dbe20c00e836c26d00e87bd29a20ab6a5bc49",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 287912,
+          "sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40"
+    },
+    {
+      "label": "photo",
+      "run": 2,
+      "mode": "native",
+      "adapter_ms": 1572,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "output_puts": 0,
+      "output_upload_bytes": 0,
+      "stored_readbacks": 2,
+      "stored_readback_bytes": 871204,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 583292,
+          "sha256": "0f2416c2b3b07c42a3f78664d04dbe20c00e836c26d00e87bd29a20ab6a5bc49",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 287912,
+          "sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40"
+    },
+    {
+      "label": "photo",
+      "run": 2,
+      "mode": "relay",
+      "adapter_ms": 1619,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "output_puts": 2,
+      "output_upload_bytes": 871204,
+      "stored_readbacks": 0,
+      "stored_readback_bytes": 0,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 583292,
+          "sha256": "0f2416c2b3b07c42a3f78664d04dbe20c00e836c26d00e87bd29a20ab6a5bc49",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 287912,
+          "sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40"
+    },
+    {
+      "label": "photo",
+      "run": 3,
+      "mode": "relay",
+      "adapter_ms": 1801,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "output_puts": 2,
+      "output_upload_bytes": 871204,
+      "stored_readbacks": 0,
+      "stored_readback_bytes": 0,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 583292,
+          "sha256": "0f2416c2b3b07c42a3f78664d04dbe20c00e836c26d00e87bd29a20ab6a5bc49",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 287912,
+          "sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40"
+    },
+    {
+      "label": "photo",
+      "run": 3,
+      "mode": "native",
+      "adapter_ms": 1866,
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "output_puts": 0,
+      "output_upload_bytes": 0,
+      "stored_readbacks": 2,
+      "stored_readback_bytes": 871204,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 583292,
+          "sha256": "0f2416c2b3b07c42a3f78664d04dbe20c00e836c26d00e87bd29a20ab6a5bc49",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 287912,
+          "sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40"
+    },
+    {
+      "label": "alpha",
+      "run": 1,
+      "mode": "relay",
+      "adapter_ms": 650,
+      "input_bytes": 121,
+      "width": 32,
+      "height": 16,
+      "output_puts": 2,
+      "output_upload_bytes": 408,
+      "stored_readbacks": 0,
+      "stored_readback_bytes": 0,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 118,
+          "sha256": "33be0e16c5f4bc0ca08c714dd117d163f6143f646f378128f9e518e9d2a2bc93",
+          "has_alpha": true,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 290,
+          "sha256": "fdaf8e4a9cd6b5676f74f5594107bdaa81b6396c9a3d1072513bb198029e8779",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "42d1f4ffe946019c93436a60399a3497e9ac86e24bc20e3f216f87e8e54cf257"
+    },
+    {
+      "label": "alpha",
+      "run": 1,
+      "mode": "native",
+      "adapter_ms": 961,
+      "input_bytes": 121,
+      "width": 32,
+      "height": 16,
+      "output_puts": 0,
+      "output_upload_bytes": 0,
+      "stored_readbacks": 2,
+      "stored_readback_bytes": 408,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 118,
+          "sha256": "33be0e16c5f4bc0ca08c714dd117d163f6143f646f378128f9e518e9d2a2bc93",
+          "has_alpha": true,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 290,
+          "sha256": "fdaf8e4a9cd6b5676f74f5594107bdaa81b6396c9a3d1072513bb198029e8779",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "42d1f4ffe946019c93436a60399a3497e9ac86e24bc20e3f216f87e8e54cf257"
+    },
+    {
+      "label": "orientation-6",
+      "run": 1,
+      "mode": "relay",
+      "adapter_ms": 843,
+      "input_bytes": 21007,
+      "width": 200,
+      "height": 320,
+      "output_puts": 2,
+      "output_upload_bytes": 62555,
+      "stored_readbacks": 0,
+      "stored_readback_bytes": 0,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 39938,
+          "sha256": "6d8f5d3adf6983fd1e0100251e194a409e7f5a86144eb3041d3b25e7e998fdc9",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 22617,
+          "sha256": "b783a1be94bdf471f3ab2bc286babde0dc046110e079b2a1e8af0eadee286f59",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "e02c7dcba459fd17775c518886136d548f76c3b1ae280c56b5d2eddf854ca0da"
+    },
+    {
+      "label": "orientation-6",
+      "run": 1,
+      "mode": "native",
+      "adapter_ms": 996,
+      "input_bytes": 21007,
+      "width": 200,
+      "height": 320,
+      "output_puts": 0,
+      "output_upload_bytes": 0,
+      "stored_readbacks": 2,
+      "stored_readback_bytes": 62555,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 39938,
+          "sha256": "6d8f5d3adf6983fd1e0100251e194a409e7f5a86144eb3041d3b25e7e998fdc9",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 22617,
+          "sha256": "b783a1be94bdf471f3ab2bc286babde0dc046110e079b2a1e8af0eadee286f59",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "e02c7dcba459fd17775c518886136d548f76c3b1ae280c56b5d2eddf854ca0da"
+    },
+    {
+      "label": "maximum-pixels",
+      "run": 1,
+      "mode": "relay",
+      "adapter_ms": 3948,
+      "input_bytes": 18298067,
+      "width": 4096,
+      "height": 2304,
+      "output_puts": 2,
+      "output_upload_bytes": 2553027,
+      "stored_readbacks": 0,
+      "stored_readback_bytes": 0,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 1572210,
+          "sha256": "93cbf615c7b4960e8fa0df7cc204aeb0dd8f58295afddba6978a66b05d3f21ec",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 980817,
+          "sha256": "17773cb3dc192ac6f86d69277e2d30a77eaa52a8dcba88bfef79d3d15fa752ae",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "e00ad3b40691bfb6d57ffa9f23f9d512be1b41484f21acde8d15356ac0a5793a"
+    },
+    {
+      "label": "maximum-pixels",
+      "run": 1,
+      "mode": "native",
+      "adapter_ms": 3500,
+      "input_bytes": 18298067,
+      "width": 4096,
+      "height": 2304,
+      "output_puts": 0,
+      "output_upload_bytes": 0,
+      "stored_readbacks": 2,
+      "stored_readback_bytes": 2553027,
+      "roles": [
+        {
+          "role": "display",
+          "bytes": 1572210,
+          "sha256": "93cbf615c7b4960e8fa0df7cc204aeb0dd8f58295afddba6978a66b05d3f21ec",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        },
+        {
+          "role": "fallback",
+          "bytes": 980817,
+          "sha256": "17773cb3dc192ac6f86d69277e2d30a77eaa52a8dcba88bfef79d3d15fa752ae",
+          "has_alpha": false,
+          "anonymous_status": 403,
+          "signed_status": 200,
+          "signed_cache_control": "private, no-store"
+        }
+      ],
+      "lqip_sha256": "e00ad3b40691bfb6d57ffa9f23f9d512be1b41484f21acde8d15356ac0a5793a"
+    }
+  ],
+  "outputs_byte_identical": true,
+  "cleanup": {
+    "objects": 36,
+    "current_missing": 36,
+    "historical_versions": "retained",
+    "production_content_accessed": false
+  },
+  "production_synthetic_canary": {
+    "date": "2026-11-01T15:45:01.826Z",
+    "scope": "production application identity; synthetic unadopted 32x16 image; no database writes or existing object reads",
+    "input_bytes": 122,
+    "roles": [
+      {
+        "role": "display",
+        "bytes": 112,
+        "sha256": "56bfeb7d867a1f2a75d1338fb2c6ec42dcac58548e2d84258074a62eae6a231a",
+        "versioned": true,
+        "acl": "private",
+        "anonymous_status": 403,
+        "signed_status": 200,
+        "cache_control": "private, no-store",
+        "mime": "image/webp"
+      },
+      {
+        "role": "fallback",
+        "bytes": 289,
+        "sha256": "49a4292ce38d8ca03e3b1115b65f44c230c8d7d6d755935218086264a8e217ed",
+        "versioned": true,
+        "acl": "private",
+        "anonymous_status": 403,
+        "signed_status": 200,
+        "cache_control": "private, no-store",
+        "mime": "image/jpeg"
+      }
+    ],
+    "passed": true,
+    "cleanup": {
+      "objects": 3,
+      "current_missing": 3,
+      "historical_versions": "retained"
+    }
+  }
+}

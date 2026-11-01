@@ -60,7 +60,7 @@ ESA 私有回源会赋予加速链路读取私有桶的能力，所以必须同�
 | 范围 | 精确 Content host + `/content/`，优先于冲突的宽泛规则 |
 | 缓存键 | 忽略全部 query，使同一不可变对象的不同签名和下载名共用缓存 |
 | 边缘 TTL | 对成功对象设置明确的长 TTL；实际生产值由控制台核对，不从 URL 300 秒有效期推导 |
-| 源站 Cache-Control | OSS 对象是 private/no-store；需要在受鉴权保护的此范围采用忽略源站策略/自定义边缘 TTL，并用 MISS→HIT 验证 |
+| 源站 Cache-Control | 普通 PUT 对象是 private/no-store，原生图片 saveas 不设置此元数据；在受鉴权保护的此范围使用明确的自定义边缘 TTL，并用 MISS→HIT 验证，浏览器策略独立强制覆盖 |
 | 浏览器 TTL | 不强制长缓存；最终响应保持 `private, no-store` |
 | 错误/授权响应 | 不缓存 403/5xx 或授权回调；不得启用正向授权缓存 |
 

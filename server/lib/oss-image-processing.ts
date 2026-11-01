@@ -12,6 +12,10 @@ import sharp from 'sharp'
 
 type Storage = ReturnType<typeof create_aliyun_oss>
 type ImageObjectIdentity = Awaited<ReturnType<Storage['head_object']>> & { key: string, sha256: string, version_id: string }
+// SDK 6.23.0 implements this method; @types/ali-oss does not declare it.
+type ImageClient = OSS & {
+  processObjectSave: (source: string, target: string, process: string, bucket: string) => Promise<{ status: number }>
+}
 
 interface Request {
   storage: Storage
@@ -58,7 +62,8 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
       throw new ApiError(400, size_error)
     const rotated = (metadata.orientation ?? 1) >= 5
     const expected = rotated ? { width: raw_size.height, height: raw_size.width } : raw_size
-    const client = new OSS({ ... config, secure: true, authorizationV4: true, timeout: Math.min(config.timeoutMs, profile.timeoutSeconds * 1000) })
+    const options: OSS.Options & { retryMax: number } = { ... config, secure: true, authorizationV4: true, retryMax: 0, timeout: Math.min(config.timeoutMs, profile.timeoutSeconds * 1000) }
+    const client = new OSS(options) as ImageClient
     const unchanged = async (object: ImageObjectIdentity) => {
       const head = await storage.head_object(object.key)
       if (head.etag !== object.etag || head.version_id !== object.version_id || head.size !== object.size || await storage.get_object_access(object.key) !== 'private')
@@ -91,16 +96,61 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
       return Buffer.concat(chunks)
     }
     const persist = async (source: ImageObjectIdentity, target: string, operation: string, format: 'webp' | 'jpeg') => {
-      // Retain the bounded verification and owned-attempt publication contract.
-      const body = await processed(source, operation, settings.app.content.image.uploadMaxBytes * (format === 'webp' ? 1 : 4))
+      await guard()
+      await unchanged(source)
+      // saveas cannot set an object ACL: it inherits the bucket at creation.
+      // Never create even a temporary public representation of private pixels.
+      if ((await client.getBucketACL(config.bucket)).acl !== 'private')
+        throw new ApiError(503, 'OSS 图片持久化要求目标桶为私有，请联系管理员')
+      try {
+        await storage.head_object(target)
+        throw fail('图片处理目标已存在，请重新尝试')
+      }
+      catch (error) {
+        if ((error as { status?: number }).status !== 404)
+          throw error
+      }
+      await guard()
+      const response = await client.processObjectSave(source.key, target, operation, config.bucket)
+      if (response.status === 403)
+        throw new ApiError(503, 'OSS 图片持久化权限尚未配置，请联系管理员')
+      if (response.status !== 200)
+        throw new ApiError(502, '云端图片持久化请求失败，请重试或联系管理员')
+      // Pin explicit privacy even if cancellation arrived while the POST ran.
+      // The attempt already owns this exact key, including unknown/late writes.
+      await storage.set_object_access(target, 'private')
+      // saveas omits Cache-Control. Browser delivery still forces private/no-store
+      // through signed_read_url or ESA's outgoing response rule; no self-copy is needed.
+      await guard()
+      await unchanged(source)
+      const head = await storage.head_object(target)
+      const limit = settings.app.content.image.uploadMaxBytes * (format === 'webp' ? 1 : 4)
+      if (! head.version_id || head.size <= 0 || head.size > limit || await storage.get_object_access(target) !== 'private')
+        throw fail()
+      // Verify the persisted object once; no transformed bytes are uploaded by us.
+      const { stream, size } = await storage.get_object_stream(target, head.etag, AbortSignal.any([signal, AbortSignal.timeout(profile.timeoutSeconds * 1000)]))
+      if (size !== head.size) {
+        stream.destroy()
+        throw fail()
+      }
+      const chunks: Buffer[] = []
+      let length = 0
+      for await (const chunk of stream) {
+        length += chunk.length
+        if (length > head.size) {
+          stream.destroy()
+          throw fail('云端图片产物超过处理大小上限')
+        }
+        chunks.push(Buffer.from(chunk))
+      }
+      if (length !== head.size)
+        throw fail()
+      const body = Buffer.concat(chunks)
       const info = await open(body).metadata()
       if (info.format !== format || (info.pages ?? 1) !== 1 || info.width !== expected.width || info.height !== expected.height)
         throw fail()
       await guard()
-      const receipt = await storage.put_object(target, body, format === 'webp' ? content_image_formats.display.mime : content_image_formats.fallback.mime, 'private')
-      if (! receipt.version_id)
-        throw fail()
-      const object = { key: target, ... receipt, version_id: receipt.version_id, size: body.length, sha256: createHash('sha256').update(body).digest('hex') }
+      const object = { key: target, ... head, version_id: head.version_id, sha256: createHash('sha256').update(body).digest('hex') }
       await unchanged(object)
       await guard()
       return object
@@ -123,6 +173,8 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
     catch (error) {
       if (error instanceof ApiError || signal.aborted)
         throw error
+      if ((error as { status?: number }).status === 403)
+        throw new ApiError(503, 'OSS 图片持久化权限尚未配置，请联系管理员')
       // SDK errors can contain signed requests; only a controlled message reaches the job/UI.
       throw new ApiError(502, '云端图片处理失败，请重试或联系管理员')
     }
