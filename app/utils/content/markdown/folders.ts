@@ -11,9 +11,9 @@ import { local_file_name } from './links'
  * the labeled per-file tags.
  *
  * It runs as a core rule placed before the carousel rule, so the expanded run
- * is treated exactly like hand-written consecutive images: a folder of two or
- * more images becomes a carousel, a lone image stays a framed image, and mixing
- * the reference with other images on the same line behaves the same way.
+ * is treated exactly like hand-written images: single or multiple images and
+ * neighboring cards share their paragraph's strip, retaining individual frames
+ * and captions.
  */
 export const folder_images_plugin: StoryMarkdownPlugin = (md, ctx) => {
   // Anchored to the carousel rule, so carousel_plugin must run first.

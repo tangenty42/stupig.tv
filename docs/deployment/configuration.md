@@ -43,4 +43,4 @@ plan 只显示脱敏目标；check 使用生产发布身份做云端只读检查
 
 ## 运行时选哪个文件
 
-`pnpm dev` 使用 `.env.dev`；build/preview 与生产容器使用 `.env.prod`。工具可以传 `--env=dev|prod`；已有进程变量优先。Compose 手动操作要显式指定 `--env-file .env.prod`。`pnpm dev` 和 env:build 不会发布函数，正式发布按 [ESA](esa-functions.md)及[部署顺序](README.md)执行。
+`pnpm dev` 使用 `.env.dev`；build/preview 与生产容器使用 `.env.prod`。工具可以传 `--env=dev|prod`；已有进程变量优先。Compose 手动操作要显式指定 `--env-file .env.prod`。`pnpm dev` 和两个显式的 env 模板命令不会发布函数，正式发布按 [ESA](esa-functions.md)及[部署顺序](README.md)执行。

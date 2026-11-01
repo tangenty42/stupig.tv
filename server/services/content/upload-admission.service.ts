@@ -139,7 +139,7 @@ export async function admit_upload_batch(actor: number, input: UploadBatch) {
       const row = await accept_transfer(connection, actor, randomUUID(), {
         operation: 'upload', scope_id: input.scope_id, target_location: 'aliyun', target_path: plan.path,
         target_parent_id: parent, target_name: attachment_base_name(plan.path), target_access: plan.access,
-        expected_size: entry.size, sha256: entry.sha256, mime_type: mime ?? undefined, purpose: entry.purpose, redacted_policy: ['keep', 'discard'].includes(input.on_error.redacted) ? input.on_error.redacted as 'keep' | 'discard' : undefined, source: entry.source, replacement: entry.replacement, image,
+        expected_size: entry.size, mime_type: mime ?? undefined, purpose: entry.purpose, redacted_policy: ['keep', 'discard'].includes(input.on_error.redacted) ? input.on_error.redacted as 'keep' | 'discard' : undefined, source: entry.source, replacement: entry.replacement, image,
       }, settings.app.content.workspace.sessionHours * 3600)
       await connection.execute('UPDATE content_transfer_sessions SET target_parent_id = ?, target_name_key = ?, source_attachment_id = ?, replacement_attachment_id = ? WHERE id = ?',
         [parent, attachment_name_key(attachment_base_name(plan.path)), entry.source?.id ?? null, entry.replacement?.id ?? null, row.id])

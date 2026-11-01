@@ -22,7 +22,7 @@ export interface UploadRow extends RowDataPacket {
   execution_epoch: number
   remaining_seconds: number
   busy: number
-  result: null | { key: string, etag: string, oss_version_id: string, sha256: string, size: number } | UploadPublication
+  result: null | { key: string, etag: string, oss_version_id: string, sha256: string | null, size: number } | UploadPublication
 }
 export interface UploadAttempt extends RowDataPacket {
   id: string

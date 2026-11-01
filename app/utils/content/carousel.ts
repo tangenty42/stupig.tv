@@ -19,10 +19,12 @@ interface CarouselSnapshot {
 // so entries match the same carousel across re-renders.
 const carousel_snapshots = new Map<string, CarouselSnapshot>()
 
-// innerHTML drifts after setup (cropped-image markers), so key by the image
-// src list which is fixed at render time.
+// Runtime markers drift after setup. Use destination identities instead;
+// card-only and iframe-only strips must not all share an empty image key.
 function carousel_key(carousel: HTMLElement) {
-  return [... carousel.querySelectorAll('img')].map(image => image.getAttribute('src')).join()
+  const destinations = [... carousel.querySelectorAll('img, iframe, a[href], [data-folder-card]')]
+    .map(element => [element.tagName, element.getAttribute('src') ?? element.getAttribute('href') ?? element.getAttribute('data-folder-card')])
+  return JSON.stringify(destinations.length ? destinations : [carousel.textContent])
 }
 
 function update_carousel_navs(carousel: HTMLElement, restore_left = 0) {

@@ -32,8 +32,8 @@ ESA ── HTTPS ── stupig-content-auth-dev.cina.cs.tangenty.com
 
 ```sh
 pnpm env:build:dev
-pnpm dev:auth:prepare
-pnpm dev:auth:verify
+pnpm dev:tunnel --prepare
+pnpm dev:tunnel --verify
 ```
 
 `prepare` 生成忽略目录中的 `.dev/auth/frpc.json` 与公共 CA bundle。token 不写入生成 JSON，而是启动时通过子进程环境中的 JSON 编码模板传给 frpc。`verify` 检查可执行文件版本并运行 frpc 原生配置验证，尚未连接服务器。

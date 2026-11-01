@@ -65,7 +65,7 @@ Original prose and images stay here.
 
 ## Verification
 
-- `pnpm lint` checks; `pnpm lint:fix` fixes. Hooks use lint-staged; VS Code can apply ESLint fixes on save. Use focused fixes to preserve unrelated working changes.
+- `pnpm lint` checks; `pnpm lint --fix` fixes. Hooks use lint-staged; VS Code can apply ESLint fixes on save. Use focused fixes to preserve unrelated working changes.
 - Test files obey the same style. Fix lint errors without weakening assertions or exempting whole files; use a narrow, justified disable only when a rule cannot apply.
 - Follow the [global testing rules](../copilot-instructions.md) and [testing guide](../../docs/development/testing.md). Type/import changes require typecheck; pure documentation changes require lint and link/command/source consistency checks.
 - Intentional exceptions use `eslint-disable-next-line` with a `-- reason` suffix.

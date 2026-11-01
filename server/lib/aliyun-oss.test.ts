@@ -26,6 +26,25 @@ const config = {
 }
 const response = (values: Record<string, string> = {}) => ({ res: { headers: { 'etag': '"target"', 'x-oss-version-id': 'target-version', ... values } } })
 
+it('pins a bounded image-header read with If-Match and a precise Range', async () => {
+  const stream = Readable.from(Buffer.alloc(12))
+  state.methods.getStream.mockResolvedValue({ stream, res: { status: 206, headers: { 'content-length': '12', 'content-range': 'bytes 0-11/100' } } })
+  expect((await create_aliyun_oss(config).get_object_stream('stage', 'fixed', undefined, { start: 0, end: 11 })).size).toBe(12)
+  expect(state.methods.getStream).toHaveBeenCalledWith('stage', { headers: { 'If-Match': '"fixed"', 'Range': 'bytes=0-11' } })
+  stream.destroy()
+})
+
+it.each([
+  { status: 200, length: '100', range: undefined },
+  { status: 206, length: '12', range: 'bytes 1-12/100' },
+  { status: 206, length: '13', range: 'bytes 0-11/100' },
+])('destroys an ignored or invalid range before consuming the object: %j', async ({ status, length, range }) => {
+  const stream = Readable.from(Buffer.alloc(100))
+  state.methods.getStream.mockResolvedValue({ stream, res: { status, headers: { 'content-length': length, 'content-range': range } } })
+  await expect(create_aliyun_oss(config).get_object_stream('stage', 'fixed', undefined, { start: 0, end: 11 })).rejects.toMatchObject({ statusCode: 502 })
+  expect(stream.destroyed).toBe(true)
+})
+
 beforeEach(() => {
   state.clients.length = 0
   for (const mock of Object.values(state.methods))

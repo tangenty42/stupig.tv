@@ -145,11 +145,9 @@ describe('shared cloud draft session', () => {
     expect(f.api.command.mock.calls.map(([input]) => input.kind)).toEqual(['sync', 'publish'])
     expect(f.api.command.mock.calls[1]![0]).toMatchObject({ expected_revision: 2, seq: 2 })
   })
-  it.each([
-    { story_id: 7, restored: 'published main' },
-    { story_id: null, restored: 'new draft template' },
-  ])('discards unsaved input on reset without uploading it again, story=$story_id', async ({ story_id, restored }) => {
-    const f = await fixture({ story_id, markdown: 'cloud draft', unpublished_changes: true })
+  it('discards unsaved input on published draft reset without uploading it again', async () => {
+    const restored = 'published main'
+    const f = await fixture({ story_id: 7, markdown: 'cloud draft', unpublished_changes: true })
     f.store.set_cycle_trigger(() => f.store.cycle())
     f.store.markdown = 'discard this unsaved input'
     const response = deferred<DraftResult>()
@@ -215,12 +213,30 @@ describe('shared cloud draft session', () => {
     expect(await f.store.action('publish')).toBe(false)
     expect(f.store.writable).toBe(false)
   })
-  it('recognizes an absent target after a committed delete reply was lost', async () => {
-    const f = await fixture()
+  it.each([
+    { kind: 'delete' as const, story_id: 7 },
+    { kind: 'reset' as const, story_id: null },
+  ])('recognizes absence after a committed $kind reply was lost, story=$story_id', async ({ kind, story_id }) => {
+    const f = await fixture({ story_id })
     f.api.command.mockRejectedValueOnce(Object.assign(new Error('Draft no longer exists'), { status: 404 }))
-    expect(await f.store.action('delete')).toBe(true)
+    expect(await f.store.action(kind)).toBe(true)
     expect(f.store.cloud).toBeNull()
     expect(f.store.markdown).toBe('')
+  })
+
+  it('removes an unpublished draft on discard without uploading local input or recreating a template', async () => {
+    const f = await fixture({ story_id: null, unpublished_changes: true })
+    f.store.markdown = 'discard this unsaved input'
+    f.api.command.mockResolvedValueOnce({ snapshot: null, receipt: { kind: 'reset', seq: 1, ok: true } })
+    expect(await f.store.action('reset', 1)).toBe(true)
+    expect(f.api.command.mock.calls[0]![0]).toMatchObject({ kind: 'reset', expected_revision: 1 })
+    expect(f.api.command.mock.calls[0]![0].markdown).toBeUndefined()
+    expect(f.store.removed).toBe(true)
+    expect(f.store.cloud).toBeNull()
+    expect(f.store.markdown).toBe('')
+    await vi.advanceTimersByTimeAsync(settings.app.content.draft.saveThrottleMs)
+    await f.store.cycle()
+    expect(f.api.command).toHaveBeenCalledOnce()
   })
   it('retains input typed after a save snapshot was sent', async () => {
     const f = await fixture()

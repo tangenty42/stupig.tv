@@ -1,6 +1,5 @@
 import type { ContentUploadPartGrant, ContentUploadSession } from '@shared/types/content-upload'
 import { md5 } from '@noble/hashes/legacy.js'
-import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { settings } from '@shared/settings'
 
@@ -11,23 +10,43 @@ export interface UploadSessionApi {
   seal: () => Promise<ContentUploadSession>
   cancel: () => Promise<ContentUploadSession>
 }
-export interface UploadProgress { phase: 'hashing' | 'uploading' | 'verifying' | 'ready', loaded: number, total: number, confirmed?: number }
+export interface UploadProgress { phase: 'checking' | 'uploading' | 'verifying' | 'ready', loaded: number, total: number, confirmed?: number }
 
-/** Bounded memory, including a reselected multi-GB file. Never trust its name/size alone. */
-export async function upload_file_sha256(file: Blob, signal?: AbortSignal, progress?: (value: UploadProgress) => void) {
-  const hash = sha256.create()
-  const chunk_size = settings.app.content.upload.partSizeMb * 1024 ** 2
-  try {
-    for (let offset = 0; offset < file.size; offset += chunk_size) {
-      signal?.throwIfAborted()
-      hash.update(new Uint8Array(await file.slice(offset, offset + chunk_size).arrayBuffer()))
-      progress?.({ phase: 'hashing', loaded: Math.min(offset + chunk_size, file.size), total: file.size })
+function file_mismatch() {
+  return Object.assign(new Error('请选择内容一致的原文件'), { code: 'UPLOAD_FILE_MISMATCH' })
+}
+
+/** Only previously uploaded parts need comparison when continuing a selection. */
+export async function verify_upload_file(file: Blob, state: Pick<ContentUploadSession, 'size' | 'part_size' | 'parts'>, signal?: AbortSignal, progress?: (value: UploadProgress) => void) {
+  signal?.throwIfAborted()
+  if (file.size !== state.size)
+    throw file_mismatch()
+  if (! state.parts.length)
+    return
+  const part_size = state.part_size
+  if (! part_size || ! Number.isSafeInteger(part_size) || part_size <= 0)
+    throw new Error('上传分片计划无效')
+  const seen = new Set<number>()
+  for (const part of state.parts) {
+    const expected = Math.min(part_size, file.size - (part.part_number - 1) * part_size)
+    if (! Number.isInteger(part.part_number) || part.part_number < 1 || part.part_number > 10_000 || seen.has(part.part_number)
+      || expected <= 0 || part.size !== expected || ! /^[a-f0-9]{32}$/i.test(part.etag)) {
+      throw new Error('上传分片计划无效')
     }
-    signal?.throwIfAborted()
-    return bytesToHex(hash.digest())
+    seen.add(part.part_number)
   }
-  finally {
-    hash.destroy()
+  const total = state.parts.reduce((sum, part) => sum + part.size, 0)
+  let loaded = 0
+  progress?.({ phase: 'checking', loaded, total })
+  for (const part of state.parts) {
+    signal?.throwIfAborted()
+    const start = (part.part_number - 1) * part_size
+    const bytes = await file.slice(start, start + part.size).arrayBuffer()
+    signal?.throwIfAborted()
+    if (bytesToHex(md5(new Uint8Array(bytes))) !== part.etag.toLowerCase())
+      throw file_mismatch()
+    loaded += part.size
+    progress?.({ phase: 'checking', loaded, total })
   }
 }
 
@@ -51,8 +70,9 @@ export function create_browser_upload(api: UploadSessionApi, progress?: (value: 
       if (state.status === 'queued' || state.status === 'running')
         state = await api.initialize()
       signal.throwIfAborted()
-      if (file.size !== state.size || await upload_file_sha256(file, signal, progress) !== state.sha256)
-        throw new Error('请选择内容一致的原文件')
+      if (state.status === 'ready' || state.status === 'completed')
+        return state
+      await verify_upload_file(file, state, signal, progress)
       if (state.status === 'running' || state.status === 'verifying') {
         progress?.({ phase: 'verifying', loaded: file.size, total: file.size })
         state = await api.seal()

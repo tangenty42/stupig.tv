@@ -155,8 +155,8 @@ export function attachment_summary_tree(paths: string[], nodes: readonly Content
 /** Keep upload-only selection separate; folders cover their descendants. */
 export function normalize_attachment_selection(rows: WorkspaceListRow[], keys: ReadonlySet<string>) {
   const selected = rows.filter(row => keys.has(row.key))
-  const stored = selected.some(row => row.node)
-  const group = selected.filter(row => Boolean(row.node) === stored)
+  const group_type = selected.some(row => row.node) ? 'node' : selected.some(row => row.session) ? 'session' : 'preparation'
+  const group = selected.filter(row => (row.node ? 'node' : row.session ? 'session' : 'preparation') === group_type)
   return new Set(group.filter(row => ! group.some(parent => parent !== row && parent.node?.kind === 'folder' && (parent.path === '' || row.path.startsWith(`${parent.path}/`)))).map(row => row.key))
 }
 
@@ -166,7 +166,8 @@ export function guard_attachment_selection(selected: ReadonlySet<string>, next: 
 }
 
 export function select_attachment_row(rows: WorkspaceListRow[], selected: ReadonlySet<string>, anchor: string | null, row: WorkspaceListRow, event: Pick<MouseEvent, 'ctrlKey' | 'metaKey' | 'shiftKey'>, limit = Number.POSITIVE_INFINITY) {
-  const group = rows.filter(item => Boolean(item.node) === Boolean(row.node))
+  const kind = (item: WorkspaceListRow) => item.node ? 'node' : item.preparation ? 'preparation' : 'session'
+  const group = rows.filter(item => kind(item) === kind(row))
   const additive = event.ctrlKey || event.metaKey
   const next = additive ? new Set(group.filter(item => selected.has(item.key)).map(item => item.key)) : new Set<string>()
   const from = group.findIndex(item => item.key === anchor)

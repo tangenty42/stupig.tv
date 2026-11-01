@@ -2,9 +2,9 @@
 
 事实源：[package.json](../../package.json)、[scripts](../../scripts/)、[Check](../../.github/workflows/check.yml)、[Deploy](../../.github/workflows/deploy.yml)、[Dockerfile](../../Dockerfile)。本页说明用途与调用关系，具体操作步骤由对应模块手册维护。
 
-2026-10-25 盘点：package.json 共 **31 个入口**，其中 2 个是安装钩子；scripts 共 **60 个文件**，其中 25 个是测试、1 个是类型声明、1 个是 tsconfig、1 个是目录说明，剩余 32 个也包含内部模块。文件数量不等于需要手动记住的命令数量。
+2026-11-01 精简：package.json 从 **38 个入口减少到 34 个**，其中 2 个是安装钩子。`check` 是本地与 CI unit job 的共同质量入口，`typecheck` 统一应用、工具和浏览器测试的类型检查。文件数量不等于需要手动记住的命令数量。
 
-已将 ESA 入口改为 `esa:deploy:dev` / `esa:deploy:prod`，并完成 scripts 按职责分目录，更新内部 import、子进程、CI、Compose 和维护打包路径。其余 pnpm 命令名保持原样；下述命令删减、改名及实现合并仍为**待实施建议**。
+ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校验入口，移除重复别名与未使用的静态生成命令。存储盘点、样本导出和开发重置的运维改名仍是待实施建议。
 
 ## package.json 全部入口
 
@@ -14,14 +14,10 @@
 | --- | --- | --- |
 | `dev` | 启动 Docker 依赖，再启动 Nuxt、授权代理和 frpc；退出只清理本次拥有的应用/通道进程 | 保留为日常默认入口 |
 | `dev:app` | 只启动 Nuxt，不启动 Docker 或授权通道 | 保留为局部调试入口 |
-| `dev:tunnel` | 给已有应用启动授权代理和 frpc，不启动 Nuxt | 保留；可直接调用 dev/frp.ts，删除薄包装 |
-| `dev:auth:prepare` | 生成 frpc 配置和 CA 文件，不启动隧道 | 可并入隧道入口的 `--prepare`；正常启动和 verify 都已包含这一步 |
-| `dev:auth:verify` | 先 prepare，再核对 frpc 版本和原生配置；不验证真实授权下载 | 可并入隧道入口的 `--check`，无需单列一个 pnpm 命令 |
+| `dev:tunnel` | 给已有应用启动授权代理和 frpc；`--prepare` 仅生成配置，`--verify` 准备并检查 frpc 版本／配置 | 共用 dev/frp.ts 的 CLI；不启动第二个应用 |
 | `build` | 使用 `.env.prod` 构建 Nuxt 服务端产物；Docker 构建会调用 | 保留 |
 | `preview` | 本机以 `.env.prod` 预览已构建产物；不是生产服务器启动入口 | 保留为交付排查入口 |
-| `generate` | Nuxt 静态生成 | 当前 Node/Nitro 交付未使用，仓库未发现调用方；建议删除此命令，保留 build |
 | `maintenance:build` | 先生成 settings，再打包迁移执行器、旧存储盘点器、TS 迁移和 Sharp 运行依赖到 `.output` | 保留；Docker 和产物测试正在调用 |
-| `env:build` | 按参数或 NODE_ENV 选环境，未设置时默认 dev，合成 env 并保留已填值 | 与两个显式入口重复，建议删除裸入口 |
 | `env:build:dev` | 固定合成/补全 `.env.dev` | 保留 |
 | `env:build:prod` | 固定合成/补全 `.env.prod` | 保留 |
 | `env:encrypt` | 将 `.env.prod` 加密为 `.env.prod.gpg` | 保留；与 decrypt/check 已共用实现 |
@@ -39,14 +35,21 @@
 | `db:dump:dev` | 从所选库导出开发用 SQL，仅替换手机号、bcrypt 和 IPv4，可 `--gzip` | 建议改为 `db:export-sample`；名字中的 dev 目前是导出用途，不固定源库，容易误解 |
 | `content:dev:reset` | 开发 Content 重置，默认盘点；`--apply` 执行删除，支持清理记录续跑 | 建议改为 `content:reset:dev`，真正固定 dev 参数；继续保留环境/库/桶保护 |
 | `lint` | 全仓库 ESLint 检查 | 保留 |
-| `lint:fix` | ESLint 检查并修复 | 可用 `pnpm lint --fix` 替代，删一个纯别名 |
-| `test` | Vitest 单次执行，可追加文件或筛选参数 | 保留 |
+| `test` | 顺序执行单元、工具和挂载组件测试 | 筛选文件时使用下列分组入口 |
+| `test:unit` | app/server 纯逻辑测试 | 可指定文件和筛选参数 |
+| `test:tools` | 工具和产物测试，串行执行 | 可指定文件和筛选参数 |
+| `test:component` | Nuxt + happy-dom 挂载回归 | 与纯逻辑测试有不同运行环境 |
+| `test:e2e` | 默认应用浏览器场景，CI 拆三个分片 | 不重复执行生产布局与 CSS 专用场景 |
+| `test:e2e:legacy` | 最低版本真实浏览器的生产页面验证 | 需已准备对应浏览器与驱动 |
+| `test:css:legacy` | 最低版本浏览器的独立工具类验证 | 与应用验收有不同范围 |
+| `typecheck` | 应用、scripts、tests 三个 TypeScript 项目 | 单一类型检查入口 |
+| `check` | 生成文件检查、lint、typecheck、test | 与 CI unit job 使用相同命令；数据库／浏览器集成仍按专用入口验证 |
 | `postinstall` | 安装后的 Nuxt prepare，生成类型及框架中间文件 | 安装钩子，保留；不作为日常手动步骤 |
 | `prepare` | 安装 simple-git-hooks | 安装钩子，保留；与 Nuxt prepare 含义不同 |
 
 开发用法见[本地开发](README.md)，配置见[环境分层](../deployment/configuration.md)，发布见[ESA](../deployment/esa-functions.md)，迁移见[迁移工具](../operations/migrations.md)。
 
-目前 CI 还直接运行 `pnpm exec nuxt typecheck` 对应的检查（工作流中仍写为 `npx nuxt typecheck`）和 `pnpm exec tsc --project scripts/tsconfig.json --noEmit`，package.json 没有统一 `typecheck` 入口。建议增加一个同时执行两者的 `typecheck`，让本地与 CI 使用同一命令。
+CI unit job 直接运行 `pnpm check`。`pnpm typecheck` 依次执行 Nuxt、scripts 和 tests 类型检查，工作流与本地共用同一实现。
 
 ## scripts 逐项职责
 
@@ -60,8 +63,7 @@
 | [`dev/process.mjs`](../../scripts/dev/process.mjs) | 受控子进程重启与清理，dev/frp.ts 调用 | 可转为 TS，和下面的手写声明合为一个文件 |
 | [`dev/process.d.mts`](../../scripts/dev/process.d.mts) | 上述 MJS 的 TypeScript 声明 | 实现转为 TS 后删除，不先单独删除 |
 | [`dev/auth-proxy.mjs`](../../scripts/dev/auth-proxy.mjs) | 仅转发 POST 授权回调的本地 HTTP 代理，由隧道管理器启动为子进程 | 保留进程边界；当前已通过 tsx 加载，可统一为 TS |
-| [`dev/tunnel.mjs`](../../scripts/dev/tunnel.mjs) | 仅调用 dev/frp.ts 的运行/信号函数并报告异常 | dev/frp.ts 已有等价 CLI，可删除此包装并更新命令 |
-| [`env/build.ts`](../../scripts/env/build.ts) | 环境模板合成、已有值保留、必填值交互；3 个 env:build 入口共用 | 保留；无需为 dev/prod 复制实现 |
+| [`env/build.ts`](../../scripts/env/build.ts) | 环境模板合成、已有值保留、必填值交互；dev/prod 两个入口共用 | 保留；无需为 dev/prod 复制实现 |
 | [`env/gpg.ts`](../../scripts/env/gpg.ts) | encrypt/decrypt/check 共用 GPG、口令和临时文件逻辑 | 保留；3 个动作无需强行变成一个名字 |
 | [`env/preload.mjs`](../../scripts/env/preload.mjs) | 在 CLI 业务模块导入前选择并注入 env、移除环境参数 | 保留原生 MJS 预载边界，不能简单改成依赖 Nuxt 的加载器 |
 | [`background/worker.ts`](../../scripts/background/worker.ts) | 独立 worker 适配器注册、保活、退出清理 | 保留 |
@@ -91,7 +93,7 @@
 | [`tsconfig.json`](../../scripts/tsconfig.json) | scripts 与版本化 TS 迁移的独立类型检查项目及 aliases | 保留，和 Nuxt tsconfig 的职责不同 |
 | [`README.md`](../../scripts/README.md) | 目录职责索引，链接回本清单 | 保留，避免在入口说明中复制操作手册 |
 
-25 个 `*.test.ts` 均是测试，不是运维命令。其中 [`verify/package.test.ts`](../../scripts/verify/package.test.ts)、[`deploy/docker-image.test.ts`](../../scripts/deploy/docker-image.test.ts)、[`verify/nuxt-config.test.ts`](../../scripts/verify/nuxt-config.test.ts)、[`migration/maintenance-build.test.ts`](../../scripts/migration/maintenance-build.test.ts) 检查跨文件接线/产物，其余主要跟随相应模块。[`migration/sql.test.ts`](../../scripts/migration/sql.test.ts)、[`catalog-sql.test.ts`](../../scripts/migration/catalog-sql.test.ts)、[`frozen.test.ts`](../../scripts/migration/frozen.test.ts) 分别保护 SQL 执行/失败/幂等、版本识别及历史不可变合同。不要为了减少列表长度删掉这些测试。
+`*.test.ts` 均是测试，不是运维命令。其中 [`verify/package.test.ts`](../../scripts/verify/package.test.ts)、[`deploy/docker-image.test.ts`](../../scripts/deploy/docker-image.test.ts)、[`verify/nuxt-config.test.ts`](../../scripts/verify/nuxt-config.test.ts)、[`migration/maintenance-build.test.ts`](../../scripts/migration/maintenance-build.test.ts) 检查跨文件接线/产物，其余主要跟随相应模块。[`migration/sql.test.ts`](../../scripts/migration/sql.test.ts)、[`catalog-sql.test.ts`](../../scripts/migration/catalog-sql.test.ts)、[`frozen.test.ts`](../../scripts/migration/frozen.test.ts) 分别保护 SQL 执行/失败/幂等、版本识别及历史不可变合同。不要为了减少列表长度删掉这些测试。
 
 迁移实现位于 `migrations/`，scripts/migration 是运行工具。历史迁移与其冻结闭包不得改名、改内容或重新生成摘要来掩盖变化，见[迁移约束](../../.github/instructions/migrations.instructions.md)。
 
@@ -103,12 +105,15 @@
 
 ## 建议的整理顺序
 
-### 第一批：减少重复入口，修正误导命名
+### 已完成：CI 与开发检查入口
 
-1. 删除 `generate`、裸 `env:build`、`dev:auth:prepare`、`dev:auth:verify`、`lint:fix` 共 5 个入口；隧道入口承接准备/校验参数，其他已有替代入口。
-2. 将 `storage:cleanup` 改名 `storage:audit`，`db:dump:dev` 改名 `db:export-sample`，`content:dev:reset` 改名 `content:reset:dev`。同步调用方与文档，不增加永久兼容别名。
-3. 增加 `typecheck` 合并现有两条类型检查，并把 Check 中的 npx 改为统一 pnpm 入口。
-4. 这样 package.json 从 31 个变为 **27 个入口**；这是建议后的数量，当前尚未执行此批整理。
+1. 移除 `generate`、裸 `env:build`、`dev:auth:prepare`、`dev:auth:verify`、`lint:fix` 与 `test:all` 六个入口；对应替代分别是现有 build、显式环境模板、隧道参数、lint 参数，以及明确选择需要的验证范围。
+2. 新增 `typecheck` 与 `check`，共 34 个入口。`test:all` 不包含生产 CSS、数据库集成或真实 MQTT，故不继续用该名字表达全量验证。
+3. `dev:tunnel` 直接调用 dev/frp.ts，已删除等价薄包装。
+
+### 后续：修正运维命名
+
+将 `storage:cleanup` 改为 `storage:audit`、`db:dump:dev` 改为 `db:export-sample`、`content:dev:reset` 改为 `content:reset:dev`，仍需同步调用方与实际环境选择；本轮没有改名。完整脚本职责及其保护边界见上表。
 
 ### 已完成：按职责收拢 scripts
 
@@ -132,7 +137,7 @@ scripts/
 
 已移动 36 个文件，测试随模块移动，目录内去掉重复的职责前缀。pnpm 入口、CI/Compose、模块导入、子进程和维护打包路径均已更新。版本化迁移及其冻结依赖未移动。
 
-后续仍可删除 dev/tunnel.mjs 薄包装；也可让 migration/maintenance-build.ts 的入口归入构建模块，或将 dev/process.mjs 转 TS 后去掉手写 `.d.mts`。这些实现合并尚未执行。
+dev/tunnel.mjs 薄包装已删除。后续可让 migration/maintenance-build.ts 的入口归入构建模块，或将 dev/process.mjs 转 TS 后去掉手写 `.d.mts`；后两项尚未执行。
 
 ### 统一规则
 

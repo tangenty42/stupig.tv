@@ -28,6 +28,8 @@ test('autosaves one shared cloud draft, keeps main unchanged, and hands editing 
     await expect(second_editor).not.toBeEditable()
     await expect.poll(() => editor_text(second)).toContain('shared cloud text')
     await page.locator('a[href="/content"]').first().click()
+    await page.getByRole('button', { name: '未发布草稿', exact: true }).click()
+    await expect(page.getByRole('link', { name: story.title })).toHaveAttribute('href', `/content/${story.id}/edit`)
     // If the final in-flight request failed, release is best effort and the
     // successor waits L + M + T; it must remain read only until then.
     await expect(second_editor).toBeEditable({ timeout: 2 * timing.keepaliveIntervalMs + 3 * timing.requestTimeoutMs + timing.leaseMarginMs })

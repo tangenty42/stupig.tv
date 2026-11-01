@@ -9,7 +9,7 @@ import { useSyncedData } from './useSyncedData'
 import { useSyncedState } from './useSyncedState'
 
 const state = vi.hoisted(() => ({ list: vi.fn(), toast: vi.fn() }))
-vi.mock('~/utils/content/browser-upload', () => ({ create_browser_upload: vi.fn(), upload_file_sha256: vi.fn() }))
+vi.mock('~/utils/content/browser-upload', () => ({ create_browser_upload: vi.fn() }))
 const user = ref({ id: 7, is_admin: true })
 const resources = new Map<string, ReturnType<typeof ref>>()
 const listeners = new Map<string, () => Promise<void>>()

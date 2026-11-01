@@ -78,6 +78,21 @@ it('does not verify bytes that differ from the fixed source digest', async () =>
   expect(execute).toHaveBeenCalledTimes(2)
 })
 
+it('does not allow copy or restore verification to omit its computed digest', async () => {
+  execute.mockResolvedValueOnce([[{ active_attempt_id: attempt, expected_size: 262_161, intent }]])
+    .mockResolvedValueOnce([[{ upload_id: null, status: 'created' }]])
+  await expect(verify_transfer_attempt(connection, claim, attempt, { size: 262_161, etag: 'object', oss_version_id: 'version', sha256: null })).rejects.toMatchObject({ statusCode: 409 })
+})
+
+it('accepts upload metadata with an explicit absent digest only after full part coverage', async () => {
+  execute.mockResolvedValueOnce([[{ active_attempt_id: attempt, expected_size: 262_161, intent: { operation: 'upload' } }]])
+    .mockResolvedValueOnce([[{ upload_id: 'upload', status: 'uploading', part_size: 262_144 }]])
+    .mockResolvedValueOnce([[{ count: 2, bytes: 262_161 }]])
+    .mockResolvedValue([{ affectedRows: 1 }])
+  await expect(verify_transfer_attempt(connection, claim, attempt, { size: 262_161, etag: 'object', oss_version_id: 'version', sha256: null })).resolves.toBeUndefined()
+  expect(execute.mock.calls.find(([sql]) => sql.includes('SET status = \'verified\''))?.[1]).toEqual(['object', 'version', null, attempt])
+})
+
 it('returns the original completed result on cancellation without deleting the adopted object', async () => {
   const result = { status: 'completed', result: { attachment_id: 42 } }
   execute.mockResolvedValueOnce([[result]])

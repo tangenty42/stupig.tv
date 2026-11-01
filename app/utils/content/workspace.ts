@@ -4,6 +4,16 @@ import type { ContentUploadReservation, ContentUploadSession } from '@shared/typ
 import { attachment_base_name, attachment_path_is_private, compare_attachment_items, decrypted_attachment_name, is_encrypted_attachment, processable_image_mime, redactable_attachment_mime } from '@shared/content-markdown'
 import { attachment_name_key } from '@shared/content-workspace'
 
+export interface UploadPreparation {
+  id: string
+  path: string
+  size: number
+  loaded: number
+  phase: 'waiting' | 'admitting' | 'failed'
+  error?: string
+  session_id?: string
+}
+
 export interface WorkspaceListRow {
   key: string
   parent_id: number
@@ -12,6 +22,7 @@ export interface WorkspaceListRow {
   depth: number
   node?: ContentWorkspaceNode
   session?: ContentUploadSession
+  preparation?: UploadPreparation
 }
 
 export interface WorkspaceCommandFootprint {
@@ -53,7 +64,7 @@ export function workspace_footprints_overlap(left: WorkspaceCommandFootprint, ri
 export function workspace_row_footprint(row: WorkspaceListRow): WorkspaceCommandFootprint {
   return { ids: row.node ? [row.node.id] : [], paths: [{ path: row.path, subtree: row.node?.kind === 'folder' }] }
 }
-export function project_workspace_rows(nodes: ContentWorkspaceNode[], sessions: ContentUploadSession[], root: number, expanded: ReadonlySet<number>) {
+export function project_workspace_rows(nodes: ContentWorkspaceNode[], sessions: ContentUploadSession[], root: number, expanded: ReadonlySet<number>, preparations: readonly UploadPreparation[] = []) {
   const entries: WorkspaceListRow[] = nodes.map(node => ({ key: `node:${node.id}`, parent_id: node.parent_id, name: node.name, path: node.path, depth: 0, node }))
   for (const session of sessions) {
     const replacing = session.purpose === 'replace' || session.purpose === 'redact' ? session.source_id : session.replacement_id
@@ -64,11 +75,18 @@ export function project_workspace_rows(nodes: ContentWorkspaceNode[], sessions: 
     const existing = replacing
       ? entries.find(row => row.node?.id === replacing)
       : entries.find(row => row.node?.kind === 'file' && attachment_name_key(row.path) === attachment_name_key(session.path))
-    const task = { key: `session:${session.id}`, parent_id: session.parent_id ?? existing?.parent_id ?? root, name: attachment_base_name(session.path), path: session.path, depth: 0, session }
+    const parent = session.parent_id ?? existing?.parent_id ?? root
+    // A receipt may precede the new folder's independent catalog snapshot.
+    const parent_id = parent === root || nodes.some(node => node.kind === 'folder' && node.id === parent) ? parent : root
+    const task = { key: `session:${session.id}`, parent_id, name: attachment_base_name(session.path), path: session.path, depth: 0, session }
     if (existing)
       entries.splice(entries.indexOf(existing), 1, task)
     else
       entries.push(task)
+  }
+  for (const preparation of preparations) {
+    if (! sessions.some(session => session.id === preparation.session_id))
+      entries.push({ key: `preparing:${preparation.id}`, parent_id: root, name: preparation.path, path: preparation.path, depth: 0, preparation })
   }
   const result: WorkspaceListRow[] = []
   const walk = (parent: number, depth: number) => {

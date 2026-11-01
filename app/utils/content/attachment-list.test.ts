@@ -1,3 +1,4 @@
+import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { WorkspaceListRow } from './workspace'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
@@ -12,6 +13,15 @@ const rows: WorkspaceListRow[] = [
   { key: 'upload', path: 'pending.txt', name: 'pending.txt', parent_id: 1, depth: 0 },
 ]
 const plain = { ctrlKey: false, metaKey: false, shiftKey: false }
+
+it('does not mix local preparations with server upload selections', () => {
+  const preparation: WorkspaceListRow = { key: 'preparing:local', parent_id: 1, name: 'large.bin', path: 'large.bin', depth: 0,
+    preparation: { id: 'local', path: 'large.bin', size: 9000, loaded: 0, phase: 'admitting' } }
+  const upload: WorkspaceListRow = { key: 'session:actual', parent_id: 1, name: 'other.bin', path: 'other.bin', depth: 0, session: { id: 'actual' } as ContentUploadSession }
+  const selected = select_attachment_row([preparation, upload], new Set([upload.key]), upload.key, preparation, { ... plain, ctrlKey: true })
+  expect([... selected]).toEqual([preparation.key])
+  expect([... normalize_attachment_selection([preparation, upload], new Set([preparation.key, upload.key]))]).toEqual([upload.key])
+})
 
 it('builds only the requested hierarchy with shared folders and natural file-list ordering', () => {
   const tree = attachment_summary_tree(['a/c10.png', 'a/c2.png', 'a/sub/d.png', 'root.txt'], rows.flatMap(row => row.node ? [row.node] : []))

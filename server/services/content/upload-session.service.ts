@@ -2,7 +2,7 @@ import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
 import type { ContentUploadReservation, ContentUploadSession } from '@shared/types/content-upload'
 import type { Connection, Pool, RowDataPacket } from 'mysql2/promise'
 import type { UploadAttempt, UploadIntent, UploadPublication, UploadRow } from './upload-session.repository'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
 import { attachment_path_violation, redactable_attachment_mime } from '@shared/content-markdown'
 import { redaction_image_mime } from '@shared/content-upload'
@@ -59,7 +59,7 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
   }
   const public_state = (row: UploadRow, attempt: UploadAttempt | null, parts: ContentUploadSession['parts'] = []): ContentUploadSession => ({
     id: row.id, scope_id: Number(row.scope_id), status: row.result && row.status === 'verifying' ? 'ready' : row.status,
-    path: String(row.target_path ?? row.intent.target_path), size: Number(row.expected_size), sha256: row.intent.sha256,
+    path: String(row.target_path ?? row.intent.target_path), size: Number(row.expected_size),
     parent_id: row.intent.target_parent_id, source_id: row.intent.source?.id, replacement_id: row.intent.replacement?.id, purpose: row.intent.purpose,
     expires_at: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at), revision: Number(row.revision),
     key: attempt?.target_key ?? null, upload_id: attempt?.upload_id ?? null, part_size: attempt ? Number(attempt.part_size) : null, parts,
@@ -232,46 +232,45 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
       throw error
     })
     if (! metadata) {
-      await storage.complete_multipart_upload(attempt.target_key, attempt.upload_id!, parts.map(part => ({ part_number: Number(part.part_number), etag: part.etag })))
+      const completed = await storage.complete_multipart_upload(attempt.target_key, attempt.upload_id!, parts.map(part => ({ part_number: Number(part.part_number), etag: part.etag })))
       metadata = await storage.head_object(attempt.target_key)
+      if (completed.etag !== metadata.etag || completed.version_id !== metadata.version_id)
+        throw new ApiError(409, '合并回执与上传对象身份不符')
     }
     if (metadata.size !== state.size || ! metadata.version_id || await storage.get_object_access(attempt.target_key) !== 'private')
       throw new ApiError(409, '上传对象大小或私密状态不符')
-    const hash = createHash('sha256')
-    const { stream } = await storage.get_object_stream(attempt.target_key, metadata.etag)
-    let bytes = 0
-    const image_header = new Uint8Array(12)
-    let heartbeat_at = Date.now()
-    try {
-      for await (const chunk of stream) {
-        if (bytes < image_header.length)
-          image_header.set(chunk.subarray(0, image_header.length - bytes), bytes)
-        bytes += chunk.length
-        if (bytes > state.size)
-          throw new ApiError(409, '上传对象大小不符')
-        hash.update(chunk)
-        if (Date.now() - heartbeat_at >= limits.heartbeat_seconds * 1000) {
-          await owned(session, actor, connection => heartbeat_transfer(connection, claim, limits.lease_seconds))
-          heartbeat_at = Date.now()
+    const snapshot_intent = (await snapshot(session, actor)).row.intent
+    // Format guards need only a bounded header, not another whole-object download.
+    if (snapshot_intent.image?.source || (state.purpose === 'redact' && ! snapshot_intent.image)) {
+      const expected = Math.min(12, state.size)
+      const { stream, size } = await storage.get_object_stream(attempt.target_key, metadata.etag, undefined, { start: 0, end: expected - 1 })
+      const image_header = new Uint8Array(expected)
+      let read = 0
+      try {
+        if (size !== expected)
+          throw new ApiError(409, '图片格式头大小不符')
+        for await (const chunk of stream) {
+          if (read + chunk.length > expected)
+            throw new ApiError(409, '图片格式头超过请求范围')
+          image_header.set(chunk, read)
+          read += chunk.length
         }
       }
+      finally { stream.destroy() }
+      if (read !== expected)
+        throw new ApiError(409, '图片格式头不完整')
+      if (snapshot_intent.image?.source && redaction_image_mime(image_header) !== 'image/png')
+        throw new ApiError(400, '图片编辑输出必须为无损 PNG')
+      if (! snapshot_intent.image && redaction_image_mime(image_header) !== redactable_attachment_mime(state.path))
+        throw new ApiError(400, '删减版实际格式与原图不一致')
     }
-    finally {
-      stream.destroy()
-    }
-    const sha256 = hash.digest('hex')
-    const snapshot_intent = (await snapshot(session, actor)).row.intent
-    if (snapshot_intent.image?.source && redaction_image_mime(image_header) !== 'image/png')
-      throw new ApiError(400, '图片编辑输出必须为无损 PNG')
-    if (state.purpose === 'redact' && ! snapshot_intent.image && redaction_image_mime(image_header) !== redactable_attachment_mime(state.path))
-      throw new ApiError(400, '删减版实际格式与原图不一致')
     const after = await storage.head_object(attempt.target_key)
-    if (bytes !== state.size || sha256 !== state.sha256 || after.etag !== metadata.etag || after.version_id !== metadata.version_id)
-      throw new ApiError(409, '上传对象完整摘要或身份不符')
+    if (after.size !== state.size || after.etag !== metadata.etag || after.version_id !== metadata.version_id)
+      throw new ApiError(409, '上传对象大小或身份不符')
     await owned(session, actor, async (connection, row) => {
       await heartbeat_transfer(connection, claim, limits.lease_seconds)
-      await verify_transfer_attempt(connection, claim, attempt.id, { size: bytes, etag: metadata!.etag, oss_version_id: metadata!.version_id!, sha256 })
-      await connection.execute('UPDATE content_transfer_sessions SET result = CAST(? AS JSON) WHERE id = ?', [JSON.stringify({ key: attempt.target_key, etag: metadata!.etag, oss_version_id: metadata!.version_id, size: bytes, sha256 }), session])
+      await verify_transfer_attempt(connection, claim, attempt.id, { size: state.size, etag: metadata!.etag, oss_version_id: metadata!.version_id!, sha256: null })
+      await connection.execute('UPDATE content_transfer_sessions SET result = CAST(? AS JSON) WHERE id = ?', [JSON.stringify({ key: attempt.target_key, etag: metadata!.etag, oss_version_id: metadata!.version_id, size: state.size, sha256: null }), session])
       await release_upload(connection, session, claim.executor_id, claim.epoch, true)
       if (on_sealed)
         await on_sealed(connection, await get_upload(connection, session, actor))

@@ -8,6 +8,7 @@
       <MyContentStoryHeader back :invalid="! header_meta" :title="header_title" :labels="header_labels" :desc="header_desc" :cover="header_cover" :cover-label="header_cover_label" :cover-url="header_cover_url" :cover-image="header_cover_image" :date="header_date" :story-id="is_edit ? story_id : null">
         <template #actions>
           <Button
+            v-if="is_edit"
             severity="danger"
             text
             size="small"
@@ -62,7 +63,7 @@
               />
               <span>{{ draft_status_label }}</span>
               <Button
-                v-if="draft_dirty && ! save_pending"
+                v-if="(draft_dirty || ! is_edit) && ! save_pending"
                 label="舍弃草稿"
                 size="small"
                 text

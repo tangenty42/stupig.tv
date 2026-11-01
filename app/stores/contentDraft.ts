@@ -316,6 +316,7 @@ export function useContentDraftStore(target: string | number | null) {
         const status = (error as { status?: number, statusCode?: number }).status ?? (error as { statusCode?: number }).statusCode
         if ([401, 403, 404].includes(status ?? 0)) {
           const deleting = pending?.command.kind === 'delete'
+            || (pending?.command.kind === 'reset' && cloud.value?.story_id === null)
           clear()
           removed.value = status === 404
           message.value = status === 404 ? '云端草稿已删除' : '当前身份无权访问云端草稿'
@@ -390,7 +391,7 @@ export function useContentDraftStore(target: string | number | null) {
             return
         }
         const result = await execute(kind, undefined, expected_revision)
-        return (result?.absent === true && kind === 'delete')
+        return result?.absent === true
           || (result?.receipt?.kind === kind && result.receipt.ok)
       }
       finally {

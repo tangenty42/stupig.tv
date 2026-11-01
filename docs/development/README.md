@@ -36,8 +36,8 @@ pnpm migrate --status
 配置 frpc 和回调服务器后执行：
 
 ```powershell
-pnpm dev:auth:prepare
-pnpm dev:auth:verify
+pnpm dev:tunnel --prepare
+pnpm dev:tunnel --verify
 pnpm dev
 ```
 
@@ -90,7 +90,7 @@ Compose 重建时保留现有挂载；不要使用 `down -v`、`--renew-anon-vol
 | `pnpm background:status` | 读取后台领域账本状态 |
 | `pnpm content:preload:check` | 查询预热额度、分层缓存配置、开关和账本；不代替真实交付验收，先阅读[预热说明](../modules/content/object-lifecycle.md) |
 
-裸 `pnpm env:build` 遵循 NODE_ENV，未设置时默认生成 `.env.dev`；生产使用 `pnpm env:build:prod`。迁移、后台状态和预热工具可用 `--env=prod` 选择 `.env.prod`；ESA 用 `pnpm esa:deploy:dev` / `pnpm esa:deploy:prod` 固定选择环境，不需要复制文件或手动加载 dotenv。Nuxt 构建、生成及维护产物打包不属于日常 HMR 流程；在需要交付产物时按[部署手册](../deployment/README.md)运行。
+开发环境模板使用 `pnpm env:build:dev`，生产使用 `pnpm env:build:prod`。迁移、后台状态和预热工具可用 `--env=prod` 选择 `.env.prod`；ESA 用 `pnpm esa:deploy:dev` / `pnpm esa:deploy:prod` 固定选择环境，不需要复制文件或手动加载 dotenv。Nuxt 构建、生成及维护产物打包不属于日常 HMR 流程；在需要交付产物时按[部署手册](../deployment/README.md)运行。
 
 ## 测试数据与重置
 

@@ -57,9 +57,12 @@ export function create_aliyun_oss(): ReturnType<typeof ProductionStorage> {
     async set_object_access() {},
     async get_object_access() { return 'private' },
     async signed_read_url() { throw new Error('Cloud delivery is outside local E2E coverage') },
-    async get_object_stream(key) {
+    async get_object_stream(key, etag, _signal, range) {
       const value = objects.get(key) ?? missing()
-      return { stream: Readable.from(value.bytes), size: value.bytes.length }
+      if (etag !== undefined && etag !== value.etag)
+        throw Object.assign(new Error('Test object version changed'), { status: 412 })
+      const bytes = range ? value.bytes.subarray(range.start, range.end + 1) : value.bytes
+      return { stream: Readable.from(bytes), size: bytes.length }
     },
     async soft_delete_object(key) {
       objects.delete(key)

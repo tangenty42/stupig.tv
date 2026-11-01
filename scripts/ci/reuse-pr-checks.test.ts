@@ -4,8 +4,9 @@ import { has_verified_pr, verified_jobs } from './reuse-pr-checks.mjs'
 const tree = 'a'.repeat(40)
 const sha = 'b'.repeat(40)
 const head = 'c'.repeat(40)
-const names = ['check', 'migrations', 'mqtt', 'browser (1/3)', 'browser (2/3)', 'browser (3/3)', 'browser-css', `verified-tree-${tree}`]
-const jobs = names.map(name => ({ name, status: 'completed', conclusion: 'success' }))
+const names = ['check', 'unit', 'migrations', 'mqtt', 'browser-tests (1/3)', 'browser-tests (2/3)', 'browser-tests (3/3)', 'browser-css']
+const marker = { name: `verified-tree-${tree}`, status: 'completed', conclusion: 'success' }
+const jobs = names.map(name => ({ name, status: 'completed', conclusion: 'success', ... name === 'check' ? { steps: [marker] } : {} }))
 
 function api_with(overrides: { pull?: object, run?: object, jobs?: object[] } = {}) {
   return async (path: string) => {
@@ -31,14 +32,16 @@ describe('reusing PR checks on main', () => {
     expect(verified_jobs(jobs, 'd'.repeat(40))).toBe(false)
   })
 
-  it('accepts a fixed verification job only when its tree step succeeded', () => {
-    const fixed_job = { name: 'verified-tree', status: 'completed', conclusion: 'success', steps: [{ name: `verified-tree-${tree}`, status: 'completed', conclusion: 'success' }] }
-    const fixed_jobs = [... jobs.slice(0, - 1), fixed_job]
-    expect(verified_jobs(fixed_jobs, tree)).toBe(true)
-    expect(verified_jobs(fixed_jobs, 'd'.repeat(40))).toBe(false)
-    expect(verified_jobs([... jobs.slice(0, - 1), { ... fixed_job, conclusion: 'failure' }], tree)).toBe(false)
-    expect(verified_jobs([... jobs.slice(0, - 1), { ... fixed_job, steps: [] }], tree)).toBe(false)
-    expect(verified_jobs([... jobs.slice(0, - 1), { ... fixed_job, steps: [{ ... fixed_job.steps[0]!, conclusion: 'skipped' }] }], tree)).toBe(false)
+  it('requires the successful matching tree step in the gate itself', () => {
+    for (const steps of [[], [{ ... marker, conclusion: 'skipped' }], [{ ... marker, conclusion: 'failure' }], [{ ... marker, name: `verified-tree-${'d'.repeat(40)}` }]]) {
+      expect(verified_jobs(jobs.map(job => job.name === 'check' ? { ... job, steps } : job), tree)).toBe(false)
+    }
+  })
+
+  it('does not accept old browser wrappers or an unrelated tree attestation', () => {
+    const wrappers = jobs.filter(job => ! job.name.startsWith('browser-tests')).concat([1, 2, 3].map(shard => ({ name: `browser (${shard}/3)`, status: 'completed', conclusion: 'success' })))
+    expect(verified_jobs(wrappers, tree)).toBe(false)
+    expect(verified_jobs([... jobs.map(job => ({ ... job, steps: [] })), marker], tree)).toBe(false)
   })
 
   it('does not reuse checks when the GitHub API fails', async () => {

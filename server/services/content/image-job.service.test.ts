@@ -178,15 +178,17 @@ async function pipeline() {
   }
 }
 
-it('publishes the verified original with both variants and retires the staging input only in the adoption transaction', async () => {
+it.each([true, false])('publishes the verified original and both variants with an input digest supplied=%s', async (supplied) => {
   const f = await pipeline()
+  if (! supplied)
+    f.state.job.intent.input.sha256 = null
   await f.jobs.run(f.state.job.id, 1)
   expect(f.state.events.map(event => event.resource).sort()).toEqual([
     `content_upload_session:${'a'.repeat(32)}`, `content_upload_session:${'a'.repeat(32)}`,
     'content_uploads:1', 'content_uploads:1',
   ])
   const key = image_original_key(f.state.job.id, f.state.job.active_attempt_id!)
-  expect(f.state.job.result?.original).toMatchObject({ key, sha256: f.input.sha256, size: f.input.size })
+  expect(f.state.job.result?.original).toMatchObject({ key, sha256: createHash('sha256').update(f.bytes).digest('hex'), size: f.input.size })
   expect(f.objects.get(key)!.bytes).toEqual(f.bytes)
   expect(f.state.retired).toEqual([])
   await f.adopt()

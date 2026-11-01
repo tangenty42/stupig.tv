@@ -1,133 +1,99 @@
 import type { StoryMarkdownPlugin } from './types'
+import { html_void_tags } from '@shared/content-html'
+import { is_reference_card } from './link-cards'
 
-// Image carousels: a run of consecutive images in one paragraph becomes a
-// horizontal scroll strip. The core rule splits mixed paragraphs into
-// image-only and normal segments, tags the image-only ones as carousels,
-// and the paragraph renderers hoist a carousel out of its <p> into a
-// .carousel-shell <div> — a carousel can't stay a <p> because its prev/next
-// buttons must be block-level siblings (interactive content isn't allowed
-// inside a <p> anyway).
+// Consecutive images/cards share a scroll strip; surrounding prose keeps its
+// normal flow. Each element renders identically inside or outside that strip.
 export const carousel_plugin: StoryMarkdownPlugin = (md, ctx) => {
   md.core.ruler.after('inline', 'image_carousels', (state) => {
-    const is_break = (type: string) => type === 'softbreak' || type === 'hardbreak'
-    const clone_token = (token: InstanceType<typeof state.Token>) => Object.assign(
-      new state.Token(token.type, token.tag, token.nesting),
-      token,
-      { attrs: token.attrs?.map(attribute => [... attribute]) ?? null },
-    )
-
+    type Token = InstanceType<typeof state.Token>
+    const whitespace = (token: Token) => ['softbreak', 'hardbreak'].includes(token.type) || (token.type === 'text' && ! token.content.trim())
+    const nesting = (token: Token) => {
+      if (token.type !== 'html_inline')
+        return token.nesting
+      const tag = /^<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>$/i.exec(token.content)
+      return ! tag || tag[3] || html_void_tags.has(tag[2]!.toLowerCase()) ? 0 : tag[1] ? - 1 : 1
+    }
+    const clone = (token: Token) => Object.assign(new state.Token(token.type, token.tag, token.nesting), token, {
+      attrs: token.attrs?.map(attribute => [... attribute]) ?? null,
+    })
     for (let index = 0; index < state.tokens.length - 2;) {
-      const paragraph_open = state.tokens[index]
-      const inline = state.tokens[index + 1]
-      const paragraph_close = state.tokens[index + 2]
-      const children = inline?.children ?? []
-      const segments: { carousel: boolean, children: typeof children }[] = []
-      let normal_start = 0
-
-      if (paragraph_open?.type !== 'paragraph_open'
-        || inline?.type !== 'inline'
-        || paragraph_close?.type !== 'paragraph_close') {
+      const opening = state.tokens[index]!
+      const inline = state.tokens[index + 1]!
+      const closing = state.tokens[index + 2]!
+      if (opening.type !== 'paragraph_open' || inline.type !== 'inline' || closing.type !== 'paragraph_close') {
         index ++
         continue
       }
-
-      for (let child_index = 0; child_index < children.length;) {
-        if (children[child_index]?.type !== 'image') {
-          child_index ++
-          continue
+      const children = inline.children ?? []
+      const units: { children: Token[], media: boolean, whitespace: boolean }[] = []
+      for (let position = 0; position < children.length;) {
+        const first = children[position]!
+        let end = position + 1
+        // Never cut an emphasis, link label or raw inline HTML container in half.
+        if (nesting(first) === 1) {
+          let depth = 1
+          while (end < children.length && depth > 0)
+            depth += nesting(children[end ++]!)
         }
-
-        let run_end = child_index + 1
-        let image_count = 1
-        // Adjacent images are a run too: the folder expansion splices its
-        // images in without breaks, and hand-written `![](a)![](b)` must split
-        // exactly like the break-separated spelling.
-        while (children[run_end]?.type === 'image'
-          || (is_break(children[run_end]?.type ?? '') && children[run_end + 1]?.type === 'image')) {
-          run_end += children[run_end]?.type === 'image' ? 1 : 2
-          image_count ++
-        }
-
-        if (image_count < 2) {
-          child_index = run_end
-          continue
-        }
-
-        const before = children.slice(normal_start, child_index)
-        while (before.length && is_break(before.at(- 1)?.type ?? '')) {
-          before.pop()
-        }
-        if (before.length) {
-          segments.push({ carousel: false, children: before })
-        }
-        segments.push({
-          carousel: true,
-          children: children.slice(child_index, run_end).filter(child => child.type === 'image'),
-        })
-
-        normal_start = run_end
-        while (is_break(children[normal_start]?.type ?? '')) {
-          normal_start ++
-        }
-        child_index = normal_start
+        units.push({ children: children.slice(position, end), media: first.type === 'image' || is_reference_card(children, position, ctx.options), whitespace: whitespace(first) })
+        position = end
       }
-
-      if (! segments.some(segment => segment.carousel)) {
+      const segments: { carousel: boolean, children: Token[] }[] = []
+      let normal_start = 0
+      for (let position = 0; position < units.length;) {
+        if (! units[position]!.media) {
+          position ++
+          continue
+        }
+        let end = position + 1
+        let count = 1
+        for (let next = end; next < units.length;) {
+          while (units[next]?.whitespace)
+            next ++
+          if (! units[next]?.media)
+            break
+          end = next + 1
+          count ++
+          next = end
+        }
+        const standalone = units.slice(0, position).every(unit => unit.whitespace) && units.slice(end).every(unit => unit.whitespace)
+        if (count < 2 && ! standalone) {
+          position = end
+          continue
+        }
+        const before = units.slice(normal_start, position).flatMap(unit => unit.children)
+        while (before.length && whitespace(before.at(- 1)!))
+          before.pop()
+        if (before.length)
+          segments.push({ carousel: false, children: before })
+        segments.push({ carousel: true, children: units.slice(position, end).filter(unit => unit.media).flatMap(unit => unit.children) })
+        normal_start = end
+        while (units[normal_start]?.whitespace)
+          normal_start ++
+        position = normal_start
+      }
+      if (! segments.length) {
         index += 3
         continue
       }
-
-      const after = children.slice(normal_start)
-      if (after.length) {
+      const after = units.slice(normal_start).flatMap(unit => unit.children)
+      if (after.length)
         segments.push({ carousel: false, children: after })
-      }
-
       const replacement = segments.flatMap((segment) => {
-        const opening = clone_token(paragraph_open)
-        const content = clone_token(inline)
-        const closing = clone_token(paragraph_close)
+        const start = clone(opening)
+        const content = clone(inline)
+        const end = clone(closing)
         content.children = segment.children
-        return [opening, content, closing]
+        if (segment.carousel) {
+          start.attrJoin('class', 'image-carousel')
+          start.meta = { ... start.meta, carousel: true }
+          end.meta = { ... end.meta, carousel: true }
+        }
+        return [start, content, end]
       })
       state.tokens.splice(index, 3, ... replacement)
       index += replacement.length
-    }
-
-    const image_paragraph_at = (index: number) => {
-      const paragraph_open = state.tokens[index]
-      const inline = state.tokens[index + 1]
-      const paragraph_close = state.tokens[index + 2]
-      const children = inline?.children ?? []
-      const image_count = children.filter(child => child.type === 'image').length
-      const is_image_only = image_count > 0
-        && children.every(child => ['image', 'softbreak', 'hardbreak'].includes(child.type))
-
-      return paragraph_open?.type === 'paragraph_open'
-        && inline?.type === 'inline'
-        && paragraph_close?.type === 'paragraph_close'
-        && is_image_only
-        ? { paragraph_open, inline, paragraph_close, image_count }
-        : null
-    }
-
-    for (let index = 0; index < state.tokens.length - 2; index ++) {
-      const paragraph = image_paragraph_at(index)
-      if (! paragraph || paragraph.image_count < 1) {
-        continue
-      }
-
-      paragraph.paragraph_open.attrJoin('class', 'image-carousel')
-      paragraph.paragraph_open.meta = { ... paragraph.paragraph_open.meta, carousel: true }
-      paragraph.paragraph_close.meta = { ... paragraph.paragraph_close.meta, carousel: true }
-      for (const child of paragraph.inline.children ?? []) {
-        if (is_break(child.type)) {
-          child.type = 'text'
-          child.content = ''
-        }
-        else if (child.type === 'image') {
-          child.meta = { ... child.meta, carousel: true }
-        }
-      }
     }
   })
 

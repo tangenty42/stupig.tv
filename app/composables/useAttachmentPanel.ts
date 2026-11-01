@@ -42,7 +42,14 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
   const completion = create_upload_completion_context()
   let generation = 0
   let anchor: string | null = null
-  const rows = computed(() => project_workspace_rows(catalog.data.value?.nodes ?? [], readonly ? [] : uploads.sessions, catalog.data.value?.root_id ?? 0, expanded.value))
+  const rows = computed(() => project_workspace_rows(catalog.data.value?.nodes ?? [], readonly ? [] : uploads.sessions, catalog.data.value?.root_id ?? 0, expanded.value, readonly ? [] : uploads.preparations))
+  watch(() => rows.value.filter(row => row.preparation).map(row => row.key), (next, previous) => {
+    const removed = new Set(previous.filter(key => ! next.includes(key)))
+    if ([... selected.value].some(key => removed.has(key)))
+      selected.value = new Set([... selected.value].filter(key => ! removed.has(key)))
+    if (anchor && removed.has(anchor))
+      anchor = null
+  }, { flush: 'sync' })
   watch(() => uploads.sessions.map(session => ({ key: `session:${session.id}`, replacing: session.purpose === 'replace' || session.purpose === 'redact' ? session.source_id : session.replacement_id })), (next, previous) => {
     const hidden = new Set(next.filter(item => item.replacing).map(item => `node:${item.replacing}`))
     for (const task of previous) {

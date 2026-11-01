@@ -29,10 +29,12 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function mount(width = 1000, src = `/carousel-unit-${serial ++}.png`) {
-  document.body.innerHTML = `<div class="carousel-shell" style="--carousel-fade-width:48px"><button class="carousel-prev"></button><div class="image-carousel"><span><img src="${src}"></span><span></span></div><button class="carousel-next"></button></div>`
+function mount(width = 1000, src = `/carousel-unit-${serial ++}.png`, body = `<img src="${src}">`) {
+  document.body.innerHTML = `<div class="carousel-shell" style="--carousel-fade-width:48px"><button class="carousel-prev"></button><div class="image-carousel"><span>${body}</span><span></span></div><button class="carousel-next"></button></div>`
   const carousel = document.querySelector<HTMLElement>('.image-carousel')!
-  Object.defineProperty(carousel.querySelector('img'), 'complete', { value: false, configurable: true })
+  const image = carousel.querySelector('img')
+  if (image)
+    Object.defineProperty(image, 'complete', { value: false, configurable: true })
   let left = 0
   Object.defineProperties(carousel, {
     scrollWidth: { value: width, configurable: true },
@@ -70,6 +72,27 @@ it.each(['restore', 'hidden', 'wheel', 'next'])('retains a clamped snapshot unti
     expect(carousel.style.getPropertyValue('--carousel-fade-l')).toBe('48px')
     expect(carousel.style.getPropertyValue('--carousel-fade-r')).toBe('0px')
   }
+})
+
+it.each(['iframe', 'file', 'folder', 'denied'])('restores %s-only strips independently of other strips without images', (kind) => {
+  const content = (identity: string) => kind === 'iframe'
+    ? `<iframe srcdoc="fixture" src="/${identity}"></iframe>`
+    : kind === 'file'
+      ? `<a href="/${identity}">file</a>`
+      : kind === 'folder' ? `<span data-folder-card="${identity}">folder</span>` : `<span>${identity}</span>`
+  const key = `independent-${kind}-${serial ++}`
+  const original = mount(1000, '', content(key))
+  original.scrollLeft = 420
+  original.dispatchEvent(new Event('scroll'))
+  cleanup!()
+  const other = mount(1000, '', content(`${key}-other`))
+  expect(other.scrollLeft).toBe(0)
+  other.scrollLeft = 150
+  other.dispatchEvent(new Event('scroll'))
+  cleanup!()
+  const restored = mount(1000, '', content(key))
+  expect(restored.scrollLeft).toBe(420)
+  expect(document.querySelector('.carousel-next')?.getAttribute('data-hint')).toBeNull()
 })
 
 it('updates fades after resize without restarting them on repeated observations and cancels on unmount', () => {
