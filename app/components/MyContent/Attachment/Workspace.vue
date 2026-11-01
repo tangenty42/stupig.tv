@@ -1,9 +1,5 @@
 <template>
   <div class="flex w-full flex-col">
-    <div v-if="model.uploads.preparations.length" class="mb-2 flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400" role="status">
-      <span>{{ model.uploads.preparing ? '正在准备上传' : model.uploads.admitting ? '正在确认上传' : '所选文件等待处理' }} · {{ model.uploads.preparations.length }} 个文件</span>
-      <Button label="取消这批准备" size="small" text severity="secondary" :disabled="! model.uploads.can_cancel_preparation" @click="model.uploads.cancel_preparation()" />
-    </div>
     <div v-if="model.request_error || model.uploads.admission_error" class="mb-3 flex items-center gap-2 text-sm text-red-600" role="alert">
       <span>{{ model.request_error || model.uploads.admission_error }}</span>
       <Button label="重试" size="small" text @click="model.request_error ? model.submit() : model.uploads.submit()" />
