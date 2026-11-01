@@ -1,6 +1,7 @@
 import type { AttachmentUploadPick } from '~/utils/content/attachment'
 import type { EditorCompletionSources } from '~/utils/content/editor/completions'
 import type { LintListItem } from '~/utils/content/editor/lint'
+import type { StoryEditorPosition } from '~/utils/content/editor/view-state'
 import { startCompletion } from '@codemirror/autocomplete'
 import { indentWithTab } from '@codemirror/commands'
 import { lintGutter } from '@codemirror/lint'
@@ -44,7 +45,105 @@ export function useStoryEditor(options: StoryEditorOptions) {
   const external_update = Annotation.define<boolean>()
   const readonly_extensions = () => [EditorState.readOnly.of(!! options.readonly?.()), EditorView.editable.of(! options.readonly?.())]
   const search = useMarkdownSearch(() => view)
-  const scroll_sync = useMarkdownEditorScrollSync(() => view, options.preview_pane, () => front_matter_line_count(model.value))
+  let restoring_scroll = false
+  let pending_position: StoryEditorPosition | null = null
+  let restore_generation = 0
+  let restore_observer: ResizeObserver | null = null
+  const scroll_sync = useMarkdownEditorScrollSync(() => view, options.preview_pane, () => front_matter_line_count(model.value), () => restoring_scroll)
+  const restore_measure_key = {}
+  const intent_events = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const
+
+  function capture_position(): StoryEditorPosition | null {
+    if (! view)
+      return null
+    if (pending_position)
+      return pending_position
+    return {
+      anchor: view.state.selection.main.anchor, head: view.state.selection.main.head,
+      editor: { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft },
+      preview: { top: options.preview_pane.value?.scrollTop ?? 0, left: options.preview_pane.value?.scrollLeft ?? 0 },
+      page: { top: window.scrollY ?? 0, left: window.scrollX ?? 0 },
+    }
+  }
+
+  function cancel_restore() {
+    restore_generation ++
+    pending_position = null
+    restoring_scroll = false
+    restore_observer?.disconnect()
+    restore_observer = null
+  }
+
+  function measure_position() {
+    const active_view = view
+    const position = pending_position
+    const generation = restore_generation
+    if (! active_view || ! position || disposed)
+      return
+    restoring_scroll = true
+    active_view.requestMeasure({
+      key: restore_measure_key,
+      read: () => ({
+        top: Math.min(position.editor.top, Math.max(0, active_view.scrollDOM.scrollHeight - active_view.scrollDOM.clientHeight)),
+        left: Math.min(position.editor.left, Math.max(0, active_view.scrollDOM.scrollWidth - active_view.scrollDOM.clientWidth)),
+      }),
+      write: (scroll) => {
+        if (disposed || view !== active_view || generation !== restore_generation)
+          return
+        active_view.scrollDOM.scrollTop = scroll.top
+        active_view.scrollDOM.scrollLeft = scroll.left
+        const pane = options.preview_pane.value
+        if (pane) {
+          pane.scrollTop = position.preview.top
+          pane.scrollLeft = position.preview.left
+        }
+        window.scrollTo?.(position.page.left, position.page.top)
+        // Scroll events from both assignments must not drive each other.
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => {
+            if (generation === restore_generation)
+              restoring_scroll = false
+          })
+        }
+        else {
+          restoring_scroll = false
+        }
+      },
+    })
+  }
+
+  function on_page_scrolled() {
+    // Router/native scroll restoration can finish after the editor mounts.
+    // Keep the saved page offset until the user deliberately takes control.
+    if (pending_position && Math.abs(window.scrollY - pending_position.page.top) > 1)
+      measure_position()
+  }
+
+  function restore_position(position: StoryEditorPosition, selection = true) {
+    cancel_restore()
+    if (! view || disposed)
+      return
+    pending_position = position
+    if (selection) {
+      const length = view.state.doc.length
+      view.dispatch({ selection: { anchor: Math.min(length, position.anchor), head: Math.min(length, position.head) } })
+    }
+    // Retry after delayed preview images, font/layout measurement and Teleport.
+    // User input immediately takes ownership and disconnects the observer.
+    if (typeof ResizeObserver !== 'undefined') {
+      restore_observer = new ResizeObserver(measure_position)
+      restore_observer.observe(view.contentDOM)
+      const body = options.preview_pane.value?.firstElementChild
+      if (body)
+        restore_observer.observe(body)
+      restore_observer.observe(document.documentElement)
+    }
+    const generation = restore_generation
+    void nextTick(() => {
+      if (generation === restore_generation)
+        measure_position()
+    })
+  }
   const get_lint_config = () => story_lint_config(settings.app.content.story, sources.stories(), sources.story_id(), sources.attachments(), sources.folders())
   const lint_source = create_markdown_lint(get_lint_config, (items) => {
     if (! view || disposed)
@@ -83,6 +182,9 @@ export function useStoryEditor(options: StoryEditorOptions) {
   })
 
   onMounted(() => {
+    window.addEventListener('scroll', on_page_scrolled, { passive: true })
+    for (const type of intent_events)
+      window.addEventListener(type, cancel_restore, { capture: true, passive: true })
     view = new EditorView({
       parent: options.host.value!,
       state: EditorState.create({
@@ -160,6 +262,10 @@ export function useStoryEditor(options: StoryEditorOptions) {
 
   onBeforeUnmount(() => {
     disposed = true
+    cancel_restore()
+    window.removeEventListener('scroll', on_page_scrolled)
+    for (const type of intent_events)
+      window.removeEventListener(type, cancel_restore, true)
     // Detach while both DOM endpoints and the instance are still available.
     scroll_sync.detach()
     view?.destroy()
@@ -171,8 +277,14 @@ export function useStoryEditor(options: StoryEditorOptions) {
     view?.dispatch({ effects: theme_compartment.reconfigure(theme_extensions(mode)) })
   })
   watch(model, (value) => {
-    if (view && value !== view.state.doc.toString())
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value }, annotations: external_update.of(true) })
+    if (view && value !== view.state.doc.toString()) {
+      const position = capture_position()
+      const changes = view.state.changes({ from: 0, to: view.state.doc.length, insert: value })
+      const selection = view.state.selection.main
+      view.dispatch({ changes, selection: { anchor: Math.min(selection.anchor, changes.newLength), head: Math.min(selection.head, changes.newLength) }, annotations: external_update.of(true) })
+      if (position)
+        restore_position({ ... position, anchor: view.state.selection.main.anchor, head: view.state.selection.main.head }, false)
+    }
   })
   watch([sources.stories, sources.attachments, sources.folders], () => {
     if (view)
@@ -202,10 +314,15 @@ export function useStoryEditor(options: StoryEditorOptions) {
   function apply_reference_changes(snapshot: string, changes: { from: number, to: number, insert: string }[]) {
     if (disposed || model.value !== snapshot || (view && view.state.doc.toString() !== snapshot))
       return false
-    if (view)
+    if (view) {
+      const position = capture_position()
       view.dispatch({ changes, annotations: [Transaction.addToHistory.of(false), external_update.of(true)] })
-    else
+      if (position)
+        restore_position({ ... position, anchor: view.state.selection.main.anchor, head: view.state.selection.main.head }, false)
+    }
+    else {
       model.value = changes.reduceRight((text, change) => text.slice(0, change.from) + change.insert + text.slice(change.to), snapshot)
+    }
     return true
   }
 
@@ -221,5 +338,5 @@ export function useStoryEditor(options: StoryEditorOptions) {
     return view ? (view.posAtCoords(coords) ?? view.state.selection.main.from) : null
   }
 
-  return { editor_ready, issues, search, jump_to_line, insert_at_position, apply_reference_changes, validate, position_at_coords }
+  return { editor_ready, issues, search, jump_to_line, insert_at_position, apply_reference_changes, validate, position_at_coords, capture_position, restore_position }
 }

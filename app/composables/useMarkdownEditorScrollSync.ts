@@ -15,6 +15,7 @@ export function useMarkdownEditorScrollSync(
   get_view: () => EditorView | null,
   preview_pane: Ref<HTMLElement | undefined>,
   get_line_offset: () => number,
+  suspended: () => boolean = () => false,
 ) {
   interface ScrollAnchor {
     /** Editor-document line (0-based, front matter offset applied). */
@@ -258,6 +259,8 @@ export function useMarkdownEditorScrollSync(
   }
 
   function on_editor_scrolled() {
+    if (suspended())
+      return
     const view = get_view()
     if (! view || ! preview_pane.value) {
       return
@@ -288,6 +291,8 @@ export function useMarkdownEditorScrollSync(
   }
 
   function on_preview_scrolled() {
+    if (suspended())
+      return
     const view = get_view()
     if (! view || ! preview_pane.value) {
       return

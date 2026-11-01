@@ -42,6 +42,7 @@
           :readonly="reference_rewrite_pending || ! tab_writable"
           :allow-write="draft_store.can_write_now"
           :story-id="is_edit ? story_id : null"
+          :view-state-key="user && cloud ? `${user.id}:${cloud.id}` : null"
           :attachments="stored_attachments"
           :stories="existing_stories ?? []"
           :folders="folder_names"
