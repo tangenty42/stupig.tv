@@ -2,7 +2,7 @@ import type { MigrationContext } from '../migration/contract'
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { load_database_config } from '@config/loader'
+import { load_database_config, runtime_config } from '@config/loader'
 import { create_audit_catalog } from '@server/services/storage-audit/repository'
 import mysql from 'mysql2/promise'
 import sharp from 'sharp'
@@ -13,11 +13,24 @@ import { run_migrations } from '../migration/local'
 
 initialize_cli_environment()
 assert.equal(process.env.NODE_ENV, 'development')
+// Draft notification channels need a JWT-derived HMAC key during adoption.
+// Supply a complete synthetic app environment: this verifier never uses Redis,
+// MQTT, SMS or cloud storage, and must also work without a local .env.dev.
+Object.assign(process.env, {
+  REDIS_HOST: '127.0.0.1', REDIS_PORT: '1', REDIS_PASSWORD: '',
+  MQTT_HOST: '127.0.0.1', MQTT_TCP_PORT: '1', MQTT_WS_PORT: '1', MQTT_WEB_URL: 'ws://127.0.0.1:1/mqtt',
+  APP_PORT: '3042', JWT_SECRET: randomUUID().replaceAll('-', '').repeat(2),
+  ALIYUN_OSS_ACCESS_KEY_ID: 'qa-local-only', ALIYUN_OSS_ACCESS_KEY_SECRET: 'qa-local-only',
+  ALIYUN_DYPNS_ACCESS_KEY_ID: 'qa-local-only', ALIYUN_DYPNS_ACCESS_KEY_SECRET: 'qa-local-only', ALIYUN_DYPNS_CAPTCHA_APP_KEY: 'qa-local-only',
+  NUXT_OTP_DEBUG: 'true', NUXT_CAPTCHA_DEBUG: 'true',
+})
 const config = load_database_config()
+assert(['127.0.0.1', 'localhost'].includes(config.host), 'WebP verification only supports local MySQL')
 const password = process.env.MYSQL_DEV_ROOT_PASSWORD
 assert(password, 'Development MySQL root is required')
 const name = `stupig_webp_qa_${randomUUID().replaceAll('-', '')}`
 assert.match(name, /^stupig_webp_qa_[a-f\d]{32}$/)
+runtime_config().db = { ... config, name, user: 'root', password }
 const root = await mysql.createConnection({ host: config.host, port: config.port, user: 'root', password, timezone: 'Z' })
 const objects = new Map<string, { bytes: Buffer, etag: string, version_id: string }>()
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
