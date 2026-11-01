@@ -132,8 +132,12 @@ export async function build_migration_scripts(dir: string, output_dir: string) {
 
 export async function build_maintenance() {
   const output = resolve(project_root, '.output/server/maintenance')
+  // Incremental builds must not ship a retired legacy cleanup executable.
+  await unlink(resolve(output, 'cleanup.mjs')).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT')
+      throw error
+  })
   const entries = {
-    'cleanup.mjs': 'storage/audit.ts',
     'migrate.mjs': 'migration/cli.ts',
     'release.mjs': 'deploy/release.ts',
   }

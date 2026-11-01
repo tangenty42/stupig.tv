@@ -97,6 +97,6 @@ pnpm migrate --status
 
 没有通用 down。回退需要对应的数据库快照、旧对象和匹配版本的应用；恢复写入后还要处理新增数据，不能仅把 adopted 或 completed 改回 pending。
 
-旧源退役是独立显式阶段。确认保留窗口结束、无回滚需求后再按精确对象清单处理并释放 pin，不能清空迁移表或递归删除桶前缀。当前日常退役负责正式替换／删除的对象及 ESA 刷新，不是业务回收站。`storage:cleanup --delete` 已停用；上线前停掉旧清理 cron。
+旧源退役是独立显式阶段。确认保留窗口结束、无回滚需求后再按精确对象清单处理并释放 pin，不能清空迁移表或递归删除桶前缀。当前日常退役负责正式替换／删除的对象及 ESA 刷新，不是业务回收站。旧 `storage:cleanup` 盘点入口已删除，旧清理 cron 继续保持停用。迁移明细的归档及删除遵守[迁移专用表退出规范](migrations.md#迁移专用表必须有退出方案)；本轮退役五张旧任务／早期迁移空表，不删除上表的 cutover 恢复材料。
 
 隔离演练入口见[测试说明](../development/testing.md)。旧 `content:workspace:plan`、`content:storage:migrate`、`content:private:migrate`、`content:refs:migrate` 均已退休，统一使用上述版本链。

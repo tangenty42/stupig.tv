@@ -368,8 +368,8 @@ jobs:
       - name: Verify schema landed
         run: |
           # 关键结构断言（数量断言太脆，每次迁移都要改）：
-          # 任务队列三表已就位、旧 scope 锁表已移除
-          for TABLE in content_locks content_tasks content_task_items content_story_drafts migration_runs storage_audit_targets storage_audit_findings; do
+          # Current runtime ledgers are present; obsolete task/migration tables are absent.
+          for TABLE in content_transfer_sessions content_transfer_attempts content_image_jobs content_image_attempts content_story_drafts migration_runs storage_audit_targets storage_audit_findings; do
             FOUND=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
               -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = '$TABLE'")
             if [ "$FOUND" != "1" ]; then
@@ -383,6 +383,11 @@ jobs:
             echo "content_operation_locks should be dropped, got $OLD"
             exit 1
           fi
+          for TABLE in content_locks content_tasks content_task_items content_attachment_encryption_backup content_attachment_storage_migrations; do
+            FOUND=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
+              -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = '$TABLE'")
+            test "$FOUND" = "0"
+          done
           mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
             -e "SELECT filename, finished_at FROM migration_runs WHERE status = 'completed' ORDER BY filename"
           LEGACY=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \

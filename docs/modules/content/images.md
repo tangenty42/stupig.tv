@@ -85,6 +85,8 @@
 
 只读预检及执行参数沿用[迁移运维](../../operations/migrations.md)：源码环境先以 `pnpm migrate --preflight` 分类待办链，再以 `pnpm migrate --dry-run` 运行当前迁移的只读业务 plan；确认后使用 `pnpm migrate --maintenance`；生产使用同版本维护镜像／备份和既有维护发布流程。不能让旧应用连接已改字段的新库。迁移的真实 MySQL 验证入口为 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/webp-migration.ts`，仅创建随机隔离测试库，OSS 使用内存替身。
 
+`content_webp_migration_objects` 的[退出合同](../../operations/migrations.md#webp-回执表64的退出合同)规定生产完成及验收后至少保留 30 日，归档读回、责任交接后才通过独立维护迁移删除；不自动清表，不随回执删除旧对象或释放 pin。下一条旧 Content 退役迁移只删除五张已废弃且为空的旧表，保留本次 WebP 恢复明细。
+
 本轮开发桶原生 `processObjectSave` 可行性测试：1536×1024 PNG 生成 WebP Q100 并直接保存，单次 POST 约 597ms、583,292 字节；Q90 为约 406ms、269,632 字节。另以透明 AVIF 验证转 WebP 仍保留透明通道；产物匿名 HEAD 均为 403。样本、顺序和参数固定的单次测量不代表生产 p95；临时对象已软删除。**当前应用仍沿用有界 IMG GET + 私有 PUT 的校验／发布合同，原生 saveas 尚未接入运行链路**；后续接入还需最小 RAM 授权、默认桶私有验证及相同的对象身份／迟到副作用保障。该原生试验不等于已取消应用的读取／转存。
 
 PNG 回退也已按同一份最终 WebP 试验：OSS PNG 为 2,423,705 字节，JPEG Q85 为 287,912 字节。PNG 默认、Q30、Q85 的字节及 SHA-256 完全相同，像素与最终 WebP 一致；[OSS quality 不作用于 PNG](https://help.aliyun.com/zh/oss/user-guide/adjust-image-quality)。本地 PNG 压缩等级 9＋自适应过滤仍为 2,250,401 字节；调色板 PNG 约 864,239 字节，但已减色并损失像素，`quality: 100` 也不是无损。用户据此选择保留 JPEG 回退、优先体积；没有启用 PNG 回退。

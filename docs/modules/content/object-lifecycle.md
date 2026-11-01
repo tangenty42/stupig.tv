@@ -41,7 +41,7 @@ OSS 开启版本控制时，软删除不等于历史版本已经永久回收；�
 
 看到一次 404 不能证明远端再也不会写入。清理需要保留尝试身份和账本，以处理超时请求的迟到完成；不能先丢失记录，再用桶全量扫描猜测归属。
 
-迁移源被 `content_migration_pins` 保护。迁移完成后的旧源退役是明确的独立操作，不由普通上传清理自动代办。旧 `storage:cleanup --delete` 不再执行写入；报告用途和源退役步骤见[Content 切换](../../operations/content-cutover.md)。
+迁移源被 `content_migration_pins` 保护。迁移完成后的旧源退役是明确的独立操作，不由普通上传清理自动代办。旧 S3 盘点工具及 `storage:cleanup` 入口已随旧表退役删除；历史源恢复需使用匹配的受保护版本。源退役步骤见[Content 切换](../../operations/content-cutover.md)，迁移明细及 WebP 回执的退出条件见[迁移运维](../../operations/migrations.md#迁移专用表必须有退出方案)。
 
 ## 运维观察与恢复边界
 

@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { load_database_config } from '@config/loader'
+import { create_audit_catalog } from '@server/services/storage-audit/repository'
 import mysql from 'mysql2/promise'
 import sharp from 'sharp'
 import { initialize_cli_environment } from '../../config/lib/environment.mjs'
+import retirement from '../../migrations/20261101143000_retire_legacy_content'
 import { migrate_webp, verify_webp, webp_plan } from '../../migrations/lib/webp-v1/convert'
 import { run_migrations } from '../migration/local'
 
@@ -140,6 +142,30 @@ try {
   assert.equal(Number(drafts[0]!.namespace_revision), 1)
   await migrate_webp(ctx)
   assert.equal(writes - initialWrites, 4)
+  // Exercise retirement against real legacy DDL; retain the WebP recovery ledger.
+  assert.equal(Object.keys((await retirement.plan(ctx)).counts!).length, 5)
+  await db.execute('INSERT INTO content_tasks (scope_id, kind, status, payload) VALUES (1, \'upload\', \'failed\', JSON_OBJECT())')
+  await assert.rejects(retirement.apply(ctx), /legacy_content_tables_not_empty/)
+  assert.equal(Object.keys((await retirement.plan(ctx)).counts!).length, 5)
+  await db.execute('DELETE FROM content_tasks')
+  let ddl = 0
+  ctx.assert_active = async () => {
+    if (++ ddl === 2)
+      throw new Error('qa_retirement_interrupted')
+  }
+  await assert.rejects(retirement.apply(ctx), /qa_retirement_interrupted/)
+  assert.equal(Object.keys((await retirement.plan(ctx)).counts!).length, 4)
+  ctx.assert_active = async () => {}
+  await retirement.apply(ctx)
+  assert.equal(await retirement.verify(ctx), true)
+  await retirement.apply(ctx)
+  const [retained] = await db.query<mysql.RowDataPacket[]>('SELECT adopted FROM content_webp_migration_objects')
+  assert.equal(Number(retained[0]!.adopted), 1)
+  const [preserved] = await db.query<mysql.RowDataPacket[]>('SELECT original_key FROM content_story_attachments WHERE id = 2')
+  assert.equal(preserved[0]!.original_key, archive.key)
+  const catalog = create_audit_catalog(db as unknown as Parameters<typeof create_audit_catalog>[0], { bucket: 'qa', endpoint: 'https://oss.example.test' }, [])
+  assert.equal(await catalog.ownership('content/att/not-tracked'), null, 'Current ownership scans work after legacy tables are removed')
+  assert.equal(await catalog.ownership(main.key), 'tracked', 'Migration pins still protect old source objects')
   console.log(JSON.stringify({ webp_migration: 'passed', privacy: 'redacted source isolated', recovery: 'rollback and resume passed', archive: 'unchanged', references: 'main, cover and draft rewritten', external_oss: 'in-memory boundary' }))
 }
 finally {

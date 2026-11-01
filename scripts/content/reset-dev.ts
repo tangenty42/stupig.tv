@@ -97,11 +97,9 @@ export async function reset_development_content(apply: boolean, all_content_obje
       counts[name] = Number(rows[0]!.count)
     }
     const [attachments] = await connection.execute<(RowDataPacket & Parameters<typeof reset_attachment_objects>[0])[]>('SELECT object_key, original_key, display_key, fallback_key, redacted_display_key, redacted_fallback_key, storage_provider, storage_bucket FROM content_story_attachments WHERE object_key IS NOT NULL')
-    const [staging] = await connection.execute<RowDataPacket[]>('SELECT staging_key, staging_provider, staging_bucket, upload_id FROM content_task_items WHERE staging_key IS NOT NULL')
     const [attempts] = await connection.execute<RowDataPacket[]>('SELECT a.target_key, a.upload_id, s.target_location FROM content_transfer_attempts a JOIN content_transfer_sessions s ON s.id = a.session_id')
     const objects: ResetObject[] = [
       ... attachments.flatMap(reset_attachment_objects),
-      ... staging.map(row => ({ key: String(row.staging_key), location: row.staging_provider === 'aliyun' ? 'aliyun' as const : row.staging_bucket as 'public' | 'private', upload_id: row.upload_id ? String(row.upload_id) : undefined })),
       ... attempts.map(row => ({ key: String(row.target_key), location: row.target_location === 'aliyun' ? 'aliyun' as const : row.target_location === 'legacy_public' ? 'public' as const : 'private' as const, upload_id: row.upload_id ? String(row.upload_id) : undefined })),
     ]
     if (names.includes('content_image_attempts')) {

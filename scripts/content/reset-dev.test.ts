@@ -53,7 +53,11 @@ describe('development Content reset boundary', () => {
     const config = (suffix: string) => ({ db: { name: 'stupig_dev', host: 'localhost' }, aliyun: { oss: { bucket: `aliyun-${suffix}` } }, oss: { buckets: { public: { bucket: `public-${suffix}` }, private: null } } })
     boundary.runtime_config.mockReturnValue(config('dev'))
     boundary.load_config.mockReturnValue(config('prod'))
-    const connection = { execute: vi.fn().mockResolvedValue([[]]), end: vi.fn(), beginTransaction: vi.fn() }
+    const connection = { execute: vi.fn(async (sql: string): Promise<Record<string, unknown>[][]> => {
+      if (/content_task_items|content_tasks|content_locks|content_attachment_encryption_backup|content_attachment_storage_migrations/.test(sql))
+        throw new Error('Retired table queried')
+      return [[]]
+    }), end: vi.fn(), beginTransaction: vi.fn() }
     boundary.createConnection.mockResolvedValue(connection)
     await expect(reset_development_content(false)).resolves.toBeUndefined()
     expect(connection.end).toHaveBeenCalledTimes(1)

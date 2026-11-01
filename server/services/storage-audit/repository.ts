@@ -128,7 +128,6 @@ export function create_audit_catalog(pool: Pick<Pool, 'execute'>, destination: {
         UNION ALL SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(intent,'$.input.key')) AS BINARY) FROM content_image_jobs WHERE status IN ('queued','processing','ready','failed')
         UNION ALL SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(intent,'$.source.key')) AS BINARY) FROM content_image_jobs WHERE status IN ('queued','processing','ready','failed')
         UNION ALL SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(intent,'$.source.key')) AS BINARY) FROM content_transfer_sessions WHERE status IN ('uploading','queued','running','verifying','failed')
-        UNION ALL SELECT CAST(staging_key AS BINARY) FROM content_task_items WHERE staging_provider='aliyun' AND superseded_at IS NULL
         UNION ALL SELECT CAST(object_key AS BINARY) FROM content_migration_pins WHERE retired_at IS NULL
         UNION ALL SELECT CAST(m.target_key AS BINARY) FROM content_migration_objects m JOIN content_migration_scopes s ON s.scope_id=m.scope_id WHERE m.state='copying' OR s.state='copying'
         UNION ALL SELECT CAST(object_key AS BINARY) FROM content_preload_jobs WHERE phase IN ('submitting','polling')

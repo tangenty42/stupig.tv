@@ -33,7 +33,9 @@ async function verify() {
       VALUES (1,'fixture','day',JSON_ARRAY('2026-10-31'),?,0)`, ['# 原文字节\r\n[附件](att://example?a=1#part)\n'])
     const [before_rows] = await connection.query('SELECT id,SHA2(markdown,256) AS digest,revision,namespace_revision FROM content_stories ORDER BY id')
     const before = (await run_migrations({ ... options, preflight: true })).preflight!
-    assert.equal(before.pending.length, 4)
+    // Admission concerns the actual pending chain, not a historical file count.
+    for (const filename of ['20261030120000_shared_content_drafts.sql', '20261101133000_content_webp.ts', '20261101143000_retire_legacy_content.ts'])
+      assert(before.pending.some(file => file.filename === filename))
     assert(before.pending.every(file => file.execution === 'maintenance'))
     const [ledger] = await connection.query('SELECT filename,checksum,status,attempts,finished_at FROM migration_runs ORDER BY filename')
     await assert.rejects(run_migrations(options), /维护窗口/)
