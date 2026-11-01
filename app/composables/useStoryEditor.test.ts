@@ -16,9 +16,15 @@ vi.mock('@codemirror/view', async (original) => {
   const actual = await original<typeof import('@codemirror/view')>()
   class TestView {
     state: EditorState
-    scrollDOM = new EventTarget()
+    scrollDOM = Object.assign(new EventTarget(), { scrollTop: 0, scrollLeft: 0, scrollHeight: 3000, clientHeight: 400, scrollWidth: 800, clientWidth: 500 })
     focus = vi.fn()
-    requestMeasure = vi.fn()
+    requestMeasure = vi.fn((request?: { read: (view: EditorView) => unknown, write?: (value: unknown, view: EditorView) => void }) => {
+      if (request) {
+        const self = this as unknown as EditorView
+        request.write?.(request.read(self), self)
+      }
+    })
+
     destroy = vi.fn(() => boundary.lifecycle.push('destroy'))
     plugin = () => null
     posAtCoords = () => null
@@ -49,7 +55,7 @@ beforeEach(() => {
   boundary.views.length = 0
   boundary.lifecycle.length = 0
   theme = ref('light')
-  window_target = new EventTarget()
+  window_target = Object.assign(new EventTarget(), { scrollX: 0, scrollY: 0, scrollTo: vi.fn() })
   const remove = window_target.removeEventListener.bind(window_target)
   vi.spyOn(window_target, 'removeEventListener').mockImplementation((... args) => {
     if (args[0] === 'resize')
@@ -171,6 +177,70 @@ it('keeps a single instance across external updates and inserts with the existin
   expect(view.focus).toHaveBeenCalledOnce()
   await nextTick()
   expect(boundary.views).toHaveLength(1)
+})
+
+it('keeps cursor and both viewport offsets after an external document replacement', async () => {
+  const fixture = create()
+  fixture.model.value = 'long line\n'.repeat(300)
+  const view = fixture.mount()
+  view.dispatch({ selection: { anchor: 45, head: 55 } })
+  view.scrollDOM.scrollTop = 1400
+  view.scrollDOM.scrollLeft = 40
+  const saved = fixture.api.capture_position()!
+  saved.preview.top = 1100
+  fixture.api.restore_position(saved)
+  await nextTick()
+  fixture.model.value = 'replacement line\n'.repeat(300)
+  await nextTick()
+  await nextTick()
+  expect(view.state.selection.main.anchor).toBe(45)
+  expect(view.state.selection.main.head).toBe(55)
+  expect(view.scrollDOM.scrollTop).toBe(1400)
+  expect(view.scrollDOM.scrollLeft).toBe(40)
+  expect(fixture.api.capture_position()?.preview.top).toBe(1100)
+})
+
+it('clamps a shortened replacement to the new document and scroll edge', async () => {
+  const fixture = create()
+  fixture.model.value = 'long line\n'.repeat(300)
+  const view = fixture.mount()
+  view.dispatch({ selection: { anchor: 1000 } })
+  view.scrollDOM.scrollTop = 1400
+  Object.assign(view.scrollDOM, { scrollHeight: 500 })
+  fixture.model.value = 'short'
+  await nextTick()
+  await nextTick()
+  expect(view.state.selection.main.head).toBe(5)
+  expect(view.scrollDOM.scrollTop).toBe(100)
+})
+
+it('keeps reference-patch scroll while mapping the cursor through its changes', async () => {
+  const fixture = create()
+  fixture.model.value = 'old\n'.repeat(300)
+  const view = fixture.mount()
+  view.dispatch({ selection: { anchor: 200 } })
+  view.scrollDOM.scrollTop = 800
+  expect(fixture.api.apply_reference_changes(fixture.model.value, [{ from: 0, to: 3, insert: 'new-name' }])).toBe(true)
+  await nextTick()
+  await nextTick()
+  expect(view.state.selection.main.head).toBe(205)
+  expect(view.scrollDOM.scrollTop).toBe(800)
+})
+
+it('lets user input cancel a pending restore and ignores measurements after disposal', async () => {
+  const fixture = create()
+  const view = fixture.mount()
+  const position = fixture.api.capture_position()!
+  position.editor.top = 1500
+  fixture.api.restore_position(position)
+  window_target.dispatchEvent(new Event('wheel'))
+  view.scrollDOM.scrollTop = 300
+  await nextTick()
+  expect(view.scrollDOM.scrollTop).toBe(300)
+  fixture.api.restore_position(position)
+  fixture.unmount()
+  await nextTick()
+  expect(view.scrollDOM.scrollTop).toBe(300)
 })
 
 it('applies reference changes outside undo history and rejects stale or disposed callbacks', async () => {

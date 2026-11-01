@@ -167,6 +167,8 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   readonly?: boolean
   allowWrite?: () => boolean
+  /** Account + immutable cloud draft id; only presentation state is stored. */
+  viewStateKey?: string | null
   /** Known stories for `@story` completion, dead-reference linting and preview cards. */
   stories?: ContentStorySummary[]
   /** Folder paths in scope, offered alongside the attachments in the destination completion. */
@@ -275,7 +277,13 @@ function start_divider_drag(event: MouseEvent) {
   window.addEventListener('mouseup', on_up)
 }
 
-const editor = useStoryEditor({
+let editor: ReturnType<typeof useStoryEditor>
+useStoryEditorViewState({
+  key: () => props.viewStateKey,
+  fullscreen, mode: editor_mode, audience: preview_audience, split_ratio, attachments_width,
+  capture: () => editor.capture_position(), restore: position => editor.restore_position(position),
+})
+editor = useStoryEditor({
   model, host: editor_host, preview_pane, fullscreen, mode: editor_mode,
   readonly: () => props.readonly,
   allow_write: () => props.allowWrite?.() !== false,
