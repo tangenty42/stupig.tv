@@ -6,6 +6,7 @@ import type { Connection, Pool, RowDataPacket } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
 import type { create_upload_sessions } from './upload-session.service'
 import { ApiError } from '@server/errors/ApiError'
+import { wake_background } from '@server/services/background/wakeup'
 import { create_image_jobs } from './image-job.service'
 import { publish_uploaded_attachment } from './upload-publication.service'
 
@@ -80,6 +81,7 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
             failure_epoch = Number(current[0]?.execution_epoch)
           }
           await uploads.adopt(row.id, Number(row.actor_id), publish)
+          wake_background('sync')
         }
         catch {
           // Busy/late workers may not fail another worker. A terminal failure is

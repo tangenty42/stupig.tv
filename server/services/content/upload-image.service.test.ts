@@ -3,7 +3,8 @@ import type { Connection, Pool } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
 import type { create_upload_sessions } from './upload-session.service'
 import { randomUUID } from 'node:crypto'
-import { expect, it, vi } from 'vitest'
+import { register_background_wakeup } from '@server/services/background/wakeup'
+import { afterEach, expect, it, vi } from 'vitest'
 import { create_upload_images } from './upload-image.service'
 
 vi.mock('@server/lib/db', () => ({ db: {} }))
@@ -12,6 +13,32 @@ const options: Parameters<typeof create_upload_images>[2] & { profile: import('@
   profile: { maxInputBytes: 1000, maxPixels: 1000, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 },
 }
 const storage = {} as ReturnType<typeof create_aliyun_oss>
+const disposers: Array<() => void> = []
+afterEach(() => {
+  disposers.splice(0).forEach(dispose => dispose())
+})
+function listen() {
+  const wake = vi.fn().mockReturnValue(true)
+  disposers.push(register_background_wakeup({ wake }))
+  return wake
+}
+
+it('wakes delivery after image adoption commits, without waiting for the periodic outbox tick', async () => {
+  const wake = listen()
+  const execute = vi.fn().mockResolvedValue([[{ id: 'one', actor_id: 7, image_status: 'ready' }]])
+  const pool = { execute, getConnection: vi.fn() } as unknown as Pool
+  let finish!: () => void
+  const adopt = vi.fn(() => new Promise<void>((resolve) => {
+    finish = resolve
+  }))
+  const images = create_upload_images(pool, storage, options)
+  const running = images.sweep({ adopt } as unknown as ReturnType<typeof create_upload_sessions>)
+  await vi.waitFor(() => expect(adopt).toHaveBeenCalledOnce())
+  expect(wake).not.toHaveBeenCalled()
+  finish()
+  await running
+  expect(wake).toHaveBeenCalledExactlyOnceWith('sync')
+})
 
 it('stops claiming more images after the active publication reaches its checkpoint', async () => {
   const controller = new AbortController()
@@ -94,6 +121,7 @@ it.each([false, true])('commits one versioned processing intent before linking i
 })
 
 it('recovers ready jobs without processing them again and fences stale scan errors by epoch', async () => {
+  const wake = listen()
   const item = { id: 'a'.repeat(32), job_id: 'b'.repeat(32), actor_id: 7, scope_id: 1, image_status: 'ready', image_epoch: 4, expired: 0 }
   const execute = vi.fn(async (sql: string, _values?: unknown[]) => {
     if (sql.startsWith('UPDATE') || sql.startsWith('INSERT'))
@@ -109,6 +137,8 @@ it('recovers ready jobs without processing them again and fences stale scan erro
   expect(adopt).toHaveBeenCalledWith(item.id, 7, pipeline.publish)
   // Adoption owns its atomic outbox (covered through the real upload API).
   expect(connection.commit).not.toHaveBeenCalled()
+  expect(wake).toHaveBeenCalledExactlyOnceWith('sync')
+  wake.mockClear()
   adopt.mockRejectedValue(new Error('source changed'))
   await pipeline.sweep({ adopt } as unknown as ReturnType<typeof create_upload_sessions>)
   const failed = execute.mock.calls.find(([sql]) => String(sql).includes('image_publish_failed'))!
@@ -117,6 +147,7 @@ it('recovers ready jobs without processing them again and fences stale scan erro
   const events = execute.mock.calls.filter(([sql]) => sql.startsWith('INSERT INTO content_sync_outbox'))
   expect(events.map(([, args]) => args![1]).sort()).toEqual([`content_upload_session:${item.id}`, 'content_uploads:1'])
   expect(connection.commit).toHaveBeenCalledOnce()
+  expect(wake).not.toHaveBeenCalled()
 })
 
 it('does not scan when disabled or publish an image before both outputs are ready', async () => {

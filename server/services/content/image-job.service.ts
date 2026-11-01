@@ -4,7 +4,7 @@ import type { ImageAccessRow } from './attachment-access.service'
 import type { RedactedVariantRow } from './redacted-variant'
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
-import { create_oss_image_processor } from '@server/lib/oss-image-processing'
+import { copy_oss_image_original, create_oss_image_processor } from '@server/lib/oss-image-processing'
 import { image_processing_options_schema, process_image_variants } from '@server/lib/webp-image-processing'
 import { content_image_formats } from '@shared/content-image-format'
 import { settings } from '@shared/settings'
@@ -20,7 +20,8 @@ import { require_workspace_actor } from './workspace-auth.service'
 import { enqueue_workspace_change } from './workspace-sync.service'
 
 const uuid = () => randomUUID().replaceAll('-', '')
-const object_identity = image_object_identity
+// Native OSS roles have no application-computed SHA-256; old verified receipts retain theirs.
+const object_identity = image_object_identity.extend({ sha256: image_object_identity.shape.sha256.nullable() })
 export const image_job_intent_schema = z.strictObject({
   scope_id: z.number().int().positive(), actor_id: z.number().int().positive(),
   mode: z.enum(['upload', 'copy', 'overwrite', 'redacted']), is_private: z.boolean(),
@@ -76,7 +77,7 @@ function jpeg_bytes(base64: string) {
  * No arbitrary-key public API and no process-local promise owns this ledger.
  * Each admitted intent owns its provider/profile; retries only refresh budgets.
  */
-export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: ReturnType<typeof create_aliyun_oss>, lease_seconds: number, heartbeat_seconds: number, cloud = create_oss_image_processor) {
+export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: ReturnType<typeof create_aliyun_oss>, lease_seconds: number, heartbeat_seconds: number, cloud = create_oss_image_processor, cloud_copy = copy_oss_image_original) {
   if (! Number.isInteger(lease_seconds) || lease_seconds < 1 || heartbeat_seconds <= 0 || heartbeat_seconds >= lease_seconds)
     throw new ApiError(400, '图片处理租约无效')
   async function transaction<T>(action: (connection: Connection) => Promise<T>) {
@@ -202,28 +203,32 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       const { input, profile } = claim.intent
       if (input.size > profile.maxInputBytes)
         throw new ApiError(400, '图片超过处理大小限制')
-      const head = await storage.head_object(input.key)
-      if (head.etag !== input.etag || head.version_id !== input.version_id || head.size !== input.size || await storage.get_object_access(input.key) !== 'private')
-        throw conflict()
-      const { stream, size } = await storage.get_object_stream(input.key, input.etag, abort.signal)
-      if (size !== input.size) {
-        stream.destroy()
-        throw conflict()
-      }
-      const chunks: Buffer[] = []
-      let length = 0
-      for await (const chunk of stream) {
-        length += chunk.length
-        if (length > input.size || length > profile.maxInputBytes) {
+      let bytes: Buffer | null = null
+      let sha256 = input.sha256
+      if (claim.intent.processor !== 'oss') {
+        const [head, access] = await Promise.all([storage.head_object(input.key), storage.get_object_access(input.key)])
+        if (head.etag !== input.etag || head.version_id !== input.version_id || head.size !== input.size || access !== 'private')
+          throw conflict()
+        const { stream, size } = await storage.get_object_stream(input.key, input.etag, abort.signal)
+        if (size !== input.size) {
           stream.destroy()
           throw conflict()
         }
-        chunks.push(Buffer.from(chunk))
+        const chunks: Buffer[] = []
+        let length = 0
+        for await (const chunk of stream) {
+          length += chunk.length
+          if (length > input.size || length > profile.maxInputBytes) {
+            stream.destroy()
+            throw conflict()
+          }
+          chunks.push(Buffer.from(chunk))
+        }
+        bytes = Buffer.concat(chunks)
+        sha256 = createHash('sha256').update(bytes).digest('hex')
+        if (length !== input.size || (input.sha256 !== null && sha256 !== input.sha256))
+          throw conflict()
       }
-      const bytes = Buffer.concat(chunks)
-      const sha256 = createHash('sha256').update(bytes).digest('hex')
-      if (length !== input.size || (input.sha256 !== null && sha256 !== input.sha256))
-        throw conflict()
       const output = async (key: string, body: Buffer, mime: string) => {
         abort.signal.throwIfAborted()
         const object = await storage.put_object(key, body, mime, 'private')
@@ -232,23 +237,52 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
           throw conflict()
         return { key, etag: object.etag, version_id: object.version_id, size: body.length, sha256: createHash('sha256').update(body).digest('hex') }
       }
-      const result = claim.intent.processor === 'oss'
-        ? await cloud()({ storage, input: { ... input, sha256 }, bytes, profile, prefix: claim.prefix, signal: abort.signal, checkpoint: renew })
-        : await (async () => {
-            const result = await process_image_variants(bytes, profile)
-            jpeg_bytes(result.lqip.toString('base64'))
-            abort.signal.throwIfAborted()
-            await renew()
-            const display = await output(`${claim.prefix}.${content_image_formats.display.extension}`, result.display, content_image_formats.display.mime)
-            const fallback = await output(`${claim.prefix}.${content_image_formats.fallback.extension}`, result.fallback, content_image_formats.fallback.mime)
-            return { ... result, display, fallback }
-          })()
+      const produce = async () => {
+        const result = claim.intent.processor === 'oss'
+          ? await cloud()({ storage, input, profile, prefix: claim.prefix, signal: abort.signal, checkpoint: renew, require_png: !! claim.intent.source })
+          : await (async () => {
+              const result = await process_image_variants(bytes!, profile)
+              jpeg_bytes(result.lqip.toString('base64'))
+              abort.signal.throwIfAborted()
+              await renew()
+              const display = await output(`${claim.prefix}.${content_image_formats.display.extension}`, result.display, content_image_formats.display.mime)
+              const fallback = await output(`${claim.prefix}.${content_image_formats.fallback.extension}`, result.fallback, content_image_formats.fallback.mime)
+              return { ... result, display, fallback }
+            })()
+        jpeg_bytes(result.lqip.toString('base64'))
+        return result
+      }
+      const { result, original } = await (async () => {
+        if (claim.intent.processor === 'oss' && claim.intent.mode === 'upload') {
+          // Both targets are already owned by this attempt. Neither is adopted
+          // until both complete; keep the lease/slots while a failed sibling drains.
+          const pending = [produce(), cloud_copy(storage, input, image_original_key(id, claim.attempt), abort.signal)] as const
+          try {
+            const [result, original] = await Promise.all(pending)
+            return { result, original }
+          }
+          catch (error) {
+            abort.abort(error)
+            await Promise.allSettled(pending)
+            throw error
+          }
+        }
+        const result = await produce()
+        const archive = claim.intent.mode === 'upload' ? { ... input, sha256 } : claim.intent.mode === 'copy' ? result.display : null
+        let original: z.infer<typeof object_identity> | null = null
+        if (archive) {
+          if (claim.intent.processor === 'oss') {
+            original = await cloud_copy(storage, archive, image_original_key(id, claim.attempt), abort.signal)
+          }
+          else {
+            if (archive.sha256 === null)
+              throw conflict()
+            original = await copy_image_original(storage, { ... archive, sha256: archive.sha256 }, image_original_key(id, claim.attempt), abort.signal)
+          }
+        }
+        return { result, original }
+      })()
       const { display, fallback } = result
-      jpeg_bytes(result.lqip.toString('base64'))
-      const archive = claim.intent.mode === 'upload' ? { ... input, sha256 } : claim.intent.mode === 'copy' ? display : null
-      const original = archive
-        ? await copy_image_original(storage, archive, image_original_key(id, claim.attempt), abort.signal)
-        : null
       await renew()
       await with_job(id, actor, async (connection) => {
         const [updated] = await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'ready', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`,
