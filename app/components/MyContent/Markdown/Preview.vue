@@ -758,7 +758,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 /* Flex gap is unavailable in Chrome 80 and Safari 13.1. */
-.story-body :deep(.carousel-item + .carousel-item) {
+.story-body :deep(.image-carousel > * + *) {
   @apply ml-3;
 }
 
@@ -809,7 +809,23 @@ function on_preview_keydown(event: KeyboardEvent) {
    own max-w-full resolves against that oversized box — overflowing the
    strip into a scroller even for a single image. */
 .story-body :deep(.carousel-item) {
-  @apply flex max-w-full shrink-0 flex-col;
+  @apply inline-flex max-w-full shrink-0 flex-col align-bottom;
+}
+
+/* The strip owns spacing for every card type. In particular, the private
+   image's old block margin must not lift its visible bottom above its peers. */
+.story-body :deep(.carousel-item > .encrypted-block) {
+  @apply m-0 flex max-w-full flex-col;
+}
+
+.story-body :deep(.image-carousel > .link-card) {
+  @apply my-0 shrink-0;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.story-body :deep(.image-carousel > .link-card:not(:first-child)) {
+  @apply ml-3;
 }
 
 .story-body :deep(.carousel-caption) {

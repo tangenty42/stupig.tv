@@ -399,10 +399,7 @@ describe('folder image expansion', () => {
 
   it('renders exactly as the literal image tags would', () => {
     const expanded = render('![](att://cards)').html
-    // Adjacent with no separator: the expansion splices the tags in with
-    // nothing between them, so that is the literal spelling to compare against.
-    // (Space-separated tags are a text-separated run the carousel rule treats
-    // differently, which is why they are not the reference here.)
+    // The expansion splices the tags in without adding separators.
     const literal = render('![](att://cards/1.png)![](att://cards/2.png)![](att://cards/10.png)').html
 
     // The whole point of the feature: the folder reference is shorthand for the
@@ -412,8 +409,8 @@ describe('folder image expansion', () => {
 
   it('stays equivalent when other content shares the paragraph', () => {
     // The expanded images are spliced in adjacent, the literal spelling has a
-    // line break between tags; both must split into the same carousel plus a
-    // trailing folder-card paragraph. data-line differs because the two
+    // line break between tags; both share one strip with the folder card.
+    // data-line differs because the two
     // spellings occupy a different number of source lines.
     const strip_lines = (html: string) => html.replaceAll(/ data-line="\d+"/g, '')
     const shorthand = render('![](att://cards)\n[](att://cards)').html
@@ -601,7 +598,7 @@ describe('folder markdown shorthand', () => {
 
     // `![](att://cards)` is still supported by hand, but the menu deliberately copies
     // the link form only.
-    expect(render(copied).html).not.toContain('carousel')
+    expect(render(copied).html).not.toContain('img-frame')
     expect(render(`!${copied}`).html).toContain('carousel')
   })
 })

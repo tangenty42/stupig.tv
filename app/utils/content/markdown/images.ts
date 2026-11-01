@@ -9,9 +9,9 @@ import { local_file_name, resolve_content_url } from './links'
 // Images resolve story-relative sources, feed the lightbox through the
 // shared env.images list, and render inside a frame that anchors the
 // "点击查看长图" cover (revealed by data-cropped when the min-w/object-crop
-// rule actually clips a tall image). Carousel images additionally wrap into
-// a .carousel-item with an optional caption. Private attachments use the
-// server-issued readable URL for permitted viewers; everyone else gets the
+// rule actually clips a tall image). Every image uses the same .carousel-item
+// and optional caption, including mixed paragraphs and inline renders. Private
+// attachments use the server-issued readable URL for permitted viewers; everyone else gets the
 // plaintext 删减版 twin when the author uploaded one (amber brand strip, tag
 // 删减版), or keeps the frame and
 // caption with the <img> swapped for a gray denied placeholder when there is
@@ -33,7 +33,7 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
       const url = `https://${src.slice('iframe://'.length)}`
       const title = token?.content || '嵌入内容'
       const frame = `<span class="img-frame iframe-frame" aria-busy="true"><iframe src="${md.utils.escapeHtml(url)}" title="${md.utils.escapeHtml(title)}" loading="lazy" allowfullscreen></iframe><span class="image-loading-mask" role="status"><span class="iconify i-lucide:loader-circle" aria-hidden="true"></span><span class="sr-only">内容加载中</span></span><span class="image-unavailable" role="img" aria-label="嵌入内容不可用"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span></span>`
-      return token?.meta?.carousel ? carousel_item(frame) : frame
+      return carousel_item(frame)
     }
     let denied = false
     let invalid = ! src
@@ -112,19 +112,11 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
     const brand_text = private_image ? '机密附件·完整版' : '机密附件·删减版'
     const brand_icon = private_image ? 'i-lucide:lock-keyhole-open' : 'i-lucide:lock-keyhole'
     const brand = `<span class="encrypted-block-brand"><span class="iconify ${brand_icon}" aria-hidden="true"></span><span class="encrypted-block-brand-text">${brand_text}</span></span>`
-    if ((private_image || abridged) && ! token?.meta?.carousel) {
-      return `<div class="encrypted-block">${brand}${framed_image}</div>\n`
-    }
-    const output_image = framed_image
-    if (! token?.meta?.carousel) {
-      return output_image
-    }
-    // Carousel images carry their alt text as a visible caption below the
-    // image. The wrapper must be a span, not <figure>: the carousel is a
-    // <p>, and a figure would force the browser to close it early. An empty
+    // Images carry their alt text as a visible caption below the image.
+    // Spans also remain valid inside inline markup and table cells. An empty
     // alt (the insertion default) or one repeating the file name is not a
     // real caption — skip it. The caption is rendered as inline markdown (like
     // a link label), so `**bold**` etc. resolve instead of showing literally.
-    return carousel_item(output_image, private_image || abridged ? brand : '')
+    return carousel_item(framed_image, private_image || abridged ? brand : '')
   }
 }

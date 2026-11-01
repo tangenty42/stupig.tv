@@ -1,6 +1,7 @@
 import type { ContentStorySummary } from '@shared/types/content'
 import type MarkdownIt from 'markdown-it'
-import type { FileCardData, StoryCardMeta, StoryMarkdownContext, StoryMarkdownPlugin } from './types'
+import type Token from 'markdown-it/lib/token.mjs'
+import type { FileCardData, StoryCardMeta, StoryMarkdownContext, StoryMarkdownOptions, StoryMarkdownPlugin } from './types'
 import { attachment_base_name, CONTENT_ATTACHMENT_DENIED_TEXT, decrypted_attachment_name, folder_file_count, is_attachment_folder } from '@shared/content-markdown'
 import { content_name_key, parse_content_ref } from '@shared/content-reference'
 import { story_rating, story_rating_rank } from '@shared/types/content'
@@ -9,6 +10,28 @@ import { render_story_cover } from '~/utils/content/story-cover'
 import { format_bytes } from '~/utils/size'
 import { apply_chip_gaps } from './chips'
 import { find_story_by_title, local_file_name, resolve_content_url, with_reference_suffix } from './links'
+
+/** Block-shaped references share a paragraph strip; labeled ordinary links stay text. */
+export function is_reference_card(tokens: Token[], index: number, options: StoryMarkdownOptions) {
+  const token = tokens[index]
+  if (token?.type !== 'link_open')
+    return false
+  const href = token.attrGet('href') ?? ''
+  const reference = parse_content_ref(href)
+  const unlabeled = tokens[index + 1]?.type === 'link_close'
+  if (reference?.kind === 'story' || reference?.kind === 'legacy_story')
+    return unlabeled
+  const name = local_file_name(href)
+  if (! name)
+    return false
+  const attachment = options.attachments().find(item => content_name_key(item.file_name) === content_name_key(name))
+  if (attachment && attachment_is_restricted(attachment) && ! attachment_can_read(attachment)
+    && ! redacted_version_of(options.attachments(), attachment.file_name)) {
+    return true
+  }
+  const default_label = tokens[index + 1]?.type === 'text' && tokens[index + 1]?.content === name && tokens[index + 2]?.type === 'link_close'
+  return (unlabeled || default_label) && Boolean(attachment || is_attachment_folder(options.attachments(), name, options.folders?.()))
+}
 
 /** Shared two-line body for files, folders and unavailable private files. */
 function file_card_body_open(md: MarkdownIt, card: FileCardData) {
