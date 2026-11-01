@@ -163,6 +163,19 @@ app:
       lqipMaxDimension: 24
       lqipQuality: 40
       timeoutSeconds: 60
+    cloud:
+      enabled: true
+      profileVersion: 2
+      profile:
+        maxInputBytes: 20971520
+        maxPixels: 9437184
+        avifQuality: 100
+        avifEffort: 4
+        jpegQuality: 85
+        jpegBackground: '#ffffff'
+        lqipMaxDimension: 24
+        lqipQuality: 40
+        timeoutSeconds: 60
   contentMigration:
     partSizeMb: 8
   auth:

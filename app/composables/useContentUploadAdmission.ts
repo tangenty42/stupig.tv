@@ -5,9 +5,12 @@ import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { useApi } from './useApi'
 import type { AttachmentUploadPick } from '~/utils/content/attachment'
 import type { UploadPreparation } from '~/utils/content/workspace'
-import { normalized_attachment_extension } from '@shared/content-markdown'
+import { image_upload_error } from '@shared/content-image-upload'
+import { normalized_attachment_extension, processable_image_mime } from '@shared/content-markdown'
+import { upload_content_mime } from '@shared/content-upload'
 import { error_policy_schema } from '@shared/content-workspace'
 import { settings } from '@shared/settings'
+import { image_upload_size } from '~/utils/content/image-upload'
 
 export interface UploadEntry extends AttachmentUploadPick {
   image_mode?: ImageSaveMode
@@ -121,6 +124,35 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
           throw new Error(preparation.error)
         }
       }
+      let invalid = false
+      for (const [index, entry] of entries.entries()) {
+        if (! current())
+          return
+        if (! entry.image_mode && ! processable_image_mime(upload_content_mime({ path: entry.file_name, original_name: entry.file.name, content_type: entry.file.type })))
+          continue
+        const preparation = preparations.value[index]!
+        let message = image_upload_error(entry.file.size)
+        if (! message) {
+          try {
+            const size = await image_upload_size(entry.file)
+            if (! current())
+              return
+            message = image_upload_error(entry.file.size, size)
+          }
+          catch (error) {
+            if (! current())
+              return
+            message = error instanceof Error ? error.message : '无法检查图片尺寸，请重新选择文件'
+          }
+        }
+        if (message) {
+          preparation.phase = 'failed'
+          preparation.error = message
+          invalid = true
+        }
+      }
+      if (invalid)
+        return
       if (current() && entries.length) {
         for (const preparation of preparations.value)
           preparation.phase = 'admitting'

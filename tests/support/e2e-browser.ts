@@ -105,7 +105,8 @@ export function markdown(title: string, body: string) {
 
 /** Exercise the real tRPC boundary for test setup and persisted-state checks. */
 export async function content_query<T>(page: Page, operation: string, input: object): Promise<T> {
-  const response = await page.request.get(`/api/trpc/content.${operation}?input=${encodeURIComponent(JSON.stringify(input))}`)
+  // Only retry one connection reset on reads; HTTP failures still fail below.
+  const response = await page.request.get(`/api/trpc/content.${operation}?input=${encodeURIComponent(JSON.stringify(input))}`, { maxRetries: 1 })
   expect(response.ok(), `${operation}: HTTP ${response.status()}`).toBe(true)
   const payload = await response.json()
   return payload.result.data as T

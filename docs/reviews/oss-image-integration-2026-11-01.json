@@ -1,0 +1,92 @@
+{
+  "date": "2026-11-01",
+  "mode": "real runtime adapter; dev only; IMG GET plus private PUT",
+  "client": "local ARM64 Node 24; not production end-to-end latency",
+  "profile": {
+    "version": 2,
+    "avifQuality": 100,
+    "jpegQuality": 85,
+    "lqipQuality": 40,
+    "lqipMaxDimension": 24
+  },
+  "scope": "new private dev UUID objects only; no business database writes",
+  "excluded_timing": [
+    "source upload",
+    "queue",
+    "original archive",
+    "database adoption",
+    "post-run byte and anonymous verification"
+  ],
+  "samples": [
+    {
+      "id": "user-photo",
+      "input_sha256": "94aa579025cadcfbed20a910aef4aaadf19c3b006de6884bfff8c367d86c0f80",
+      "adapter_ms": 1167.4196000000002,
+      "cpu_ms": 110,
+      "width": 1536,
+      "height": 1024,
+      "avif": {
+        "size": 180251,
+        "sha256": "4d58ac408e00fe9217e3a04a75afb111dad7ac76575918462e1c1470aefb1d3a"
+      },
+      "jpeg": {
+        "size": 277387,
+        "sha256": "dda9105a16841717fabaf6f66cc97ed4550363a2a2be9dd47ea84d76d058aac2"
+      },
+      "lqip_bytes": 397,
+      "anonymous_direct_and_transform": 403
+    },
+    {
+      "id": "transparent-png",
+      "input_sha256": "af7acdc6c41ad8fcf898abf54d18d5a6550a3c64fb026a73ba082fd0374b63fa",
+      "adapter_ms": 523.1700999999998,
+      "cpu_ms": 78,
+      "width": 32,
+      "height": 16,
+      "avif": {
+        "size": 496,
+        "sha256": "6279d9b5b3185d5241f454267c94ff5687d1490c20d45dad5b5216664e31fa8d"
+      },
+      "jpeg": {
+        "size": 287,
+        "sha256": "e416fe31dcf137b0aff1450e763026030959c9bbc55e2a637d05675bdd276da2"
+      },
+      "lqip_bytes": 286,
+      "anonymous_direct_and_transform": 403,
+      "transparent_JPEG_pixel": [
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "id": "exif-rotate",
+      "input_sha256": "6e4a307d5d42b2bca5035bcd8425b9a03b9a93c9b19f763349c98eef3682bb85",
+      "adapter_ms": 537.8419000000004,
+      "cpu_ms": 47,
+      "width": 24,
+      "height": 40,
+      "avif": {
+        "size": 318,
+        "sha256": "ba5471c9b0db557b10bf7202c05f80203e82270696d2f712144655aa2ee14e59"
+      },
+      "jpeg": {
+        "size": 295,
+        "sha256": "4f8c5dd0bd676e6b635eed4c12bb3d417a7b95f76ad5a1587691e66404d6cc09"
+      },
+      "lqip_bytes": 288,
+      "anonymous_direct_and_transform": 403
+    }
+  ],
+  "cleanup": {
+    "last_run_objects": 9,
+    "all_soft_deleted": true,
+    "historical_versions": "retained; not permanently deleted"
+  },
+  "native_saveas": {
+    "status": 400,
+    "code": "BadRequest",
+    "message": "Avif encode is not supported.",
+    "strategy": "authenticated IMG GET plus existing private PUT; no added RAM permission needed"
+  }
+}

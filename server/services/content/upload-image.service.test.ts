@@ -63,7 +63,7 @@ it('refreshes only execution budgets on explicit failed-image retry and preserve
   expect(execute).not.toHaveBeenCalled()
 })
 
-it('commits one versioned processing intent on the caller connection before linking its upload', async () => {
+it.each([false, true])('commits one versioned processing intent before linking its upload, cloud=%s', async (cloud_enabled) => {
   let job: object | null = null
   const execute = vi.fn(async (sql: string, values: unknown[] = []) => {
     if (sql.includes('FROM content_stories'))
@@ -77,13 +77,16 @@ it('commits one versioned processing intent on the caller connection before link
     return [{ affectedRows: 1 }]
   })
   const pool = { getConnection: vi.fn() } as unknown as Pool
-  const pipeline = create_upload_images(pool, storage, options)
+  const cloud = { enabled: cloud_enabled, profileVersion: 2, profile: { ... options.profile, avifQuality: 100 } }
+  const pipeline = create_upload_images(pool, storage, { ... options, cloud })
   const row = { id: randomUUID().replaceAll('-', ''), scope_id: 1, actor_id: 7,
     intent: { target_access: 'public', image: { mode: 'upload', source: null, original_name: 'a.png', original_mime: 'image/png' } },
     result: { key: 'content/att/staging/a/b', etag: 'etag', oss_version_id: 'version', size: 100, sha256: 'a'.repeat(64) } } as UploadRow
   await pipeline.sealed({ execute } as unknown as Connection, row)
   const insert = execute.mock.calls.find(([sql]) => sql.includes('INSERT IGNORE INTO content_image_jobs'))!
-  expect(JSON.parse(insert[1]![5] as string)).toMatchObject({ profile_version: 1, mode: 'upload', input: { version_id: 'version' }, profile: options.profile })
+  const intent = JSON.parse(insert[1]![5] as string)
+  expect(intent).toMatchObject({ profile_version: cloud_enabled ? 2 : 1, mode: 'upload', input: { version_id: 'version' }, profile: cloud_enabled ? cloud.profile : options.profile })
+  expect(intent.processor).toBe(cloud_enabled ? 'oss' : undefined)
   expect(execute.mock.calls.at(- 1)).toEqual(['INSERT IGNORE INTO content_upload_images (session_id, job_id) VALUES (?, ?)', [row.id, expect.any(String)]])
   expect(pool.getConnection).not.toHaveBeenCalled()
   await pipeline.sealed({ execute } as unknown as Connection, row)

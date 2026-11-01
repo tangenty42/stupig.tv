@@ -4,7 +4,13 @@
 
 ## 图片类型与对象角色
 
-静态 JPEG、PNG、WebP、AVIF 进入 Sharp 处理管线；GIF、SVG 等其他图片按原始字节存储，浏览器支持时可以预览，但不压缩、不进入画布编辑。处理管线验证字节、单帧、尺寸和资源预算，不能靠改后缀绕过限制。
+静态 JPEG、PNG、WebP、AVIF 的新任务使用 OSS 图片处理；GIF、SVG 等其他图片按原始字节存储，浏览器支持时可以预览，但不压缩、不进入画布编辑。处理管线验证字节、单帧、尺寸和资源预算，不能靠改后缀绕过限制。以下为当前代码行为，生产仍须随 PR 部署验收；已受理的本地 Sharp 任务保持其原有编码合同，冻结迁移实现与 profile 1 不变。
+
+### 上传前门禁
+
+处理图片最多 **20 MiB**，宽、高均不超过 **4096px**，总像素不超过 **9,437,184**。AVIF 本身限制输出宽度和总像素，OSS 旋转操作另限制输入宽高；由于管线固定自动校正方向，应用采用双边 4096px 门禁，不只检查较短边或文件大小。限制由 `config/app-settings.yaml` 的 `app.content.image.upload*` 生成，前后端共用。
+
+选中后先展示现有文件列表准备行，只读取 PNG／JPEG／WebP／AVIF 的尺寸头，不进行全文件哈希或像素解码。超限、损坏或无法识别的头直接写入该行既有『准备失败』错误栏；整批不受理、不启动字节上传，可用现有『取消准备』撤回。普通文件不新增读取成本；替换、另存为及删减编辑的导出文件也经过相同门禁。服务端受理再次核对声明大小，上传封存后的实际字节还会验证格式、帧数、尺寸、SHA-256 及来源版本，不信任浏览器声明。
 
 | 字段／角色 | 含义 |
 | --- | --- |
@@ -22,6 +28,8 @@
 ## 处理与发布
 
 图片尝试先记录任务、尝试身份及来源，生成 AVIF，再从该 AVIF 生成 JPEG 与小尺寸 LQIP。首次上传还把原始字节独立归档。对象私有权限、身份、大小与摘要经过验证后，才允许在数据库事务中采用一组完整角色。
+
+新任务在 intent 中冻结 `processor: oss` 和 cloud profile 2：AVIF Q100、JPEG Q85、24px JPEG LQIP Q40。后台使用 OSS V4 请求头鉴权的 IMG GET，读取有上限、可中断的处理结果，核对格式和尺寸后通过既有 `put_object(..., private)` 持久化 AVIF／JPEG；LQIP 仍作为现有数据库字段保存。JPEG／LQIP 均读取已确认版本的最终 AVIF。没有浏览器转换 URL、任意参数签名接口或新增云权限；用户继续走现有 Content／ESA 成品读取授权。profile 中的 `avifEffort` 只供旧 Sharp 任务解释，OSS 没有对应的已验证 effort 参数。
 
 失败、取消或过期尝试不覆盖正式行；旧尝试的迟到写入由账本继续跟踪和清理。对象发布同时登记预热及旧对象退役意图，见[对象生命周期](object-lifecycle.md)。
 
@@ -65,9 +73,156 @@
 
 封面和正文图片共用加载状态与动效样式。已处理图片先显示透明度缓慢呼吸的对应版本 LQIP，并提供旋转的加载图标；没有 LQIP 的 GIF／SVG 等也使用加载反馈。图片淡入期间保留其下方的 LQIP，遮罩随之淡出，避免切换时露出底色；系统启用减少动态效果时立即切换。解码失败或引用无效时替换图片区域为占位符，保持原有图片项与 caption 结构。编辑预览增量更新时复用未变化的媒体节点，避免每次输入都重载整篇图片。
 
+## 转换性能基线（2026-11-01）
+
+本轮按用户选择先测量，正式画质、处理提供方和云资源均未调整。基线为 #61 后的 `15ac9f4`，使用真实 `process_image_variants`，只在独立基准进程中计时；不连接数据库、不访问生产对象。脚本不进入应用启动或 CI 性能门禁。
+
+### 重复测量
+
+```powershell
+$env:NODE_ENV = 'development'
+pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/image-performance.ts --output .data/image-performance.json
+pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/image-performance.ts --input .data/photo.jpeg --efforts 4,2 --runs 2 --quality --output .data/photo-performance.json
+```
+
+输出目录需预先存在。默认顺序处理两张确定性纹理图（1280×800、2400×1600），每个 effort 4／2／0 各运行两次；`--input` 可重复指定自备文件，`--runs` 限制为 1–5。只加载图片配置子树，不需要数据库或云端凭据。报告保留输入 basename、配置、环境、耗时、输出字节、进程 CPU 时间、采样 RSS 和事件循环延迟，不保存转换产物；自行选用不含敏感名称的测试文件。
+
+阶段为源 metadata、AVIF、JPEG、LQIP、最终 metadata。AVIF 阶段包含解码、方向和色彩转换及编码；JPEG／LQIP 阶段各自包含最终 AVIF 的解码，不能把阶段值当作纯编码器耗时。工具委托真实管线，并校验阶段调用数量；管线调整后必须复核标签。`--quality` 另作 sRGB／白底像素 PSNR 诊断，诊断不计入处理耗时，但可能影响后续缓存状态；PSNR 不能代替视觉验收，`null` 表示诊断像素完全一致。
+
+### 本机结果与边界
+
+环境为 Windows ARM64、Node 24.22.1、Sharp 0.35.5／libvips 8.18.7／AOM 3.15.1，12 个可用逻辑处理器，Sharp concurrency 12，libuv 线程池默认。保持 quality 65、JPEG quality 85、24px LQIP，仅比较 effort；后台领域并发 1 不代表编码器只用一个线程。
+
+| 输入 | effort | 全管线 ms | AVIF 阶段 ms | JPEG ms | LQIP ms | AVIF 字节 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2400×1600 纹理 | 4 | 2,059 | 1,525 | 281 | 251 | 1,116,774 |
+| 同上 | 2 | 702 | 212 | 265 | 223 | 1,068,000 |
+| 2400×1560 照片 | 4 | 872 | 639 | 125 | 106 | 198,228 |
+| 同上 | 2 | 434 | 156 | 147 | 129 | 241,634 |
+| 3924×2550 照片 | 4 | 1,837 | 1,222 | 335 | 276 | 552,331 |
+| 同上 | 2 | 1,080 | 366 | 392 | 320 | 619,108 |
+
+纹理计时取不启用 `--quality` 的两次均值，照片启用诊断；1000 万像素组每种 effort 仅一次，其余组各两次。未隔离其他进程负载，顺序固定，未做随机顺序／冷缓存对照，不具备 p95 或生产 SLA 含义。照片来自[阿里云高级压缩示例](https://www.alibabacloud.com/help/en/oss/user-guide/advanced-compression-of-heif-or-avif-images)中的[公开原图](https://image-demo-oss-zhangjiakou.oss-cn-zhangjiakou.aliyuncs.com/pics/compression-demo.jpeg)，2,195,428 字节，SHA-256 为 `c0e0bf371f74023ead5bb1c394b19ff7a4a715ea023a4062cdcd20a963b2c6c6`；小图由其 `resize({ width: 2400, height: 1600, fit: 'inside' }).jpeg({ quality: 92 })` 生成。没有下载生产附件。
+
+两组照片的 effort 4 → 2 减少约 50%／41% 墙钟时间和约 79%／78% 进程 CPU 时间，AVIF 分别增大约 22%／12%；PSNR 分别从 40.38 → 40.20、39.99 → 39.82 dB。纹理在 effort 2 下反而更小，PSNR 则从 33.85 降到 32.88 dB；不能将某一张图的体积变化推广到全部输入。effort 0 的两组较小输入为 543／344ms，仍须另评画质；[Sharp 的 effort 定义](https://sharp.pixelplumbing.com/api-output/#avif)是速度与压缩投入的取舍，不是画质保证。
+
+首次探索的 380 万像素纹理耗时 9.8 秒，随后两组复测约 2.06／2.07 秒，产物字节一致；首轮异常的负载／缓存原因未隔离，不能当稳定基线。1000 万像素组观察到进程 RSS 约 500–584MiB，包含此前任务、分配器／缓存及质量诊断的影响；25ms 采样也不能保证捕捉绝对峰值，更不能据此认定每张图固定占用该内存。尚未测试 2400 万像素上限、并发压力或前后台混合负载；生产容器的同图独立进程试验另列于下文。
+
+### 生产反馈与只读快照
+
+用户最初粗估约 1MB 图片可能等待一分钟，随后重新验证并修正：提供的 PNG 在页面“服务器处理中”阶段约 20 秒，CPU 峰值约 40%。原文件为 **1536×1024（1,572,864 像素）、2,621,740 字节（约 2.50MiB）**，不能把文件字节数当作像素数。现行 Sharp／libaom 管线和本机基准都使用 CPU。该用户记录是界面观察，未取得分阶段日志；CPU 图表的统计口径也未确认，不能把峰值百分比当作编码阶段平均用核数。
+
+2026-11-01 18:26 起（Asia/Shanghai）SSH 只读快照：宿主机为 x86_64、8 个 vCPU（AMD EPYC 7702）、约 16GB 内存，可用约 12GB，swap 未使用；短时采样 CPU 空闲 96%–99%。应用容器无显式 CPU／内存配额，当前 cgroup 无 CPU 限流及 OOM 记录；空闲容器 RSS 约 100MiB。镜像内独立 Node 探针为 24.22.2、8 个可用处理器；加载 Sharp 公开 ESM 入口 `dist/index.mjs` 后为 Sharp 0.35.5／libvips 8.18.7、concurrency **1**、SIMD 开启，与本机 concurrency 12 不同。[Sharp 文档](https://sharp.pixelplumbing.com/api-utility/#concurrency)说明部分 glibc Linux 环境会降低默认线程数以减少内存碎片；libaom 又有独立线程，因此不能据此推断 12 倍差距或直接提高并发。
+
+探针没有执行编码，不代表运行中进程的全部历史状态，也不能排除此前编码时的资源压力、任务排队、I/O 或超时重试。没有改生产配置或读取生产图片内容。
+
+### 用户同图的本机与服务器对比
+
+该 PNG 的 SHA-256 为 `94aa579025cadcfbed20a910aef4aaadf19c3b006de6884bfff8c367d86c0f80`。本机通过上述 CLI 各跑两次：effort 4 完整转换平均 558ms（AVIF 阶段 414ms），effort 2 平均 260ms；输出 AVIF 分别 137,267／150,804 字节，PSNR 分别 39.21／38.86 dB。
+
+服务器试验把仓库原始 `process_image_variants` 和图片配置加载器打包到独立 Node 进程，通过 SSH stdin 传入同一图片字节，加载镜像内的 Sharp 公开入口；报告输入摘要与上述原文件一致，读回 profile 仍为 quality 65／effort 4、版本 1。每轮有 20 秒总时限和低 CPU 调度优先级，不经过生产上传／图片任务队列，不创建附件或 OSS 对象，不保存服务器文件，不修改正在服务用户的进程。只在试验进程内改变 Sharp concurrency／effort，结果如下，每个组合一次：
+
+| Sharp concurrency | effort | 完整转换 ms | AVIF 阶段 ms | 进程 CPU ms | AVIF 字节 |
+| --- | --- | --- | --- | --- | --- |
+| 1（服务器默认） | 4 | 9,444 | 9,106 | 9,468 | 136,120 |
+| 4 | 4 | 2,667 | 2,369 | 9,061 | 136,850 |
+| 8 | 4 | 1,888 | 1,440 | 10,059 | 137,337 |
+| 1 | 2 | 1,835 | 1,424 | 1,854 | 148,636 |
+
+这确认该样本在服务器的编码开销显著，默认配置约 96% 的转换时间位于 AVIF 阶段；不能把本机 0.56 秒推广到生产。保持 quality／effort 参数不变、仅在独立进程试用 4 线程，墙钟时间减少约 72%，总 CPU 时间相近；8 线程进一步缩短等待，但会更集中地争用在线服务的 CPU。线程设置也改变了产物字节，不承诺像素或文件完全一致。effort 2 的默认线程试验则减少约 81% 耗时、约 80% CPU 时间，文件增大约 9%；服务器产物没有做视觉或 PSNR 验收。
+
+这些是有限次数、固定顺序、低优先级独立进程的测量，不含上传队列、OSS、归档或发布，不能拿“20 秒减 9.44 秒”当作同一次请求的精确 I/O 时间，也没有复现此前一分钟的估计。下一步优先评估 **4 线程的运行时预算**，覆盖多种输入、最大尺寸、草稿保活／在线授权的混合负载及产物质量，同时给真实任务补阶段耗时；正式配置目前保持原状。8 线程组结束 RSS 约 384MiB，但含此前任务／缓存，仍不能当作每图峰值预算。
+
+### 排队、I/O 与云端选择
+
+代码确认当前是每 5 秒扫描、图片并发 1、单批最多 20 个任务，扫描期间占用 runner 的 image／OSS 资源槽。长批次处理完才释放，处理中新到任务也不在已有快照里；可感知等待可能同时包含轮询和排队，不能把上述编码时间当作选择文件到最终发布的总耗时。输入下载／Buffer 拼接、两个产物顺序上传、原图归档、数据库采用和预热也未纳入本基准。下一步先记录排队年龄及各外部阶段耗时，再评估入队唤醒和有界批次；数据库池／在线授权延迟目前只是待测风险。
+
+当前 JPEG 与 LQIP 分别解码一次最终 AVIF；effort 降低后这部分占比更高。可实验复用解码，但必须保持二者源自最终 AVIF 的合同，并复测内存和像素。`image-processing.ts` 属于冻结迁移依赖，未来运行时优化需另建入口并按需推进处理 profile；不能直接改历史实现或重算 digest。
+
+阿里云标准 OSS IMG 的[公开限制](https://help.aliyun.com/zh/oss/user-guide/overview-17/)为原图不超过 20MB、AVIF 输出宽不超过 4096px 且总像素不超过 9,437,184。当前应用接受 50MiB／2400 万像素，上述 3924×2550 照片也超过标准 AVIF 像素限制，因此不能直接全量替换；需本地回退、其他计算服务或工单确认更高限额。下述试验按用户要求先忽略尺寸边界比较速度，不代表已经解决这些接入限制；费用尚未核定。
+
+若选云端持久化处理，还须保留私有对象、尝试身份／租约、完整角色后原子采用及迟到结果清理；JPEG／LQIP 仍须从最终 AVIF 派生。[sys/saveas](https://www.alibabacloud.com/help/en/oss/user-guide/sys-or-saveas)需要来源处理权限及目标写权限，输出继承目标桶 ACL，不能用公开转换 URL 绕过当前读取授权。
+
+### OSS 转换 GET 与质量标尺（2026-11-01）
+
+按用户授权，将上述 1536×1024 PNG 上传到开发桶 `stupig-static-dev` 的本轮 UUID 私有前缀。由生产主机的独立 Node 进程请求 OSS API endpoint 的 V4 签名 GET，使用 `image/auto-orient,1/format,avif/quality,Q_N`，不经过 ESA／CDN。下表计入请求往返、OSS 转换及读取返回字节，不包含首次上传、持久化、数据库采用或应用任务排队；每个参数一次、顺序固定，前后请求也可能复用连接或内部缓存。
+
+| OSS Q | GET 总耗时 ms | AVIF 字节 | 本机像素诊断 PSNR dB |
+| --- | --- | --- | --- |
+| 65 | 480 | 62,791 | 34.49 |
+| 85 | 437 | 84,319 | 36.13 |
+| 95 | 538 | 120,099 | 38.17 |
+| 98 | 754 | 180,251 | 40.44 |
+| 100 | 644 | 180,251 | 40.44 |
+
+所有输出均验证为 AVIF、1536×1024；Q98／Q100 在此图上字节摘要相同。诊断与本机 Sharp 基线共用源文件、sRGB／白底 RGB 像素规则；Sharp quality 65 的本机 PSNR 为 39.21 dB、AVIF 为 137,267 字节。OSS Q65 与 Sharp quality 65 明显不是相同标尺，不能把更快且更小直接描述成保持同等画质；Q98 只是在本样本诊断中更高，也不构成视觉等价保证。云端没有对应 Sharp effort 的已验证映射。[OSS 质量参数说明](https://www.alibabacloud.com/help/en/oss/user-guide/adjust-image-quality)区分相对 `q` 与绝对 `Q`，并要求 PNG 等先转为有损目标格式后再调整质量。
+
+质量诊断后，用户选择云端 AVIF 方案采用 **Q100**；JPEG／LQIP 按 Q85／Q40。此图 Q100 的上述单次 GET 为 644ms，输出 180,251 字节（约 176KiB），不是纯编码耗时或完整持久化延迟。当前代码已实现独立 cloud profile；生产部署和完整上传链路验收另行确认，旧 Sharp profile 保持原状。
+
+**转换调用的隔离要求：** 用户明确要求普通用户不能获得云端转换入口。本轮测速使用私有源对象和 300 秒有效期的 OSS V4 预签名 GET，处理参数参与签名，URL 仅通过 SSH stdin 传入独立服务器进程，不返回浏览器、不记录完整签名 URL。预签名 URL 是有效期内持有即能使用的凭据，不能仅靠过期时间实现用户隔离。后续正式接入只允许后台以服务端凭据调用固定处理参数／受控来源与目标，优先 SDK 请求头鉴权；不提供任意对象、参数或 URL 的签名／转换 API，不把转换 URL 放入接口响应、重定向或页面。持久化目标桶必须确认私有，因为 `sys/saveas` 产物继承目标桶 ACL；全部角色回执和权限验证后，用户继续通过现有 Content／ESA 读取鉴权访问成品。现有 ESA 参数白名单拒绝 `x-oss-process`（包括 style），不能为了接入云端转换而放行或透传；正式上线前仍需验证匿名直连拒绝、参数篡改拒绝和前端无转换凭据。
+
+开发身份最初执行 `sys/saveas` 返回缺少 `oss:PostProcessTask` 的 HTTP 403。用户为本轮随机前缀补权限后，两次真实 AVIF 请求返回 HTTP 400、`BadRequest`、`Avif encode is not supported.`。因此不能把 GET 支持 AVIF 推导为该 endpoint 的 `sys/saveas` 也支持；正式实现改用后台 IMG GET + 私有 PUT，不需要扩展现有 RAM 策略。本轮原生持久化试验的临时源和哨兵均已软删除，预登记目标也逐一删除并确认当前 404；历史版本保留。该临时权限现可由用户撤销，代理未执行 RAM 管理操作。
+
+本轮 GET 试验没有改应用配置、写数据库或读取既有生产附件。两份临时源对象均已软删除，当前 HEAD 确认 404；旧版本仍由桶的实际生命周期保留，没有永久删除或扩大版本删除权限。返回的测试产物与摘要保存在本机忽略目录，不提交图片到仓库。
+
+### OSS 与 Sharp 的质量刻度对照
+
+这不是通用的质量乘数。2026-11-01 用三份不透明 sRGB 样本诊断：用户照片（1536×1024）、官方照片的缩小版（2400×1560），以及确定性的高饱和彩色细网格（1024×768）。输入先规范为无损 PNG，避免解码、方向或源 JPEG 的质量估计干扰；官方照片另以原 JPEG 做 Q65／97／100 对照，三个输出均与规范 PNG 输入时字节相同。逐档数据、输入摘要、码流采样及校验结果见[测量摘要 JSON](../../reviews/image-quality-mapping-2026-11-01.json)。
+
+| 角色 | 当前 Sharp 参数 | 本轮 OSS 对照 | 适用边界 |
+| --- | --- | --- | --- |
+| AVIF | quality 65、effort 4、默认 4:4:4 | 两张照片的目标 PSNR 落在 OSS Q96／Q97 两档之间；Q97 是达到或超过目标的最小已测档位 | 不是精确等画质，也不适用于全部图像；彩色网格 Q100 仍达不到 Sharp 65 |
+| JPEG 回退 | quality 85、默认 4:2:0 | Q85 | 相同最终 AVIF 输入时，量化表、解码像素与编码数据一致，仅 OSS 增加 18 字节 JFIF APP0 头 |
+| LQIP 编码 | quality 40、24px JPEG | Q40 | 同一份已缩小 PNG 输入时与 Sharp 编码一致；OSS 自己缩放及上游 AVIF 的差异另算 |
+
+#### AVIF：照片的近似档位与颜色边界
+
+两张照片都观察到以下 PSNR 区间，不能据此插值出严格等价的 Q，也不能外推到未测图片或其他编码器版本：
+
+| Sharp quality（effort 4、4:4:4） | OSS 已测 PSNR 对照 |
+| --- | --- |
+| 30 | Q20 已高于目标，本轮未向更低档位标定 |
+| 40 | 目标介于 Q50 和 Q60 之间 |
+| 50 | 目标介于 Q85 和 Q90 之间 |
+| 65 | 目标介于 Q96 和 Q97 之间 |
+| 75、85 | Q100 仍低于目标，没有达到目标的已测档位 |
+
+当前 quality 65 的具体结果：
+
+| 样本 | Sharp 65 PSNR | OSS Q94／95／96 PSNR | OSS Q97／98／100 PSNR | Sharp 65 → OSS Q97 字节 |
+| --- | --- | --- | --- | --- |
+| 用户照片 | 39.21 dB | 38.17 dB | 40.44 dB | 137,267 → 180,251（约 +31%） |
+| 官方照片 | 40.38 dB | 39.20 dB | 41.45 dB | 198,228 → 272,679（约 +38%） |
+| 彩色细网格 | 39.84 dB | 29.44 dB | 29.90 dB | 38,118 → 107,001，仍低于目标 |
+
+三张图在本次路径中分别出现 Q60／65、Q94／95／96、Q97／98／100 返回完全相同字节的档位组。这是实测现象，不推断云端内部如何量化或缓存；不能把 Q97 提到 Q100 当作必然的画质提升。
+
+依据 [AV1 配置记录](https://aomediacodec.github.io/av1-isobmff/#av1codecconfigurationbox-syntax)解析实际 AVIF 的 `av1C`：Sharp 当前输出 profile 1、8bit、4:4:4，符合 [Sharp 的默认选项](https://sharp.pixelplumbing.com/api-output/#avif)；本次 OSS Q65／97／100 则均为 profile 0、8bit、4:2:0。色度采样会影响彩色细线与边缘，提高 Q 不能直接恢复已减少的色彩采样。独立把 Sharp 65 改为 4:2:0 后，网格 PSNR 从 39.84 降至 33.20 dB，仍高于 OSS Q100 的 29.90 dB，因此差异不只由采样解释，不能把固定比例当成质量合同。本轮没有验证能将 OSS 输出切为 4:4:4 的公开参数，也未改正式采样设置。
+
+#### JPEG 与 LQIP：先隔离编码，再看完整链路
+
+JPEG 对照的两端都读取同一份最终 Sharp AVIF；LQIP 编码对照读取同一份由该 AVIF 缩到最大 24px、白底的无损 PNG。JPEG 的 40／65／75／85／95、LQIP 的 20／40／60，各在三张图验证，共 24 组：同档位量化表与 4:2:0 采样一致，解码像素逐字节相同；移除 JFIF APP0 后其余 JPEG 文件也逐字节相同。本轮可将编码参数按 1:1 对照，但不保证其他版本或不同选项永远如此。Sharp 直接从 AVIF 缩放并输出 quality 40 的 LQIP，也与经共享 PNG 再编码的三份结果逐字节一致，确认该中间步骤未改变本轮对照。
+
+完整 LQIP 还有缩放差异：同一最终 AVIF 经 OSS 与 Sharp 各自缩成无损小图，两张照片的 RGB PSNR 仅约 31.78／29.04 dB；加入 Q40 JPEG 后，与 Sharp 缩放参考的 PSNR 分别为 23.17／21.25 dB，而 Sharp 原链路为 23.85／22.03 dB。不能为了补缩放误差，直接把 JPEG Q 当作补偿系数。JPEG 回退同样会继承各自 AVIF 的误差：参数 85 对应 85 不代表不同 AVIF 输入最终生成相同图片。
+
+上述质量标定只验证 GET 转换和本机像素／码流，不把 PSNR 当作视觉等价证明，也不证明透明图、ICC／HDR、其他尺寸或全部输入格式的质量合同。标定新增的 22 个私有测试对象均已软删除，当前 HEAD 为 404；历史版本未永久删除。后续接入与透明图验收另列于下文。
+
+### 后台接入验收（2026-11-01）
+
+真实运行 `create_oss_image_processor`，使用开发桶的本轮独占 UUID staging／image keys，不写业务数据库，不接触既有附件。两轮各测试用户照片、全透明 PNG、EXIF orientation 6 JPEG；均完成 AVIF／JPEG 的私有 PUT、版本／大小／SHA-256 回读核对，以及从最终 AVIF 生成的 LQIP。[脱敏验收摘要](../../reviews/oss-image-integration-2026-11-01.json)保留输入／产物摘要与最后一轮计时。校正计时边界后的单轮结果如下，调用客户端为本机 ARM64，计时不包含后续人工式回读／匿名请求断言：
+
+| 样本 | 适配器总耗时 ms | 本机 CPU ms | AVIF／JPEG 字节 | 额外核验 |
+| --- | --- | --- | --- | --- |
+| 1536×1024 用户照片 | 1,167 | 110 | 180,251／277,387 | LQIP 397 字节 |
+| 32×16 全透明 PNG | 523 | 78 | 496／287 | JPEG 白底像素 255／255／255 |
+| 40×24、orientation 6 JPEG | 538 | 47 | 318／295 | 成品 24×40，方向已校正 |
+
+这些耗时含 OSS 请求、校验、两个私有 PUT 和 HEAD／ACL 确认，不含最初上传、任务队列、原图归档、数据库采用或生产网络；不是生产端到端延迟或 p95。两轮 18 个新增对象均已软删除并确认当前 404，未永久删除旧版本。每份持久化 AVIF／JPEG 的匿名原址读取与追加 `x-oss-process` 请求均为 403。试验只证明这三种样本与该开发桶路径；更大尺寸、ICC／HDR、并发、费用和生产发布仍须继续验收。
+
 ## 源码与验证
 
 - 图片领域：[`image-job.service.ts`](../../../server/services/content/image-job.service.ts)、[`image-original-object.ts`](../../../server/services/content/image-original-object.ts)、[`redacted-variant.ts`](../../../server/services/content/redacted-variant.ts)。
+- 本地转换基准：[`image-performance.ts`](../../../scripts/verify/image-performance.ts)；真实 CLI 回归检查报告、资源参数及失败后的计时恢复，不以耗时数值作为通过门槛。
 - 画布：[`ImageEditor.vue`](../../../app/components/MyContent/Attachment/ImageEditor.vue)、[`useImageEditSession.ts`](../../../app/composables/useImageEditSession.ts)、[`useImageEditorViewport.ts`](../../../app/composables/useImageEditorViewport.ts)、[`image-edit.ts`](../../../app/utils/content/image-edit.ts)。
 - 展示：[`image-presentation.ts`](../../../server/services/content/image-presentation.ts)、[`lqip.ts`](../../../app/utils/content/lqip.ts)。
 

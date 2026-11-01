@@ -1,4 +1,5 @@
 import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
+import type { create_oss_image_processor } from '@server/lib/oss-image-processing'
 import type { Pool } from 'mysql2/promise'
 import type { ImageJobIntent } from './image-job.service'
 import { createHash } from 'node:crypto'
@@ -34,7 +35,7 @@ describe('durable image intent', () => {
   })
 })
 
-async function pipeline() {
+async function pipeline(cloud?: typeof create_oss_image_processor) {
   const bytes = await sharp({ create: { width: 4, height: 3, channels: 3, background: '#449988' } }).png().toBuffer()
   const input = { ... base.input, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
   const objects = new Map([[input.key, { bytes, etag: input.etag, version_id: input.version_id }]])
@@ -159,7 +160,7 @@ async function pipeline() {
     }),
     soft_delete_object: vi.fn(async (key: string) => { objects.delete(key) }),
   }
-  const jobs = create_image_jobs({ getConnection: async () => connection } as unknown as Pool, storage as unknown as ReturnType<typeof create_aliyun_oss>, 60, 10)
+  const jobs = create_image_jobs({ getConnection: async () => connection } as unknown as Pool, storage as unknown as ReturnType<typeof create_aliyun_oss>, 60, 10, cloud)
   async function adopt(node_revision = 1) {
     await connection.beginTransaction()
     try {
@@ -206,6 +207,31 @@ it.each([true, false])('publishes the verified original and both variants with a
   expect(f.state.retired).toEqual([f.input.key])
   await f.jobs.cleanup()
   expect(f.storage.soft_delete_object).not.toHaveBeenCalled()
+})
+
+it('owns cloud targets before execution and adopts cloud receipts through the existing publisher', async () => {
+  const encode = vi.fn<ReturnType<typeof create_oss_image_processor>>()
+  const f = await pipeline(() => encode)
+  f.state.job.intent.processor = 'oss'
+  f.state.job.intent.profile_version = 2
+  encode.mockImplementation(async (request) => {
+    expect(f.state.attempts).toHaveLength(1)
+    expect(f.state.attempts[0]).toMatchObject({ avif_key: `${request.prefix}.avif`, jpeg_key: `${request.prefix}.jpg`, adopted: 0 })
+    const avif_bytes = await sharp(request.bytes).avif({ effort: 0 }).toBuffer()
+    const jpeg_bytes = await sharp(avif_bytes).jpeg().toBuffer()
+    const put = async (key: string, bytes: Buffer, mime: string) => ({ key, ... await request.storage.put_object(key, bytes, mime, 'private'), size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
+    const avif = await put(`${request.prefix}.avif`, avif_bytes, 'image/avif')
+    const jpeg = await put(`${request.prefix}.jpg`, jpeg_bytes, 'image/jpeg')
+    await request.checkpoint()
+    return { avif: { ... avif, version_id: avif.version_id! }, jpeg: { ... jpeg, version_id: jpeg.version_id! }, width: 4, height: 3, lqip: jpeg_bytes }
+  })
+  await f.jobs.run(f.state.job.id, 1)
+  expect(encode).toHaveBeenCalledOnce()
+  expect(f.state.job.status).toBe('ready')
+  await f.adopt()
+  expect(f.state.job.status).toBe('completed')
+  expect(f.state.attachment.avif_key).toBe(f.state.attempts[0]!.avif_key)
+  expect(f.state.attachment.original_key).toBe(image_original_key(f.state.job.id, f.state.job.active_attempt_id!))
 })
 
 it('publishes a redacted pair on its private owner without changing its normal pixels or archive', async () => {

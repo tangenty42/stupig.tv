@@ -5,6 +5,7 @@ import type { RedactedVariantRow } from './redacted-variant'
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
 import { image_processing_options_schema, process_image_variants } from '@server/lib/image-processing'
+import { create_oss_image_processor } from '@server/lib/oss-image-processing'
 import { settings } from '@shared/settings'
 import { z } from 'zod'
 import { image_download_name, resolve_attachment_role } from './attachment-access.service'
@@ -25,6 +26,7 @@ export const image_job_intent_schema = z.strictObject({
   input: object_identity.extend({ sha256: object_identity.shape.sha256.nullable() }), original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255),
   source: z.strictObject({ id: z.number().int().positive(), revision: z.number().int().positive(), node_revision: z.number().int().positive(), key: z.string().min(1).max(512), is_private: z.boolean() }).nullable(),
   profile_version: z.number().int().positive(), profile: image_processing_options_schema,
+  processor: z.literal('oss').optional(),
   input_basis: z.enum(['avif', 'original']).optional(),
   redacted_policy: z.enum(['keep', 'discard']).optional(),
 }).superRefine((value, ctx) => {
@@ -71,9 +73,9 @@ function jpeg_bytes(base64: string) {
 /**
  * Internal producer: callers must hold the existing namespace/upload reservation.
  * No arbitrary-key public API and no process-local promise owns this ledger.
- * Runtime scheduling/transport activation belongs to the image cutover stage.
+ * Each admitted intent owns its provider/profile; retries only refresh budgets.
  */
-export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: ReturnType<typeof create_aliyun_oss>, lease_seconds: number, heartbeat_seconds: number) {
+export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: ReturnType<typeof create_aliyun_oss>, lease_seconds: number, heartbeat_seconds: number, cloud = create_oss_image_processor) {
   if (! Number.isInteger(lease_seconds) || lease_seconds < 1 || heartbeat_seconds <= 0 || heartbeat_seconds >= lease_seconds)
     throw new ApiError(400, '图片处理租约无效')
   async function transaction<T>(action: (connection: Connection) => Promise<T>) {
@@ -221,10 +223,6 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       const sha256 = createHash('sha256').update(bytes).digest('hex')
       if (length !== input.size || (input.sha256 !== null && sha256 !== input.sha256))
         throw conflict()
-      const result = await process_image_variants(bytes, profile)
-      jpeg_bytes(result.lqip.toString('base64'))
-      abort.signal.throwIfAborted()
-      await renew()
       const output = async (key: string, body: Buffer, mime: string) => {
         abort.signal.throwIfAborted()
         const object = await storage.put_object(key, body, mime, 'private')
@@ -233,8 +231,19 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
           throw conflict()
         return { key, etag: object.etag, version_id: object.version_id, size: body.length, sha256: createHash('sha256').update(body).digest('hex') }
       }
-      const avif = await output(`${claim.prefix}.avif`, result.avif, 'image/avif')
-      const jpeg = await output(`${claim.prefix}.jpg`, result.jpeg, 'image/jpeg')
+      const result = claim.intent.processor === 'oss'
+        ? await cloud()({ storage, input: { ... input, sha256 }, bytes, profile, prefix: claim.prefix, signal: abort.signal, checkpoint: renew })
+        : await (async () => {
+            const result = await process_image_variants(bytes, profile)
+            jpeg_bytes(result.lqip.toString('base64'))
+            abort.signal.throwIfAborted()
+            await renew()
+            const avif = await output(`${claim.prefix}.avif`, result.avif, 'image/avif')
+            const jpeg = await output(`${claim.prefix}.jpg`, result.jpeg, 'image/jpeg')
+            return { ... result, avif, jpeg }
+          })()
+      const { avif, jpeg } = result
+      jpeg_bytes(result.lqip.toString('base64'))
       const archive = claim.intent.mode === 'upload' ? { ... input, sha256 } : claim.intent.mode === 'copy' ? avif : null
       const original = archive
         ? await copy_image_original(storage, archive, image_original_key(id, claim.attempt), abort.signal)

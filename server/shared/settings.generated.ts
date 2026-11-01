@@ -122,6 +122,9 @@ export const settings: Settings = {
       },
       image: {
         lqipMaxBytes: 8192,
+        uploadMaxBytes: 20971520,
+        uploadMaxDimension: 4096,
+        uploadMaxPixels: 9437184,
       },
       encrypt: {
         maxSizeMb: 20,

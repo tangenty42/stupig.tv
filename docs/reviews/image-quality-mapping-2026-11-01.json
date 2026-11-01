@@ -1,0 +1,1213 @@
+{
+  "date": "2026-11-01",
+  "environment": {
+    "sharp": "0.35.5",
+    "vips": "8.18.7",
+    "aom": "3.15.1",
+    "concurrency": 12,
+    "node": "v24.22.1"
+  },
+  "current_profile": {
+    "maxInputBytes": 52428800,
+    "maxPixels": 24000000,
+    "avifQuality": 65,
+    "avifEffort": 4,
+    "jpegQuality": 85,
+    "jpegBackground": "#ffffff",
+    "lqipMaxDimension": 24,
+    "lqipQuality": 40,
+    "timeoutSeconds": 60
+  },
+  "method": {
+    "sample_count": 3,
+    "inputs": "opaque sRGB lossless PNG normalized from user photograph, official photographic example and generated saturated colour grid",
+    "avif_reference": "normalized source RGB",
+    "jpeg_reference": "decoded shared Sharp quality-65 final AVIF; both encoders receive the same bytes",
+    "lqip_reference": "shared Sharp 24px PNG for encoding isolation; separate actual OSS resize probes",
+    "metric": "8-bit RGB PSNR; null means identical pixels; not a perceptual equivalence guarantee",
+    "avif_effort": 4,
+    "cloud_mode": "GET image processing in dev bucket; no sys/saveas",
+    "timing": "not used as codec-only latency; local-client GET includes network"
+  },
+  "validation": {
+    "jpeg_pixel_equal_pairs": 15,
+    "lqip_pixel_equal_pairs": 9,
+    "codestream_equal_without_APP0": 24,
+    "test_objects_soft_deleted": 22,
+    "historical_versions": "not permanently deleted",
+    "source_JPEG_PNG_controls": [
+      {
+        "quality": 65,
+        "bytes": 71459,
+        "sha256": "a6e7cf2a939d28b45a725631d6680710b065dcbbb22ea399616fb4903f7ffd32",
+        "same_as_PNG_source": true,
+        "psnr_db": 36.19290494000674
+      },
+      {
+        "quality": 97,
+        "bytes": 272679,
+        "sha256": "0c146cdb179f5461e67d9de4a536e0912ba54a3b2540e6b3024d7dffac8b78a6",
+        "same_as_PNG_source": true,
+        "psnr_db": 41.44728713734577
+      },
+      {
+        "quality": 100,
+        "bytes": 272679,
+        "sha256": "0c146cdb179f5461e67d9de4a536e0912ba54a3b2540e6b3024d7dffac8b78a6",
+        "same_as_PNG_source": true,
+        "psnr_db": 41.44728713734577
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": "user-photo",
+      "width": 1536,
+      "height": 1024,
+      "canonical_sha256": "53b9f7fb0956c37dc3aef5842e8d4e84dcbf0a7335d560c3e7bba71e134c8e77",
+      "original_sha256": "94aa579025cadcfbed20a910aef4aaadf19c3b006de6884bfff8c367d86c0f80",
+      "avif": {
+        "sharp_444": [
+          {
+            "quality": 30,
+            "psnr_db": 32.2929,
+            "bytes": 42002
+          },
+          {
+            "quality": 40,
+            "psnr_db": 34.2448,
+            "bytes": 59819
+          },
+          {
+            "quality": 50,
+            "psnr_db": 36.3825,
+            "bytes": 85810
+          },
+          {
+            "quality": 65,
+            "psnr_db": 39.2104,
+            "bytes": 137267
+          },
+          {
+            "quality": 75,
+            "psnr_db": 41.2741,
+            "bytes": 186071
+          },
+          {
+            "quality": 85,
+            "psnr_db": 42.8525,
+            "bytes": 248397
+          }
+        ],
+        "sharp_420": [
+          {
+            "quality": 40,
+            "psnr_db": 34.0053,
+            "bytes": 58354
+          },
+          {
+            "quality": 50,
+            "psnr_db": 36.1053,
+            "bytes": 83535
+          },
+          {
+            "quality": 65,
+            "psnr_db": 38.7707,
+            "bytes": 132616
+          },
+          {
+            "quality": 75,
+            "psnr_db": 40.6878,
+            "bytes": 181301
+          },
+          {
+            "quality": 85,
+            "psnr_db": 42.1955,
+            "bytes": 243089
+          }
+        ],
+        "oss_420": [
+          {
+            "quality": 20,
+            "psnr_db": 33.121,
+            "bytes": 49166
+          },
+          {
+            "quality": 30,
+            "psnr_db": 33.4371,
+            "bytes": 52261
+          },
+          {
+            "quality": 40,
+            "psnr_db": 33.8038,
+            "bytes": 55701
+          },
+          {
+            "quality": 50,
+            "psnr_db": 34.1074,
+            "bytes": 58957
+          },
+          {
+            "quality": 60,
+            "psnr_db": 34.4887,
+            "bytes": 62791
+          },
+          {
+            "quality": 65,
+            "psnr_db": 34.4887,
+            "bytes": 62791
+          },
+          {
+            "quality": 75,
+            "psnr_db": 35.1232,
+            "bytes": 70317
+          },
+          {
+            "quality": 80,
+            "psnr_db": 35.4534,
+            "bytes": 74573
+          },
+          {
+            "quality": 85,
+            "psnr_db": 36.1292,
+            "bytes": 84319
+          },
+          {
+            "quality": 90,
+            "psnr_db": 36.9531,
+            "bytes": 97557
+          },
+          {
+            "quality": 94,
+            "psnr_db": 38.1706,
+            "bytes": 120099
+          },
+          {
+            "quality": 95,
+            "psnr_db": 38.1706,
+            "bytes": 120099
+          },
+          {
+            "quality": 96,
+            "psnr_db": 38.1706,
+            "bytes": 120099
+          },
+          {
+            "quality": 97,
+            "psnr_db": 40.4379,
+            "bytes": 180251
+          },
+          {
+            "quality": 98,
+            "psnr_db": 40.4379,
+            "bytes": 180251
+          },
+          {
+            "quality": 100,
+            "psnr_db": 40.4379,
+            "bytes": 180251
+          }
+        ],
+        "psnr_brackets": [
+          {
+            "sharp_quality": 30,
+            "sharp_psnr_db": 32.2929,
+            "last_below_OSS_quality": null,
+            "first_at_least_OSS_quality": 20,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 40,
+            "sharp_psnr_db": 34.2448,
+            "last_below_OSS_quality": 50,
+            "first_at_least_OSS_quality": 60,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 50,
+            "sharp_psnr_db": 36.3825,
+            "last_below_OSS_quality": 85,
+            "first_at_least_OSS_quality": 90,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 65,
+            "sharp_psnr_db": 39.2104,
+            "last_below_OSS_quality": 96,
+            "first_at_least_OSS_quality": 97,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 75,
+            "sharp_psnr_db": 41.2741,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 85,
+            "sharp_psnr_db": 42.8525,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          }
+        ],
+        "bitstream_configs": {
+          "sharp-avif-65.avif": [
+            {
+              "profile": 1,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:4:4"
+            }
+          ],
+          "sharp420-avif-65.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-65.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-97.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-100.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ]
+        },
+        "observed_equal_output_quality_groups": [
+          [
+            40
+          ],
+          [
+            60,
+            65
+          ],
+          [
+            75
+          ],
+          [
+            85
+          ],
+          [
+            90
+          ],
+          [
+            94,
+            95,
+            96
+          ],
+          [
+            97,
+            98,
+            100
+          ]
+        ]
+      },
+      "jpeg": {
+        "tested_equal_quality_pairs": [
+          {
+            "quality": 40,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 65,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 75,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 85,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 95,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          }
+        ],
+        "current_sharp_85": {
+          "quality": 85,
+          "psnr_db": 41.5356,
+          "bytes": 278364
+        },
+        "current_OSS_85": {
+          "quality": 85,
+          "psnr_db": 41.5356,
+          "bytes": 278382
+        }
+      },
+      "lqip": {
+        "dimensions": {
+          "width": 24,
+          "height": 16
+        },
+        "tested_equal_quality_pairs": [
+          {
+            "quality": 20,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 40,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 60,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          }
+        ],
+        "current_sharp_40": {
+          "quality": 40,
+          "psnr_db": 23.8526,
+          "bytes": 378
+        },
+        "current_OSS_40": {
+          "quality": 40,
+          "psnr_db": 23.8526,
+          "bytes": 396
+        },
+        "lossless_resize_psnr_db": 31.7766,
+        "actual_OSS_resize_JPEG_40_psnr_db": 23.168
+      },
+      "own_AVIF_pipeline": [
+        {
+          "role": "own-avif-jpeg",
+          "avif_quality": 97,
+          "quality": 85,
+          "bytes": 277387,
+          "sha256": "dda9105a16841717fabaf6f66cc97ed4550363a2a2be9dd47ea84d76d058aac2",
+          "psnr_db": 40.43286851092689,
+          "original_psnr_db": 38.344868706001314,
+          "format": "jpeg",
+          "chroma_subsampling": "4:2:0",
+          "matching_sharp_quantizers": [
+            85
+          ]
+        },
+        {
+          "role": "own-avif-lqip",
+          "avif_quality": 97,
+          "quality": 40,
+          "bytes": 397,
+          "sha256": "8d57634a05c417946b644f4ba9b1917409cfe32d28fde6b535080f1141cd6583",
+          "psnr_db": 23.20999330484447,
+          "format": "jpeg",
+          "chroma_subsampling": "4:2:0",
+          "matching_sharp_quantizers": [
+            40
+          ]
+        }
+      ]
+    },
+    {
+      "id": "official-photo",
+      "width": 2400,
+      "height": 1560,
+      "canonical_sha256": "b6373ea9e1c05b3d5a9be35619191ba860466bf07d73e677329e7941f1d49c30",
+      "original_sha256": "00ab7480c4c86ae0f4bf5dd841dc1495a331c01f9bab093f43f0d52f899af927",
+      "avif": {
+        "sharp_444": [
+          {
+            "quality": 30,
+            "psnr_db": 34.4538,
+            "bytes": 50662
+          },
+          {
+            "quality": 40,
+            "psnr_db": 36.0576,
+            "bytes": 73304
+          },
+          {
+            "quality": 50,
+            "psnr_db": 37.9075,
+            "bytes": 111907
+          },
+          {
+            "quality": 65,
+            "psnr_db": 40.3765,
+            "bytes": 198228
+          },
+          {
+            "quality": 75,
+            "psnr_db": 43.4507,
+            "bytes": 315387
+          },
+          {
+            "quality": 85,
+            "psnr_db": 45.9354,
+            "bytes": 447600
+          }
+        ],
+        "sharp_420": [
+          {
+            "quality": 40,
+            "psnr_db": 35.763,
+            "bytes": 69222
+          },
+          {
+            "quality": 50,
+            "psnr_db": 37.4662,
+            "bytes": 104636
+          },
+          {
+            "quality": 65,
+            "psnr_db": 39.6419,
+            "bytes": 184911
+          },
+          {
+            "quality": 75,
+            "psnr_db": 42.1136,
+            "bytes": 299953
+          },
+          {
+            "quality": 85,
+            "psnr_db": 44.1602,
+            "bytes": 430896
+          }
+        ],
+        "oss_420": [
+          {
+            "quality": 20,
+            "psnr_db": 35.0865,
+            "bytes": 55316
+          },
+          {
+            "quality": 30,
+            "psnr_db": 35.3343,
+            "bytes": 59115
+          },
+          {
+            "quality": 40,
+            "psnr_db": 35.6342,
+            "bytes": 62983
+          },
+          {
+            "quality": 50,
+            "psnr_db": 35.9005,
+            "bytes": 66856
+          },
+          {
+            "quality": 60,
+            "psnr_db": 36.1929,
+            "bytes": 71459
+          },
+          {
+            "quality": 65,
+            "psnr_db": 36.1929,
+            "bytes": 71459
+          },
+          {
+            "quality": 75,
+            "psnr_db": 36.7289,
+            "bytes": 80919
+          },
+          {
+            "quality": 80,
+            "psnr_db": 36.9719,
+            "bytes": 85944
+          },
+          {
+            "quality": 85,
+            "psnr_db": 37.498,
+            "bytes": 98611
+          },
+          {
+            "quality": 90,
+            "psnr_db": 38.1518,
+            "bytes": 117395
+          },
+          {
+            "quality": 94,
+            "psnr_db": 39.1973,
+            "bytes": 155147
+          },
+          {
+            "quality": 95,
+            "psnr_db": 39.1973,
+            "bytes": 155147
+          },
+          {
+            "quality": 96,
+            "psnr_db": 39.1973,
+            "bytes": 155147
+          },
+          {
+            "quality": 97,
+            "psnr_db": 41.4473,
+            "bytes": 272679
+          },
+          {
+            "quality": 98,
+            "psnr_db": 41.4473,
+            "bytes": 272679
+          },
+          {
+            "quality": 100,
+            "psnr_db": 41.4473,
+            "bytes": 272679
+          }
+        ],
+        "psnr_brackets": [
+          {
+            "sharp_quality": 30,
+            "sharp_psnr_db": 34.4538,
+            "last_below_OSS_quality": null,
+            "first_at_least_OSS_quality": 20,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 40,
+            "sharp_psnr_db": 36.0576,
+            "last_below_OSS_quality": 50,
+            "first_at_least_OSS_quality": 60,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 50,
+            "sharp_psnr_db": 37.9075,
+            "last_below_OSS_quality": 85,
+            "first_at_least_OSS_quality": 90,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 65,
+            "sharp_psnr_db": 40.3765,
+            "last_below_OSS_quality": 96,
+            "first_at_least_OSS_quality": 97,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 75,
+            "sharp_psnr_db": 43.4507,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 85,
+            "sharp_psnr_db": 45.9354,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          }
+        ],
+        "bitstream_configs": {
+          "sharp-avif-65.avif": [
+            {
+              "profile": 1,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:4:4"
+            }
+          ],
+          "sharp420-avif-65.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-65.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-97.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-100.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ]
+        },
+        "observed_equal_output_quality_groups": [
+          [
+            40
+          ],
+          [
+            60,
+            65
+          ],
+          [
+            75
+          ],
+          [
+            85
+          ],
+          [
+            90
+          ],
+          [
+            94,
+            95,
+            96
+          ],
+          [
+            97,
+            98,
+            100
+          ]
+        ]
+      },
+      "jpeg": {
+        "tested_equal_quality_pairs": [
+          {
+            "quality": 40,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 65,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 75,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 85,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 95,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          }
+        ],
+        "current_sharp_85": {
+          "quality": 85,
+          "psnr_db": 42.1939,
+          "bytes": 400428
+        },
+        "current_OSS_85": {
+          "quality": 85,
+          "psnr_db": 42.1939,
+          "bytes": 400446
+        }
+      },
+      "lqip": {
+        "dimensions": {
+          "width": 24,
+          "height": 16
+        },
+        "tested_equal_quality_pairs": [
+          {
+            "quality": 20,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 40,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 60,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          }
+        ],
+        "current_sharp_40": {
+          "quality": 40,
+          "psnr_db": 22.0315,
+          "bytes": 393
+        },
+        "current_OSS_40": {
+          "quality": 40,
+          "psnr_db": 22.0315,
+          "bytes": 411
+        },
+        "lossless_resize_psnr_db": 29.0374,
+        "actual_OSS_resize_JPEG_40_psnr_db": 21.2543
+      },
+      "own_AVIF_pipeline": [
+        {
+          "role": "own-avif-jpeg",
+          "avif_quality": 97,
+          "quality": 85,
+          "bytes": 416318,
+          "sha256": "3d5359089a4a2b232e47ac35b6777eb53a16cdd8d20c98d5f0d0e2baa980bf1c",
+          "psnr_db": 40.3734625818445,
+          "original_psnr_db": 38.93672118039299,
+          "format": "jpeg",
+          "chroma_subsampling": "4:2:0",
+          "matching_sharp_quantizers": [
+            85
+          ]
+        },
+        {
+          "role": "own-avif-lqip",
+          "avif_quality": 97,
+          "quality": 40,
+          "bytes": 410,
+          "sha256": "9bf90c0baa166639f527aabac3fbeea92c1420ce2ae33e500b16cc67f8563f7a",
+          "psnr_db": 21.240792174886167,
+          "format": "jpeg",
+          "chroma_subsampling": "4:2:0",
+          "matching_sharp_quantizers": [
+            40
+          ]
+        }
+      ]
+    },
+    {
+      "id": "colour-grid",
+      "width": 1024,
+      "height": 768,
+      "canonical_sha256": "8321c76bfc689d660cc08d9dc78ed963da5b1ab61f836bf081f7b8b7f0ed006f",
+      "original_sha256": "8321c76bfc689d660cc08d9dc78ed963da5b1ab61f836bf081f7b8b7f0ed006f",
+      "avif": {
+        "sharp_444": [
+          {
+            "quality": 30,
+            "psnr_db": 36.3027,
+            "bytes": 6727
+          },
+          {
+            "quality": 40,
+            "psnr_db": 37.6744,
+            "bytes": 7727
+          },
+          {
+            "quality": 50,
+            "psnr_db": 37.9853,
+            "bytes": 10680
+          },
+          {
+            "quality": 65,
+            "psnr_db": 39.84,
+            "bytes": 38118
+          },
+          {
+            "quality": 75,
+            "psnr_db": 43.0045,
+            "bytes": 59412
+          },
+          {
+            "quality": 85,
+            "psnr_db": 45.5469,
+            "bytes": 78967
+          }
+        ],
+        "sharp_420": [
+          {
+            "quality": 40,
+            "psnr_db": 32.5404,
+            "bytes": 6951
+          },
+          {
+            "quality": 50,
+            "psnr_db": 32.6851,
+            "bytes": 9427
+          },
+          {
+            "quality": 65,
+            "psnr_db": 33.1958,
+            "bytes": 36755
+          },
+          {
+            "quality": 75,
+            "psnr_db": 33.7375,
+            "bytes": 61558
+          },
+          {
+            "quality": 85,
+            "psnr_db": 33.9811,
+            "bytes": 83568
+          }
+        ],
+        "oss_420": [
+          {
+            "quality": 20,
+            "psnr_db": 27.7811,
+            "bytes": 33945
+          },
+          {
+            "quality": 30,
+            "psnr_db": 27.8913,
+            "bytes": 35509
+          },
+          {
+            "quality": 40,
+            "psnr_db": 27.9132,
+            "bytes": 36739
+          },
+          {
+            "quality": 50,
+            "psnr_db": 28.1192,
+            "bytes": 38431
+          },
+          {
+            "quality": 60,
+            "psnr_db": 28.3228,
+            "bytes": 40053
+          },
+          {
+            "quality": 65,
+            "psnr_db": 28.3228,
+            "bytes": 40053
+          },
+          {
+            "quality": 75,
+            "psnr_db": 28.6791,
+            "bytes": 44011
+          },
+          {
+            "quality": 80,
+            "psnr_db": 28.7484,
+            "bytes": 46285
+          },
+          {
+            "quality": 85,
+            "psnr_db": 28.9051,
+            "bytes": 52224
+          },
+          {
+            "quality": 90,
+            "psnr_db": 29.2802,
+            "bytes": 51434
+          },
+          {
+            "quality": 94,
+            "psnr_db": 29.4427,
+            "bytes": 69092
+          },
+          {
+            "quality": 95,
+            "psnr_db": 29.4427,
+            "bytes": 69092
+          },
+          {
+            "quality": 96,
+            "psnr_db": 29.4427,
+            "bytes": 69092
+          },
+          {
+            "quality": 97,
+            "psnr_db": 29.9014,
+            "bytes": 107001
+          },
+          {
+            "quality": 98,
+            "psnr_db": 29.9014,
+            "bytes": 107001
+          },
+          {
+            "quality": 100,
+            "psnr_db": 29.9014,
+            "bytes": 107001
+          }
+        ],
+        "psnr_brackets": [
+          {
+            "sharp_quality": 30,
+            "sharp_psnr_db": 36.3027,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 40,
+            "sharp_psnr_db": 37.6744,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 50,
+            "sharp_psnr_db": 37.9853,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 65,
+            "sharp_psnr_db": 39.84,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 75,
+            "sharp_psnr_db": 43.0045,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          },
+          {
+            "sharp_quality": 85,
+            "sharp_psnr_db": 45.5469,
+            "last_below_OSS_quality": 100,
+            "first_at_least_OSS_quality": null,
+            "exact_equivalence": false
+          }
+        ],
+        "bitstream_configs": {
+          "sharp-avif-65.avif": [
+            {
+              "profile": 1,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:4:4"
+            }
+          ],
+          "sharp420-avif-65.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-65.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-97.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ],
+          "oss-avif-100.avif": [
+            {
+              "profile": 0,
+              "bit_depth": 8,
+              "monochrome": false,
+              "chroma": "4:2:0"
+            }
+          ]
+        },
+        "observed_equal_output_quality_groups": [
+          [
+            40
+          ],
+          [
+            60,
+            65
+          ],
+          [
+            75
+          ],
+          [
+            85
+          ],
+          [
+            90
+          ],
+          [
+            94,
+            95,
+            96
+          ],
+          [
+            97,
+            98,
+            100
+          ]
+        ]
+      },
+      "jpeg": {
+        "tested_equal_quality_pairs": [
+          {
+            "quality": 40,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 65,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 75,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 85,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 95,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          }
+        ],
+        "current_sharp_85": {
+          "quality": 85,
+          "psnr_db": 18.124,
+          "bytes": 140762
+        },
+        "current_OSS_85": {
+          "quality": 85,
+          "psnr_db": 18.124,
+          "bytes": 140780
+        }
+      },
+      "lqip": {
+        "dimensions": {
+          "width": 24,
+          "height": 18
+        },
+        "tested_equal_quality_pairs": [
+          {
+            "quality": 20,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 40,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          },
+          {
+            "quality": 60,
+            "same_decoded_pixels": true,
+            "same_without_APP0": true,
+            "max_channel_delta": 0,
+            "byte_difference": 18
+          }
+        ],
+        "current_sharp_40": {
+          "quality": 40,
+          "psnr_db": 19.4569,
+          "bytes": 430
+        },
+        "current_OSS_40": {
+          "quality": 40,
+          "psnr_db": 19.4569,
+          "bytes": 448
+        },
+        "lossless_resize_psnr_db": 32.3305,
+        "actual_OSS_resize_JPEG_40_psnr_db": 19.4761
+      },
+      "own_AVIF_pipeline": [
+        {
+          "role": "own-avif-jpeg",
+          "avif_quality": 100,
+          "quality": 85,
+          "bytes": 140122,
+          "sha256": "282f91413136601dd65e411bf718fe68c5b51662eb3e8d0e6420a9794de35013",
+          "psnr_db": 16.542834644012643,
+          "original_psnr_db": 15.233634024567262,
+          "format": "jpeg",
+          "chroma_subsampling": "4:2:0",
+          "matching_sharp_quantizers": [
+            85
+          ]
+        },
+        {
+          "role": "own-avif-lqip",
+          "avif_quality": 100,
+          "quality": 40,
+          "bytes": 452,
+          "sha256": "57357f5a5e423439d58723f8a2ead6cfbb67d44d1446d11a76e5fe426fa42133",
+          "psnr_db": 19.443456941610382,
+          "format": "jpeg",
+          "chroma_subsampling": "4:2:0",
+          "matching_sharp_quantizers": [
+            40
+          ]
+        }
+      ]
+    }
+  ]
+}

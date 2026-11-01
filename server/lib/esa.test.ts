@@ -143,6 +143,8 @@ describe('eSA signed Content reads', () => {
       (u: URL) => u.searchParams.append('response-content-disposition', u.searchParams.get('response-content-disposition')!),
       (u: URL) => u.searchParams.append('auth_key', u.searchParams.get('auth_key')!),
       (u: URL) => u.searchParams.set('version', '2'),
+      (u: URL) => u.searchParams.set('x-oss-process', 'image/format,avif/quality,Q_100'),
+      (u: URL) => u.searchParams.set('x-oss-process', 'style/avif'),
       (u: URL) => { u.search = u.search.replace('auth_key=', '%61uth_key=') },
     ]
     for (const change of variants) {

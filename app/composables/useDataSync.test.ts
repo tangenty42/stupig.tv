@@ -335,6 +335,22 @@ describe('data sync transport', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('preserves SDK close cleanup and consumes late errors during asynchronous disposal', async () => {
+    const { transport, client } = await start()
+    // MQTT clears its handshake deadline in an internal asynchronous close handler.
+    const deadline = setTimeout(() => client.emit('error', new Error('connack timeout')), settings.app.client.sync.connectTimeoutMs)
+    client.once('close', () => clearTimeout(deadline))
+    client.end.mockImplementation(() => {
+      setTimeout(() => client.emit('close'), 1)
+      return client
+    })
+    transport.dispose()
+    expect(() => client.emit('error', new Error('late socket error'))).not.toThrow()
+    expect(() => vi.advanceTimersByTime(settings.app.client.sync.connectTimeoutMs + 1)).not.toThrow()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(mocks.connect).toHaveBeenCalledOnce()
+  })
+
   it('does not reconnect after pagehide while a resource gather is pending', async () => {
     const transport = create_data_sync_transport('ws://broker')
     transports.push(transport)

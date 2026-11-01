@@ -126,6 +126,7 @@ describe('deployment configuration', () => {
   it('keeps image processing budgets server-only and rejects invalid lease/profile limits', () => {
     const config = load_config(deployment_env)
     expect(config.app.contentImages).toMatchObject({ enabled: true, concurrency: 1, profileVersion: 1 })
+    expect(config.app.contentImages.cloud).toMatchObject({ enabled: true, profileVersion: 2, profile: { avifQuality: 100, jpegQuality: 85, lqipQuality: 40 } })
     expect(public_config_from(config).app).not.toHaveProperty('contentImages')
     const image = config.app.contentImages
     for (const invalid of [{ ... image, heartbeatSeconds: image.leaseSeconds }, { ... image, concurrency: 0 }, { ... image, profile: { ... image.profile, avifQuality: 101 } }])
