@@ -157,12 +157,10 @@ const list_rows = computed<MyContentAttachmentRow[]>(() => model.rows.map((row, 
   const message = session ? model.uploads.errors.get(session.id) ?? session.image_error ?? null : null
   const upload = preparation
     ? {
-        status: preparation.phase === 'failed' ? 'error' as const : ['waiting', 'ready'].includes(preparation.phase) ? 'queued' as const : 'uploading' as const,
+        status: preparation.phase === 'failed' ? 'error' as const : preparation.phase === 'waiting' ? 'queued' as const : 'uploading' as const,
         progress: preparation.size ? Math.min(100, preparation.loaded / preparation.size * 100) : 100,
         file_size: preparation.size, message: preparation.error ?? null,
-        label: preparation.phase === 'hashing'
-          ? `正在准备上传 · ${Math.floor(preparation.size ? preparation.loaded / preparation.size * 100 : 100)}%`
-          : preparation.phase === 'waiting' ? '等待准备' : preparation.phase === 'ready' ? '准备完成，等待这批文件确认' : '正在确认上传',
+        label: preparation.phase === 'waiting' ? '等待受理' : '正在确认上传',
       }
     : session
       ? {
@@ -379,7 +377,7 @@ function status(row: WorkspaceListRow) {
   if (! model.uploads.active.has(session.id))
     return model.uploads.errors.has(session.id) ? '未完成' : '已暂停'
   const phase = model.uploads.progress.get(session.id)?.phase
-  return phase === 'hashing' ? '正在校验原文件' : phase === 'verifying' || phase === 'ready' ? '服务器处理中' : `${percent(row)} %`
+  return phase === 'checking' ? '正在核对已上传分片' : phase === 'verifying' || phase === 'ready' ? '服务器处理中' : `${percent(row)} %`
 }
 function pick(parent: number, folder: boolean) {
   const path = prefix(parent) || null

@@ -242,9 +242,11 @@ export function create_aliyun_oss(config: Destination | null = runtime_config().
     return client.signatureUrlV4(method as OSS.HTTPMethods, expires_in, { queries }, key)
   }
 
-  async function get_object_stream(key: string, etag: string, signal?: AbortSignal) {
+  async function get_object_stream(key: string, etag: string, signal?: AbortSignal, range?: { start: number, end: number }) {
     signal?.throwIfAborted()
-    const response = await client.getStream(object_key(key), { headers: { 'If-Match': `"${etag.replaceAll('"', '')}"` } })
+    if (range && (! Number.isSafeInteger(range.start) || ! Number.isSafeInteger(range.end) || range.start < 0 || range.end < range.start))
+      throw new ApiError(400, 'OSS 读取范围无效')
+    const response = await client.getStream(object_key(key), { headers: { 'If-Match': `"${etag.replaceAll('"', '')}"`, ... range ? { Range: `bytes=${range.start}-${range.end}` } : {} } })
     const stream: unknown = response.stream
     if (! (stream instanceof Readable))
       throw new ApiError(502, 'OSS 未返回对象数据流')
@@ -253,6 +255,11 @@ export function create_aliyun_oss(config: Destination | null = runtime_config().
     if (size_header === undefined || ! Number.isSafeInteger(size) || size < 0) {
       stream.destroy()
       throw new ApiError(502, 'OSS 对象大小无效')
+    }
+    if (range && (response.res.status !== 206 || size !== range.end - range.start + 1
+      || ! new RegExp(`^bytes ${range.start}-${range.end}/[0-9]+$`).test(headers(response)['content-range'] ?? ''))) {
+      stream.destroy()
+      throw new ApiError(502, 'OSS 未返回请求的精确范围')
     }
     if (signal)
       addAbortSignal(signal, stream)

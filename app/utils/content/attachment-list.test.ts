@@ -16,7 +16,7 @@ const plain = { ctrlKey: false, metaKey: false, shiftKey: false }
 
 it('does not mix local preparations with server upload selections', () => {
   const preparation: WorkspaceListRow = { key: 'preparing:local', parent_id: 1, name: 'large.bin', path: 'large.bin', depth: 0,
-    preparation: { id: 'local', path: 'large.bin', size: 9000, loaded: 0, phase: 'hashing' } }
+    preparation: { id: 'local', path: 'large.bin', size: 9000, loaded: 0, phase: 'admitting' } }
   const upload: WorkspaceListRow = { key: 'session:actual', parent_id: 1, name: 'other.bin', path: 'other.bin', depth: 0, session: { id: 'actual' } as ContentUploadSession }
   const selected = select_attachment_row([preparation, upload], new Set([upload.key]), upload.key, preparation, { ... plain, ctrlKey: true })
   expect([... selected]).toEqual([preparation.key])

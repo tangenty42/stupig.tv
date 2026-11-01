@@ -21,7 +21,6 @@ export interface ContentUploadSession {
   image_error?: string
   path: string
   size: number
-  sha256: string
   key: string | null
   upload_id: string | null
   part_size: number | null

@@ -10,7 +10,7 @@ import { project_workspace_rows } from '~/utils/content/workspace'
 
 const state = vi.hoisted(() => ({
   api: { begin_upload_batch: vi.fn(), adopt_upload_session: vi.fn(), get_upload_session: vi.fn(), resume_upload_session: vi.fn(), initialize_upload_session: vi.fn(), sign_upload_session_part: vi.fn(), seal_upload_session: vi.fn(), cancel_upload_session: vi.fn() },
-  hash: vi.fn(), run: vi.fn(), pause: vi.fn(),
+  run: vi.fn(), pause: vi.fn(),
   save_handle: vi.fn(), load_handle: vi.fn(), delete_handle: vi.fn(),
   driver_apis: [] as UploadSessionApi[],
 }))
@@ -27,7 +27,7 @@ vi.stubGlobal('useState', (key: string, init: () => unknown) => {
   return resources.get(key)
 })
 vi.stubGlobal('useApi', () => ({ content: state.api }))
-vi.mock('~/utils/content/browser-upload', () => ({ upload_file_sha256: state.hash, create_browser_upload: (api: UploadSessionApi) => {
+vi.mock('~/utils/content/browser-upload', () => ({ create_browser_upload: (api: UploadSessionApi) => {
   state.driver_apis.push(api)
   return { run: state.run, pause: state.pause }
 } }))
@@ -36,7 +36,7 @@ vi.mock('~/utils/content/upload-file-handle', async original => ({
   save_upload_file_handle: state.save_handle, load_upload_file_handle: state.load_handle, delete_upload_file_handle: state.delete_handle,
 }))
 const { useContentUploadsStore } = await import('./contentUploads')
-const session = { id: 'a'.repeat(32), scope_id: 24, status: 'ready', path: 'a.txt', size: 3, sha256: 'a'.repeat(64), parts: [], target: { bucket: 'test', region: 'test', endpoint: 'https://test' }, key: 'staging/key', upload_id: 'upload', part_size: 262144, object_etag: 'etag' } satisfies ContentUploadSession
+const session = { id: 'a'.repeat(32), scope_id: 24, status: 'ready', path: 'a.txt', size: 3, parts: [], target: { bucket: 'test', region: 'test', endpoint: 'https://test' }, key: 'staging/key', upload_id: 'upload', part_size: 262144, object_etag: 'etag' } satisfies ContentUploadSession
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.resetAllMocks()
@@ -46,7 +46,6 @@ beforeEach(() => {
   state.save_handle.mockResolvedValue(undefined)
   state.load_handle.mockResolvedValue(null)
   state.delete_handle.mockResolvedValue(undefined)
-  state.hash.mockResolvedValue(session.sha256)
   // Admission precedes bytes; a ready session would skip the transfer under test.
   state.api.begin_upload_batch.mockResolvedValue({ accepted: [{ index: 0, session_id: session.id, path: session.path }], sessions: [{ ... session, status: 'queued' }], succeeded: [session.path], skipped: [], renamed: [] })
   state.api.cancel_upload_session.mockResolvedValue({ ... session, status: 'cancelled' })
@@ -55,67 +54,47 @@ beforeEach(() => {
   state.api.adopt_upload_session.mockResolvedValue({ attachment: { id: 9, file_name: 'a.txt' } })
 })
 
-it('shows all selected files before hashing or admission and updates the current progress', async () => {
-  let finish!: (digest: string) => void
-  let report!: (progress: { phase: 'hashing', loaded: number, total: number }) => void
-  state.hash.mockImplementationOnce((_file, _signal, progress) => {
-    report = progress
-    return new Promise(resolve => finish = resolve)
-  })
+it('admits the complete selection without reading any file bytes', async () => {
+  const response = deferred<unknown>()
+  state.api.begin_upload_batch.mockReturnValueOnce(response.promise)
   const store = useContentUploadsStore(24)
-  const pending = store.start(['large.bin', 'small.txt'].map(name => ({ file: new File(['abc'], name), file_name: name })))
-  expect(store.preparations.map(item => [item.path, item.phase])).toEqual([['large.bin', 'hashing'], ['small.txt', 'waiting']])
-  expect(store.sessions).toEqual([])
-  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
-  report({ phase: 'hashing', loaded: 2, total: 3 })
-  expect(store.preparations[0]?.loaded).toBe(2)
-  expect(store.can_cancel_preparation).toBe(true)
-  finish(session.sha256)
+  const files = ['large.bin', 'small.txt'].map(name => new File(['abc'], name))
+  const reads = files.map(file => vi.spyOn(file, 'slice'))
+  const pending = store.start(files.map(file => ({ file, file_name: file.name })))
+  expect(store.preparations.map(item => [item.path, item.phase])).toEqual([['large.bin', 'admitting'], ['small.txt', 'admitting']])
+  expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
+  expect(state.api.begin_upload_batch.mock.calls[0]![0].entries.every((entry: object) => ! ('sha256' in entry))).toBe(true)
+  expect(reads.every(read => read.mock.calls.length === 0)).toBe(true)
+  expect(store.can_cancel_preparation).toBe(false)
+  response.resolve({ accepted: [], sessions: [], skipped: [], renamed: [] })
   await pending
   expect(store.preparations).toEqual([])
 })
 
-it('cancels local preparation without admission and fences its late result from a new selection', async () => {
-  let finish!: (digest: string) => void
-  let signal!: AbortSignal
-  state.hash.mockImplementationOnce((_file, abort) => {
-    signal = abort
-    return new Promise(resolve => finish = resolve)
-  })
+it('forgets a mismatched selection so continuing can request another file', async () => {
   const store = useContentUploadsStore(24)
-  const old = store.start([{ file: new File(['abc'], 'old.bin'), file_name: 'old.bin' }])
-  store.cancel_preparation()
-  expect(signal.aborted).toBe(true)
-  expect(store.preparations).toEqual([])
-  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
-  const next = store.start([{ file: new File(['abc'], 'new.bin'), file_name: 'new.bin' }])
-  finish(session.sha256)
-  await Promise.all([old, next])
-  expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
-  expect(state.api.begin_upload_batch.mock.calls[0]![0].entries[0].path).toBe('new.bin')
+  const handle = { queryPermission: vi.fn().mockResolvedValue('granted'), getFile: vi.fn() } as unknown as FileSystemFileHandle
+  state.run.mockRejectedValueOnce(Object.assign(new Error('请选择内容一致的原文件'), { code: 'UPLOAD_FILE_MISMATCH' }))
+  await store.start([{ file: new File(['abc'], 'a.txt'), file_name: 'a.txt', handle }])
+  await vi.waitFor(() => expect(store.errors.get(session.id)).toContain('内容一致'))
+  expect(store.has_file(session.id)).toBe(false)
+  await vi.waitFor(() => expect(state.delete_handle).toHaveBeenCalledOnce())
+  expect(await store.resume(session.id)).toBe(false)
+  expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
 })
 
-it('keeps read failures visible and can clear them without creating a server session', async () => {
-  state.hash.mockRejectedValueOnce(new Error('file unavailable'))
-  const store = useContentUploadsStore(24)
-  await expect(store.start([{ file: new File(['abc'], 'large.bin'), file_name: 'large.bin' }])).rejects.toThrow('file unavailable')
-  expect(store.preparations[0]).toMatchObject({ phase: 'failed', error: 'file unavailable' })
-  expect(store.can_cancel_preparation).toBe(true)
-  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
-  store.cancel_preparation()
-  expect(store.preparations).toEqual([])
-})
-
-it('rejects over-limit selections before scanning file bytes', async () => {
+it('rejects over-limit selections before reading bytes or creating sessions', async () => {
   const file = new File(['abc'], 'oversized.bin')
   Object.defineProperty(file, 'size', { value: settings.app.content.upload.maxSizeMb * 1024 ** 2 + 1 })
+  const read = vi.spyOn(file, 'slice')
   const store = useContentUploadsStore(24)
   await expect(store.start([{ file, file_name: file.name }])).rejects.toThrow('上传上限')
-  expect(state.hash).not.toHaveBeenCalled()
+  expect(store.preparations[0]).toMatchObject({ phase: 'failed' })
   expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
   store.cancel_preparation()
+  expect(store.preparations).toEqual([])
   await expect(store.start(Array.from({ length: settings.app.content.workspace.batchLimit + 1 }, () => ({ file, file_name: file.name })))).rejects.toThrow('分批上传')
-  expect(state.hash).not.toHaveBeenCalled()
+  expect(read).not.toHaveBeenCalled()
 })
 
 it('does not pretend to cancel an unknown admission result and retries its original identity', async () => {
@@ -129,7 +108,6 @@ it('does not pretend to cancel an unknown admission result and retries its origi
   const request = state.api.begin_upload_batch.mock.calls[0]![0].request_id
   await store.submit()
   expect(state.api.begin_upload_batch.mock.calls[1]![0].request_id).toBe(request)
-  expect(state.hash).toHaveBeenCalledOnce()
   expect(store.preparations).toEqual([])
 })
 
@@ -137,7 +115,7 @@ it('publishes only after verified upload and delivers the returned attachment on
   const store = useContentUploadsStore(24)
   const on_landed = vi.fn()
   await store.start([{ file: new File(['abc'], 'a.txt'), file_name: 'a.txt', on_landed }])
-  expect(state.api.begin_upload_batch.mock.calls[0]![0]).toMatchObject({ scope_id: 24, entries: [{ path: 'a.txt', sha256: session.sha256, purpose: 'create' }] })
+  expect(state.api.begin_upload_batch.mock.calls[0]![0]).toMatchObject({ scope_id: 24, entries: [{ path: 'a.txt', purpose: 'create' }] })
   await vi.waitFor(() => expect(on_landed).toHaveBeenCalledOnce())
   expect(state.api.adopt_upload_session).toHaveBeenCalledWith(session.id)
   expect(on_landed).toHaveBeenCalledOnce()
@@ -215,7 +193,6 @@ it.each([false, true])('passes .good file and directory declarations through rea
   const input = state.api.begin_upload_batch.mock.calls[0]![0]
   expect(input.entries.map((entry: { path: string }) => entry.path)).toEqual(paths.map(path => path.replace('.PNG', '.png').replace('.GIF', '.gif')))
   expect(input.entries.every((entry: { selection_root?: string }) => entry.selection_root === (folder ? 'album.good' : undefined))).toBe(true)
-  expect(state.hash).toHaveBeenCalledTimes(paths.length)
 })
 
 it.each([
@@ -315,7 +292,6 @@ it.each([
   await store.start([{ file, file_name: path, purpose, selection_root, ... (purpose === 'replace' ? { source: { id: 9, version: 'v1' } } : {}) }])
   expect(state.api.begin_upload_batch.mock.calls[0]![0].entries[0]).toMatchObject({ path: expected, original_name: 'Original.JPG', purpose })
   expect(file.name).toBe('Original.JPG')
-  expect(state.hash.mock.calls[0]![0]).toBe(file)
   await vi.waitFor(() => expect(store.active.size).toBe(0))
 })
 
@@ -588,31 +564,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-// Exercise the real store -> admission -> runtime wiring. Only hashing, API
-// and browser persistence are replaced, so an omitted identity reset is caught.
-it('aborts hashing on identity change and fences old progress and completion from the next selection', async () => {
-  const store = useContentUploadsStore(24)
-  const old_hash = deferred<string>()
-  const new_hash = deferred<string>()
-  state.hash.mockReturnValueOnce(old_hash.promise).mockReturnValueOnce(new_hash.promise)
-  const old_start = store.start([{ file: new File(['abc'], 'old.txt'), file_name: 'old.txt' }])
-  const [, signal, progress] = state.hash.mock.calls[0]!
-  user.value = { id: 8, is_admin: true }
-  expect(signal.aborted).toBe(true)
-  const new_start = store.start([{ file: new File(['abc'], 'new.txt'), file_name: 'new.txt' }])
-  progress({ loaded: 2, total: 3 })
-  old_hash.resolve(session.sha256)
-  await old_start
-  expect(store.preparing).toEqual({ path: 'new.txt', loaded: 0, total: 3 })
-  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
-  await expect(store.start([])).rejects.toThrow('正在处理所选文件')
-  new_hash.resolve(session.sha256)
-  await new_start
-  expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
-  expect(state.api.begin_upload_batch.mock.calls[0]![0].entries[0].path).toBe('new.txt')
-  await vi.waitFor(() => expect(store.active.size).toBe(0))
-})
-
+// Exercise the real store -> admission -> runtime identity fence across delayed API replies.
 it.each(['success', 'failure'])('discards a late admission %s without changing the next identity batch', async (outcome) => {
   const store = useContentUploadsStore(24)
   const old_request = deferred<unknown>()

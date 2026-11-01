@@ -22,7 +22,7 @@ const object_identity = image_object_identity
 export const image_job_intent_schema = z.strictObject({
   scope_id: z.number().int().positive(), actor_id: z.number().int().positive(),
   mode: z.enum(['upload', 'copy', 'overwrite', 'redacted']), is_private: z.boolean(),
-  input: object_identity, original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255),
+  input: object_identity.extend({ sha256: object_identity.shape.sha256.nullable() }), original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255),
   source: z.strictObject({ id: z.number().int().positive(), revision: z.number().int().positive(), node_revision: z.number().int().positive(), key: z.string().min(1).max(512), is_private: z.boolean() }).nullable(),
   profile_version: z.number().int().positive(), profile: image_processing_options_schema,
   input_basis: z.enum(['avif', 'original']).optional(),
@@ -218,7 +218,8 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
         chunks.push(Buffer.from(chunk))
       }
       const bytes = Buffer.concat(chunks)
-      if (length !== input.size || createHash('sha256').update(bytes).digest('hex') !== input.sha256)
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      if (length !== input.size || (input.sha256 !== null && sha256 !== input.sha256))
         throw conflict()
       const result = await process_image_variants(bytes, profile)
       jpeg_bytes(result.lqip.toString('base64'))
@@ -234,7 +235,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       }
       const avif = await output(`${claim.prefix}.avif`, result.avif, 'image/avif')
       const jpeg = await output(`${claim.prefix}.jpg`, result.jpeg, 'image/jpeg')
-      const archive = claim.intent.mode === 'upload' ? input : claim.intent.mode === 'copy' ? avif : null
+      const archive = claim.intent.mode === 'upload' ? { ... input, sha256 } : claim.intent.mode === 'copy' ? avif : null
       const original = archive
         ? await copy_image_original(storage, archive, image_original_key(id, claim.attempt), abort.signal)
         : null
@@ -334,7 +335,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
     const previous = typeof row.image_metadata === 'string' ? JSON.parse(row.image_metadata) : row.image_metadata
     const archive = intent.mode === 'upload' ? intent.input : intent.mode === 'copy' ? result.avif : null
     if (!! archive !== !! result.original || (result.original && (result.original.key !== image_original_key(id, job.active_attempt_id!)
-      || result.original.sha256 !== archive!.sha256 || result.original.size !== archive!.size))) {
+      || (archive!.sha256 !== null && result.original.sha256 !== archive!.sha256) || result.original.size !== archive!.size))) {
       throw conflict()
     }
     const original = archive ? result.original!.key : intent.mode === 'overwrite' ? row.original_key : null

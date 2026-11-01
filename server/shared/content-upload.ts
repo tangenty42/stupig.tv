@@ -11,7 +11,8 @@ export const upload_intent_schema = z.strictObject({
   scope_id: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), operation: z.literal('upload'),
   target_path: z.string().min(1).max(255), target_location: z.literal('aliyun'), target_access: z.enum(['public', 'private']),
   expected_size: z.number().int().positive().max(settings.app.content.upload.maxSizeMb * 1024 ** 2),
-  sha256: z.string().regex(/^[\da-f]{64}$/),
+  // Existing durable intents may carry this field; uploads no longer require or compare it.
+  sha256: z.string().regex(/^[\da-f]{64}$/).optional(),
   mime_type: mime_type_schema.optional(),
   purpose: z.enum(['create', 'replace', 'redact']).default('create'),
   target_parent_id: z.number().int().positive().optional(),
@@ -25,7 +26,7 @@ export const upload_batch_schema = z.strictObject({
   request_id: z.uuid(), scope_id: z.number().int().positive(),
   on_error: error_policy_schema.default(() => error_policy_schema.parse({})),
   entries: z.array(z.strictObject({
-    path: z.string().max(4096), size: z.number().int().nonnegative(), sha256: z.string().regex(/^[\da-f]{64}$/),
+    path: z.string().max(4096), size: z.number().int().nonnegative(),
     purpose: z.enum(['create', 'replace', 'redact']).default('create'), access: z.enum(['public', 'private']).default('public'),
     source: workspace_target_schema.optional(), replacement: workspace_target_schema.optional(),
     image_mode: image_save_mode_schema.optional(),

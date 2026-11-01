@@ -43,7 +43,7 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
     if (! storage_key)
       return
     // Browser storage is optional. Its failure must not reject an accepted upload.
-    const saved = save_upload_file_handle(db_name, storage_key, { file_name: file.name, file_size: file.size, handle }).catch(() => {})
+    const saved = (saves.get(id) ?? Promise.resolve()).then(() => save_upload_file_handle(db_name, storage_key, { file_name: file.name, file_size: file.size, handle })).catch(() => {})
     saves.set(id, saved)
     await saved
   }
@@ -214,6 +214,16 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
         complete(id, receipt.attachment, receipt.workspace)
     }
     catch (error) {
+      if (live() && error instanceof Error && 'code' in error && error.code === 'UPLOAD_FILE_MISMATCH') {
+        files.delete(id)
+        handles.delete(id)
+        const storage_key = key(id)
+        if (storage_key) {
+          // Serialize with a later reattachment so stale cleanup cannot erase its handle.
+          const deleted = (saves.get(id) ?? Promise.resolve()).then(() => delete_upload_file_handle(db_name, storage_key)).catch(() => {})
+          saves.set(id, deleted)
+        }
+      }
       if (live() && ! (error instanceof DOMException && error.name === 'AbortError'))
         failed(id, error)
     }

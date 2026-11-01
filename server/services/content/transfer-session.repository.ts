@@ -173,13 +173,15 @@ export async function record_transfer_part(connection: Connection, claim: Transf
   await touch(connection, claim)
 }
 
-export async function verify_transfer_attempt(connection: Connection, claim: TransferClaim, attempt_id: string, identity: { size: number, etag: string, oss_version_id: string, sha256: string }) {
-  z.strictObject({ size: integer, etag: z.string().min(1).max(255), oss_version_id: z.string().min(1).max(255), sha256: z.string().regex(/^[\da-f]{64}$/) }).parse(identity)
+export async function verify_transfer_attempt(connection: Connection, claim: TransferClaim, attempt_id: string, identity: { size: number, etag: string, oss_version_id: string, sha256: string | null }) {
+  z.strictObject({ size: integer, etag: z.string().min(1).max(255), oss_version_id: z.string().min(1).max(255), sha256: z.string().regex(/^[\da-f]{64}$/).nullable() }).parse(identity)
   const { session, attempt } = await active_attempt(connection, claim, attempt_id)
   const intent: Intent = typeof session.intent === 'string' ? JSON.parse(session.intent) : session.intent
-  const expected_sha256 = intent.operation === 'upload' ? intent.sha256 : intent.source.sha256
-  if (Number(session.expected_size) !== identity.size || (expected_sha256 && expected_sha256 !== identity.sha256))
+  const expected_sha256 = intent.operation === 'upload' ? null : intent.source.sha256
+  if (Number(session.expected_size) !== identity.size || (expected_sha256 && expected_sha256 !== identity.sha256)
+    || (intent.operation !== 'upload' && identity.sha256 === null)) {
     throw new ApiError(409, '完整对象与固定传输计划不符')
+  }
   if (attempt.upload_id) {
     const [parts] = await connection.execute<RowDataPacket[]>('SELECT COUNT(*) AS count, COALESCE(SUM(byte_length), 0) AS bytes FROM content_transfer_parts WHERE attempt_id = ?', [attempt_id])
     if (Number(parts[0]!.count) !== Math.ceil(identity.size / Number(attempt.part_size)) || Number(parts[0]!.bytes) !== identity.size)

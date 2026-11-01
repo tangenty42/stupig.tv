@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { api_schema, draft_schema } from './schemas'
 
 const request = { request_id: '00000000-0000-4000-8000-000000000001', scope_id: 1 }
-const entry = { path: 'new photo.PNG', size: 10, sha256: 'a'.repeat(64) }
+const entry = { path: 'new photo.PNG', size: 10 }
 describe('workspace request boundaries', () => {
   it('preserves raw names and duplicate paths for transactional resolve', () => {
     const result = upload_batch_schema.parse({ ... request, entries: [entry, entry] })

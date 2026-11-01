@@ -51,7 +51,7 @@ beforeEach(() => {
     active_attempt_id: 'b'.repeat(32), revision: 1, execution_epoch: 1, busy: 0,
     result: { key: 'new-key', etag: 'v2', oss_version_id: 'oss-v2', size: 10, sha256: 'c'.repeat(64) },
     intent: { scope_id: 1, operation: 'upload', target_path: 'new.txt', target_name: 'new.txt', target_parent_id: 1,
-      target_location: 'aliyun', target_access: 'public', expected_size: 10, sha256: 'c'.repeat(64), purpose: 'create' },
+      target_location: 'aliyun', target_access: 'public', expected_size: 10, purpose: 'create' },
   } as UploadRow
   boundary.execute.mockImplementation(async (sql: string, args: unknown[] = []) => {
     if (sql.includes('FROM content_story_drafts'))
@@ -116,7 +116,7 @@ beforeEach(() => {
 it('enqueues a published raw GIF through the real upload adopter without warming a staging input', async () => {
   preload_fixture.enabled = true
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path: 'raw.gif', size: 10, sha256: 'c'.repeat(64) }] }))
+    entries: [{ path: 'raw.gif', size: 10 }] }))
   session.status = 'verifying'
   session.result = { key: 'content/att/raw-gif', etag: 'etag', oss_version_id: 'oss-version', size: 10, sha256: 'c'.repeat(64) }
   const published = await adopt_upload_session(result.accepted[0]!.session_id, 7)
@@ -132,7 +132,7 @@ it.each([
   ['photos/nested.good/Scan.TIFF', 'photos', 'photos/nested.good/Scan.tiff', 'image/tiff', false],
 ])('admits the direct or inherited declaration on %s without duplicating the marker', async (path, selection_root, expected, mime, processed) => {
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path, selection_root, original_name: path.split('/').at(- 1), size: 10, sha256: 'c'.repeat(64) }] }))
+    entries: [{ path, selection_root, original_name: path.split('/').at(- 1), size: 10 }] }))
   expect(result.accepted).toMatchObject([{ path: expected }])
   expect(session.intent).toMatchObject({ target_path: expected, target_access: 'private', mime_type: mime })
   expect(Boolean(session.intent.image)).toBe(processed)
@@ -155,7 +155,7 @@ it.each([false, true])('keeps mixed upload access separate for multi-file and fo
     ? ['album/public.txt', 'album/private.good/sub/a.txt', 'album/private.good/sub/b.txt', 'album/solo.txt.good']
     : ['public.txt', 'solo.txt.good', 'second.GIF.good']
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(), entries: paths.map(path => ({
-    path, ... (folder ? { selection_root: 'album' } : {}), size: 10, sha256: 'c'.repeat(64),
+    path, ... (folder ? { selection_root: 'album' } : {}), size: 10,
   })) }))
   const intents = boundary.execute.mock.calls.filter(([sql]) => sql.startsWith('INSERT INTO content_transfer_sessions')).map(([, args]) => JSON.parse(String(args[6])))
   expect(intents.map(intent => [intent.target_path, intent.target_access])).toEqual(paths.map((path, index) => [path.replace('.GIF', '.gif'), index ? 'private' : 'public']))
@@ -164,7 +164,7 @@ it.each([false, true])('keeps mixed upload access separate for multi-file and fo
 
 it.each(['solo.txt.good', 'private.good/sub/a.txt'])('rejects %s without private permission before accepting any transfer', async (path) => {
   admin = false
-  await expect(begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(), entries: [{ path, size: 10, sha256: 'c'.repeat(64) }] })))
+  await expect(begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(), entries: [{ path, size: 10 }] })))
     .rejects.toMatchObject({ statusCode: 403 })
   expect(boundary.execute.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO content_transfer_sessions'))).toBe(false)
 })
@@ -172,7 +172,7 @@ it.each(['solo.txt.good', 'private.good/sub/a.txt'])('rejects %s without private
 it('preserves a private folder declaration when resolving a whole-folder collision', async () => {
   rows.push({ ... rows[0]!, id: 3, parent_id: 1, name: 'photos.good', name_key: 'photos.good', file_name: 'photos.good' })
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(), on_error: { name_conflict: 'suffix' },
-    entries: ['a.txt', 'sub/b.txt'].map(name => ({ path: `photos.good/${name}`, selection_root: 'photos.good', size: 10, sha256: 'c'.repeat(64) })) }))
+    entries: ['a.txt', 'sub/b.txt'].map(name => ({ path: `photos.good/${name}`, selection_root: 'photos.good', size: 10 })) }))
   expect(result.accepted.map(item => item.path)).toEqual(['photos_1.good/a.txt', 'photos_1.good/sub/b.txt'])
   expect(session.intent.target_access).toBe('private')
 })
@@ -180,7 +180,7 @@ it('preserves a private folder declaration when resolving a whole-folder collisi
 it.each([true, false])('rechecks privacy after sanitizing a name into an ACL declaration (permission=%s)', async (allowed) => {
   admin = allowed
   const input = upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(), on_error: { invalid_name: 'sanitize' },
-    entries: [{ path: 'secret.good.', size: 10, sha256: 'c'.repeat(64) }] })
+    entries: [{ path: 'secret.good.', size: 10 }] })
   if (! allowed) {
     await expect(begin_upload_batch(7, input)).rejects.toMatchObject({ statusCode: 403 })
     expect(boundary.execute.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO content_transfer_sessions'))).toBe(false)
@@ -204,7 +204,7 @@ it.each(['keep', 'discard'] as const)('requires explicit %s resolution before ad
     redacted_avif_key: 'redacted.avif', redacted_jpeg_key: 'redacted.jpg', redacted_revision: 1 })
   const input = upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(), entries: [{
     path: 'existing.txt', purpose: 'replace', source: { id: 2, version: node_version(rows, rows[1]!) },
-    original_name: 'replacement.gif', content_type: 'image/gif', size: 10, sha256: 'c'.repeat(64),
+    original_name: 'replacement.gif', content_type: 'image/gif', size: 10,
   }] })
   await expect(begin_upload_batch(7, input)).rejects.toMatchObject({ statusCode: 409, public_data: { details: { items: [expect.objectContaining({ category: 'redacted', code: 'REDACTED_EXISTS' })] } } })
   expect(boundary.execute.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO content_transfer_sessions'))).toBe(false)
@@ -221,9 +221,9 @@ it.each([
   ['Secret.GIF', 'image/gif', 'private'],
 ])('admits and publishes %s as unchanged original bytes without an image job', async (original, mime, access) => {
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path: original, original_name: original, content_type: mime, access, size: 10, sha256: 'c'.repeat(64) }] }))
+    entries: [{ path: original, original_name: original, content_type: mime, access, size: 10 }] }))
   expect(session.intent.image).toBeUndefined()
-  expect(session.intent.sha256).toBe('c'.repeat(64))
+  expect(session.intent).not.toHaveProperty('sha256')
   session.status = 'verifying'
   session.result = { key: 'original-bytes', etag: 'original-etag', oss_version_id: 'original-version', size: 10, sha256: 'c'.repeat(64) }
   const published = await adopt_upload_session(result.accepted[0]!.session_id, 7)
@@ -243,7 +243,7 @@ it.each([
   ['', 'Selected.PNG', 'image/png'],
 ])('uses the selected %s file rather than a replacement target suffix', async (declared, original, expected) => {
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path: 'Retained.GIF', original_name: original, content_type: declared, size: 10, sha256: 'c'.repeat(64) }] }))
+    entries: [{ path: 'Retained.GIF', original_name: original, content_type: declared, size: 10 }] }))
   const mime = declared || expected
   expect(result.accepted).toHaveLength(1)
   expect(session.intent.mime_type).toBe(mime)
@@ -258,7 +258,7 @@ it.each([
   Object.assign(rows[1]!, { avif_key: 'source.avif', jpeg_key: 'source.jpg', image_revision: 1 })
   const source = { id: 2, version: node_version(rows, rows[1]!) }
   await expect(begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path, original_name: 'edited.png', content_type: 'image/png', image_mode: 'copy', source, size: 10, sha256: 'c'.repeat(64) }] })))
+    entries: [{ path, original_name: 'edited.png', content_type: 'image/png', image_mode: 'copy', source, size: 10 }] })))
     .rejects.toMatchObject({ statusCode: 409, public_data: { details: { items: [expect.objectContaining({ code })] } } })
   expect(boundary.execute.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO content_transfer_sessions'))).toBe(false)
 })
@@ -267,7 +267,7 @@ it('admits an edited AVIF copy while retaining PNG as its temporary pixel input'
   Object.assign(rows[1]!, { avif_key: 'source.avif', jpeg_key: 'source.jpg', image_revision: 1 })
   const source = { id: 2, version: node_version(rows, rows[1]!) }
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path: '副本.AVIF', original_name: 'edited.png', content_type: 'image/png', image_mode: 'copy', source, size: 10, sha256: 'c'.repeat(64) }] }))
+    entries: [{ path: '副本.AVIF', original_name: 'edited.png', content_type: 'image/png', image_mode: 'copy', source, size: 10 }] }))
   expect(result.accepted[0]?.path).toBe('副本.avif')
   expect(session.intent.image).toMatchObject({ mode: 'copy', original_mime: 'image/png', original_name: 'edited.png' })
 })
@@ -282,7 +282,7 @@ it('refuses legacy redaction of an original GIF even when replacement retained a
   Object.assign(rows[1]!, { name: 'Kept.jpg.good', file_name: 'Kept.jpg.good', name_key: 'kept.jpg.good', is_private: 1, mime_type: 'image/gif' })
   const source = { id: 2, version: node_version(rows, rows[1]!) }
   await expect(begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path: 'Kept.jpg', original_name: 'edited.png', content_type: 'image/png', purpose: 'redact', source, size: 10, sha256: 'c'.repeat(64) }] })))
+    entries: [{ path: 'Kept.jpg', original_name: 'edited.png', content_type: 'image/png', purpose: 'redact', source, size: 10 }] })))
     .rejects.toMatchObject({ statusCode: 409, public_data: { code: 'BATCH_REJECTED', details: { items: [expect.objectContaining({ code: 'INVALID_REDACTION' })] } } })
   expect(boundary.execute.mock.calls.some(([sql]) => sql.startsWith('INSERT INTO content_transfer_sessions'))).toBe(false)
 })
@@ -297,7 +297,7 @@ it.each([
   const source = { id: 2, version: node_version(rows, rows[1]!) }
   const original = mime === 'image/gif' ? 'Selected.GIF' : 'Selected.SVG'
   const result = await begin_upload_batch(7, upload_batch_schema.parse({ scope_id: 1, request_id: crypto.randomUUID(),
-    entries: [{ path, original_name: original, content_type: mime, purpose: 'replace', source, size: 10, sha256: 'c'.repeat(64) }] }))
+    entries: [{ path, original_name: original, content_type: mime, purpose: 'replace', source, size: 10 }] }))
   expect(session.intent.image).toBeUndefined()
   session.status = 'verifying'
   session.result = { key: 'raw-selected-file', etag: 'raw-etag', oss_version_id: 'raw-version', size: 10, sha256: 'c'.repeat(64) }
@@ -385,7 +385,7 @@ it('does not emit publication events if its transaction fails', async () => {
 })
 
 it.each(['new.txt', 'folder/new.txt'])('only refreshes created directories and upload state at admission: %s', async (path) => {
-  const batch = upload_batch_schema.parse({ request_id: crypto.randomUUID(), scope_id: 1, entries: [{ path, size: 10, sha256: 'c'.repeat(64) }] })
+  const batch = upload_batch_schema.parse({ request_id: crypto.randomUUID(), scope_id: 1, entries: [{ path, size: 10 }] })
   const result = await begin_upload_batch(7, batch)
   const expected = path.includes('/') ? ['content_attachments:1', 'content_uploads:1'] : ['content_uploads:1']
   expect(resources()).toEqual(expected)
@@ -399,7 +399,7 @@ it.each(['new.txt', 'folder/new.txt'])('only refreshes created directories and u
 })
 
 it('does not notify an all-skipped admission or a rejected admission', async () => {
-  const batch = upload_batch_schema.parse({ request_id: crypto.randomUUID(), scope_id: 1, entries: [{ path: 'existing.txt', size: 10, sha256: 'c'.repeat(64) }] })
+  const batch = upload_batch_schema.parse({ request_id: crypto.randomUUID(), scope_id: 1, entries: [{ path: 'existing.txt', size: 10 }] })
   await expect(begin_upload_batch(7, batch)).rejects.toMatchObject({ public_data: { code: 'BATCH_REJECTED' } })
   expect(boundary.publish).not.toHaveBeenCalled()
   const skipped = await begin_upload_batch(7, { ... batch, request_id: crypto.randomUUID(), on_error: { ... batch.on_error, name_conflict: 'skip' } })
@@ -413,7 +413,7 @@ it.each([
   ['Album.JPG/README', 'Album.JPG/README', 'public'],
 ] as const)('normalizes the direct API upload path %s before reserving it', async (path, expected, access) => {
   const batch = upload_batch_schema.parse({ request_id: crypto.randomUUID(), scope_id: 1,
-    entries: [{ path, selection_root: 'Album.JPG', size: 10, sha256: 'c'.repeat(64), access }] })
+    entries: [{ path, selection_root: 'Album.JPG', size: 10, access }] })
   const result = await begin_upload_batch(7, batch)
   expect(result.accepted[0]?.path).toBe(expected)
   expect(session.intent).toMatchObject({ target_path: expected, target_name: expected.slice(expected.lastIndexOf('/') + 1) })
@@ -424,7 +424,7 @@ it.each([['Existing.TXT', 'Existing.txt'], ['SelectedName.PDF', 'SelectedName.pd
   Object.assign(rows[1]!, { name: 'Existing.TXT', file_name: 'Existing.TXT', name_key: 'existing.txt' })
   story.markdown = '[file](att://Existing.TXT)'
   const batch = upload_batch_schema.parse({ request_id: crypto.randomUUID(), scope_id: 1,
-    entries: [{ path, size: 10, sha256: 'c'.repeat(64), purpose: 'replace', source: { id: 2, version: node_version(rows, rows[1]!) } }] })
+    entries: [{ path, size: 10, purpose: 'replace', source: { id: 2, version: node_version(rows, rows[1]!) } }] })
   const result = await begin_upload_batch(7, batch)
   expect(result.accepted[0]?.path).toBe(expected)
   session.status = 'verifying'

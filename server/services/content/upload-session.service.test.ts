@@ -1,5 +1,7 @@
 import type { Connection, Pool } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
+import { createHash } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { create_upload_sessions } from './upload-session.service'
 
@@ -30,6 +32,109 @@ const dependencies: Parameters<typeof create_upload_sessions>[0] = {
   limits: { part_size: 262144, max_size: 1048576, lifetime_seconds: 3600, lease_seconds: 60, heartbeat_seconds: 10, url_ttl_seconds: 60 },
 }
 const service = create_upload_sessions(dependencies)
+
+function seal_fixture(bytes = Buffer.from('abc')) {
+  const session: UploadRow = { ... structuredClone(row), expected_size: bytes.length,
+    intent: { ... row.intent, expected_size: bytes.length } }
+  const attempt = { id: attempt_id, session_id: id, upload_id: 'upload', target_key: 'stage', part_size: 262144,
+    cleanup_required: 0, status: 'uploading', execution_epoch: 1 }
+  const checksum = createHash('md5').update(bytes)
+  const md5 = checksum.copy().digest('base64')
+  const etag = checksum.digest('hex')
+  const confirmed = { part_number: 1, byte_length: bytes.length, size: bytes.length, etag }
+  const metadata = { size: bytes.length, etag: 'assembled-etag', version_id: 'version' }
+  const head = vi.fn().mockRejectedValueOnce({ status: 404 }).mockResolvedValue(metadata)
+  const complete = vi.fn().mockResolvedValue(metadata)
+  const stream = vi.fn(async (_key: string, _etag: string, _signal?: AbortSignal, range?: { start: number, end: number }) => {
+    if (! range)
+      throw new Error('Unexpected whole-object read during upload completion')
+    const header = bytes.subarray(range.start, range.end + 1)
+    return { stream: Readable.from(header), size: header.length }
+  })
+  const remote_parts = [{ part_number: 1, size: bytes.length, etag }]
+  const sql = vi.fn(async (query: string, args: unknown[] = []): Promise<unknown[]> => {
+    if (query.startsWith('SELECT intent'))
+      return [[{ intent: session.intent }]]
+    if (query.includes('FROM content_transfer_sessions'))
+      return [[structuredClone(session)]]
+    if (query.includes('FROM content_transfer_attempts'))
+      return [[structuredClone(attempt)]]
+    if (query.includes('FROM content_upload_part_grants'))
+      return [[{ part_number: 1, byte_length: bytes.length, content_md5: md5 }]]
+    if (query.startsWith('SELECT COUNT(*)'))
+      return [[{ count: 1, bytes: bytes.length }]]
+    if (query.includes('FROM content_transfer_parts'))
+      return [[confirmed]]
+    if (query.includes('SET status = \'running\', executor_id')) {
+      session.status = 'running'
+      session.execution_epoch = Number(args[1])
+    }
+    if (query.includes('SET result = CAST'))
+      session.result = JSON.parse(String(args[0]))
+    if (query.includes('SET status = ?, executor_id = NULL'))
+      session.status = String(args[0])
+    return [{ affectedRows: 1 }]
+  })
+  const uploads = create_upload_sessions({ ... dependencies,
+    pool: { getConnection: async () => ({ execute: sql, beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() }) } as unknown as Pool,
+    storage: { ... dependencies.storage, list_multipart_parts: vi.fn(async () => ({ parts: remote_parts, next_marker: null })),
+      head_object: head, complete_multipart_upload: complete, get_object_access: vi.fn().mockResolvedValue('private'), get_object_stream: stream },
+  })
+  return { uploads, session, head, complete, stream, sql, metadata, remote_parts }
+}
+
+it('completes ordinary uploads using committed parts and object metadata without downloading their bytes', async () => {
+  const f = seal_fixture()
+  expect(await f.uploads.seal(id, 1)).toMatchObject({ status: 'ready', size: 3, object_etag: f.metadata.etag })
+  expect(f.complete).toHaveBeenCalledExactlyOnceWith('stage', 'upload', [{ part_number: 1, etag: createHash('md5').update('abc').digest('hex') }])
+  expect(f.stream).not.toHaveBeenCalled()
+  expect(f.session.result).toMatchObject({ sha256: null, size: 3, oss_version_id: 'version' })
+})
+
+it('does not complete when OSS parts disagree with the durable MD5 commitments', async () => {
+  const f = seal_fixture()
+  f.remote_parts[0]!.etag = '0'.repeat(32)
+  await expect(f.uploads.seal(id, 1)).rejects.toMatchObject({ statusCode: 409 })
+  expect(f.complete).not.toHaveBeenCalled()
+  expect(f.session.result).toBeNull()
+})
+
+it.each(['etag', 'version_id'])('rejects a completed object whose %s disagrees with the completion receipt', async (field) => {
+  const f = seal_fixture()
+  f.complete.mockResolvedValue({ ... f.metadata, [field]: 'changed' })
+  await expect(f.uploads.seal(id, 1)).rejects.toMatchObject({ statusCode: 409 })
+  expect(f.session.result).toBeNull()
+})
+
+it('refuses changed object identity after metadata validation', async () => {
+  const f = seal_fixture()
+  f.head.mockReset().mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce(f.metadata).mockResolvedValue({ ... f.metadata, version_id: 'changed' })
+  await expect(f.uploads.seal(id, 1)).rejects.toMatchObject({ statusCode: 409 })
+  expect(f.session.result).toBeNull()
+})
+
+it('reconciles an already-completed object on the exact owned attempt without another completion or full read', async () => {
+  const f = seal_fixture()
+  f.head.mockReset().mockResolvedValue(f.metadata)
+  await expect(f.uploads.seal(id, 1)).resolves.toMatchObject({ status: 'ready' })
+  expect(f.complete).not.toHaveBeenCalled()
+  expect(f.stream).not.toHaveBeenCalled()
+})
+
+it('keeps image edit format validation bounded to at most twelve bytes', async () => {
+  const bytes = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0, 1])
+  const f = seal_fixture(bytes)
+  f.session.intent.image = { mode: 'copy', source: { id: 2, revision: 1, node_revision: 1, key: 'content/att/images/current', is_private: false }, original_name: 'edit.png', original_mime: 'image/png' }
+  await expect(f.uploads.seal(id, 1)).resolves.toMatchObject({ status: 'ready' })
+  expect(f.stream).toHaveBeenCalledExactlyOnceWith('stage', f.metadata.etag, undefined, { start: 0, end: 11 })
+})
+
+it('rejects invalid image edit bytes before accepting a ready object', async () => {
+  const f = seal_fixture()
+  f.session.intent.image = { mode: 'copy', source: { id: 2, revision: 1, node_revision: 1, key: 'content/att/images/current', is_private: false }, original_name: 'edit.png', original_mime: 'image/png' }
+  await expect(f.uploads.seal(id, 1)).rejects.toMatchObject({ statusCode: 400 })
+  expect(f.session.result).toBeNull()
+})
 beforeEach(() => {
   vi.clearAllMocks()
   list.mockReset()

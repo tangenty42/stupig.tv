@@ -9,7 +9,7 @@ export interface UploadPreparation {
   path: string
   size: number
   loaded: number
-  phase: 'waiting' | 'hashing' | 'ready' | 'admitting' | 'failed'
+  phase: 'waiting' | 'admitting' | 'failed'
   error?: string
   session_id?: string
 }

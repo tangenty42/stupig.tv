@@ -10,7 +10,7 @@ import { expect, it, vi } from 'vitest'
 import { project_workspace_rows, workspace_capabilities, workspace_command_footprint } from './workspace'
 
 it('projects local preparations without granting stored-file actions and hands off by actual session identity', () => {
-  const preparation: UploadPreparation = { id: 'local', path: 'docs/large.bin', size: 9000, loaded: 100, phase: 'hashing' }
+  const preparation: UploadPreparation = { id: 'local', path: 'docs/large.bin', size: 9000, loaded: 100, phase: 'admitting' }
   const before = project_workspace_rows([], [], 1, new Set(), [preparation])
   expect(before).toHaveLength(1)
   expect(before[0]).toMatchObject({ key: 'preparing:local', path: preparation.path, preparation })

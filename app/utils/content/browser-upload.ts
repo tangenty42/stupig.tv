@@ -1,8 +1,7 @@
 import type { ContentUploadPartGrant, ContentUploadSession } from '@shared/types/content-upload'
-import type { UploadHashMessage } from './upload-hash'
 import { md5 } from '@noble/hashes/legacy.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { settings } from '@shared/settings'
-import { calculate_upload_sha256 } from './upload-hash'
 
 export interface UploadSessionApi {
   resume: () => Promise<ContentUploadSession>
@@ -11,75 +10,44 @@ export interface UploadSessionApi {
   seal: () => Promise<ContentUploadSession>
   cancel: () => Promise<ContentUploadSession>
 }
-export interface UploadProgress { phase: 'hashing' | 'uploading' | 'verifying' | 'ready', loaded: number, total: number, confirmed?: number }
+export interface UploadProgress { phase: 'checking' | 'uploading' | 'verifying' | 'ready', loaded: number, total: number, confirmed?: number }
 
-const file_digests = new WeakMap<Blob, string>()
-
-async function hash_in_worker(file: Blob, chunk_size: number, signal?: AbortSignal, progress?: (loaded: number) => void): Promise<string | null> {
-  // Tiny selections should not pay for a new worker per file.
-  if (typeof Worker === 'undefined' || file.size < chunk_size)
-    return null
-  let worker: Worker
-  try {
-    worker = new Worker(new URL('./upload-hash.worker.ts', import.meta.url), { type: 'module' })
-  }
-  catch { return null }
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const finish = (result: string | null, error?: Error) => {
-      if (settled)
-        return
-      settled = true
-      signal?.removeEventListener('abort', abort)
-      worker.terminate()
-      worker.onmessage = worker.onerror = null
-      if (error)
-        reject(error)
-      else
-        resolve(result)
-    }
-    function abort() {
-      finish(null, new DOMException('准备上传已取消', 'AbortError'))
-    }
-    worker.onmessage = ({ data }: MessageEvent<UploadHashMessage>) => {
-      if (settled)
-        return
-      if (data?.type === 'progress' && Number.isFinite(data.loaded) && data.loaded >= 0 && data.loaded <= file.size)
-        progress?.(data.loaded)
-      else if (data?.type === 'done' && /^[a-f0-9]{64}$/.test(data.sha256))
-        finish(data.sha256)
-      else
-        finish(null, new Error('无法读取所选文件，请重新选择后上传'))
-    }
-    // Older engines or a blocked worker retain the incremental compatibility path.
-    worker.onerror = (event) => {
-      event.preventDefault()
-      finish(null)
-    }
-    signal?.addEventListener('abort', abort, { once: true })
-    if (signal?.aborted)
-      return abort()
-    try {
-      worker.postMessage({ file, chunk_size })
-    }
-    catch { finish(null) }
-  })
+function file_mismatch() {
+  return Object.assign(new Error('请选择内容一致的原文件'), { code: 'UPLOAD_FILE_MISMATCH' })
 }
 
-/** Hash an immutable Blob once; a newly selected File must still be verified. */
-export async function upload_file_sha256(file: Blob, signal?: AbortSignal, progress?: (value: UploadProgress) => void) {
+/** Only previously uploaded parts need comparison when continuing a selection. */
+export async function verify_upload_file(file: Blob, state: Pick<ContentUploadSession, 'size' | 'part_size' | 'parts'>, signal?: AbortSignal, progress?: (value: UploadProgress) => void) {
   signal?.throwIfAborted()
-  const cached = file_digests.get(file)
-  if (cached) {
-    progress?.({ phase: 'hashing', loaded: file.size, total: file.size })
-    return cached
+  if (file.size !== state.size)
+    throw file_mismatch()
+  if (! state.parts.length)
+    return
+  const part_size = state.part_size
+  if (! part_size || ! Number.isSafeInteger(part_size) || part_size <= 0)
+    throw new Error('上传分片计划无效')
+  const seen = new Set<number>()
+  for (const part of state.parts) {
+    const expected = Math.min(part_size, file.size - (part.part_number - 1) * part_size)
+    if (! Number.isInteger(part.part_number) || part.part_number < 1 || part.part_number > 10_000 || seen.has(part.part_number)
+      || expected <= 0 || part.size !== expected || ! /^[a-f0-9]{32}$/i.test(part.etag)) {
+      throw new Error('上传分片计划无效')
+    }
+    seen.add(part.part_number)
   }
-  const chunk_size = settings.app.content.upload.partSizeMb * 1024 ** 2
-  const report = (loaded: number) => progress?.({ phase: 'hashing', loaded, total: file.size })
-  const digest = await hash_in_worker(file, chunk_size, signal, report) ?? await calculate_upload_sha256(file, chunk_size, signal, report)
-  signal?.throwIfAborted()
-  file_digests.set(file, digest)
-  return digest
+  const total = state.parts.reduce((sum, part) => sum + part.size, 0)
+  let loaded = 0
+  progress?.({ phase: 'checking', loaded, total })
+  for (const part of state.parts) {
+    signal?.throwIfAborted()
+    const start = (part.part_number - 1) * part_size
+    const bytes = await file.slice(start, start + part.size).arrayBuffer()
+    signal?.throwIfAborted()
+    if (bytesToHex(md5(new Uint8Array(bytes))) !== part.etag.toLowerCase())
+      throw file_mismatch()
+    loaded += part.size
+    progress?.({ phase: 'checking', loaded, total })
+  }
 }
 
 /**
@@ -102,8 +70,9 @@ export function create_browser_upload(api: UploadSessionApi, progress?: (value: 
       if (state.status === 'queued' || state.status === 'running')
         state = await api.initialize()
       signal.throwIfAborted()
-      if (file.size !== state.size || await upload_file_sha256(file, signal, progress) !== state.sha256)
-        throw new Error('请选择内容一致的原文件')
+      if (state.status === 'ready' || state.status === 'completed')
+        return state
+      await verify_upload_file(file, state, signal, progress)
       if (state.status === 'running' || state.status === 'verifying') {
         progress?.({ phase: 'verifying', loaded: file.size, total: file.size })
         state = await api.seal()
