@@ -20,6 +20,7 @@ export const settings: Settings = {
         userName: 'login',
       },
       bcryptRounds: 12,
+      syncPollIntervalSeconds: 30,
     },
     otp: {
       expiresMinutes: 10,

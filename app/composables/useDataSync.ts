@@ -53,7 +53,6 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
   let suspended = false
   let reconnect_timer: ReturnType<typeof setTimeout> | null = null
   let cancel_gather: (() => void) | null = null
-  let document_first_load = true
 
   function get_listeners() {
     return listeners
@@ -207,10 +206,8 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
 
   function broker_client_id() {
     if (! current_client_id) {
-    // One stable id per tab (sessionStorage) so reconnects resume the same
-    // broker session: with clean=false and QoS 1, sessionPresent then tells us
-    // whether offline events were queued, letting quick reconnects skip the
-    // full refresh below.
+    // One stable id per tab (sessionStorage) resumes queued QoS 1 messages.
+    // It cannot prove that the publisher delivered every invalidation.
       current_client_id = `${settings.integrations.mqtt.clientIdPrefixWeb}_${sync_client_id()}`
     }
     return current_client_id
@@ -227,6 +224,8 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
       return
     }
 
+    if (private_mode && ! listeners.size && ! collected_resources.size)
+      return
     if (mqtt_client || status.value === 'connecting') {
       return
     }
@@ -274,17 +273,12 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
 
         mqtt_client = client
 
-        client.on('connect', (connack) => {
+        client.on('connect', () => {
           if (client !== mqtt_client) {
             return
           }
           status.value = 'open'
           sync_mqtt_subscriptions()
-
-          if (! connack?.sessionPresent && ! document_first_load) {
-            notify_all_listeners_refresh()
-          }
-          document_first_load = false
         })
 
         client.on('message', (_topic: string, message: Buffer) => {
@@ -331,6 +325,32 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     }
   }
 
+  function subscribe_resources(resources: string[], ready: () => void) {
+    const client = mqtt_client
+    if (! client?.connected || ! resources.length)
+      return
+    const failed = () => {
+      if (client !== mqtt_client)
+        return
+      close_mqtt()
+      schedule_reconnect()
+    }
+    try {
+      client.subscribe(resources.map(resource => `${topic_prefix}/${resource}`), { qos: settings.integrations.mqtt.qos }, (error, grants) => {
+        if (client !== mqtt_client)
+          return
+        if (error || grants?.some(grant => grant.qos >= 128)) {
+          failed()
+          return
+        }
+        ready()
+      })
+    }
+    catch {
+      failed()
+    }
+  }
+
   function sync_mqtt_subscriptions() {
     if (import.meta.server) {
       return
@@ -342,19 +362,9 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     }
 
     const all_resources = Array.from(new Set([... listeners.keys(), ... collected_resources]))
-    const topics = all_resources.map(resource => `${topic_prefix}/${resource}`)
-    if (topics.length) {
-      const client = mqtt_client
-      try {
-        client.subscribe(topics, { qos: settings.integrations.mqtt.qos }, (err: any) => {
-          if (err && ! err.message?.includes('Connection closed')) {
-            console.error('[MQTT] subscribe failed', err)
-          }
-        })
-      }
-      catch {
-      }
-    }
+    // Read after SUBACK closes the initial-fetch/subscription gap, including
+    // resumed sessions whose publisher lost a notification before delivery.
+    subscribe_resources(all_resources, notify_all_listeners_refresh)
   }
 
   function update_mqtt_subscriptions(added: string[], removed: string[]) {
@@ -366,17 +376,9 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     }
 
     if (added.length) {
-      const client = mqtt_client
-      const topics = added.map(resource => `${topic_prefix}/${resource}`)
-      try {
-        client.subscribe(topics, { qos: settings.integrations.mqtt.qos }, (err: any) => {
-          if (err && ! err.message?.includes('Connection closed')) {
-            console.error('[MQTT] subscribe failed', err)
-          }
-        })
-      }
-      catch {
-      }
+      subscribe_resources(added, () => notify_listeners({
+        id: next_event_id(), type: 'sync', resource: '', dirty_resources: added, timestamp: Date.now(),
+      }))
     }
 
     if (removed.length) {
@@ -456,6 +458,9 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
       close_mqtt()
     }
     else {
+      // HTTP may already be usable while MQTT is unavailable; do not wait for
+      // a connection or trust that another tab forwarded every notification.
+      notify_all_listeners_refresh()
       void collect_resources().then(() => open_mqtt())
     }
   }
@@ -574,6 +579,16 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
       [... collected_resources].filter(resource => ! previous.has(resource) && ! listeners.has(resource)),
       [... previous].filter(resource => ! collected_resources.has(resource) && ! listeners.has(resource)),
     )
+    sync_private_connection()
+  }
+
+  function sync_private_connection() {
+    if (! private_mode)
+      return
+    if (! listeners.size && ! collected_resources.size)
+      close_mqtt()
+    else
+      void open_mqtt()
   }
 
   function announce_resources(request_id?: string) {
@@ -776,6 +791,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
             update_mqtt_subscriptions([], [resource])
           }
           announce_resources()
+          sync_private_connection()
         }
       }
 

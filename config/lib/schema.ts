@@ -12,6 +12,7 @@ export const settings_schema = z.strictObject({
       session: z.strictObject({ maxAgeDays: positive_integer, maxTokenGenerations: positive_integer }),
       cookie: z.strictObject({ maxAgeDays: positive_integer, tokenName: identifier, userName: identifier }),
       bcryptRounds: z.number().int().min(4).max(31),
+      syncPollIntervalSeconds: positive_integer,
     }),
     otp: z.strictObject({ expiresMinutes: positive_integer, tier1: otp_tier, tier2: otp_tier }),
     identity: z.strictObject({ cookieName: identifier, cookieMaxAgeDays: positive_integer }),

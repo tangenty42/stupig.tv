@@ -11,7 +11,7 @@
 
 资源名与事件类型定义于 [`server/shared/types/sync.ts`](../../server/shared/types/sync.ts)。主题前缀来自共享 settings；服务端发布器和浏览器订阅器必须使用同一规则。EMQX 允许匿名连接订阅应用主题，因此手机号、设备身份这类个人标识不进入主题与事件明文：[`server/lib/sync-channel.ts`](../../server/lib/sync-channel.ts) 用密钥化 HMAC（密钥为 JWT 密钥的域分隔子密钥，`v1.` 前缀标识当前版本）把相应资源的 id 转为 channel，`publish_refresh()` 发布其 channel 形式，浏览器无法自行推导，只能通过查询接口拿到——OTP 冷却的 channel 随 `getOtpCooldown` 响应下发，`useDataSync` 原样订阅。密钥不出服务端，可避免通过原始标识直接订阅或离线字典反查；查询接口仍会向调用者返回 channel，不防主动查询/枚举，也不代替 broker 的订阅授权。发布与查询共用同一推导，保证订阅的主题与事件一致。更换 JWT 密钥会改变 channel，客户端需重新查询和订阅；当前不提供双密钥过渡。EMQX 的网络与权限配置见 [MQTT 部署](../deployment/mqtt.md)。
 
-`useDataSync` 负责浏览器 MQTT 连接、资源订阅、跨标签消息与页面可见性变化。隐藏页面断开自己的 MQTT 连接，并通过 BroadcastChannel 与其他页面协调资源订阅；不要把它理解为数据库锁或可靠持久消息队列。连接恢复时也需要重新读取受影响的资源。
+`useDataSync` 负责浏览器 MQTT 连接、资源订阅、跨标签消息与页面可见性变化。隐藏页面断开自己的 MQTT 连接，并通过 BroadcastChannel 与其他页面协调资源订阅；不要把它理解为数据库锁或可靠持久消息队列。每次连接的 SUBACK 成功后重新读取资源，即使 broker 恢复了旧会话；旧会话不能证明发布者没有丢掉通知。运行中新加订阅在确认后核对对应资源，订阅失败／拒绝会重连重试，旧连接迟到的确认不触发重读。页面重新可见及网络恢复也主动核对，不等待 MQTT 恢复。
 
 `useSyncedData` 按资源共享数据和 fetch 生命周期，页面一般使用默认的 universal 模式。调用者有不同 fetch 行为或额外副作用时，需显式选择独立实例；单纯希望手动触发刷新不能借用一个尚未获取数据的 trigger-only proxy 当作初始值。
 
@@ -20,6 +20,8 @@
 草稿事件 `content_draft`、`content_drafts` 在入队时统一映射 HMAC resource，topic 与 payload 使用相同值；派发器不会再次映射。它们通过独立 `integrations.mqtt.privateTopicPrefix` 及授权 WS 连接，不属于匿名 `stupig/sync/#`。凭据经当前账号／会话双权限校验后签发，仅存在内存，最长 30 秒；broker 连接时重新授权并按期断开，客户端重连领取新凭据。公开与私有连接复用同一 transport 实现，BroadcastChannel 使用独立通道。真实 ACL、撤权时限和反代配置见 [MQTT](../deployment/mqtt.md)。
 
 每个 transport 统一选择主题前缀，初始订阅、运行中新增／取消订阅及重连均使用该前缀；代其他标签页订阅的资源遵循相同规则。
+
+私有草稿 transport 仅在本页或其他标签有实际订阅时连接；最后一个需求释放后关闭连接。没有草稿订阅的普通页面不请求私有凭据，也不因无权限反复尝试建立空连接。
 
 | 业务 | 提交与发布方式 | 保证与边界 |
 | --- | --- | --- |
@@ -41,6 +43,16 @@ Content 通过 `enqueue_workspace_change()`／`enqueue_content_refresh()` 指定
 ## 轮询的使用范围
 
 用户在线状态等派生数据会随时间改变，即使没有写操作也会变化。因此用户资料、会话列表和管理员列表保留按 settings 配置的轮询补偿。它只在页面可见且一段时间没有新 fetch 后触发，不替代明确变更的 MQTT 通知。
+
+账号发布仍无事务 outbox，进程退出或队列溢出可能丢通知。当前登录资料因此也有独立补偿，避免只在资料页才能恢复正确状态：
+
+| 数据 | 当前静默轮询周期 | 配置入口 |
+| --- | --- | --- |
+| 全站当前登录资料／权限菜单 | 30 秒 | `app.auth.syncPollIntervalSeconds` |
+| 用户资料、可读会话列表 | 4 秒 | `app.online.pollIntervalSeconds` |
+| 管理员列表 | 2 秒 | `app.admin.pollIntervalSeconds` |
+
+以上是可见页面、HTTP 可用且没有未完成请求时的静默周期，恢复还需加上请求耗时；不是断网或服务不可用时的绝对时限。隐藏页面停止周期请求，重新可见时立即核对。未登录页面不启动当前用户查询，权限和会话是否有效始终由服务端按当前事实判断。若业务以后要求持久送达每次变更，再单独评估账号域 outbox，不把客户端补偿记录为可靠消息投递。
 
 草稿按独立页面 query 复用相同 M 轮询，租约／命令结果不进入共享资源缓存。store 串行执行自动保存、纯保活及用户动作，输入 N 节流不会被自通知绕过。MQTT 只是核对触发，不能授予编辑权；隐藏即只读并尽力释放，消息丢失靠轮询与服务端到期恢复。
 
