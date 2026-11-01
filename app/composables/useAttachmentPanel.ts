@@ -39,6 +39,13 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
   const resolution = computed(() => resolution_operation.value?.resolution ?? null)
   const resolution_pending = computed(() => resolution_operation.value?.pending ?? false)
   const request_error = computed(() => operations.value.find(operation => operation.error)?.error ?? '')
+  const failure_visible = ref(false)
+  watch([request_error, () => uploads.admission_error, pending, () => uploads.admitting], ([request, admission, working, admitting], previous) => {
+    if ((request && request !== previous?.[0]) || (admission && admission !== previous?.[1]))
+      failure_visible.value = true
+    else if (! request && ! admission && ! working && ! admitting)
+      failure_visible.value = false
+  }, { immediate: true, flush: 'sync' })
   const completion = create_upload_completion_context()
   let generation = 0
   let anchor: string | null = null
@@ -67,6 +74,7 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
   const draft_markdown = computed(markdown)
   const get_delete_impact = (targets: number[]) => content.get_delete_impact({ kind: 'attachment', id: scope, targets })
   const affected_operation = (row: WorkspaceListRow) => operations.value.find(operation => workspace_footprints_overlap(operation.footprint, workspace_row_footprint(row)))
+  const command_failed = (row: WorkspaceListRow) => !! affected_operation(row)?.error
   const command_pending = (row: WorkspaceListRow) => operations.value.some(operation => operation.pending && workspace_footprints_overlap(operation.footprint, workspace_row_footprint(row)))
   const command_moving = (row: WorkspaceListRow) => operations.value.some(operation => operation.pending && operation.command.operation === 'move' && row.node && operation.footprint.ids.includes(row.node.id))
   const capabilities = (row: WorkspaceListRow) => {
@@ -125,6 +133,7 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
         // may have committed. Only retry its existing receipt until reconciled.
         operation.resolution = null
         operation.error = error instanceof Error ? error.message : '操作结果未知，请重试'
+        failure_visible.value = true
       }
     }
     finally {
@@ -141,8 +150,14 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
   function execute(input: WorkspaceAction) {
     const command = { ... input, request_id: crypto.randomUUID(), scope_id: scope, on_error: error_policy_schema.parse({}) } as WorkspaceCommand
     const footprint = workspace_command_footprint(command, catalog.data.value?.nodes ?? [])
-    if (operations.value.some(operation => workspace_footprints_overlap(operation.footprint, footprint)))
-      return toast.error('此目标仍有操作待完成，请先处理其结果')
+    const blocked = operations.value.find(operation => workspace_footprints_overlap(operation.footprint, footprint))
+    if (blocked) {
+      if (blocked.error)
+        failure_visible.value = true
+      else
+        toast.error('此目标仍有操作待完成，请先处理其结果')
+      return
+    }
     operations.value.push({ command, footprint, pending: false, error: '', resolution: null, selection: new Set([... selected.value].filter(key => footprint.ids.some(id => key === `node:${id}`))) })
     return submit_operation(operations.value[operations.value.length - 1]!)
   }
@@ -153,8 +168,14 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
   }
   async function start(entries: UploadEntry[]) {
     const footprint = { ids: entries.flatMap(entry => [entry.source?.id, entry.replacement?.id].filter((id): id is number => id !== undefined)), paths: entries.map(entry => ({ path: normalized_attachment_extension(entry.file_name) + (entry.access === 'private' ? '.good' : ''), subtree: false })) }
-    if (operations.value.some(operation => workspace_footprints_overlap(operation.footprint, footprint)))
-      return toast.error('上传目标仍有操作待完成，请先处理其结果')
+    const blocked = operations.value.find(operation => workspace_footprints_overlap(operation.footprint, footprint))
+    if (blocked) {
+      if (blocked.error)
+        failure_visible.value = true
+      else
+        toast.error('上传目标仍有操作待完成，请先处理其结果')
+      return
+    }
     const epoch = generation
     try {
       await uploads.start(entries.map(entry => ({ ... entry, on_landed: completion.bind((file) => {
@@ -164,8 +185,12 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
       }) })))
     }
     catch (error) {
-      if (epoch === generation)
-        toast.error(error instanceof Error ? error.message : '无法开始上传')
+      if (epoch === generation) {
+        if (uploads.admission_error)
+          failure_visible.value = true
+        else
+          toast.error(error instanceof Error ? error.message : '无法开始上传')
+      }
     }
   }
   async function download(row: WorkspaceListRow, role: 'display' | 'original' | 'redacted_display' = 'display') {
@@ -222,6 +247,7 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     completion.reset()
     selected.value = new Set()
     operations.value = []
+    failure_visible.value = false
     preview_visible.value = false
   }, { flush: 'sync' })
   onUnmounted(() => {
@@ -231,6 +257,6 @@ export async function useAttachmentPanel(scope: number, markdown: () => string, 
     operations.value = []
   })
   await Promise.all([catalog.ready, sync_pending])
-  return { catalog, uploads, selected, selected_rows, expanded, drag_ids, preview_visible, preview_images, rows, root_id, readonly, can_private, draft_markdown, get_delete_impact, pending, resolution, request_error,
-    resolution_pending, command_pending, command_moving, can_execute, target, capabilities, toggle_folder, select, submit, execute, dismiss_resolution, start, open, preview, download, replace, edit_image }
+  return { catalog, uploads, selected, selected_rows, expanded, drag_ids, preview_visible, preview_images, rows, root_id, readonly, can_private, draft_markdown, get_delete_impact, pending, resolution, request_error, failure_visible,
+    resolution_pending, command_failed, command_pending, command_moving, can_execute, target, capabilities, toggle_folder, select, submit, execute, dismiss_resolution, start, open, preview, download, replace, edit_image }
 }

@@ -1,9 +1,5 @@
 <template>
   <div class="flex w-full flex-col">
-    <div v-if="model.request_error || model.uploads.admission_error" class="mb-3 flex items-center gap-2 text-sm text-red-600" role="alert">
-      <span>{{ model.request_error || model.uploads.admission_error }}</span>
-      <Button label="重试" size="small" text @click="model.request_error ? model.submit() : model.uploads.submit()" />
-    </div>
     <MyContentAttachmentList
       ref="list"
       class="flex-1"
@@ -110,6 +106,10 @@
       </template>
     </MyDialog>
     <MyContentAttachmentImageEditor v-model:visible="image_editor_visible" :attachment="image_editor_row?.node?.attachment ?? null" :redacted="editing_redacted" @save="save_image" />
+    <MyContentAttachmentRequestFailure
+      v-if="dialogs" v-model:visible="model.failure_visible" :operation-error="model.request_error" :upload-error="model.uploads.admission_error"
+      :pending="model.pending || model.uploads.admitting" @retry="source => source === 'operation' ? model.submit() : model.uploads.submit()"
+    />
     <MyContentAttachmentResolve v-if="dialogs" :resolution="model.resolution ?? model.uploads.resolution" :pending="model.resolution ? model.resolution_pending : !! model.uploads.resolution && model.uploads.admitting" :nodes="model.catalog.data?.nodes" @submit="resolve" @close="close_resolve" />
     <ClientOnly v-if="dialogs">
       <MyImagePreview v-model:visible="model.preview_visible" :images="model.preview_images" :initial-index="0" />
@@ -157,10 +157,10 @@ const list_rows = computed<MyContentAttachmentRow[]>(() => model.rows.map((row, 
   const message = session ? model.uploads.errors.get(session.id) ?? session.image_error ?? null : null
   const upload = preparation
     ? {
-        status: preparation.phase === 'failed' ? 'error' as const : preparation.phase === 'waiting' ? 'queued' as const : 'uploading' as const,
+        status: preparation.phase === 'failed' || model.uploads.admission_error ? 'error' as const : preparation.phase === 'waiting' ? 'queued' as const : 'uploading' as const,
         progress: preparation.size ? Math.min(100, preparation.loaded / preparation.size * 100) : 100,
         file_size: preparation.size, message: preparation.error ?? null,
-        label: preparation.phase === 'waiting' ? '等待受理' : '正在确认上传',
+        label: model.uploads.admission_error ? '上传请求失败' : preparation.phase === 'waiting' ? '等待受理' : '正在确认上传',
       }
     : session
       ? {
@@ -427,11 +427,16 @@ function submit_delete() {
 function menu_for(row: WorkspaceListRow): AttachmentMenuItem[] {
   const { selected, single } = attachment_menu_context(row, model.selected_rows)
   if (selected.every(item => item.preparation)) {
-    return [{ label: '取消准备', icon_name: 'lucide:x', disabled: ! model.uploads.can_cancel_preparation, command: () => model.uploads.cancel_preparation() }]
+    return [
+      ... (model.uploads.admission_error ? [{ label: '查看上传失败原因', icon_name: 'lucide:circle-alert', command: () => { model.failure_visible = true } }] : []),
+      { label: '取消准备', icon_name: 'lucide:x', disabled: ! model.uploads.can_cancel_preparation, command: () => model.uploads.cancel_preparation() },
+    ]
   }
   const cap = model.capabilities(row)
   const blocked = (operation: keyof typeof cap.reasons, targets = [row]) => targets.flatMap(target => model.capabilities(target).reasons[operation])
   const read_entries: AttachmentMenuItem[] = []
+  if (model.request_error && selected.some(item => model.command_failed(item)))
+    read_entries.push({ label: '查看失败操作', icon_name: 'lucide:circle-alert', command: () => { model.failure_visible = true } })
   const edit_entries: AttachmentMenuItem[] = []
   const delete_entries: AttachmentMenuItem[] = []
   if (single && row.node) {
