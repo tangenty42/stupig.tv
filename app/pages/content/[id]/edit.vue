@@ -191,9 +191,10 @@ const story_id = computed(() => is_edit.value ? Number(raw_id.value) : 0)
 const draft_story_id = is_edit.value ? story_id.value : null
 
 const draft_store = useContentDraftStore(cloud_draft_id ?? draft_story_id)
-const { markdown } = storeToRefs(draft_store)
+const { markdown, unconfirmed_changes } = storeToRefs(draft_store)
 
-const attachment_panel = await useAttachmentPanel(story_id.value, () => markdown.value)
+// Confirmed cloud text is already covered by the server's draft reference check.
+const attachment_panel = await useAttachmentPanel(story_id.value, () => unconfirmed_changes.value ? markdown.value : '')
 const attachment_workspace = attachment_panel.catalog
 
 // Existing titles must reach the save/header validation too, or every `content://` reference
