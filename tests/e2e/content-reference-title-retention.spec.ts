@@ -33,7 +33,13 @@ test('global title history keeps 200 batches and warns an expired new draft', as
     await connection.execute('UPDATE content_story_drafts SET title_revision = ?, draft_revision = draft_revision + 200', [base + 200])
     await connection.commit()
 
-    await page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true }).fill(markdown(new_title, 'target renamed'))
+    // Direct SQL fixture preparation emits no invalidation. Load its new
+    // reference baseline before editing, rather than racing a stale sync.
+    await page.reload()
+    await ready(page)
+    const editor = page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true })
+    await expect(editor).toBeEditable({ timeout: draft_timeout })
+    await editor.fill(markdown(new_title, 'target renamed'))
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await expect.poll(async () => (await content_query<StoryBody>(page, 'getStoryBody', { id })).markdown, { timeout: draft_timeout }).toContain(`title: ${new_title}`)
     const [[counts]] = await connection.execute<mysql.RowDataPacket[]>('SELECT COUNT(DISTINCT revision) AS batches, MIN(revision) AS oldest, SUM(revision = ?) AS big_batch FROM content_reference_journals WHERE scope_id = 0', [base + 2])
