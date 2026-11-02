@@ -56,6 +56,7 @@ test('a folder rename replays main and draft; deleting it shows impact and leave
     const dialog = actor.getByRole('dialog', { name: '空城计？' })
     await expect(dialog.getByText('有正文正在引用。')).toBeVisible()
     await expect(dialog.getByText('有云端草稿正在引用。')).toBeVisible()
+    await expect(dialog.getByText('有未上传修改正在引用。')).toHaveCount(0)
     await expect(dialog.getByText('renamed', { exact: false })).toHaveCount(0)
     await dialog.getByRole('button', { name: '仍然删除' }).click()
     await expect.poll(async () => (await content_query<Workspace>(page, 'getAttachmentWorkspace', { id })).nodes.some(node => node.path === 'renamed')).toBe(false)
