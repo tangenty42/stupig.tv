@@ -120,6 +120,32 @@ it.each(['Format', 'FrameCount', 'ImageWidth', 'FileSize'])('rejects unsafe sour
   expect(f.storage.get_object_stream).not.toHaveBeenCalled()
 })
 
+it.each([0, 1, 2, 3, 4, 5, 6, 7, 8])('accepts JPEG EXIF orientation %s with the expected display dimensions', async (orientation) => {
+  const f = await fixture()
+  const source = f.objects.get(f.request.input.key)!
+  source.bytes = await sharp(source.bytes).withMetadata({ orientation: orientation || 1 }).jpeg().toBuffer()
+  f.request.input.size = source.bytes.length
+  f.overrides.set(f.request.input.key, { Orientation: String(orientation) })
+  const result = await f.run()
+  expect(result).toMatchObject(orientation >= 5 ? { width: 16, height: 32 } : { width: 32, height: 16 })
+  expect(cloud.processObjectSave).toHaveBeenCalledTimes(2)
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
+})
+
+it.each(['-1', '9', '1.5', '', 'unknown'])('rejects malformed orientation %j before conversion', async (orientation) => {
+  const f = await fixture()
+  f.overrides.set(f.request.input.key, { Orientation: orientation })
+  await expect(f.run()).rejects.toMatchObject({ statusCode: 409 })
+  expect(cloud.processObjectSave).not.toHaveBeenCalled()
+})
+
+it.each(['FileSize', 'FrameCount', 'ImageWidth', 'ImageHeight'])('still rejects zero %s metadata before conversion', async (field) => {
+  const f = await fixture()
+  f.overrides.set(f.request.input.key, { [field]: '0' })
+  await expect(f.run()).rejects.toMatchObject({ statusCode: 409 })
+  expect(cloud.processObjectSave).not.toHaveBeenCalled()
+})
+
 it('checks edited input is actually PNG using OSS information', async () => {
   const f = await fixture()
   f.request.require_png = true

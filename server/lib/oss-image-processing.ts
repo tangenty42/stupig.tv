@@ -102,7 +102,9 @@ async function image_info(client: ImageClient, object: OssImageObject, signal: A
     if (typeof raw_format !== 'string')
       throw conflict('云端图片信息无效')
     const format = raw_format.toLowerCase().replace(/^jpg$/, 'jpeg').replace(/^heic$/, 'heif')
-    const orientation = value.Orientation ? integer('Orientation') : 1
+    // Mobile JPEGs can use 0 for unspecified EXIF orientation. Preserve their
+    // stored dimensions, as for absent EXIF; sizes and frame counts stay positive.
+    const orientation = ! value.Orientation || value.Orientation.value === '0' ? 1 : integer('Orientation')
     if (orientation > 8 || integer('FileSize') !== object.size)
       throw conflict('云端图片信息与对象不一致')
     return { format, width: integer('ImageWidth'), height: integer('ImageHeight'), frames: integer('FrameCount'), orientation }
