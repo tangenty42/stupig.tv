@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { webp_processing_options_schema } from '@config/schema'
 import { ApiError } from '@server/errors/ApiError'
 import { copy_oss_image_original, create_oss_image_processor } from '@server/lib/oss-image-processing'
+import { observe_upload, record_upload_duration } from '@server/lib/upload-observation'
 import { content_image_formats } from '@shared/content-image-format'
 import { settings } from '@shared/settings'
 import { z } from 'zod'
@@ -54,6 +55,7 @@ interface JobRow extends RowDataPacket {
   execution_epoch: number
   active_attempt_id: string | null
   busy: number
+  queue_ms?: number | string
   result: z.infer<typeof produced> | string | null
   attachment_id: number | null
 }
@@ -124,7 +126,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
     }
   }
   async function get(connection: Connection, id: string) {
-    const [rows] = await connection.execute<JobRow[]>('SELECT *, lease_until > CURRENT_TIMESTAMP(3) AS busy FROM content_image_jobs WHERE id = ? FOR UPDATE', [id])
+    const [rows] = await connection.execute<JobRow[]>('SELECT *, lease_until > CURRENT_TIMESTAMP(3) AS busy, TIMESTAMPDIFF(MICROSECOND, updated_at, CURRENT_TIMESTAMP(3)) / 1000 AS queue_ms FROM content_image_jobs WHERE id = ? FOR UPDATE', [id])
     if (! rows[0])
       throw new ApiError(404, '图片处理不存在')
     return rows[0]
@@ -170,7 +172,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
     return transaction(connection => enqueue_in_transaction(connection, request, input))
   }
   async function run(id: string, actor: number) {
-    const claim = await with_job(id, actor, async (connection, row, intent) => {
+    const claim = await observe_upload('image_claim', () => with_job(id, actor, async (connection, row, intent) => {
       if (row.status === 'ready' || row.status === 'completed')
         return null
       if (! ['queued', 'processing'].includes(row.status) || row.busy)
@@ -184,78 +186,85 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       await connection.execute(`UPDATE content_image_jobs SET status = 'processing', execution_epoch = ?, executor_id = ?, active_attempt_id = ?,
         lease_until = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)), result = NULL, error_code = NULL WHERE id = ?`, [epoch, executor, attempt, lease_seconds, id])
       await changed(connection, id, intent.scope_id)
-      return { epoch, executor, attempt, intent, prefix }
-    })
+      return { epoch, executor, attempt, intent, prefix, queue_ms: row.status === 'queued' ? Number(row.queue_ms) : null }
+    }), { job_id: id })
     if (! claim)
       return
-    const fence = `id = ? AND execution_epoch = ? AND executor_id = ? AND status = 'processing' AND lease_until > CURRENT_TIMESTAMP(3)`
-    const values = [id, claim.epoch, claim.executor]
-    const abort = new AbortController()
-    let heartbeat: Promise<void> | null = null
-    async function renew() {
-      const [result] = await transaction(connection => connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET lease_until = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)) WHERE ${fence}`, [lease_seconds, ... values]))
-      if (result.affectedRows !== 1)
-        throw conflict()
-    }
-    const timer = setInterval(() => {
-      if (! heartbeat)
-        heartbeat = renew().catch(() => abort.abort()).finally(() => { heartbeat = null })
-    }, heartbeat_seconds * 1000)
-    timer.unref()
-    try {
-      const { input, profile } = claim.intent
-      if (input.size > profile.maxInputBytes)
-        throw new ApiError(400, '图片超过处理大小限制')
-      const produce = async () => {
-        const result = await cloud()({ storage, input, profile, prefix: claim.prefix, signal: abort.signal, checkpoint: renew, require_png: !! claim.intent.source })
-        jpeg_bytes(result.lqip.toString('base64'))
-        return result
+    if (claim.queue_ms !== null)
+      record_upload_duration('image_queue', claim.queue_ms, { job_id: id, execution_epoch: claim.epoch })
+    return observe_upload('image_job', async () => {
+      const fence = `id = ? AND execution_epoch = ? AND executor_id = ? AND status = 'processing' AND lease_until > CURRENT_TIMESTAMP(3)`
+      const values = [id, claim.epoch, claim.executor]
+      const abort = new AbortController()
+      let heartbeat: Promise<void> | null = null
+      async function renew() {
+        const [result] = await transaction(connection => connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET lease_until = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(3)) WHERE ${fence}`, [lease_seconds, ... values]))
+        if (result.affectedRows !== 1)
+          throw conflict()
       }
-      const { result, original } = await (async () => {
-        if (claim.intent.mode === 'upload') {
+      const timer = setInterval(() => {
+        if (! heartbeat)
+          heartbeat = renew().catch(() => abort.abort()).finally(() => { heartbeat = null })
+      }, heartbeat_seconds * 1000)
+      timer.unref()
+      try {
+        const { input, profile } = claim.intent
+        if (input.size > profile.maxInputBytes)
+          throw new ApiError(400, '图片超过处理大小限制')
+        const archive = (source: ImageJobIntent['input']) => observe_upload('image_archive', () => cloud_copy(storage, source, image_original_key(id, claim.attempt), abort.signal))
+        const produce = async () => {
+          const result = await cloud()({ storage, input, profile, prefix: claim.prefix, signal: abort.signal, checkpoint: renew, require_png: !! claim.intent.source })
+          jpeg_bytes(result.lqip.toString('base64'))
+          return result
+        }
+        const { result, original } = await (async () => {
+          if (claim.intent.mode === 'upload') {
           // Both targets are already owned by this attempt. Neither is adopted
           // until both complete; keep the lease/slots while a failed sibling drains.
-          const pending = [produce(), cloud_copy(storage, input, image_original_key(id, claim.attempt), abort.signal)] as const
-          try {
-            const [result, original] = await Promise.all(pending)
-            return { result, original }
+            const pending = [produce(), archive(input)] as const
+            try {
+              const [result, original] = await Promise.all(pending)
+              return { result, original }
+            }
+            catch (error) {
+              abort.abort(error)
+              await Promise.allSettled(pending)
+              throw error
+            }
           }
-          catch (error) {
-            abort.abort(error)
-            await Promise.allSettled(pending)
-            throw error
-          }
-        }
-        const result = await produce()
-        const original = claim.intent.mode === 'copy'
-          ? await cloud_copy(storage, result.display, image_original_key(id, claim.attempt), abort.signal)
-          : null
-        return { result, original }
-      })()
-      const { display, fallback } = result
-      await renew()
-      await with_job(id, actor, async (connection) => {
-        const [updated] = await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'ready', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`,
-          [JSON.stringify({ display, fallback, original, width: result.width, height: result.height, lqip: result.lqip.toString('base64') }), ... values])
-        if (updated.affectedRows !== 1)
-          throw conflict()
-        await changed(connection, id, claim.intent.scope_id)
-      })
-    }
-    catch (error) {
+          const result = await produce()
+          const original = claim.intent.mode === 'copy'
+            ? await archive(result.display)
+            : null
+          return { result, original }
+        })()
+        const { display, fallback } = result
+        await observe_upload('image_ready_commit', async () => {
+          await renew()
+          await with_job(id, actor, async (connection) => {
+            const [updated] = await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'ready', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`,
+              [JSON.stringify({ display, fallback, original, width: result.width, height: result.height, lqip: result.lqip.toString('base64') }), ... values])
+            if (updated.affectedRows !== 1)
+              throw conflict()
+            await changed(connection, id, claim.intent.scope_id)
+          })
+        })
+      }
+      catch (error) {
       // Late workers may neither publish nor change a replacement worker's state.
-      const error_message = error instanceof ApiError ? error.message : '图片处理失败，请重试或联系管理员'
-      await transaction(async (connection) => {
-        const [updated] = await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'failed', error_code = 'image_processing_failed', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`, [JSON.stringify({ error_message }), ... values])
-        if (updated.affectedRows)
-          await changed(connection, id, claim.intent.scope_id)
-      })
-      throw error
-    }
-    finally {
-      clearInterval(timer)
-      await heartbeat
-    }
+        const error_message = error instanceof ApiError ? error.message : '图片处理失败，请重试或联系管理员'
+        await transaction(async (connection) => {
+          const [updated] = await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'failed', error_code = 'image_processing_failed', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`, [JSON.stringify({ error_message }), ... values])
+          if (updated.affectedRows)
+            await changed(connection, id, claim.intent.scope_id)
+        })
+        throw error
+      }
+      finally {
+        clearInterval(timer)
+        await heartbeat
+      }
+    }, { job_id: id, execution_epoch: claim.epoch })
   }
   async function cancel(id: string, actor: number) {
     return with_job(id, actor, async (connection, row) => {

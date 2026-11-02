@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const boundary = vi.hoisted(() => ({
-  pool: { on: vi.fn() },
+  pool: { on: vi.fn(), pool: { getConnection: vi.fn() } },
   create_pool: vi.fn(),
 }))
 
@@ -15,6 +15,7 @@ let directory: string
 beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
+  boundary.pool.pool.getConnection = vi.fn()
   boundary.create_pool.mockReturnValue(boundary.pool)
   directory = mkdtempSync(join(tmpdir(), 'stupig-db-config-'))
   mkdirSync(join(directory, 'config'))

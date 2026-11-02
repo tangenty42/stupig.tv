@@ -5,6 +5,7 @@ import type { UploadAttempt, UploadIntent, UploadPublication, UploadRow } from '
 import { randomUUID } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
 import { verify_private_oss_object } from '@server/lib/oss-object-identity'
+import { observe_upload } from '@server/lib/upload-observation'
 import { attachment_path_violation, redactable_attachment_mime } from '@shared/content-markdown'
 import { redaction_image_mime } from '@shared/content-upload'
 import { z } from 'zod'
@@ -233,7 +234,7 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
       throw error
     })
     if (! metadata) {
-      const completed = await storage.complete_multipart_upload(attempt.target_key, attempt.upload_id!, parts.map(part => ({ part_number: Number(part.part_number), etag: part.etag })))
+      const completed = await observe_upload('multipart_complete', () => storage.complete_multipart_upload(attempt.target_key, attempt.upload_id!, parts.map(part => ({ part_number: Number(part.part_number), etag: part.etag }))), { session_id: session })
       metadata = await storage.head_object(attempt.target_key)
       if (completed.etag !== metadata.etag || completed.version_id !== metadata.version_id)
         throw new ApiError(409, '合并回执与上传对象身份不符')
@@ -307,5 +308,6 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
       return result
     })
   }
-  return { begin, get, list, reservations, initialize, sign, resume, seal, cancel, adopt }
+  return { begin, get, list, reservations, initialize, sign, resume, seal, cancel,
+    adopt: (session: string, actor: number, publish: Parameters<typeof adopt>[2]) => observe_upload('upload_adopt_commit', () => adopt(session, actor, publish), { session_id: session }) }
 }

@@ -11,6 +11,7 @@ import { settings } from '@shared/settings'
 import OSS from 'ali-oss'
 import sharp from 'sharp'
 import { verify_private_oss_object } from './oss-object-identity'
+import { observe_upload } from './upload-observation'
 
 type Storage = ReturnType<typeof create_aliyun_oss>
 export type OssImageProcessingOptions = z.infer<typeof webp_processing_options_schema>
@@ -134,9 +135,11 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
         throw new ApiError(400, budget ?? '图片超过处理大小限制')
       if (profile.jpegBackground.toLowerCase() !== '#ffffff')
         throw new ApiError(400, '云端 JPEG 回退仅支持白色背景，请检查图片处理配置')
-      await guard()
-      await unchanged(storage, input)
-      const source = await image_info(client, input, bounded())
+      await observe_upload('image_source_guard', async () => {
+        await guard()
+        await unchanged(storage, input)
+      })
+      const source = await observe_upload('image_source_info', () => image_info(client, input, bounded()))
       if (! ['png', 'jpeg', 'webp', 'heif', 'avif'].includes(source.format) || source.frames !== 1)
         throw new ApiError(400, '暂不支持该图片格式、动图或多页图片')
       if (require_png && source.format !== 'png')
@@ -173,15 +176,20 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
         await guard()
         return object
       }
-      const display = await persist(input, `${prefix}.${content_image_formats.display.extension}`, `image/auto-orient,1/format,webp/quality,Q_${profile.webpQuality}`, 'webp')
-      const fallback = await persist(display, `${prefix}.${content_image_formats.fallback.extension}`, `image/format,jpg/quality,Q_${profile.jpegQuality}`, 'jpeg')
-      await guard()
-      const lqip = await processed(client, display, `image/resize,m_lfit,w_${profile.lqipMaxDimension},h_${profile.lqipMaxDimension},limit_1/format,jpg/quality,Q_${profile.lqipQuality}`, settings.app.content.image.lqipMaxBytes, bounded())
-      const mini = await sharp(lqip, { limitInputPixels: profile.lqipMaxDimension ** 2, failOn: 'warning', animated: true }).metadata()
-      if (mini.format !== 'jpeg' || ! mini.width || ! mini.height || mini.width > profile.lqipMaxDimension || mini.height > profile.lqipMaxDimension || (mini.pages ?? 1) !== 1)
-        throw conflict()
-      await Promise.all([input, display, fallback].map(object => unchanged(storage, object)))
-      await guard()
+      const display = await observe_upload('image_display', () => persist(input, `${prefix}.${content_image_formats.display.extension}`, `image/auto-orient,1/format,webp/quality,Q_${profile.webpQuality}`, 'webp'))
+      const fallback = await observe_upload('image_fallback', () => persist(display, `${prefix}.${content_image_formats.fallback.extension}`, `image/format,jpg/quality,Q_${profile.jpegQuality}`, 'jpeg'))
+      const lqip = await observe_upload('image_lqip', async () => {
+        await guard()
+        const body = await processed(client, display, `image/resize,m_lfit,w_${profile.lqipMaxDimension},h_${profile.lqipMaxDimension},limit_1/format,jpg/quality,Q_${profile.lqipQuality}`, settings.app.content.image.lqipMaxBytes, bounded())
+        const mini = await sharp(body, { limitInputPixels: profile.lqipMaxDimension ** 2, failOn: 'warning', animated: true }).metadata()
+        if (mini.format !== 'jpeg' || ! mini.width || ! mini.height || mini.width > profile.lqipMaxDimension || mini.height > profile.lqipMaxDimension || (mini.pages ?? 1) !== 1)
+          throw conflict()
+        return body
+      })
+      await observe_upload('image_final_guard', async () => {
+        await Promise.all([input, display, fallback].map(object => unchanged(storage, object)))
+        await guard()
+      })
       return { display, fallback, ... expected, lqip }
     }
     catch (error) { throw controlled(error, signal) }

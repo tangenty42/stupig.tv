@@ -1,6 +1,7 @@
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 import { runtime_config } from '@config/loader'
 import { db } from '@server/lib/db'
+import { upload_observation_snapshot, upload_process_resources } from '@server/lib/upload-observation'
 import { local_background_status } from '@server/services/content/background.service'
 
 // Fixed SQL only. Never return payloads, keys, signed URLs or cloud error messages.
@@ -39,5 +40,6 @@ export async function read_background_ledgers(pool: Pick<Pool, 'execute'>) {
 }
 
 export async function get_background_status() {
-  return { mode: runtime_config().app.backgroundRunner.mode, process: local_background_status(), database: await read_background_ledgers(db) }
+  return { mode: runtime_config().app.backgroundRunner.mode, process: local_background_status(), database: await read_background_ledgers(db),
+    observations: upload_observation_snapshot(), resources: upload_process_resources() }
 }

@@ -68,6 +68,41 @@
 
 ## 清理与验证
 
+### 上传耗时与资源观测
+
+服务端使用现有 JSON 行日志输出 `msg: upload_stage`，以 `session_id`、`job_id`、`execution_epoch` 关联上传和图片尝试。字段只含固定阶段、耗时、返回／拒绝结果和累计数据库连接获取耗时；不记录文件名、正文、对象 key、SQL、签名 URL 或异常原文。观察入口见 [`upload-observation.ts`](../../../server/lib/upload-observation.ts)。
+
+| 阶段 | 测量范围 |
+| --- | --- |
+| `upload_seal` / `multipart_complete` | 封口 API 全程／实际 OSS 合并请求；已完成对象重读不会伪造一次合并 |
+| `image_claim` / `image_queue` | 认领事务／认领 SELECT 开始时的数据库时间减最后 queued 时间；队列值在成功认领后记录，不含该语句自身的锁等待，重领 processing 不冒充新入队 |
+| `image_job` | 认领后的处理、归档、ready 提交和在途分支排空 |
+| `image_ready_commit` | 处理完成后的租约复核、ready 结果及其 outbox 事务提交 |
+| `image_source_guard` / `image_final_guard` | 管线首尾已有的对象身份／ACL 与租约检查，不新增请求 |
+| `image_source_info` / `image_display` / `image_fallback` / `image_lqip` / `image_archive` | 源信息、WebP、JPEG、LQIP 读取／小图头验证及原图归档；派生阶段包含自身已有的身份检查和检查点 |
+| `upload_adopt_commit` / `upload_adopt` | 采用事务（含幂等重放）／前台采用 API 及提交后的工作区读取；后台采用也记录前者 |
+| `sync_queue` / `sync_publish_ack` | 上传会话通知的建账到认领时间（含重试等待）／MQTT 发布确认；不表示浏览器已收到或渲染 |
+
+每个阶段的 `returned` 只表示该调用正常返回，`failed` 包括取消和被拒绝的尝试；不能单凭一行记录推断最终发布成功。父子阶段与并行归档存在重叠，不能直接相加。队列使用数据库语句开始时的时钟，其余耗时使用本机单调时钟；不跨主机相减。后台扫描和每条上传任务建立独立观测上下文，不继承唤醒它的前台请求身份或连接等待计数。
+
+管理员现有 `admin.getBackgroundStatus` 返回 `observations` 与 `resources`：固定阶段的进程累计次数、拒绝次数、当前／峰值在途数、总耗时、最大值，以及每阶段最近最多 128 次的 P50／P95 和实际样本数。样本少时不是生产容量承诺；重启会清零，不是持久化账本或集群指标。`resources` 为当前 Node 进程的 RSS／heap／external 字节、运行秒数及累计 CPU user/system 毫秒，不是单张图片 CPU 或峰值内存。
+
+`db_acquire` 在 mysql2 的公开 callback pool 获取连接入口测量，因此覆盖 `execute`、`query` 和显式事务。它的在途数表示尚未得到连接的请求；耗时包含排队及新建连接，不是 SQL 执行或锁等待。阶段日志的 `db_acquire_ms` 是该阶段所有连接获取的累计值，嵌套／并行请求可能使它超过墙钟耗时。逐条 SQL 不增加日志。
+
+浏览器在原生 Performance 时间线保留最近最多 128 个 `content.upload.<session_id>.*` measure，可在本次上传所在的编辑页控制台读取：
+
+```js
+console.table(performance.getEntriesByType('measure')
+  .filter(item => item.name.startsWith('content.upload.'))
+  .map(item => ({ name: item.name, duration_ms: item.duration })))
+```
+
+阶段包括句柄回读 `source`、`resume`、`initialize`、续传 `checking`、`bytes`、`seal`、`await_completion`、`adopt`、`dom_update` 和 `total`，末尾带 returned／failed／stopped。`bytes` 包含 SDK 分片准备、MD5、签名及传输；`await_completion` 是客户端收到封口结果后等待状态回传的时间，不能当纯编码时长。`total` 从当前页面本次执行开始，到接收采用结果、工作区与落地回调交接并完成 Vue `nextTick`；不包含此前的文件选择／受理，不保证图片已解码或绘制。刷新恢复可能只有后半段，暂停／失败分别结束本次观测，不把恢复前的时间补成假数据。通知早于 HTTP 响应时，各调用仍独立等自己的响应再结束计时；DOM 观测不延长 finalizing 围栏。
+
+浏览器数据留在当前页面，不上报新接口；Performance 不可用或日志失败不改变业务结果。当前生产应用进程的观测应从管理员 API 读取；源码 `background:status` CLI 是另一个进程，只能看到自身观测，不能代替应用进程指标。部署后用代表性小图、照片和编辑输出重测整条链路；离线 fixture 的延迟不代表生产 OSS。
+
+2026-11-02 的[脱敏验证](../../reviews/upload-observability-2026-11-02.json)包括开发桶真实调用、隔离数据库混合负载／连接池占满及浏览器 Performance 断言。开发桶各一次：460 字节 JPEG 约 2.03s，2,621,740 字节 PNG 约 1.78s；前者 JPEG 与尾部检查阶段约 0.90／0.50s，后者 WebP 阶段约 1.32s。阶段包含关联请求／校验，不是云端纯编码 CPU 时间，也不是生产 P95。两轮共 16 个专用对象均已软删除并确认当前缺失，历史版本保留；隔离数据库与浏览器测试实例已清理。
+
 会话过期、取消、被替代的尝试由上传生命周期扫描处理，包括普通文件和图片输入。暂存 key 可能已被正式普通附件采用，不能按 `staging/` 前缀直接删除；见[对象生命周期](object-lifecycle.md)。
 
 核心实现：[`upload-api.service.ts`](../../../server/services/content/upload-api.service.ts)、[`upload-session.service.ts`](../../../server/services/content/upload-session.service.ts)、[`upload-publication.service.ts`](../../../server/services/content/upload-publication.service.ts)、[`upload-runtime.ts`](../../../app/utils/content/upload-runtime.ts)、[`contentUploads.ts`](../../../app/stores/contentUploads.ts)。

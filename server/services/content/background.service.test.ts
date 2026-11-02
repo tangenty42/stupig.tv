@@ -1,7 +1,8 @@
+import { observe_database_wait, observe_upload } from '@server/lib/upload-observation'
 import { wake_background } from '@server/services/background/wakeup'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-const boundary = vi.hoisted(() => ({ mode: 'app', real_receipts: false, execute: vi.fn(), images: vi.fn(), uploads: vi.fn(), retirement: vi.fn(), preload: vi.fn(), sync: vi.fn(), receipts: vi.fn(), storage_audit: vi.fn(), log: vi.fn(), dispatch: vi.fn() }))
+const boundary = vi.hoisted(() => ({ mode: 'app', real_receipts: false, execute: vi.fn(), images: vi.fn(), uploads: vi.fn(), retirement: vi.fn(), preload: vi.fn(), sync: vi.fn(), receipts: vi.fn(), storage_audit: vi.fn(), log: vi.fn(), info: vi.fn(), dispatch: vi.fn() }))
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ app: {
   backgroundRunner: { mode: boundary.mode, shutdownTimeoutMs: 100, resources: { image: 1, oss: 2, esa: 1, notification: 1 } },
   contentImages: { enabled: false, sweepIntervalSeconds: 5 }, contentUploads: { enabled: false, sweepIntervalSeconds: 5 },
@@ -11,7 +12,7 @@ vi.mock('@config/loader', () => ({ runtime_config: () => ({ app: {
 }, aliyun: { oss: null } }) }))
 vi.mock('@server/lib/db', () => ({ db: { execute: boundary.execute } }))
 vi.mock('@server/lib/mqtt', () => ({ publish_sync_confirmed: boundary.dispatch }))
-vi.mock('@server/lib/log', () => ({ log_error: boundary.log }))
+vi.mock('@server/lib/log', () => ({ log_error: boundary.log, log_info: boundary.info }))
 vi.mock('./upload-api.service', () => ({ sweep_content_images: boundary.images, sweep_content_uploads: boundary.uploads }))
 vi.mock('./object-retirement.service', () => ({ sweep_object_retirements: boundary.retirement }))
 vi.mock('./preload.service', () => ({ sweep_preloads: boundary.preload }))
@@ -34,6 +35,24 @@ beforeEach(() => {
     boundary[key].mockReset().mockResolvedValue(undefined)
 })
 afterEach(() => vi.useRealTimers())
+
+it('detaches background scans from the request identity and connection accounting that woke them', async () => {
+  boundary.images.mockImplementation(async () => {
+    const acquired = observe_database_wait()
+    acquired()
+    await observe_upload('image_source_info', async () => {})
+  })
+  const image = content_background_adapters().find(adapter => adapter.id === 'images')!
+  await observe_upload('upload_seal', () => image.sweep(new AbortController().signal), {
+    session_id: 'a'.repeat(32), job_id: 'b'.repeat(32), execution_epoch: 4,
+  })
+  const request = boundary.info.mock.calls.find(([, fields]) => fields.stage === 'upload_seal')![1]
+  const background = boundary.info.mock.calls.find(([, fields]) => fields.stage === 'image_source_info')![1]
+  expect(request).toMatchObject({ session_id: 'a'.repeat(32), db_acquisitions: 0 })
+  expect(background).not.toHaveProperty('session_id')
+  expect(background).not.toHaveProperty('job_id')
+  expect(background).not.toHaveProperty('execution_epoch')
+})
 
 it('runs all seven adapters through one lifecycle, forwards stop signals and continues after scan errors', async () => {
   const host = { hooks: { hook: vi.fn() } }

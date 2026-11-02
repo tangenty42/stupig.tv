@@ -33,7 +33,7 @@ it('bundles the real DB entry with the E2E loader and uses only the isolated run
       name: 'mysql-boundary',
       setup(plugin) {
         plugin.onResolve({ filter: /^mysql2\/promise$/ }, () => ({ path: 'mysql', namespace: 'fixture' }))
-        plugin.onLoad({ filter: /^mysql$/, namespace: 'fixture' }, () => ({ contents: 'export default { createPool(options) { return { options, on() {} } } }', loader: 'js' }))
+        plugin.onLoad({ filter: /^mysql$/, namespace: 'fixture' }, () => ({ contents: 'export default { createPool(options) { return { options, on() {}, pool: { getConnection(callback) { callback(new Error("fixture does not establish connections")) } } } } }', loader: 'js' }))
       },
     }],
   })

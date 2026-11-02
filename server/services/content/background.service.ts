@@ -3,6 +3,7 @@ import { runtime_config } from '@config/loader'
 import { db } from '@server/lib/db'
 import { log_error } from '@server/lib/log'
 import { publish_sync_confirmed } from '@server/lib/mqtt'
+import { with_upload_context } from '@server/lib/upload-observation'
 import { create_background_runner } from '@server/services/background/runner'
 import { register_background_wakeup } from '@server/services/background/wakeup'
 import { sweep_storage_audit } from '@server/services/storage-audit/service'
@@ -14,7 +15,7 @@ import { sweep_content_images, sweep_content_uploads } from './upload-api.servic
 
 export function content_background_adapters(): BackgroundAdapter[] {
   const { app } = runtime_config()
-  return [
+  const adapters: BackgroundAdapter[] = [
     { id: 'images', intervalSeconds: app.contentImages.sweepIntervalSeconds, resources: { image: 1, oss: 1 }, sweep: sweep_content_images },
     { id: 'uploads', intervalSeconds: app.contentUploads.sweepIntervalSeconds, resources: { oss: 1 }, sweep: sweep_content_uploads },
     { id: 'retirement', intervalSeconds: app.contentRetirement.sweepIntervalSeconds, resources: { oss: 1, esa: 1 }, sweep: signal => sweep_object_retirements(undefined, signal) },
@@ -23,6 +24,7 @@ export function content_background_adapters(): BackgroundAdapter[] {
     { id: 'receipts', intervalSeconds: app.contentReceipts.sweepIntervalSeconds, resources: {}, sweep: create_content_receipt_compactor(db, app.contentReceipts) },
     { id: 'storage_audit', intervalSeconds: app.storageAudit.sweepIntervalSeconds, resources: { oss: 1 }, sweep: sweep_storage_audit },
   ]
+  return adapters.map(adapter => ({ ... adapter, sweep: (signal: AbortSignal) => with_upload_context({}, () => adapter.sweep(signal)) }))
 }
 
 export function create_content_background_runner() {

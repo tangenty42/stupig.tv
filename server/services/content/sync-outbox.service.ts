@@ -2,6 +2,7 @@ import type { runtime_config } from '@config/loader'
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 import { randomUUID } from 'node:crypto'
 import { log_error } from '@server/lib/log'
+import { observe_upload, record_upload_duration } from '@server/lib/upload-observation'
 
 type Options = ReturnType<typeof runtime_config>['app']['contentSync']
 interface OutboxRow extends RowDataPacket {
@@ -9,6 +10,7 @@ interface OutboxRow extends RowDataPacket {
   resource: string
   payload: object | string
   attempts: number
+  queue_ms?: number | string
 }
 
 /** A small Content-only dispatcher. A broker ACK, not a local queue, completes delivery. */
@@ -18,7 +20,7 @@ export function create_content_sync_dispatcher(pool: Pick<Pool, 'getConnection' 
     const connection = await pool.getConnection()
     try {
       await connection.beginTransaction()
-      const [rows] = await connection.execute<OutboxRow[]>(`SELECT id, resource, payload, attempts FROM content_sync_outbox
+      const [rows] = await connection.execute<OutboxRow[]>(`SELECT id, resource, payload, attempts, TIMESTAMPDIFF(MICROSECOND, created_at, CURRENT_TIMESTAMP(3)) / 1000 AS queue_ms FROM content_sync_outbox
         WHERE next_attempt_at <= CURRENT_TIMESTAMP(3) AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP(3))
         ORDER BY next_attempt_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`)
       const row = rows[0]
@@ -47,7 +49,15 @@ export function create_content_sync_dispatcher(pool: Pick<Pool, 'getConnection' 
       if (! row)
         break
       try {
-        await publish(row.resource, typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload), options.publishTimeoutMs)
+        const session = /^content_upload_session:([\da-f]{32})$/.exec(row.resource)?.[1]
+        const deliver = () => publish(row.resource, typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload), options.publishTimeoutMs)
+        if (session) {
+          record_upload_duration('sync_queue', Number(row.queue_ms), { session_id: session })
+          await observe_upload('sync_publish_ack', deliver, { session_id: session })
+        }
+        else {
+          await deliver()
+        }
         await pool.execute('DELETE FROM content_sync_outbox WHERE id = ? AND lease_token = ? AND lease_until > CURRENT_TIMESTAMP(3)', [row.id, row.token])
       }
       catch {
