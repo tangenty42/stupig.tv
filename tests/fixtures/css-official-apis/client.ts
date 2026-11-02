@@ -1,4 +1,3 @@
-import { markdown } from '@codemirror/lang-markdown'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { definePreset, updatePreset } from '@primeuix/themes'
@@ -18,6 +17,7 @@ import Toast from 'primevue/toast'
 import ToastService from 'primevue/toastservice'
 import ToggleButton from 'primevue/togglebutton'
 import { createApp, h, nextTick, ref } from 'vue'
+import { editor_markdown_lang } from '../../../app/utils/content/editor/language'
 import { theme_extensions } from '../../../app/utils/content/editor/themes'
 import { primevue_preset } from '../../../config/primevue-preset'
 
@@ -26,6 +26,7 @@ export interface CssOfficialProbe {
   set_dark: (dark: boolean) => Promise<void>
   set_input_radius: (radius: string) => Promise<void>
   set_compact: (compact: boolean) => Promise<void>
+  set_markdown: (source: string) => void
 }
 
 declare global {
@@ -101,7 +102,7 @@ const project_editor = new EditorView({
   parent: document.querySelector('#project-editor')!,
   state: EditorState.create({
     doc: '# Heading\n\nText',
-    extensions: [basicSetup, markdown(), editor_theme.of(theme_extensions('light'))],
+    extensions: [basicSetup, editor_markdown_lang, editor_theme.of(theme_extensions('light'))],
   }),
 })
 
@@ -125,6 +126,9 @@ window.addEventListener('pagehide', () => {
 
 window.__CSS_OFFICIAL_API_PROBE__ = {
   ready: false,
+  set_markdown(source) {
+    project_editor.dispatch({ changes: { from: 0, to: project_editor.state.doc.length, insert: source } })
+  },
   async set_dark(dark) {
     document.documentElement.classList.toggle('dark', dark)
     project_editor.dispatch({ effects: editor_theme.reconfigure(theme_extensions(dark ? 'dark' : 'light')) })

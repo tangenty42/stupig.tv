@@ -1,3 +1,4 @@
+import type { PluginBuild } from 'esbuild'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
@@ -60,10 +61,10 @@ export async function build_migration_scripts(dir: string, output_dir: string) {
       ... maintenance_build_options,
       // Applied scripts retain their original configuration and reference parsers.
       // Load snapshots under the original module identities to preserve artifact bytes.
-      plugins: ['20261024210100_content_references.ts', '20261024210200_content_workspace.ts'].includes(filename)
+      plugins: [... (['20261024210100_content_references.ts', '20261024210200_content_workspace.ts'].includes(filename)
         ? [{
             name: 'content-v1-frozen-config',
-            setup(plugin) {
+            setup(plugin: PluginBuild) {
               plugin.onLoad({ filter: /[\\/]server[\\/]services[\\/]content[\\/]sync-outbox\.repository\.ts$/ }, async () => ({
                 contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/sync-outbox.repository.ts.snapshot'), 'utf8'),
                 loader: 'ts',
@@ -106,7 +107,18 @@ export async function build_migration_scripts(dir: string, output_dir: string) {
               }))
             },
           }]
-        : [],
+        : []), ... (filename === '20261101133000_content_webp.ts'
+        ? [{
+            name: 'webp-v1-frozen-references',
+            setup(plugin: PluginBuild) {
+              plugin.onLoad({ filter: /[\\/]server[\\/]shared[\\/]content-reference-definitions-live\.ts$/ }, async () => ({
+                contents: await readFile(resolve(project_root, 'migrations/lib/webp-v1/content-reference-definitions-live.ts.snapshot'), 'utf8'),
+                loader: 'ts',
+                resolveDir: resolve(project_root, 'server/shared'),
+              }))
+            },
+          }]
+        : [])],
       absWorkingDir: project_root,
       stdin: { contents: source, resolveDir: dir, sourcefile: `migrations/${filename}`, loader: 'ts' },
       write: false,

@@ -51,7 +51,11 @@ time: 2026/10/24
 
 基础语法包括标题、段落、强调、删除线、列表、引用、分隔线、代码和标准链接／图片。裸 URL 不自动链接；围栏代码只展示，不执行 Mermaid、公式或程序。任务列表不会自动变成可交互复选框。
 
+编辑器识别 ATX 与 Setext 两种标题，Setext 使用标题下一行的 `===`／`---` 标记。文首元数据单独识别，不把其结束分隔符当作标题；正文中与文字隔开空行的 `---` 仍为分隔线。
+
 表格由 `markdown-it-multimd-table` 提供：支持当前配置的合并单元格、多表体和 caption，未启用的插件能力不构成项目支持范围。五种提示框使用引用首行 `[!NOTE]`、`[!TIP]`、`[!IMPORTANT]`、`[!WARNING]`、`[!CAUTION]`；标记大小写敏感，同行余文作为纯文本标题。
+
+编辑器表格扩展复用同一解析器判定有效表格及行／单元格边界，生成表头、单元格、分隔符和 caption 语法节点，并保留单元格内部的强调、代码与链接识别；支持多行表头、当前启用的行列合并和多表体。机密块跨空行的范围与渲染规则一致；原始 HTML 表格内部不另行解析 Markdown。普通 HTML 容器仍遵循现有块边界，不能把跨空行的任意 HTML 组合推断为一个递归 Markdown 容器。
 
 允许白名单内的静态 HTML，完整普通块容器可递归渲染内部 Markdown，表格和代码容器沿用专门解析边界。正文展示与编辑预览的最终 HTML（包括行内输出和业务插件输出）统一经过 `sanitize-html` 净化：禁止 script、SVG/MathML、嵌入对象和事件处理属性，仅允许 Bilibili 官方播放器 iframe，拒绝可执行 URL 协议；样式只保留有限排版属性和受控图片占位。脚本和其他来源的 iframe 不会执行，也不提供放行开关。HTML 结构诊断只负责语法提示，不替代此渲染出口的安全策略。
 
@@ -92,4 +96,4 @@ Markdown 诊断的兼容入口在依赖初始化前加载 FormatJS 标准 `Intl.
 - 渲染：[`app/utils/content/markdown/`](../../../app/utils/content/markdown/)，预览编排：[`useStoryPreview.ts`](../../../app/composables/useStoryPreview.ts)、[`useStoryPreviewBody.ts`](../../../app/composables/useStoryPreviewBody.ts)。
 - 自动测试覆盖语法、引用定义、原始 HTML 边界、文字／卡片分支、权限表示、引用改写、标题吸顶及全屏双向滚动。浏览器需验证其他布局、caption、图片加载和连续输入时的媒体复用。
 
-已知差异：渲染器支持的 Setext 标题和表格扩展，并未全部对应 CodeMirror 的着色／语法树；当前不为此统一重写所有解析器。
+Setext 标题、扩展表格、容器边界与引用补丁的跨层样例见 [`language.test.ts`](../../../app/utils/content/editor/language.test.ts)。浏览器回归使用真实编辑器语言和深浅色主题，验证着色与编辑后失效／恢复；编辑器语法树仍不替代服务端校验或最终 HTML 净化。

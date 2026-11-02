@@ -45,6 +45,7 @@ export async function build_css_official_fixture() {
       platform: 'browser',
       target: 'es2020',
       write: false,
+      alias: { '@shared': resolve(root, 'server/shared') },
       define: {
         'process.env.NODE_ENV': '"production"',
         '__VUE_OPTIONS_API__': 'true',
