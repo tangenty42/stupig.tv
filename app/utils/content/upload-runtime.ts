@@ -8,6 +8,7 @@ import { reactive } from 'vue'
 import { get_error_status } from '~/composables/useApi'
 import { create_browser_upload } from './browser-upload'
 import { delete_upload_file_handle, load_upload_file_handle, save_upload_file_handle, upload_session_handle_key } from './upload-file-handle'
+import { create_upload_timeline } from './upload-timeline'
 
 type UploadApi = Pick<ReturnType<typeof useApi>['content'], 'get_upload_session' | 'resume_upload_session' | 'initialize_upload_session' | 'sign_upload_session_part' | 'seal_upload_session' | 'cancel_upload_session' | 'adopt_upload_session'>
 
@@ -17,7 +18,7 @@ export function upload_session_unavailable(error: unknown) {
 }
 
 /** Client-only byte sources and drivers. No component, cookie, MQTT or DOM ownership. */
-export function create_upload_runtime(scope: number, actor: () => number | null, api: UploadApi, resource: ReturnType<typeof createContentUploadResource>, on_completed: (id: string, attachment?: ContentStoryAttachment | null) => void, accept_workspace: (workspace: ContentAttachmentWorkspace) => void) {
+export function create_upload_runtime(scope: number, actor: () => number | null, api: UploadApi, resource: ReturnType<typeof createContentUploadResource>, on_completed: (id: string, attachment?: ContentStoryAttachment | null) => void, accept_workspace: (workspace: ContentAttachmentWorkspace) => void, after_render: () => Promise<void> = async () => {}) {
   const progress = reactive(new Map<string, UploadProgress>())
   const errors = reactive(new Map<string, string>())
   const active = reactive(new Set<string>())
@@ -30,6 +31,23 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
   const runs = new Map<string, symbol>()
   const lookups = new Set<string>()
   const saves = new Map<string, Promise<unknown>>()
+  const timelines = new Map<string, ReturnType<typeof create_upload_timeline>>()
+  function timeline(id: string) {
+    let value = timelines.get(id)
+    if (! value) {
+      const created = create_upload_timeline(id, undefined, () => {
+        if (timelines.get(id) === created)
+          timelines.delete(id)
+      })
+      value = created
+      timelines.set(id, value)
+    }
+    return value
+  }
+  function end_timeline(id: string, outcome: 'failed' | 'stopped') {
+    timelines.get(id)?.stop(outcome)
+    timelines.delete(id)
+  }
   const db_name = settings.app.content.upload.handleStorageName
   let generation = 0
   const current = (epoch: number, id: string) => epoch === generation && ! resource.removed.has(id)
@@ -79,8 +97,13 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
   function pause(id: string) {
     stop_driver(id)
     finalizing.delete(id)
+    end_timeline(id, 'stopped')
   }
   function observe_finalization(state: ContentUploadSession) {
+    if (state.status === 'completed')
+      timelines.get(state.id)?.finish('await_completion')
+    else if (['cancelled', 'expired', 'failed'].includes(state.status) || state.image_status === 'failed')
+      end_timeline(state.id, 'failed')
     if (errors.has(state.id) || paused.has(state.id))
       return
     if (['cancelled', 'expired', 'failed'].includes(state.status) || state.image_status === 'failed')
@@ -112,9 +135,23 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
     }
     finally {
       finalizing.delete(id)
+      const trace = timelines.get(id)
+      if (trace && workspace) {
+        trace.start('dom_update')
+        const epoch = generation
+        // Measure Vue's committed DOM without extending the publication fence.
+        void Promise.resolve().then(after_render).then(() => {
+          if (epoch === generation) {
+            trace.complete()
+          }
+          else { trace.dispose() }
+        }, () => trace.stop('failed'))
+      }
+      else { end_timeline(id, 'stopped') }
     }
   }
   function failed(id: string, error: unknown) {
+    end_timeline(id, 'failed')
     finalizing.delete(id)
     if (upload_session_unavailable(error))
       complete(id)
@@ -139,7 +176,7 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
       observe_finalization(state)
       if (state.status === 'completed') {
         finalizing.add(id)
-        const receipt = await api.adopt_upload_session(id)
+        const receipt = await timeline(id).measure('adopt', () => api.adopt_upload_session(id))
         if (current(epoch, id))
           complete(id, receipt.attachment, receipt.workspace)
       }
@@ -180,36 +217,57 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
       const needs_bytes = ! state.image_status && ! ['ready', 'completed'].includes(state.status)
       if (! needs_bytes)
         finalizing.add(id)
-      const input = needs_bytes ? await source(id, epoch) : undefined
+      const trace = timeline(id)
+      trace.start('total')
+      const input = needs_bytes ? await trace.measure('source', () => source(id, epoch)) : undefined
       if (! live())
         return true
       if (needs_bytes && ! input) {
         finalizing.delete(id)
+        end_timeline(id, 'stopped')
         return false
       }
+      let bytes_started = false
       const driver = input
         ? create_browser_upload({
-            resume: () => api.resume_upload_session(id), initialize: () => api.initialize_upload_session(id),
+            resume: () => trace.measure('resume', () => api.resume_upload_session(id)), initialize: () => trace.measure('initialize', () => api.initialize_upload_session(id)),
             sign: (part, md5) => api.sign_upload_session_part(id, part, md5),
             seal: () => {
               if (live())
                 finalizing.add(id)
-              return api.seal_upload_session(id)
+              return trace.measure('seal', () => api.seal_upload_session(id))
             },
             cancel: () => api.cancel_upload_session(id),
-          }, value => live() && progress.set(id, value))
+          }, (value) => {
+            if (! live())
+              return
+            if (value.phase === 'checking')
+              trace.start('checking')
+            else
+              trace.finish('checking')
+            if (value.phase === 'uploading' && ! bytes_started) {
+              bytes_started = true
+              trace.start('bytes')
+            }
+            else if (value.phase === 'verifying') {
+              trace.finish('bytes')
+            }
+            progress.set(id, value)
+          })
         : null
       if (driver)
         drivers.set(id, driver)
-      const ready = state.image_status ? await api.resume_upload_session(id) : driver ? await driver.run(input!) : await api.get_upload_session(id)
+      const ready = state.image_status ? await trace.measure('resume', () => api.resume_upload_session(id)) : driver ? await driver.run(input!) : await api.get_upload_session(id)
       if (! live())
         return true
       resource.update(ready)
       observe_finalization(ready)
-      if (ready.image_status && ready.status !== 'completed')
+      if (ready.image_status && ready.status !== 'completed') {
+        trace.start('await_completion')
         return true
+      }
       finalizing.add(id)
-      const receipt = await api.adopt_upload_session(id)
+      const receipt = await trace.measure('adopt', () => api.adopt_upload_session(id))
       if (live())
         complete(id, receipt.attachment, receipt.workspace)
     }
@@ -239,6 +297,7 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
   async function cancel(id: string) {
     const epoch = generation
     stop_driver(id)
+    end_timeline(id, 'stopped')
     finalizing.add(id)
     try {
       const state = await api.cancel_upload_session(id)
@@ -264,6 +323,9 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
   }
   function reset() {
     generation ++
+    for (const trace of timelines.values())
+      trace.dispose()
+    timelines.clear()
     for (const driver of drivers.values())
       driver.pause()
     drivers.clear()

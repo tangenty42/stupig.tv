@@ -14,6 +14,9 @@ test('publishes a small attachment through the actual upload API', async ({ page
     const payload = await response.json()
     return payload.result?.data?.attachments?.some((file: { file_name: string }) => file.file_name === 'e2e-note.txt') ?? false
   }).toBe(true)
+  const observed_stages = () => page.evaluate(() => performance.getEntriesByType('measure')
+    .filter(entry => entry.name.startsWith('content.upload.')).map(entry => entry.name.split('.').slice(- 2).join('.')))
+  await expect.poll(observed_stages).toEqual(expect.arrayContaining(['bytes.returned', 'seal.returned', 'adopt.returned', 'dom_update.returned', 'total.returned']))
   await page.reload()
   await expect(page.getByText('e2e-note.txt', { exact: true }).first()).toBeVisible()
 })

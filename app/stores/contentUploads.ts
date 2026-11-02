@@ -37,7 +37,7 @@ export function useContentUploadsStore(scope: number) {
         callback?.(attachment)
     }, (incoming) => {
       workspace.value = accept_attachment_snapshot(workspace.value, incoming)
-    })
+    }, () => nextTick())
     const { progress, errors, active, queued, finalizing, resume, pause, cancel, has_file } = runtime
     let generation = 0
     const snapshot_epoch = () => generation

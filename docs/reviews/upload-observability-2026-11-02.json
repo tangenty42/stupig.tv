@@ -1,0 +1,227 @@
+{
+  "collected_at": "2026-11-02T07:15:18.543Z",
+  "baseline_commit": "295e9f0d2f79781dd0d5633e82208e2d45035e7c",
+  "verification": {
+    "pnpm_check": "passed",
+    "app_server_tests_passed": 1941,
+    "tool_tests_passed": 378,
+    "tool_tests_skipped": 1,
+    "component_tests_passed": 32,
+    "frozen_migration_digests": "unchanged"
+  },
+  "browser": {
+    "scope": "isolated built app and disposable local database, real API and simulated storage boundary; not production upload speed",
+    "workflow": "content-upload.spec.ts",
+    "passed": true,
+    "verified_performance_stages": [
+      "bytes.returned",
+      "seal.returned",
+      "adopt.returned",
+      "dom_update.returned",
+      "total.returned"
+    ],
+    "attachment_readable_after_reload": true,
+    "temporary_app_and_database_cleanup_completed": true
+  },
+  "cloud": {
+    "sampled_at": "2026-11-02T07:08:05.091Z",
+    "scope": "standalone development bucket diagnostics; supplied/local synthetic bytes only; no production reads, business DB writes, source upload/seal, queue, adoption or browser timing; one run per sample, not production p95",
+    "samples": [
+      {
+        "sample": "synthetic-small-jpeg",
+        "input_bytes": 460,
+        "width": 256,
+        "height": 128,
+        "wall_ms": 2034.72,
+        "stages": [
+          {
+            "stage": "image_job",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 2034.4
+          },
+          {
+            "stage": "image_source_guard",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 88.49
+          },
+          {
+            "stage": "image_source_info",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 52.18
+          },
+          {
+            "stage": "image_display",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 454.96
+          },
+          {
+            "stage": "image_fallback",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 900.39
+          },
+          {
+            "stage": "image_lqip",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 32.36
+          },
+          {
+            "stage": "image_final_guard",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 503.45
+          },
+          {
+            "stage": "image_archive",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 248.22
+          }
+        ],
+        "resources_before": {
+          "uptime_seconds": 1.32,
+          "rss_bytes": 129626112,
+          "heap_used_bytes": 26423856,
+          "external_bytes": 8560559,
+          "cpu_user_ms": 671,
+          "cpu_system_ms": 437
+        },
+        "resources_after": {
+          "uptime_seconds": 3.36,
+          "rss_bytes": 128684032,
+          "heap_used_bytes": 30971240,
+          "external_bytes": 8556624,
+          "cpu_user_ms": 796,
+          "cpu_system_ms": 437
+        },
+        "outputs": {
+          "display_bytes": 140,
+          "fallback_bytes": 478,
+          "lqip_bytes": 288,
+          "full_image_sha256": null
+        }
+      },
+      {
+        "sample": "user-provided-png",
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "wall_ms": 1777.45,
+        "stages": [
+          {
+            "stage": "image_job",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 1777.35
+          },
+          {
+            "stage": "image_source_guard",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 21.14
+          },
+          {
+            "stage": "image_source_info",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 43.03
+          },
+          {
+            "stage": "image_display",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 1322.56
+          },
+          {
+            "stage": "image_fallback",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 242.06
+          },
+          {
+            "stage": "image_lqip",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 122.18
+          },
+          {
+            "stage": "image_final_guard",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 24.92
+          },
+          {
+            "stage": "image_archive",
+            "calls": 1,
+            "failed": 0,
+            "total_ms": 209.09
+          }
+        ],
+        "resources_before": {
+          "uptime_seconds": 4.12,
+          "rss_bytes": 130519040,
+          "heap_used_bytes": 24103864,
+          "external_bytes": 10973646,
+          "cpu_user_ms": 859,
+          "cpu_system_ms": 437
+        },
+        "resources_after": {
+          "uptime_seconds": 5.9,
+          "rss_bytes": 130187264,
+          "heap_used_bytes": 27471360,
+          "external_bytes": 10985346,
+          "cpu_user_ms": 890,
+          "cpu_system_ms": 453
+        },
+        "outputs": {
+          "display_bytes": 583292,
+          "fallback_bytes": 287912,
+          "lqip_bytes": 397,
+          "full_image_sha256": null
+        }
+      }
+    ],
+    "cleanup": {
+      "owned": 8,
+      "current_missing": 8,
+      "historical_versions": "retained",
+      "previous_smoke_owned": 8,
+      "previous_smoke_current_missing": 8
+    },
+    "checkpoint": "no-op diagnostic checkpoint; no SQL or business job adoption",
+    "resource_scope": "CPU and memory belong to the standalone local Node process, not production or an individual image"
+  },
+  "isolated_database": {
+    "scope": "disposable local QA database, deliberate contention and pool saturation; precomputed image provider with a fixed 5ms fixture delay; not production capacity",
+    "contracts_passed": 19,
+    "verified_query_execute_and_explicit_transaction_acquisition": true,
+    "verified_pending_acquisition_during_saturation": true,
+    "verified_expired_queued_write_rejected": true,
+    "temporary_database_cleanup_completed": true,
+    "database": {
+      "stage": "db_acquire",
+      "count": 1256,
+      "failed": 0,
+      "active": 0,
+      "peak_active": 12,
+      "total_ms": 1007.44,
+      "max_ms": 70.66,
+      "recent_count": 128,
+      "recent_p50_ms": 0.01,
+      "recent_p95_ms": 0.03
+    },
+    "resources": {
+      "uptime_seconds": 29.83,
+      "rss_bytes": 424345600,
+      "heap_used_bytes": 150846608,
+      "external_bytes": 46278374,
+      "cpu_user_ms": 6671,
+      "cpu_system_ms": 1781
+    }
+  }
+}

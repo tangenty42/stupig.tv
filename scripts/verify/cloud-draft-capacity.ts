@@ -11,6 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { runtime_config } from '@config/loader'
 import { db } from '@server/lib/db'
 import { create_esa } from '@server/lib/esa'
+import { upload_observation_snapshot, upload_process_resources } from '@server/lib/upload-observation'
 import { resolve_attachment_delivery } from '@server/services/content/attachment-access.service'
 import { get_attachment_workspace } from '@server/services/content/attachment-workspace.service'
 import { acquire_draft, command_draft, create_draft, get_draft } from '@server/services/content/draft.service'
@@ -27,6 +28,13 @@ import sharp from 'sharp'
 export async function verify_draft_capacity(actor: AuthUser) {
   const [[database]] = await db.query<RowDataPacket[]>('SELECT DATABASE() AS name')
   assert.match(String(database!.name), /^stupig_cloud_draft_qa_[a-f0-9]{32}$/)
+  const acquisitions = () => upload_observation_snapshot().find(row => row.stage === 'db_acquire')!
+  const initial_acquisitions = acquisitions().count
+  await db.query('SELECT 1')
+  await db.execute('SELECT 1')
+  const transaction_connection = await db.getConnection()
+  transaction_connection.release()
+  assert(acquisitions().count >= initial_acquisitions + 3, 'Pool observations must include query, execute and explicit transactions')
   const id = () => randomBytes(16).toString('hex')
   async function editor(title: string) {
     const head = (await create_draft(actor, id())).snapshot!
@@ -272,6 +280,7 @@ export async function verify_draft_capacity(actor: AuthUser) {
     const blocked = writers[0]!.send('sync', 'stale overloaded input')
     rejected = assert.rejects(blocked, /编辑权已变更/)
     await delay(50)
+    assert(acquisitions().active > 0, 'Saturated pool must expose queued connection acquisition')
     await held[0]!.execute('UPDATE content_story_drafts SET lease_until = TIMESTAMPADD(SECOND, -1, CURRENT_TIMESTAMP(3)) WHERE id = ?', [writers[0]!.draft])
   }
   finally {
@@ -279,5 +288,7 @@ export async function verify_draft_capacity(actor: AuthUser) {
   }
   await rejected
   assert.equal((await get_draft(actor, { id: writers[0]!.draft })).snapshot!.markdown, before)
+  assert.equal(acquisitions().active, 0)
+  console.log(`cloud-draft observations: ${JSON.stringify({ database: acquisitions(), resources: upload_process_resources() })}`)
   console.log('cloud-draft capacity: saturated pool resumes; expired queued write rejected without text change')
 }

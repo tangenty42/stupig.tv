@@ -4,6 +4,7 @@ import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { create_aliyun_oss } from '@server/lib/aliyun-oss'
 import { db } from '@server/lib/db'
+import { observe_upload, with_upload_context } from '@server/lib/upload-observation'
 import { wake_background } from '@server/services/background/wakeup'
 import { settings } from '@shared/settings'
 import { get_attachment_workspace } from './attachment-workspace.service'
@@ -60,26 +61,33 @@ export async function begin_upload_batch(actor: number, input: UploadBatch) {
   return { ... result, sessions: await Promise.all(result.accepted.map(item => uploads.get(item.session_id, actor))) }
 }
 export async function adopt_upload_session(session: string, actor: number) {
-  const uploads = await service()
-  const state = await uploads.get(session, actor)
-  const receipt = await uploads.adopt(session, actor, uploads.images.publish)
-  // Read after commit (also on receipt replay): the file, its ancestors and the
-  // namespace revision must agree before the client retires its task row.
-  const viewer = await require_workspace_actor(actor, false)
-  const workspace = await get_attachment_workspace(state.scope_id!, viewer)
-  return { attachment_id: receipt.attachment_id, attachment: workspace.attachments.find(file => file.id === receipt.attachment_id) ?? null, workspace }
+  return observe_upload('upload_adopt', async () => {
+    const uploads = await service()
+    const state = await uploads.get(session, actor)
+    const receipt = await uploads.adopt(session, actor, uploads.images.publish)
+    // Read after commit (also on receipt replay): the file, its ancestors and the
+    // namespace revision must agree before the client retires its task row.
+    const viewer = await require_workspace_actor(actor, false)
+    const workspace = await get_attachment_workspace(state.scope_id!, viewer)
+    return { attachment_id: receipt.attachment_id, attachment: workspace.attachments.find(file => file.id === receipt.attachment_id) ?? null, workspace }
+  }, { session_id: session })
 }
 export async function operate_upload_session(operation: 'get' | 'initialize' | 'resume' | 'seal' | 'cancel', session: string, actor: number) {
-  const uploads = await service()
-  if (operation === 'resume') {
-    await uploads.get(session, actor)
-    await uploads.images.retry(session, actor)
+  const action = async () => {
+    const uploads = await service()
+    if (operation === 'resume') {
+      await uploads.get(session, actor)
+      await uploads.images.retry(session, actor)
+    }
+    const state = await uploads.images.state(await uploads[operation](session, actor))
+    // seal/retry have committed before a consumer can inspect their new intent.
+    if ((operation === 'seal' || operation === 'resume') && ['queued', 'ready'].includes(state.image_status ?? ''))
+      wake_background('images')
+    return state
   }
-  const state = await uploads.images.state(await uploads[operation](session, actor))
-  // seal/retry have committed before a consumer can inspect their new intent.
-  if ((operation === 'seal' || operation === 'resume') && ['queued', 'ready'].includes(state.image_status ?? ''))
-    wake_background('images')
-  return state
+  return operation === 'seal'
+    ? observe_upload('upload_seal', action, { session_id: session })
+    : with_upload_context({ session_id: session }, action)
 }
 export async function sign_upload_session_part(session: string, actor: number, part: number, md5: string) {
   return (await service()).sign(session, actor, part, md5)

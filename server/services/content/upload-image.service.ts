@@ -5,6 +5,7 @@ import type { Connection, Pool, RowDataPacket } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
 import type { create_upload_sessions } from './upload-session.service'
 import { ApiError } from '@server/errors/ApiError'
+import { with_upload_context } from '@server/lib/upload-observation'
 import { wake_background } from '@server/services/background/wakeup'
 import { create_image_jobs } from './image-job.service'
 import { publish_uploaded_attachment } from './upload-publication.service'
@@ -72,21 +73,23 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
     await Promise.all(Array.from({ length: Math.min(options.concurrency, queue.length) }, async () => {
       while (queue.length && ! signal?.aborted) {
         const row = queue.shift()!
-        let failure_epoch = Number(row.image_epoch)
-        try {
-          if (row.image_status !== 'ready') {
-            await jobs.run(row.job_id, Number(row.actor_id))
-            const [current] = await pool.execute<RowDataPacket[]>('SELECT execution_epoch FROM content_image_jobs WHERE id = ?', [row.job_id])
-            failure_epoch = Number(current[0]?.execution_epoch)
+        await with_upload_context({ session_id: row.id, job_id: row.job_id }, async () => {
+          let failure_epoch = Number(row.image_epoch)
+          try {
+            if (row.image_status !== 'ready') {
+              await jobs.run(row.job_id, Number(row.actor_id))
+              const [current] = await pool.execute<RowDataPacket[]>('SELECT execution_epoch FROM content_image_jobs WHERE id = ?', [row.job_id])
+              failure_epoch = Number(current[0]?.execution_epoch)
+            }
+            await uploads.adopt(row.id, Number(row.actor_id), publish)
+            wake_background('sync')
           }
-          await uploads.adopt(row.id, Number(row.actor_id), publish)
-          wake_background('sync')
-        }
-        catch {
+          catch {
           // Busy/late workers may not fail another worker. A terminal failure is
           // visible and explicitly retryable; never automatically loop a bad image.
-          await jobs.fail_publication(row.job_id, failure_epoch, Number(row.scope_id))
-        }
+            await jobs.fail_publication(row.job_id, failure_epoch, Number(row.scope_id))
+          }
+        })
       }
     }))
   }

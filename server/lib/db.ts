@@ -1,5 +1,6 @@
 import { load_database_config } from '@config/loader'
 import mysql from 'mysql2/promise'
+import { observe_database_pool } from './database-observation'
 
 const config = load_database_config()
 
@@ -14,6 +15,7 @@ const pool = mysql.createPool({
   queueLimit: 0,
   timezone: 'Z',
 })
+observe_database_pool(pool.pool)
 
 // Force UTC for every physical connection. The pool 'connection' event fires for
 // ALL connections, including the ones acquired internally by pool.execute/query,
