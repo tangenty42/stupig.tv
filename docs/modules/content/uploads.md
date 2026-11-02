@@ -103,6 +103,8 @@ console.table(performance.getEntriesByType('measure')
 
 2026-11-02 的[脱敏验证](../../reviews/upload-observability-2026-11-02.json)包括开发桶真实调用、隔离数据库混合负载／连接池占满及浏览器 Performance 断言。开发桶各一次：460 字节 JPEG 约 2.03s，2,621,740 字节 PNG 约 1.78s；前者 JPEG 与尾部检查阶段约 0.90／0.50s，后者 WebP 阶段约 1.32s。阶段包含关联请求／校验，不是云端纯编码 CPU 时间，也不是生产 P95。两轮共 16 个专用对象均已软删除并确认当前缺失，历史版本保留；隔离数据库与浏览器测试实例已清理。
 
+同日 #72 部署后，用户在专用生产测试档案完成三次顺序上传，均为 create 且已采用。只读日志核对的受理到正式发布分别为 5.75／4.23／3.67s，图片处理为 3.84／2.06／2.18s，入队等待仅 20–58ms，图片阶段累计获取数据库连接为 2–4ms。样本依次为 2.50MiB 的 1536×1024 PNG、461KiB 的 1216×2688 图片及 10.9KiB 的 62×67 小图。WebP 阶段包含处理及核验，多次对象往返也会波动；不能把小图一次较慢归因为编码成本或缓存命中。缺少浏览器 Performance 和上传时资源峰值，未验收图片编辑／删减、替换或并发。生产基线及后续开发桶精简请求的对照见[脱敏记录](../../reviews/oss-verification-roundtrips-2026-11-02.json)。
+
 会话过期、取消、被替代的尝试由上传生命周期扫描处理，包括普通文件和图片输入。暂存 key 可能已被正式普通附件采用，不能按 `staging/` 前缀直接删除；见[对象生命周期](object-lifecycle.md)。
 
 核心实现：[`upload-api.service.ts`](../../../server/services/content/upload-api.service.ts)、[`upload-session.service.ts`](../../../server/services/content/upload-session.service.ts)、[`upload-publication.service.ts`](../../../server/services/content/upload-publication.service.ts)、[`upload-runtime.ts`](../../../app/utils/content/upload-runtime.ts)、[`contentUploads.ts`](../../../app/stores/contentUploads.ts)。

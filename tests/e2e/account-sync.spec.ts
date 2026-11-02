@@ -107,9 +107,10 @@ test('lost account notifications converge by visible polling and visibility reco
     // No tab forwards events and the hidden reader closes its MQTT connection.
     broker_available = false
     await set_page_visibility(reader, 'hidden')
+    // Drain visible reads, including a queued invalidation follow-up and tRPC's
+    // deferred batch dispatch, before measuring hidden periodic polling.
+    await reader.waitForLoadState('networkidle')
     await mutate(page, 'admin.setPermissions', { id: user.id, permissions: [] })
-    // A read started while visible may still finish after hiding the page.
-    // Check that hidden polling starts no new request, not that responses stop.
     const hidden_requests = read_connections.length
     await reader.clock.fastForward((settings.app.auth.syncPollIntervalSeconds + 1) * 1000)
     expect(read_connections).toHaveLength(hidden_requests)

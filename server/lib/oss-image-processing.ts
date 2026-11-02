@@ -10,7 +10,7 @@ import { image_upload_error } from '@shared/content-image-upload'
 import { settings } from '@shared/settings'
 import OSS from 'ali-oss'
 import sharp from 'sharp'
-import { verify_private_oss_object } from './oss-object-identity'
+import { require_private_oss_identity, verify_private_oss_object } from './oss-object-identity'
 import { observe_upload } from './upload-observation'
 
 type Storage = ReturnType<typeof create_aliyun_oss>
@@ -164,7 +164,7 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
         // saveas inherits bucket ACL. Pin private even if cancellation arrived during POST.
         await storage.set_object_access(target, 'private')
         await guard()
-        const [head] = await Promise.all([verify_private_oss_object(storage, target, {}, '云端图片产物或来源校验失败'), unchanged(storage, from)])
+        const head = await verify_private_oss_object(storage, target, {}, '云端图片产物或来源校验失败')
         const limit = settings.app.content.image.uploadMaxBytes * (format === 'webp' ? 1 : 4)
         if (head.size <= 0 || head.size > limit)
           throw conflict()
@@ -172,7 +172,9 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
         const info = await image_info(client, object, bounded())
         if (info.format !== format || info.frames !== 1 || info.width !== expected.width || info.height !== expected.height)
           throw conflict()
-        await unchanged(storage, object)
+        // The next save checks its input before use. The final guard rechecks
+        // every role, including sources changed during a non-conditional POST.
+        // Do not repeat those same HEAD/ACL pairs immediately after image/info.
         await guard()
         return object
       }
@@ -207,10 +209,12 @@ export async function copy_oss_image_original(storage: Storage, source: OssImage
       throw conflict()
     }
     signal.throwIfAborted()
-    await Promise.all([unchanged(storage, source), unused_target(storage, target)])
-    const metadata = values(await client.head(source.key))
-    if (etag(metadata.etag) !== source.etag || metadata['x-oss-version-id'] !== source.version_id || Number(metadata['content-length']) !== source.size)
-      throw conflict('归档原图来源已变化')
+    const [response, access] = await Promise.all([client.head(source.key), storage.get_object_access(source.key), unused_target(storage, target)])
+    const metadata = values(response)
+    // This same HEAD supplies copy Content-Type and the pre-copy identity;
+    // a separate getObjectMeta would only repeat the source read.
+    require_private_oss_identity({ etag: etag(metadata.etag) ?? '', version_id: metadata['x-oss-version-id'] ?? null,
+      size: metadata['content-length'] === undefined ? Number.NaN : Number(metadata['content-length']) }, access, source, '归档原图来源已变化')
     signal.throwIfAborted()
     const copied = await client.copy(target, source.key, { headers: {
       'x-oss-copy-source-if-match': `"${source.etag}"`, 'x-oss-object-acl': 'private', 'Cache-Control': 'private, no-store',

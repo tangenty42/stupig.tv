@@ -7,6 +7,10 @@ test('reconciles an actually committed save whose response was lost before sendi
   await login(page)
   const story = await create_story(page)
   const attempts: { seq: number, hash: string }[] = []
+  let release_replay!: () => void
+  const replay = new Promise<void>((resolve) => {
+    release_replay = resolve
+  })
   await page.route('**/api/trpc/**commandDraft**', async (route) => {
     const input = route.request().postDataJSON()
     if (input.markdown?.includes('lost response text')) {
@@ -17,13 +21,21 @@ test('reconciles an actually committed save whose response was lost before sendi
         await route.abort('connectionreset')
         return
       }
+      // Hold the replay until the uncertain state has actually been observed;
+      // a fast successful replay can otherwise hide it between DOM assertions.
+      if (attempts.length === 2)
+        await replay
     }
     await route.continue()
   })
   const editor = page.getByRole('textbox', { name: /Markdown/ })
   await editor.fill(markdown(story.title, 'lost response text'))
-  await expect(editor).not.toBeEditable()
-  await expect.poll(async () => (await content_mutation<DraftResult>(page, 'getDraft', { story_id: Number(story.id) })).snapshot!.markdown).toContain('lost response text')
+  try {
+    await expect.poll(() => attempts.length).toBe(2)
+    await expect(editor).not.toBeEditable()
+    await expect.poll(async () => (await content_mutation<DraftResult>(page, 'getDraft', { story_id: Number(story.id) })).snapshot!.markdown).toContain('lost response text')
+  }
+  finally { release_replay() }
   await expect(editor).toBeEditable({ timeout: 20000 })
   expect(attempts.length).toBeGreaterThanOrEqual(2)
   expect(attempts[1]).toEqual(attempts[0])

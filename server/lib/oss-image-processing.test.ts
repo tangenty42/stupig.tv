@@ -102,6 +102,18 @@ it('persists WebP/JPEG in OSS and only reads bounded info JSON plus the small LQ
   expect(await sharp(result.lqip).metadata()).toMatchObject({ format: 'jpeg', width: 24, height: 12 })
 })
 
+it('bounds OSS round trips for conversion plus archive while retaining both write preflights and the final checks', async () => {
+  const f = await fixture()
+  await Promise.all([f.run(), f.archive()])
+  const count = [f.storage.head_object, f.storage.get_object_access, f.storage.set_object_access,
+    cloud.getStream, cloud.getBucketACL, cloud.processObjectSave, cloud.head, cloud.copy]
+    .reduce((total, request) => total + request.mock.calls.length, 0)
+  expect(count).toBeLessThanOrEqual(36)
+  expect(cloud.getBucketACL).toHaveBeenCalledTimes(2)
+  expect(cloud.processObjectSave).toHaveBeenCalledTimes(2)
+  expect(cloud.copy).toHaveBeenCalledOnce()
+})
+
 it.each(['public-input', 'public-output', 'replaced-input'])('rejects unsafe %s before publication', async (fault) => {
   const f = await fixture()
   if (fault === 'replaced-input')
@@ -199,6 +211,59 @@ it('rejects target replacement during information lookup', async () => {
   expect(cloud.processObjectSave).toHaveBeenCalledOnce()
 })
 
+it.each(['input', 'display', 'fallback'].flatMap(role => ['version', 'acl', 'size'].map(fault => ({ role, fault }))))('rejects late $role $fault changes at the final boundary', async ({ role, fault }) => {
+  const f = await fixture()
+  const key = role === 'input' ? f.request.input.key : `${f.request.prefix}.${role === 'display' ? 'webp' : 'jpg'}`
+  const get = cloud.getStream.getMockImplementation()!
+  cloud.getStream.mockImplementation(async (source: string, options: { process: string }) => {
+    const response = await get(source, options)
+    if (options.process.includes('resize')) {
+      if (fault === 'version')
+        f.objects.get(key)!.version_id = 'late-replacement'
+      else if (fault === 'size')
+        f.objects.get(key)!.bytes = Buffer.concat([f.objects.get(key)!.bytes, Buffer.from([0])])
+      else
+        f.storage.get_object_access.mockImplementation(async (source?: string) => source === key ? 'public-read' : 'private')
+    }
+    return response
+  })
+  await expect(f.run()).rejects.toMatchObject({ statusCode: 409 })
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
+})
+
+it('rejects a source changed during native processing even when the persisted roles are otherwise valid', async () => {
+  const f = await fixture()
+  const write = cloud.processObjectSave.getMockImplementation()!
+  cloud.processObjectSave.mockImplementationOnce(async (... args) => {
+    const result = await write(... args)
+    f.objects.get(f.request.input.key)!.version_id = 'changed-during-save'
+    return result
+  })
+  await expect(f.run()).rejects.toMatchObject({ statusCode: 409 })
+})
+
+it('rejects an expired lease at the final boundary despite reusable intermediate identities', async () => {
+  const f = await fixture()
+  const get = cloud.getStream.getMockImplementation()!
+  cloud.getStream.mockImplementation(async (source: string, options: { process: string }) => {
+    const response = await get(source, options)
+    if (options.process.includes('resize'))
+      f.request.checkpoint.mockRejectedValue(new Error('lease expired'))
+    return response
+  })
+  await expect(f.run()).rejects.toThrow('云端图片处理失败')
+})
+
+it('does not start a native save after the lease expires during its preflight', async () => {
+  const f = await fixture()
+  f.request.checkpoint.mockImplementation(async () => {
+    if (cloud.getBucketACL.mock.calls.length)
+      throw new Error('lease expired')
+  })
+  await expect(f.run()).rejects.toThrow('云端图片处理失败')
+  expect(cloud.processObjectSave).not.toHaveBeenCalled()
+})
+
 it('pins a completed native write private before honoring cancellation', async () => {
   const f = await fixture()
   const write = cloud.processObjectSave.getMockImplementation()!
@@ -250,6 +315,25 @@ it('archives by a conditional private native copy without application image read
   expect(cloud.copy).toHaveBeenCalledWith(f.original, f.request.input.key, { headers: expect.objectContaining({ 'x-oss-copy-source-if-match': '"source"', 'x-oss-object-acl': 'private', 'Cache-Control': 'private, no-store' }) })
   expect(f.storage.get_object_stream).not.toHaveBeenCalled()
   expect(cloud.getStream).not.toHaveBeenCalled()
+})
+
+it.each(['version', 'size', 'etag', 'acl'])('refuses an invalid archive source %s before sending the copy', async (kind) => {
+  const f = await fixture()
+  const head = cloud.head.getMockImplementation()!
+  cloud.head.mockImplementationOnce(async (key: string) => {
+    const result = await head(key)
+    if (kind === 'version')
+      result.res.headers['x-oss-version-id'] = ''
+    if (kind === 'etag')
+      result.res.headers.etag = '"changed"'
+    if (kind === 'size')
+      result.res.headers['content-length'] = 'NaN'
+    return result
+  })
+  if (kind === 'acl')
+    f.storage.get_object_access.mockResolvedValue('public-read')
+  await expect(f.archive()).rejects.toMatchObject({ statusCode: 409 })
+  expect(cloud.copy).not.toHaveBeenCalled()
 })
 
 it.each(['source-receipt', 'target-receipt', 'source-replaced', 'public-target', 'http-error'])('rejects an unsafe copy %s', async (kind) => {
