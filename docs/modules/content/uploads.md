@@ -66,6 +66,10 @@
 
 任务行直到结果对账完成才交接给正式文件行。会话列表暂时缺失某条记录不会直接抹去本地任务，会按 ID 查询确认。
 
+查询已完成的本人会话时，同一次 `getUploadSession` 响应携带持久化 `attachment_id`、完成结果及按当前权限读取的最新工作区。完成回执不重放采用命令，也不额外登记 outbox；取消、失败及过期仍返回各自状态。已完成查询不再读取分片凭证、分片列表或图片任务。前端在收到完整且身份匹配的结果后交接，保留代次、版本检查和 finalizing 围栏；缺少回执或工作区时保留错误行，不因列表缺失直接推断完成。成功响应丢失后的重试也可直接使用该完成结果，不重传文件或重复采用；仍需真正采用的路径、暂停／恢复和取消竞争继续使用其既有语义。
+
+正常通知后的收尾从『刷新会话列表 → 查询单个会话 → 再次采用取工作区』缩为前两次请求。以每次固定模拟 150ms 响应延迟驱动实际 Pinia／同步查询／上传 runtime，单次对照约 473 → 311ms；这是减少一次串行请求的隔离复现，不能当作生产网络或浏览器绘制时间。见[收尾与数据库预算观测](../../reviews/upload-completion-and-database-budget-2026-11-02.json)。
+
 ## 清理与验证
 
 ### 上传耗时与资源观测
@@ -97,7 +101,7 @@ console.table(performance.getEntriesByType('measure')
   .map(item => ({ name: item.name, duration_ms: item.duration })))
 ```
 
-阶段包括句柄回读 `source`、`resume`、`initialize`、续传 `checking`、`bytes`、`seal`、`await_completion`、`adopt`、`dom_update` 和 `total`，末尾带 returned／failed／stopped。`bytes` 包含 SDK 分片准备、MD5、签名及传输；`await_completion` 是客户端收到封口结果后等待状态回传的时间，不能当纯编码时长。`total` 从当前页面本次执行开始，到接收采用结果、工作区与落地回调交接并完成 Vue `nextTick`；不包含此前的文件选择／受理，不保证图片已解码或绘制。刷新恢复可能只有后半段，暂停／失败分别结束本次观测，不把恢复前的时间补成假数据。通知早于 HTTP 响应时，各调用仍独立等自己的响应再结束计时；DOM 观测不延长 finalizing 围栏。
+阶段包括句柄回读 `source`、`resume`、`initialize`、续传 `checking`、`bytes`、`seal`、`await_completion`、`reconcile`、`adopt`、`dom_update` 和 `total`，末尾带 returned／failed／stopped。`reconcile` 包含单个会话确认及完成时取得最新工作区；显式采用仍记录 `adopt`，后台已采用的完成确认不再伪造一段采用请求。`bytes` 包含 SDK 分片准备、MD5、签名及传输；`await_completion` 是客户端收到封口结果后等待状态回传的时间，不能当纯编码时长。`total` 从当前页面本次执行开始，到接收采用结果、工作区与落地回调交接并完成 Vue `nextTick`；不包含此前的文件选择／受理，不保证图片已解码或绘制。刷新恢复可能只有后半段，暂停／失败分别结束本次观测，不把恢复前的时间补成假数据。通知早于 HTTP 响应时，各调用仍独立等自己的响应再结束计时；DOM 观测不延长 finalizing 围栏。
 
 浏览器数据留在当前页面，不上报新接口；Performance 不可用或日志失败不改变业务结果。当前生产应用进程的观测应从管理员 API 读取；源码 `background:status:dev`／`background:status:prod` CLI 是另一个进程，只能看到自身观测，不能代替应用进程指标。部署后用代表性小图、照片和编辑输出重测整条链路；离线 fixture 的延迟不代表生产 OSS。
 

@@ -216,6 +216,8 @@ it.each(['verifying', 'completed', 'cancelled'])('returns the current %s receipt
     row.revision = 2
     if (status === 'verifying')
       row.result = { key: 'stage', etag: 'etag', oss_version_id: 'v1', size: 3, sha256: 'a'.repeat(64) }
+    if (status === 'completed')
+      row.result = { attachment_id: 9, object_key: 'published', version: 'published-version' }
     return { parts: [], next_marker: null }
   })
   await expect(service.resume(id, 1)).resolves.toMatchObject({ status: status === 'verifying' ? 'ready' : status, revision: 2 })
@@ -226,6 +228,8 @@ it.each(['completed', 'cancelled'])('reconciles NoSuchUpload against a concurren
   list.mockImplementation(async () => {
     row.status = status
     row.revision = 2
+    if (status === 'completed')
+      row.result = { attachment_id: 9, object_key: 'published', version: 'published-version' }
     throw Object.assign(new Error('multipart no longer exists'), { code: 'NoSuchUpload' })
   })
   await expect(service.resume(id, 1)).resolves.toMatchObject({ status, revision: 2 })
@@ -237,6 +241,21 @@ it('does not reinterpret missing multipart or temporary storage failure as succe
     list.mockRejectedValueOnce(error)
     await expect(service.resume(id, 1)).rejects.toBe(error)
   }
+})
+
+it('reads the durable completed attachment identity without replaying writes or outbox events', async () => {
+  row.status = 'completed'
+  row.result = { attachment_id: 9, object_key: 'published', version: 'published-version' }
+  expect(await service.get(id, 1)).toMatchObject({ status: 'completed', attachment_id: 9, key: null, upload_id: null, parts: [] })
+  expect(execute.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true)
+  expect(execute.mock.calls.some(([sql]) => /FROM content_transfer_(?:attempts|parts)/.test(sql))).toBe(false)
+})
+
+it('does not expose an invalid completed publication identity', async () => {
+  row.status = 'completed'
+  row.result = { attachment_id: 0, object_key: 'published', version: 'published-version' }
+  await expect(service.get(id, 1)).rejects.toThrow()
+  expect(execute.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true)
 })
 
 it('rechecks authorization before accepting a concurrent terminal receipt', async () => {

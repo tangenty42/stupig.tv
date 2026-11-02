@@ -1,0 +1,130 @@
+{
+  "collected_at": "2026-11-02T13:45:10.664Z",
+  "baseline_commit": "8498a0c22f4157b4927d0716ef130c5816d40092",
+  "completion_handoff": {
+    "scope": "actual local Vue/Pinia/shared-query/upload-runtime path; fixed 150ms simulated response delay per HTTP call; no production network, DOM paint, SQL timing or latency guarantee",
+    "before": {
+      "sequential_requests": 3,
+      "completion_ms": 472.91,
+      "operations": [
+        "listUploadSessions",
+        "getUploadSession",
+        "adoptUploadSession"
+      ]
+    },
+    "after": {
+      "sequential_requests": 2,
+      "completion_ms": 310.88,
+      "operations": [
+        "listUploadSessions",
+        "getUploadSession"
+      ]
+    },
+    "completed_read_skips": [
+      "transfer-attempt lookup",
+      "multipart-part list",
+      "image-job state lookup"
+    ],
+    "adoption_replay_and_extra_outbox_enqueue": false,
+    "production_deployed": false
+  },
+  "production_database": {
+    "release_sha": "8498a0c22f4157b4927d0716ef130c5816d40092",
+    "scope": "read-only low-frequency MySQL samples, same configured DB/account excluding this diagnostic connection; not direct application-pool counters or a production load test",
+    "started_at": "2026-11-02T13:33:45.396Z",
+    "completed_at": "2026-11-02T13:34:40.667Z",
+    "sample_count": 12,
+    "interval_seconds": 5,
+    "matching_account_database_connections": {
+      "min": 9,
+      "max": 9,
+      "observed_idle_min": 8,
+      "observed_active_max": 1,
+      "observed_oldest_active_seconds_max": 0
+    },
+    "global_status_observed_delta": {
+      "Innodb_row_lock_waits": 0,
+      "Innodb_row_lock_time": 0,
+      "Aborted_connects": 0
+    },
+    "global_row_lock_current_waits_max": 0,
+    "global_max_used_connections": 12,
+    "variables": [
+      {
+        "Variable_name": "innodb_lock_wait_timeout",
+        "Value": "50"
+      },
+      {
+        "Variable_name": "max_connections",
+        "Value": "151"
+      },
+      {
+        "Variable_name": "wait_timeout",
+        "Value": "28800"
+      }
+    ],
+    "per_database_lock_detail": {
+      "available": false,
+      "code": "ER_TABLEACCESS_DENIED_ERROR"
+    },
+    "prior_user_uploads": [
+      {
+        "input_bytes": 2621740,
+        "image_job_db_acquisitions": 13,
+        "image_job_db_acquire_total_ms": 3.71
+      },
+      {
+        "input_bytes": 472258,
+        "image_job_db_acquisitions": 13,
+        "image_job_db_acquire_total_ms": 2.11
+      },
+      {
+        "input_bytes": 11143,
+        "image_job_db_acquisitions": 13,
+        "image_job_db_acquire_total_ms": 2.24
+      }
+    ],
+    "limitations": [
+      "Low-traffic observation for about one minute, not production capacity or P95.",
+      "Connection metadata groups the configured database/account; it is not direct in-process pool occupancy or pending queue telemetry.",
+      "Five-second sampling can miss transient active queries; the diagnostic connection is excluded from matching counts but contributes to global status.",
+      "Lock counters are MySQL-global; per-database performance_schema lock details were not permitted.",
+      "No authenticated authorization-callback or draft keepalive latency was measured.",
+      "No production stress, configuration/policy changes, business writes or queue-limit changes were performed."
+    ]
+  },
+  "previous_isolated_saturation_evidence": {
+    "source": "docs/reviews/upload-observability-2026-11-02.json",
+    "rerun_this_turn": false,
+    "scope": "disposable local QA database, deliberate contention and pool saturation; precomputed image provider with a fixed 5ms fixture delay; not production capacity",
+    "pending_acquisition_observed": true,
+    "expired_queued_write_rejected": true,
+    "max_acquire_ms": 70.66,
+    "limitation": "Brief deliberate saturation validates stale-write rejection, not a bound on long-running pool waits or production throughput."
+  },
+  "decision": {
+    "change_connection_pool_limits_now": false,
+    "split_worker_now": false,
+    "reason": "Observed production connection acquisition and current SQL samples do not show a resource bottleneck. Preserve current behavior and collect mixed-load/authorization/keepalive evidence before selecting queue and wait budgets.",
+    "remaining_boundary": "Ten application connections with queueLimit=0 and a 50s InnoDB lock wait limit can still leave requests pending during future saturation; frontend timeout alone does not bound server work."
+  },
+  "verification": {
+    "focused_tests_passed": 116,
+    "pnpm_check": "passed",
+    "final_lint_typecheck_unit": "passed",
+    "app_server_tests_passed": 1982,
+    "tool_tests_passed": 402,
+    "tool_tests_skipped": 1,
+    "component_tests_passed": 32,
+    "frozen_migration_digests": "unchanged",
+    "browser": {
+      "workflow": "tests/e2e/content-upload.spec.ts",
+      "passed": 1,
+      "scope": "isolated built application and disposable local database, real upload/authorization/query boundary with simulated OSS/SMS; no production writes",
+      "completed_query_contains_fresh_workspace": true,
+      "completed_query_omits_multipart_credentials": true,
+      "attachment_readable_after_reload": true
+    },
+    "documentation_links_checked": true
+  }
+}

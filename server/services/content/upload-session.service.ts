@@ -61,6 +61,7 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
   }
   const public_state = (row: UploadRow, attempt: UploadAttempt | null, parts: ContentUploadSession['parts'] = []): ContentUploadSession => ({
     id: row.id, scope_id: Number(row.scope_id), status: row.result && row.status === 'verifying' ? 'ready' : row.status,
+    ... (row.status === 'completed' ? { attachment_id: upload_publication_schema.parse(row.result).attachment_id } : {}),
     path: String(row.target_path ?? row.intent.target_path), size: Number(row.expected_size),
     parent_id: row.intent.target_parent_id, source_id: row.intent.source?.id, replacement_id: row.intent.replacement?.id, purpose: row.intent.purpose,
     expires_at: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at), revision: Number(row.revision),
@@ -75,7 +76,8 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
   }
   async function get(session: string, actor: number) {
     return owned(session, actor, async (connection, row) => {
-      const attempt = row.active_attempt_id && ! ['cancelled', 'expired', 'failed'].includes(row.status) ? await get_upload_attempt(connection, row) : null
+      // Adopted sessions need their receipt, not obsolete multipart credentials.
+      const attempt = row.active_attempt_id && ! ['cancelled', 'expired', 'failed', 'completed'].includes(row.status) ? await get_upload_attempt(connection, row) : null
       const [parts] = attempt ? await connection.execute<RowDataPacket[]>('SELECT part_number, byte_length, etag FROM content_transfer_parts WHERE attempt_id = ? ORDER BY part_number', [attempt.id]) : [[]]
       return public_state(row, attempt, parts.map(part => ({ part_number: Number(part.part_number), size: Number(part.byte_length), etag: String(part.etag) })))
     })
