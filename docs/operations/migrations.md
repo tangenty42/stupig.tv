@@ -33,6 +33,8 @@ pnpm migrate --dry-run
 
 引用统一后，旧 Content v1 产物的 `content-markdown.ts`、`content-reference.ts`、`content-workspace.ts`、同步通道及同步类型同样固定到该目录的 `.snapshot` 文件，在原模块身份下加载；旧脚本摘要保持不变，新行为仅由新迁移及运行时代码采用。
 
+WebP v1 迁移的引用定义扫描固定到 `migrations/lib/webp-v1/content-reference-definitions-live.ts.snapshot`，构建器仍以原在线模块身份加载，保持已冻结 bundle 的字节和摘要不变。在线 Markdown 的机密块修复不回写该历史实现；不要修改快照或更新旧摘要来绕过冻结检查。
+
 开发源码入口将脚本产物放在 `.nuxt/migration-scripts/`；生产源码入口使用 `.nuxt/migration-runtime/`，同时打包 Sharp 原生依赖及 `native-manifest.json`，执行与生产镜像相同的版本/文件摘要校验。仅设置 `NODE_ENV=production` 而缺少该清单会被拒绝。CI 空库重放使用专用假 OSS 身份满足历史脚本的目标配置校验，不使用真实云密钥或复制对象。
 
 ## 命令语义

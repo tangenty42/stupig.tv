@@ -1,5 +1,6 @@
 import { html_no_markdown_tags, html_table_tags } from './content-html'
 import { create_content_markdown_parser, dedent_html_inner, split_html_wrappers } from './content-markdown-syntax'
+import { content_private_plugin } from './content-private'
 
 // Migration snapshots import content-reference-definitions.ts under its original
 // identity. Keep this evolving resolver outside that frozen dependency closure.
@@ -74,6 +75,10 @@ export function scan_reference_definitions(text: string, front_matter_end = 0) {
     },
   }) }
   const md = create_content_markdown_parser()
+  content_private_plugin(md)
+  // Inline <good> delimiters remain ordinary HTML tokens here so the normal
+  // inline pass still resolves/counts their inner reference uses.
+  md.inline.ruler.disable('content_private_inline')
   // Label lookahead also resolves references in silent mode. Count only an
   // accepted, emitted link/image, not speculative reads that were rolled back.
   for (const name of ['link', 'image']) {
@@ -146,6 +151,13 @@ export function scan_reference_definitions(text: string, front_matter_end = 0) {
         starts.push(i + 1)
     }
     for (const token of tokens) {
+      if (token.type === 'content_private_block' && token.map) {
+        // The renderer owns <good> blocks across blank lines. Treating them
+        // as ordinary HTML would exclude their first fragment from rewrites.
+        const start = current.text.indexOf(token.markup, starts[token.map[0]])
+        parse(fragment(current, token.content, start + token.markup.indexOf('>') + 1))
+        continue
+      }
       if (token.type !== 'html_block' || ! token.map)
         continue
       const block = fragment(current, token.content, starts[token.map[0]])

@@ -9,6 +9,28 @@ test.beforeAll(async () => {
   fixture = await build_css_official_fixture()
 })
 
+test('story grammar highlights Setext headings and extended tables in both themes after editing', async ({ page }) => {
+  await page.setContent('<!doctype html><html><head></head><body><div id="__nuxt"></div></body></html>')
+  await page.addStyleTag({ content: fixture.styles.application.minified.global })
+  await page.addScriptTag({ type: 'module', content: fixture.script })
+  await page.waitForFunction(() => window.__CSS_OFFICIAL_API_PROBE__?.ready)
+  const source = '---\ntitle: 元数据\ntime: 2026/11/02\n---\n\n下划线标题\n===\n\n| 表头 | 文件 |\n| --- | --- |\n| 合并 ||\n[表格说明]\n\n正文'
+  await page.evaluate(source => window.__CSS_OFFICIAL_API_PROBE__.set_markdown(source), source)
+  const lines = page.locator('#project-editor .cm-line')
+  const heading = lines.filter({ hasText: '下划线标题' }).locator('span').first()
+  const header = lines.filter({ hasText: '表头' }).locator('span').filter({ hasText: '表头' })
+  for (const dark of [false, true]) {
+    await page.evaluate(dark => window.__CSS_OFFICIAL_API_PROBE__.set_dark(dark), dark)
+    await expect(heading).toHaveCSS('font-weight', '700')
+    await expect(heading).toHaveCSS('color', dark ? 'rgb(241, 245, 249)' : 'rgb(15, 23, 42)')
+    await expect(header).toHaveCSS('font-weight', '700')
+    await expect(lines.filter({ hasText: '元数据' })).toHaveText('title: 元数据')
+  }
+  await page.evaluate(source => window.__CSS_OFFICIAL_API_PROBE__.set_markdown(source.replace('\n===', '\n普通文本')), source)
+  await expect(lines.filter({ hasText: '下划线标题' })).toHaveText('下划线标题')
+  await expect(lines.filter({ hasText: '下划线标题' }).locator('span')).toHaveCount(0)
+})
+
 for (const mode of modes) {
   for (const output of ['postcss', 'minified'] as const) {
     test(`${mode} / ${output}: official APIs and cascade boundaries`, async ({ page, browser }, test_info) => {
