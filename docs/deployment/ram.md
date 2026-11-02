@@ -38,6 +38,10 @@ pnpm content:preload:check --env=prod
 
 ESA 发布检查不会发布代码；预热检查需要对应数据库可达，但不提交任务。OSS 上传/替换/删除、短信受控号码、ACR 推拉仍需各自验收，不能用审计管理员成功代替应用身份。开发默认保持 OTP debug，不对开发测试号码发送真实短信。
 
+## 专项盘点只读权限
+
+专项版本／multipart 元数据盘点使用 [开发](../../config/ram/stupig-oss-inventory-dev-readonly.json)／[生产](../../config/ram/stupig-oss-inventory-prod-readonly.json)只读补充策略，仅允许指定桶的版本控制、生命周期、版本与 multipart 列举，以及分片元数据读取。不包含对象内容、删除或 abort；本轮临时绑定，验收后手动解除，策略没有自动到期。命令、网络前置和清理边界见[专项盘点](../operations/storage-audit.md#历史版本与-multipart-专项盘点)。现有应用身份绑定额外策略后，其原有权限仍有效，不能把它描述为完整只读身份。
+
 ## 图片原生持久化权限
 
 两份 OSS 应用策略在既有对象读写权限外，仅增加指定桶的 `oss:GetBucketAcl`（验证私有桶）和 `content/att/staging/*`、`content/att/images/*` 来源的 `oss:PostProcessTask`。不需要 `PutBucket`、公开 ACL 或历史版本永久删除。图片保存目标由已有的 `content/att/*` PutObject 权限覆盖，应用只生成尝试拥有的 images key。

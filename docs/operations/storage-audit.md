@@ -6,11 +6,59 @@
 
 | 方向 | 检查 |
 | --- | --- |
-| 数据库 → OSS | 正式附件的 object/original/AVIF/JPEG/删减版两角色、用户头像、配置登记的静态图标；检查存在性、已知的主对象大小，以及是否存在公有对象 ACL |
+| 数据库 → OSS | 正式附件的主对象、归档原图、展示图／回退图及删减版两角色、用户头像、配置登记的静态图标；检查存在性、已知的主对象大小，以及是否存在公有对象 ACL |
 | OSS → 数据库 | 无前缀限制、分批列举桶内当前对象；判断正式引用、上传和图片尝试、任务输入、迁移复制/pin、预热和退役归属 |
 | 已有异常 → 当前事实 | 单独复查每个旧异常，不因分页中没再看见它就批量关闭 |
 
-这是滚动元数据检查，不是跨 MySQL/OSS 的一致性快照，也不下载全量字节做 SHA-256 校验。新插入到已扫描排序位置之前的对象可在下轮发现。历史对象版本、删除标记与未完成 multipart 不在本轮 ListObjectsV2 清单中：版本由 OSS 生命周期管理，已登记上传的 multipart 由上传生命周期账本处理；未登记 multipart 的全桶专项盘点尚未实现。
+这是滚动元数据检查，不是跨 MySQL/OSS 的一致性快照，也不下载全量字节做 SHA-256 校验。新插入到已扫描排序位置之前的对象可在下轮发现。历史对象版本、删除标记与未完成 multipart 不在日常 ListObjectsV2 清单中：版本由 OSS 生命周期管理，已登记上传的 multipart 由上传生命周期账本处理；额外范围使用下述独立专项命令。
+
+## 历史版本与 multipart 专项盘点
+
+在具备目标配置和 MySQL 连接的源码工作区运行：
+
+```sh
+pnpm storage:inventory --env=prod --parts --output .data/oss-inventory-prod-20261102
+pnpm storage:inventory --env=dev --parts --output .data/oss-inventory-dev-20261102
+pnpm storage:inventory --env=dev --metadata-only --parts --output .data/oss-inventory-dev-metadata-20261102
+pnpm storage:inventory --help
+```
+
+该命令仅发 OSS `GET` 和业务库 `SELECT`，数据库连接先设置 session read-only；不下载对象内容、不计算文件 SHA、不修改云端配置、业务行或日常盘点账本。额外读取桶版本控制、生命周期、全部版本／删除标记、multipart 和可选分片元数据。没有 `--apply`、删除、abort 或清理入队选项；不另设 cron 或 runner。
+
+`--metadata-only` 可在数据库不可达或版本不足时，仅盘点 OSS 配置、版本和分片元数据；不加载或连接数据库，所有对象归属均为 `unverified`，不产生清理候选，`protection_checks_complete=false`。这是显式缩小范围，不会在 DB 查询失败后自动降级；需使用独立 output，不能混用默认模式的断点。此模式退出 0 仅表示所选元数据范围完成。
+
+`--env` 复用现有环境选择；数据库和 OSS 使用对应配置。生产源码命令需要可达的 MySQL；精简应用镜像不包含此 pnpm 入口。需要 SSH 转发时，另建仅本地监听的连接，例如 `ssh -N -L 127.0.0.1:13347:127.0.0.1:3306 <SSH别名>`，在运行命令的终端临时将 `MYSQL_HOST=127.0.0.1`、`MYSQL_PORT=13347` 指向转发，完成后还原变量并关闭隧道。只读会话不要求修改业务数据库结构；开发库版本不足时返回 `database_schema_mismatch`，不会把查不到保护关系当成无归属。
+
+默认每次最多 50 次 OSS 逻辑请求、每页 25 项、请求间隔 100ms、时间预算 60 秒；可用 `--max-requests`、`--page-size`、`--pause-ms`、`--max-seconds` 调整。时间预算在 OSS 操作间检查，已开始的请求和当前页归属复核可以超出预算；OSS 单次 timeout 不超过 30 秒，SQL 设置 5 秒查询执行上限。默认全桶；`--prefix content/att/` 可缩小范围。候选年龄默认 30 天，`--min-age-days` 最低 7 天；年龄只是复核条件，不是删除授权。`--parts` 额外逐任务分页统计已上传分片字节，不加该参数时大小标记为未核实，不能当成 0 占用或实际账单。
+
+输出目录保留 `checkpoint.json`、脱敏汇总 `report.json` 和分批的 `records-*.json`。详细清单／断点含对象 key、版本号、upload ID 和完整生命周期规则，放在 Git 忽略的 `.data` 并按本机敏感运维材料保管；终端汇总不含对象名、游标或签名 URL。汇总按固定命名空间、类型、存储类型、年龄及保护关系分组；`totals` 同时提供对象类型和动作分类，不能将两类 subtotal 相加当总量。分片大小是已观察部分，`multipart_bytes_complete` 才表示该轮所有列举到的 multipart 已完整统计；它不等于计费存储。
+
+版本年龄使用 OSS `LastModified`，multipart 使用 `Initiated`；旧版本的修改时间不等于它成为非当前版本的时间，不能据此复刻生命周期的 noncurrent-days 删除条件。
+
+退出 `0` 表示配置、版本和 multipart 各部分已完成；`2` 表示权限、请求／时间预算或某部分查询失败导致未完成；`1` 为参数、连接、断点或落盘失败。403 明确保留为 `access_denied`，不会伪造“空桶／无异常”。恢复时重复同一 output、prefix、页大小、年龄和 parts 参数，可单独增加本次运行预算；桶、环境、实际 MySQL server UUID 或库名变化会拒绝复用断点，SSH 本地端口变化不影响恢复。新的一轮应使用新的 output，完成的旧断点不会自动重新全扫。
+
+版本游标保留 key 与 version ID，multipart 游标保留 key 与 upload ID；版本 ID 不按字典序比较。记录先落盘再保存断点，中断重放覆盖同一批次文件，不追加重复记录。一个目录只允许一个进程，`run.lock` 存 PID；进程异常退出留下锁时，先证明对应进程已退出再手动移除该锁，不能覆盖活动扫描的锁。退出时只关闭本脚本的数据库连接，不停止应用或 Docker 服务。
+
+消费详细记录时只接受同一 target 且 revision 不超过 `report.json` 的 `committed_revision` 的文件；异常中断可能留下尚未提交断点的下一批文件，不能把它作为有效观察。
+
+### 与清理的衔接
+
+专项清单中的每一项均为 `executable: false`。归属复核复用日常 catalog，检查正式附件各角色、头像、任务／尝试、迁移 pin、预热及退役责任。注册过的 multipart 按精确 key＋upload ID 保留；静态资源和归属不明的命名空间不自动处理。保护关系按 key 保守生效，受保护 key 的全部历史版本均保留，不宣称已逐版本证明“可删除”。
+
+| 分类 | 后续处理 |
+| --- | --- |
+| `daily_audit_reobserve` | 当前 Content 不可变对象待复核；仍由日常扫描重新观察，满足连续周期和身份／发布互斥后，才可走已有退役、软删除及 ESA 刷新通道 |
+| `review_history_retention` | 历史版本保留政策复核；当前不永久删除，后续要单独核对恢复窗口、pin、精确版本及权限 |
+| `review_abort_multipart` | 未登记的旧 multipart 待复核；后续终止前需重读 key＋upload ID、分片及任务归属，不能复用当前对象软删除通道 |
+| `retain_*`／`review_unmanaged_namespace`／`upload_disappeared` | 保留、人工确认或滚动观察期间已消失；均不构成清理完成证据 |
+
+本轮不会把一次专项观察写成日常扫描的两个完整周期，不启用 `orphanCleanup`，也不使用 `DeleteObjectVersion` 或 `AbortMultipartUpload`。预热、冷回源和 ESA 共享额度仍需单独验收。
+
+权限采用独立的[开发只读补充策略](../../config/ram/stupig-oss-inventory-dev-readonly.json)和[生产只读补充策略](../../config/ram/stupig-oss-inventory-prod-readonly.json)。本轮按临时绑定处理，验收后手动解除；JSON 没有自动到期。未来频繁运行时可使用独立只读身份，并通过现有 `ALIYUN_OSS_*` 变量注入；绑定到现有应用身份不会撤销该身份原本的其他权限。见 [RAM](../deployment/ram.md)。API 口径见 [ListObjectVersions](https://www.alibabacloud.com/help/en/oss/developer-reference/listobjectversions)、[ListParts](https://www.alibabacloud.com/help/en/oss/developer-reference/listparts)。
+
+2026-11-02 [脱敏验证](../reviews/oss-inventory-2026-11-02.json)：生产完成全桶元数据与只读 DB 核对，共 643 个当前版本（579,895,354 字节）、178 个历史版本（441,456,793 字节）、186 个删除标记，multipart 为 0；按本轮 30 天门槛没有复核清理候选。开发仅完成纯元数据范围，321 个当前版本、136 个历史版本、136 个删除标记，multipart 为 0，归属未核实。两环境提交的 1,007／593 条记录与汇总一致、无重复身份；分页、断点、分片续跑和拒绝响应另有测试，真实桶本轮没有可调用 ListParts 的上传任务。
+
+两桶均读回版本控制 Enabled，现有全桶生命周期为非当前版本 7 天过期及过期删除标记清理，未配置 multipart 自动终止条件。本轮未修改这些规则。OSS 生命周期独立于应用 pin 执行；这份读回不等于对象字节恢复或长期备份窗口验收。
 
 ## 默认配置
 
@@ -66,7 +114,7 @@ pnpm background:status --storage-findings
 
 2026-10-25 的 `20261025-e9f50d4e` 发布回执记录当时生产只有扫描。自动清理实现已随 [PR #23](https://github.com/tangenty42/stupig.tv/pull/23) 合并并包含在当前源码中，仓库默认 `app.storageAudit.orphanCleanup.enabled=false`；截至 2026-11-01 的最新生产镜像、实际开关和扫描状态须按[发布信息及回执](../deployment/aliyun.md#截至-2026-11-01-的发布信息)核验。启用前先保留一至两周扫描观察期，再按环境显式启用该开关并重启应用或 worker。
 
-仅 `orphan_candidate` 且 key 符合现有 Content 不可变对象生成规则的对象可进入清理：UUID 主对象、staging/transfers/originals 的任务与尝试 key、images 的 AVIF/JPEG key。头像、静态资源、未知路径、目录标记和其他异常均继续人工处理。它们没有同样的退役/发布互斥协议，不能只凭无引用就自动删除。
+仅 `orphan_candidate` 且 key 符合现有 Content 不可变对象生成规则的对象可进入清理：UUID 主对象、staging/transfers/originals 的任务与尝试 key、images 的 WebP/JPEG key。头像、静态资源、未知路径、目录标记和其他异常均继续人工处理。它们没有同样的退役/发布互斥协议，不能只凭无引用就自动删除。
 
 连续观察次数绑定前一个完整周期；中间恢复引用、异常关闭、对象大小或最后修改时间变化均重新计数。同一周期的重试不增加次数，未完成的扫描不触发清理。清理前重新读取 OSS 元数据，再在事务内锁定完成周期、写入退役墓碑，并重新核对所有附件角色、活动任务、尝试、迁移 pin/复制及预热归属；任何保护命中都会回滚入队。未来发布使用已有对象采用锁拒绝采用退役 key。
 

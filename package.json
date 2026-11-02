@@ -5,6 +5,7 @@
   "scripts": {
     "background:worker": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/background/worker.ts",
     "background:status": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/background/status.ts",
+    "storage:inventory": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/storage/inventory.ts",
     "esa:deploy:dev": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/esa/cli.ts --env=dev",
     "esa:deploy:prod": "tsx --tsconfig scripts/tsconfig.json --import ./scripts/env/preload.mjs scripts/esa/cli.ts --env=prod",
     "build": "nuxt build --dotenv .env.prod",

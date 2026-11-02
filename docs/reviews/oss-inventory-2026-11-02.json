@@ -1,0 +1,190 @@
+{
+  "verification": {
+    "full_check": "passed",
+    "app_server_tests": 1960,
+    "tool_tests": 399,
+    "tool_tests_skipped": 1,
+    "component_tests": 32,
+    "focused_inventory_tests": 21,
+    "frozen_migration_digests": "unchanged"
+  },
+  "collected_at": "2026-11-02T10:09:56.463Z",
+  "scope": "OSS metadata only; no object bodies, file-content hashing, deletion, abort, rule changes or business DB writes",
+  "credentials": "existing app identities with temporary supplemental read permissions; bindings require manual revocation",
+  "environments": [
+    {
+      "environment": "production",
+      "started_at": "2026-11-02T09:48:36.160Z",
+      "updated_at": "2026-11-02T10:04:01.580Z",
+      "complete": true,
+      "protection_checks_complete": true,
+      "requests_checkpointed": 52,
+      "options": {
+        "prefix": "",
+        "min_age_days": 30,
+        "parts": true,
+        "page_size": 25,
+        "catalog_mode": "database"
+      },
+      "totals": {
+        "current_version": {
+          "count": 643,
+          "bytes": 579895354
+        },
+        "action:retain_protected_key": {
+          "count": 749,
+          "bytes": 963740561
+        },
+        "historical_version": {
+          "count": 178,
+          "bytes": 441456793
+        },
+        "action:retain_recent": {
+          "count": 72,
+          "bytes": 57611586
+        },
+        "delete_marker": {
+          "count": 186,
+          "bytes": 0
+        },
+        "action:retain_delete_marker": {
+          "count": 186,
+          "bytes": 0
+        }
+      },
+      "namespaces": {
+        "avatar/": {
+          "count": 8,
+          "bytes": 273770
+        },
+        "content/att/images/": {
+          "count": 430,
+          "bytes": 351546881
+        },
+        "content/att/": {
+          "count": 319,
+          "bytes": 196008082
+        },
+        "content/att/originals/": {
+          "count": 97,
+          "bytes": 210739940
+        },
+        "content/att/staging/": {
+          "count": 142,
+          "bytes": 262348609
+        },
+        "imgs/": {
+          "count": 11,
+          "bytes": 434865
+        }
+      },
+      "lifecycle": {
+        "versioning": "Enabled",
+        "rules": [
+          {
+            "status": "Enabled",
+            "scope": "bucket",
+            "current_expiration_days": null,
+            "noncurrent_expiration_days": "7",
+            "abort_multipart_days": null,
+            "expired_delete_marker": "true"
+          }
+        ]
+      },
+      "verification": {
+        "committed_records": 1007,
+        "unique_identities": 1007,
+        "duplicates": 0,
+        "version_bytes": 1021352147,
+        "all_records_non_executable": true,
+        "multipart_uploads": 0
+      },
+      "limits": "rolling metadata and read-only live DB; key-level protection retains all versions; not an atomic snapshot or bill"
+    },
+    {
+      "environment": "development",
+      "started_at": "2026-11-02T10:01:55.643Z",
+      "updated_at": "2026-11-02T10:07:35.716Z",
+      "complete": true,
+      "protection_checks_complete": false,
+      "requests_checkpointed": 29,
+      "options": {
+        "prefix": "",
+        "min_age_days": 30,
+        "parts": true,
+        "page_size": 25,
+        "catalog_mode": "unverified"
+      },
+      "totals": {
+        "current_version": {
+          "count": 321,
+          "bytes": 443450572
+        },
+        "action:unclassified_without_database": {
+          "count": 457,
+          "bytes": 595691045
+        },
+        "historical_version": {
+          "count": 136,
+          "bytes": 152240473
+        },
+        "delete_marker": {
+          "count": 136,
+          "bytes": 0
+        },
+        "action:retain_delete_marker": {
+          "count": 136,
+          "bytes": 0
+        }
+      },
+      "namespaces": {
+        "avatar/": {
+          "count": 2,
+          "bytes": 17587
+        },
+        "content/att/images/": {
+          "count": 124,
+          "bytes": 31484202
+        },
+        "content/att/": {
+          "count": 377,
+          "bytes": 237617545
+        },
+        "content/att/originals/": {
+          "count": 15,
+          "bytes": 10187296
+        },
+        "content/att/staging/": {
+          "count": 64,
+          "bytes": 315949550
+        },
+        "imgs/": {
+          "count": 11,
+          "bytes": 434865
+        }
+      },
+      "lifecycle": {
+        "versioning": "Enabled",
+        "rules": [
+          {
+            "status": "Enabled",
+            "scope": "bucket",
+            "current_expiration_days": null,
+            "noncurrent_expiration_days": "7",
+            "abort_multipart_days": null,
+            "expired_delete_marker": "true"
+          }
+        ]
+      },
+      "verification": {
+        "committed_records": 593,
+        "unique_identities": 593,
+        "duplicates": 0,
+        "version_bytes": 595691045,
+        "all_records_non_executable": true,
+        "multipart_uploads": 0
+      },
+      "limits": "metadata only; local business schema is older; no ownership or cleanup eligibility claim"
+    }
+  ]
+}
