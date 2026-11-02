@@ -152,6 +152,7 @@ app:
     scanLimit: 20
     leaseSeconds: 120
     heartbeatSeconds: 20
+    # Frozen AVIF migration profile only; never used as a runtime fallback.
     profileVersion: 1
     profile:
       maxInputBytes: 52428800
@@ -164,12 +165,14 @@ app:
       lqipQuality: 40
       timeoutSeconds: 60
     cloud:
+      # Disabling admission rejects new images; it never enables local encoding.
       enabled: true
       profileVersion: 3
       profile:
         maxInputBytes: 20971520
         maxPixels: 9437184
         webpQuality: 100
+        # Used by the frozen WebP maintenance encoder, not OSS IMG.
         webpEffort: 4
         jpegQuality: 85
         jpegBackground: '#ffffff'

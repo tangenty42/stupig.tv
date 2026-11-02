@@ -1,4 +1,5 @@
 import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
+import type { copy_oss_image_original, create_oss_image_processor } from '@server/lib/oss-image-processing'
 import type { ImageAccessRow } from '@server/services/content/attachment-access.service'
 import type { AuthUser } from '@server/types/auth'
 import type { DraftCommand, DraftLease } from '@shared/types/content-draft'
@@ -6,7 +7,6 @@ import type { RowDataPacket } from 'mysql2/promise'
 import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { Readable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 import { runtime_config } from '@config/loader'
 import { db } from '@server/lib/db'
@@ -107,28 +107,47 @@ export async function verify_draft_capacity(actor: AuthUser) {
   }
   finally { history.release() }
   const objects = new Map<string, Buffer>()
-  const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+  const etag = (bytes: Uint8Array) => createHash('md5').update(bytes).digest('hex')
   const storage = {
-    head_object: async (key: string) => ({ size: objects.get(key)!.length, etag: digest(objects.get(key)!), version_id: key }),
+    head_object: async (key: string) => ({ size: objects.get(key)!.length, etag: etag(objects.get(key)!), version_id: key }),
     get_object_access: async () => 'private',
-    get_object_stream: async (key: string) => ({ stream: Readable.from([objects.get(key)!]), size: objects.get(key)!.length }),
+    get_object_stream: async () => { throw new Error('Capacity cloud fixture must not download images') },
     put_object: async (key: string, bytes: Uint8Array) => {
       objects.set(key, Buffer.from(bytes))
-      return { etag: digest(bytes), version_id: key }
+      return { etag: etag(bytes), version_id: key }
     },
     copy_object: async (source: string, target: string) => storage.put_object(target, objects.get(source)!),
   }
   const image_settings = runtime_config().app.contentImages
   const image_config = { ... image_settings, ... image_settings.cloud }
-  const images = create_image_jobs(db, storage as unknown as ReturnType<typeof create_aliyun_oss>, image_config.leaseSeconds, image_config.heartbeatSeconds)
+  // Build fixtures before timing SQL contention. The retired application encoder
+  // is not part of this test; actual OSS throughput needs a separate measurement.
+  const image_input = await sharp(randomBytes(512 * 512 * 3), { raw: { width: 512, height: 512, channels: 3 } }).png().toBuffer()
+  const display_bytes = await sharp(image_input).webp({ quality: 100, effort: 0 }).toBuffer()
+  const fallback_bytes = await sharp(display_bytes).jpeg({ quality: 85 }).toBuffer()
+  const lqip = await sharp(display_bytes).resize(24, 24, { fit: 'inside' }).jpeg({ quality: 40 }).toBuffer()
+  const cloud: typeof create_oss_image_processor = () => async ({ prefix, signal, checkpoint }) => {
+    await delay(5, undefined, { signal })
+    const put = async (key: string, bytes: Buffer) => ({ key, ... await storage.put_object(key, bytes), size: bytes.length, sha256: null })
+    const display = await put(`${prefix}.webp`, display_bytes)
+    const fallback = await put(`${prefix}.jpg`, fallback_bytes)
+    await checkpoint()
+    return { display, fallback, width: 512, height: 512, lqip }
+  }
+  const copy: typeof copy_oss_image_original = async (_storage, source, target, signal) => {
+    signal.throwIfAborted()
+    const receipt = await storage.copy_object(source.key, target)
+    return { key: target, ... receipt, size: source.size, sha256: source.sha256 }
+  }
+  const images = create_image_jobs(db, storage as unknown as ReturnType<typeof create_aliyun_oss>, image_config.leaseSeconds, image_config.heartbeatSeconds, cloud, copy)
   const image_jobs: string[] = []
   for (let image = 0; image < 2; image ++) {
     const key = `content/att/staging/${id()}/${id()}`
-    const bytes = await sharp(randomBytes(512 * 512 * 3), { raw: { width: 512, height: 512, channels: 3 } }).png().toBuffer()
+    const bytes = image_input
     objects.set(key, bytes)
     const job = await images.enqueue(randomUUID(), { scope_id: workspace.story, actor_id: actor.id, mode: 'upload', source: null, is_private: false,
-      original_name: 'capacity.png', original_mime: 'image/png', profile_version: image_config.profileVersion, profile: image_config.profile,
-      input: { key, size: bytes.length, etag: digest(bytes), version_id: key, sha256: digest(bytes) } })
+      original_name: 'capacity.png', original_mime: 'image/png', processor: 'oss', profile_version: image_config.profileVersion, profile: image_config.profile,
+      input: { key, size: bytes.length, etag: etag(bytes), version_id: key, sha256: null } })
     image_jobs.push(job.id)
   }
   runtime_config().aliyun.esa = { baseUrl: 'https://capacity.invalid', authKey: randomBytes(32).toString('hex'), urlTtlSeconds: 300 }
@@ -234,7 +253,7 @@ export async function verify_draft_capacity(actor: AuthUser) {
   while ((await pending()).n) await dispatch()
   const [[image_count]] = await db.query<RowDataPacket[]>('SELECT COUNT(*) AS n FROM content_image_jobs WHERE status = \'ready\'')
   assert.equal(Number(image_count!.n), 2)
-  console.log(`cloud-draft capacity: images=2, pixels=512x512, content=random_RGB, webp_effort=${image_config.profile.webpEffort}`)
+  console.log('cloud-draft capacity: images=2, pixels=512x512, provider=fixture, delay_ms=5, real_oss_performance=not_measured')
   console.log(`cloud-draft capacity: pool_wait_max_ms=${Math.max(... connection_waits).toFixed(1)}, enqueue_events=${queue_events}, lock_wait_peak=${lock_peak}, outbox_peak=${outbox_peak}, oldest_outbox_ms=${outbox_age.toFixed(1)}, delivered=${deliveries}, final_outbox=0, ready_images=2, authorized_reads=40`)
   for (const [kind, values] of [['save', saves], ['renew', renewals]] as const) {
     values.sort((a, b) => a - b)

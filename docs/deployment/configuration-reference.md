@@ -75,8 +75,10 @@ Nuxt dev/build/preview 显式指定 --dotenv。Compose 插值单独通过 `--env
 | app.contentReceipts | 启用，扫描 60 s，每批最多 100；仅压缩过期结果，保留去重墓碑 |
 | app.contentUploads | 扫描 5 s，每批 20 |
 | app.contentRetirement | 扫描 5 s，每批 20，租约 300 s，重试 30–3600 s，查询 5 s，任务 600 s |
-| app.contentImages | 扫描 5 s，并发 1，每批 20，租约 120 s，心跳 20 s，profileVersion 1 |
-| app.contentImages.profile | 输入 50 MiB / 2400 万像素；AVIF 65/effort 4；JPEG 85 白底；LQIP 最长边 24/质量 40；超时 60 s |
+| app.contentImages | 扫描 5 s，并发 1，每批 20，租约 120 s，心跳 20 s；运行时仅支持 OSS |
+| app.contentImages.cloud | 新任务受理开关；profileVersion 3，WebP Q100、JPEG Q85 白底、24px JPEG LQIP Q40；关闭后拒绝新图片，不启用本地回退，已受理任务保留原合同 |
+| app.contentImages.cloud.profile | 输入 20 MiB / 9,437,184 像素，超时 60 s；webpEffort 4 仅供冻结 WebP 维护编码读取，OSS 不使用该参数 |
+| app.contentImages.profile / profileVersion | 冻结 AVIF 迁移专用，版本 1；50 MiB / 2400 万像素、AVIF Q65/effort 4，运行时图片任务不消费 |
 | app.contentPreload | shared/prod 关闭且未验收，dev 开启；每日 500、保留云额度 1000、单对象 20 MiB |
 | app.contentPreload 调度 | 扫描 30 s，每批 5，租约 300 s，重试 300–3600 s，查询 30 s，任务 3600 s，时钟容差 60 s，最多提交 3 次含首次 |
 | app.contentMigration.partSizeMb | 维护迁移分片 8 MiB |

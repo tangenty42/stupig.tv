@@ -10,7 +10,7 @@
 
 处理图片最多 **20 MiB**，宽、高均不超过 **4096px**，总像素不超过 **9,437,184**。这是当前应用的输入资源预算，并非 WebP 格式的最大尺寸。OSS 旋转操作仍限制输入宽高；在重新测量大图资源峰值前保留双边 4096px 门禁和现有像素预算。限制由 `config/app-settings.yaml` 的 `app.content.image.upload*` 生成，前后端共用。
 
-选中后先展示现有文件列表准备行，只读取 PNG／JPEG／WebP／AVIF 的尺寸头，不进行全文件哈希或像素解码。超限、损坏或无法识别的头直接写入该行既有『准备失败』错误栏；整批不受理、不启动字节上传，可用现有『取消准备』撤回。普通文件不新增读取成本；替换、另存为及删减编辑的导出文件也经过相同门禁。服务端受理再次核对声明大小，上传封存后的实际字节还会验证格式、帧数、尺寸、SHA-256 及来源版本，不信任浏览器声明。
+选中后先展示现有文件列表准备行，只读取 PNG／JPEG／WebP／AVIF 的尺寸头，不进行全文件哈希或像素解码。超限、损坏或无法识别的头直接写入该行既有『准备失败』错误栏；整批不受理、不启动字节上传，可用现有『取消准备』撤回。普通文件不新增读取成本；替换、另存为及删减编辑的导出文件也经过相同门禁。服务端受理再次核对声明大小；上传封存后，云端信息验证实际格式、帧数、尺寸，应用核对对象身份、权限及来源版本，不信任浏览器声明，也不回读整图计算 SHA-256。通用检查及摘要字段含义见[上传校验](uploads.md#统一对象校验与摘要存储)。
 
 | 字段／角色 | 含义 |
 | --- | --- |
@@ -23,23 +23,55 @@
 
 业务字段、产物元数据、读取角色及编辑来源统一使用 `display`／`fallback`，不使用格式名。后缀、MIME、Accept 协商和普通下载名由[图片格式映射](../../../server/shared/content-image-format.ts)集中描述；实际 WebP／JPEG 编解码保留在编码器内。以后更换格式无需再改业务列名或读取协议。
 
-正常与删减表示各有自己的 revision、尺寸、大小、摘要和 LQIP。无机密读取权限时，服务端不把正常版本的图片元数据或 LQIP 一并下发。
+正常与删减表示各有自己的 revision、尺寸、大小、对象身份和 LQIP；已有的真实摘要保留，新云端产物不再计算整图 SHA-256。无机密读取权限时，服务端不把正常版本的图片元数据或 LQIP 一并下发。
 
 原图归档保留上传字节，不保证源文件本身是无损编码。上传输入先进入 `content/att/staging/`；正式原图和图片产物分别位于 `content/att/originals/` 与 `content/att/images/`。这些前缀不是用户路径，改名不改对象 key。
 
 ## 处理与发布
 
-图片尝试先记录任务、尝试身份及来源，生成 WebP，再从该 WebP 生成 JPEG 与小尺寸 LQIP。首次上传还把原始字节独立归档。对象私有权限、身份、大小与摘要经过验证后，才允许在数据库事务中采用一组完整角色。
+图片尝试先记录任务、尝试身份及来源，生成 WebP，再从该 WebP 生成 JPEG 与小尺寸 LQIP。首次上传还把原始字节独立归档。对象私有权限、版本、大小与 OSS 操作回执经过确认后，才允许在数据库事务中采用一组完整角色。
 
-新任务在 intent 中冻结 `processor: oss` 和 cloud profile 3：WebP Q100、JPEG Q85、24px JPEG LQIP Q40。后台使用 OSS V4 请求头鉴权的 `processObjectSave`（`sys/saveas`），在 OSS 内直接持久化 WebP／JPEG；LQIP 使用有界 IMG GET，仍作为现有数据库字段保存。JPEG／LQIP 均读取已确认版本的最终 WebP。编码参数与先前中转方案相同，不另增 profile 或修改冻结迁移。没有浏览器转换 URL 或任意参数签名接口；用户继续走现有 Content／ESA 成品读取授权。本地 WebP 测试／维护编码使用 effort 4；OSS 没有对应的已验证 effort 参数。[Safari 14 才新增 WebP 支持](https://developer.apple.com/documentation/safari-release-notes/safari-14-release-notes)，按项目 Safari 13.1 起的兼容范围继续保留 JPEG 协商回退。`contentImages.profile` 仍保存冻结迁移所需的 AVIF profile 1；当前本地与云端处理均使用 `contentImages.cloud.profile` 的 WebP 合同，不会在关闭云端编码时改回 AVIF。
+新任务在 intent 中冻结必填 `processor: oss` 和 cloud profile 3：WebP Q100、JPEG Q85、24px JPEG LQIP Q40。后台使用 OSS V4 请求头鉴权的 `processObjectSave`（`sys/saveas`），在 OSS 内直接持久化 WebP／JPEG；LQIP 使用有界 IMG GET，仍作为现有数据库字段保存。JPEG／LQIP 均读取已确认版本的最终 WebP。编码参数与先前中转方案相同，不另增 profile 或修改冻结迁移。没有浏览器转换 URL 或任意参数签名接口；用户继续走现有 Content／ESA 成品读取授权。冻结 WebP 迁移／离线测量编码使用 effort 4；OSS 没有对应的已验证 effort 参数。[Safari 14 才新增 WebP 支持](https://developer.apple.com/documentation/safari-release-notes/safari-14-release-notes)，按项目 Safari 13.1 起的兼容范围继续保留 JPEG 协商回退。`contentImages.profile`／`profileVersion` 仅保留给冻结迁移读取 AVIF profile 1；运行时仅读取 `contentImages.cloud`，关闭 cloud 或图片受理时返回 503，已受理 OSS 任务仍按其 intent 执行，不回退本地编码。
 
-直接持久化前逐次验证目标桶为 private、来源版本／ETag／大小／ACL 未变且尝试目标不存在，成功后显式钉住对象 private ACL。每份成品只作一次有界回读，核对真实字节的 SHA-256、格式、尺寸、大小和版本；服务器不再上传转换后的图片字节。SDK 的原生保存接口不能传入来源 If-Match，故仅使用尝试拥有的不可变来源，保存前后仍核对完整版本身份；JPEG／LQIP 生成后再次验证全部角色。响应丢失、取消或租约失效不自动重发 POST，也不降级回中转；未采用及迟到对象继续由既有尝试账本负责。
+云端路径不下载完整输入、WebP、JPEG 或原图归档，也不进行整图 SHA-256 回读。后台仅读取有界 `image/info` JSON，检查实际格式、尺寸、帧数、方向与对象大小；LQIP 仍只读取最多 24px 的小图并保存数据库。源图片、产物的版本／ETag／大小／ACL 仍需一致；原生保存前确认私有桶及未使用目标，成功后显式钉住 private ACL。图片编辑继续要求无损 PNG，上传封口保留原有 12 字节格式头门禁，云端信息再次核对格式。该请求使用固定处理参数和 V4 请求头鉴权，不返回浏览器。[OSS 图片信息格式](https://help.aliyun.com/zh/oss/user-guide/query-the-exif-data-of-an-image-4)以 JSON 返回基础字段，源码限制响应大小，未把完整 EXIF 转发给用户。
+
+原图采用带来源 If-Match 的 OSS 原生复制，核对复制回执的来源版本、目标版本／ETag，并读回目标元数据与私有 ACL；不回读归档字节。新生成图像的 `sha256` 明确为 `null`，不以 ETag／CRC64 伪装 SHA-256。既有可信输入的摘要可随条件复制保留；历史元数据中的真实摘要不清空。当前应用按管理员上传场景信任 OSS 的编码／复制执行结果，普通附件也不作服务器整文件 SHA-256 回读；分片 MD5、大小、权限及版本检查仍有效。完整字节摘要校验仅保留在冻结迁移及离线诊断实现中。
+
+SDK 的原生保存接口不能传入来源 If-Match，因此只使用尝试拥有的不可变来源，保存前后核对完整版本身份；JPEG／LQIP 生成后再次确认全部角色。云端首次上传的派生和归档可以并行，但必须都完成才能采用；任一分支失败会取消另一分支并等待在途操作结束，保留租约、资源槽及清理所有权。响应丢失、取消或租约失效不自动重发 POST，也不降级为下载或本地转换；未采用及迟到对象继续由既有尝试账本负责。
+
+### 运行时本地处理退役
+
+运行时已移除本地 Sharp 编码、输入／输出整图 SHA-256 计算及原图归档回读。任务必须明确标记 OSS；缺少标记的旧本地任务在认领和外部操作前返回明确的 409，不静默重解释编码合同。历史已完成任务和已有摘要保持原样；其结果仍可从附件元数据读取。`server/lib/webp-image-processing.ts`、`image-processing.ts` 以及 `server/services/content/image-original-object.ts` 的完整字节实现仍属于冻结迁移依赖，离线性能诊断可显式使用；应用图片任务不调用这些编码／回读函数。
+
+2026-11-02 12:34（Asia/Shanghai）的生产只读汇总为：本地已完成 42、OSS 已完成 7，未完成本地任务及待处理图片上传均为 0。计数只读任务账本，不下载对象或修改生产数据；见[退役前计数](../../reviews/oss-image-metadata-2026-11-02.json)。发布前再次执行以下只读检查，结果应为 0；有未完成任务时先完成或通过上传会话取消，再发布：
+
+```sql
+SELECT COUNT(*) AS unfinished_local_image_jobs
+FROM content_image_jobs
+WHERE status NOT IN ('completed', 'cancelled')
+  AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(intent, '$.processor')), 'local') <> 'oss';
+```
 
 [原生保存继承桶 ACL，不能自定义对象 ACL](https://help.aliyun.com/zh/oss/user-guide/sys-or-saveas)，所以 private 桶是创建前置条件。它也不复制源对象的 Cache-Control；浏览器的 `private, no-store` 继续由 OSS 签名读取的 `response-cache-control` 与 [ESA 出站响应规则](../../deployment/esa.md#esa-到客户端响应头)保证，不为补元数据自拷贝产生额外历史版本。RAM 仅补指定桶的 `GetBucketAcl` 及 staging／images 来源前缀的 `PostProcessTask`，目标仍使用原有 PutObject 权限，见 [RAM 清单](../../deployment/ram.md#图片原生持久化权限)。
 
 失败、取消或过期尝试不覆盖正式行；旧尝试的迟到写入由账本继续跟踪和清理。对象发布同时登记预热及旧对象退役意图，见[对象生命周期](object-lifecycle.md)。
 
 现行 app 模式下，上传封口／重试提交 queued 或 ready 图片状态后立即唤醒本进程后台，避免空闲任务固定等待下一次五秒扫描。正在执行时的重复提示合并为一次后续扫描，仍遵守资源槽、领域租约和并发限制；周期扫描保留为兜底。独立 worker 不接收此进程内提示，调度边界见[后台工作](../background-jobs.md#调度和退出)。此优化只减少任务发现等待，不省略转换、归档或校验，也不承诺完整上传链路的固定时延。
+
+图片采用事务成功后，还会提示本进程 outbox 发送器立即工作，避免再等下一次一秒扫描；失败采用不会发送成功提示。通知事实仍在原事务 outbox 中，确认发送、重试和在线读取授权不变。
+
+## 服务器分段与云端信息方案（2026-11-02）
+
+# 66 部署后，生产只读任务快照的四次入队到认领为 22–80ms，说明五秒扫描等待已消除；约 180KB 的任务认领到结束约 3.2 秒，2.5MB 的两次约 6.3–6.6 秒。前端『服务器处理中』还包含封口、采用与状态回传，不能把这些时间全部当作编码。
+
+在生产容器的独立低优先级进程中，使用用户提供的照片及同像素 JPEG 对照。目标凭据留在目标，样图写入预登记的私有未采用 key；不读取已有用户图片，不写业务数据库。计时包含输入处理、真实 OSS 适配器与归档，但不含首次上传、封口、排队、租约 SQL、数据库采用或通知；检查点为空操作。每个组合一次、顺序固定，不代表生产 p95。
+
+| 样本（均 1536×1024） | 旧整图回读管线 | 云端信息／原生复制 | 整图 GET | GET 正文字节 |
+| --- | --- | --- | --- | --- |
+| PNG，2,621,740 字节 | 5,725ms | 1,924ms | 4 → 0 | 6,115,081 → 1,048 |
+| 同图 JPEG Q80，247,334 字节 | 3,454ms | 1,533ms | 4 → 0 | 1,238,281 → 1,047 |
+
+两路输出尺寸、大小、OSS ETag 及 LQIP 摘要一致；新路径没有重新计算整图 SHA-256，不能把 ETag 对照写成完整字节回读验证。新路径约 1KB 的正文仅为图片信息 JSON 与 LQIP。LQIP 改存 OSS 还会增加浏览器读取与授权请求，本轮保留数据库内联。另以 PNG、EXIF 方向 6 JPEG 和 AVIF **输入**验证云端信息及来源版本复制回执；输出始终是 WebP／JPEG，没有恢复 AVIF 输出。最终对照的 16 个对象及能力试验的 9 个对象均软删除并确认当前缺失，历史版本保留。证据见[脱敏测量](../../reviews/oss-image-metadata-2026-11-02.json)。本实现仍待独立发布和真实上传／编辑验收。
 
 ## 画布与保存
 

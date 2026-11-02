@@ -1,0 +1,209 @@
+{
+  "measured_at": "2026-11-01T17:28:34.386Z",
+  "local_encoder_retirement_readiness": {
+    "sampled_at": "2026-11-02T04:34:48.810Z",
+    "release_sha": "a4e037f6430733b8782f11a557c9bbbc844617b0",
+    "scope": "read-only aggregate task counts; no object contents or identities, no production writes",
+    "completed_local_jobs": 42,
+    "completed_oss_jobs": 7,
+    "unfinished_local_jobs": 0,
+    "pending_image_uploads": 0
+  },
+  "baseline_commit": "a4e037f6430733b8782f11a557c9bbbc844617b0",
+  "environment": "production application container, independent low-priority process",
+  "scope": "target credentials remain on target; supplied samples in pre-registered private unadopted keys only; compare baseline full reads with native metadata-only variants/copy; no existing user object reads or database operations; no queue, seal, adoption, lease SQL or notifications",
+  "samples": [
+    {
+      "sample": "provided-png",
+      "mode": "serial",
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "input_ms": 1290,
+      "variants_ms": 2818,
+      "archive_ms": 1614,
+      "total_ms": 5725,
+      "checkpoints": 14,
+      "display_bytes": 583292,
+      "fallback_bytes": 287912,
+      "display_etag": "383417C961A035BB81772D719AE2B26D",
+      "fallback_etag": "A4A3CAA772ECA68D3B6273B61DA5E949",
+      "display_sha256": "0f2416c2b3b07c42a3f78664d04dbe20c00e836c26d00e87bd29a20ab6a5bc49",
+      "fallback_sha256": "79f23c8bdd1972af384df4e9d279e09f07d2eb5d14eb293d07b6793b0de4f44c",
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40",
+      "full_image_reads": 4,
+      "read_response_bytes": 6115081
+    },
+    {
+      "sample": "provided-png",
+      "mode": "metadata",
+      "input_bytes": 2621740,
+      "width": 1536,
+      "height": 1024,
+      "input_ms": 0,
+      "variants_ms": 1924,
+      "archive_ms": 852,
+      "total_ms": 1924,
+      "checkpoints": 11,
+      "display_bytes": 583292,
+      "fallback_bytes": 287912,
+      "display_etag": "383417C961A035BB81772D719AE2B26D",
+      "fallback_etag": "A4A3CAA772ECA68D3B6273B61DA5E949",
+      "display_sha256": null,
+      "fallback_sha256": null,
+      "lqip_sha256": "bb9e8271d118c39f6bc7fc28aeecea64a8147442e9a9aa6702765ffe831d0b40",
+      "full_image_reads": 0,
+      "read_response_bytes": 1048
+    },
+    {
+      "sample": "provided-jpeg-q80",
+      "mode": "serial",
+      "input_bytes": 247334,
+      "width": 1536,
+      "height": 1024,
+      "input_ms": 227,
+      "variants_ms": 2475,
+      "archive_ms": 752,
+      "total_ms": 3454,
+      "checkpoints": 14,
+      "display_bytes": 475778,
+      "fallback_bytes": 267438,
+      "display_etag": "074E91735772D41E4A82A6E9A60F0659",
+      "fallback_etag": "DBECD89F15628045C27F0739A1B1289D",
+      "display_sha256": "23e09e6d694eecc531b9c4cefaae2f982b0e5f3618664785b4f86afae1b6e4a4",
+      "fallback_sha256": "037f686ad7dee8e5239992d608a7cb1f34c7d4af69666066645e7d182377037a",
+      "lqip_sha256": "8d57634a05c417946b644f4ba9b1917409cfe32d28fde6b535080f1141cd6583",
+      "full_image_reads": 4,
+      "read_response_bytes": 1238281
+    },
+    {
+      "sample": "provided-jpeg-q80",
+      "mode": "metadata",
+      "input_bytes": 247334,
+      "width": 1536,
+      "height": 1024,
+      "input_ms": 0,
+      "variants_ms": 1533,
+      "archive_ms": 465,
+      "total_ms": 1533,
+      "checkpoints": 11,
+      "display_bytes": 475778,
+      "fallback_bytes": 267438,
+      "display_etag": "074E91735772D41E4A82A6E9A60F0659",
+      "fallback_etag": "DBECD89F15628045C27F0739A1B1289D",
+      "display_sha256": null,
+      "fallback_sha256": null,
+      "lqip_sha256": "8d57634a05c417946b644f4ba9b1917409cfe32d28fde6b535080f1141cd6583",
+      "full_image_reads": 0,
+      "read_response_bytes": 1047
+    }
+  ],
+  "output_etag_size_and_lqip_match": true,
+  "production_observation": {
+    "release_sha": "a4e037f6430733b8782f11a557c9bbbc844617b0",
+    "recent_tasks": [
+      {
+        "input_bytes": 2621740,
+        "queue_ms": "23.0000",
+        "claimed_to_last_update_ms": "6559.0000",
+        "total_job_ms": "6582.0000"
+      },
+      {
+        "input_bytes": 2621740,
+        "queue_ms": "80.0000",
+        "claimed_to_last_update_ms": "6266.0000",
+        "total_job_ms": "6346.0000"
+      },
+      {
+        "input_bytes": 180466,
+        "queue_ms": "22.0000",
+        "claimed_to_last_update_ms": "3200.0000",
+        "total_job_ms": "3222.0000"
+      },
+      {
+        "input_bytes": 115317,
+        "queue_ms": "28.0000",
+        "claimed_to_last_update_ms": "3184.0000",
+        "total_job_ms": "3212.0000"
+      }
+    ]
+  },
+  "cloud_information_checks": [
+    {
+      "label": "png",
+      "input_info": {
+        "FileSize": "2621740",
+        "Format": "png",
+        "FrameCount": "1",
+        "ImageHeight": "1024",
+        "ImageWidth": "1536"
+      },
+      "native_status": 200,
+      "output_info": {
+        "FileSize": "583292",
+        "Format": "webp",
+        "FrameCount": "1",
+        "ImageHeight": "1024",
+        "ImageWidth": "1536"
+      },
+      "copy_source_version_matches": true,
+      "copy_target_version_matches": true,
+      "copy_target_etag_matches": true
+    },
+    {
+      "label": "jpeg-orientation-6",
+      "input_info": {
+        "FileSize": "21007",
+        "Format": "jpg",
+        "FrameCount": "1",
+        "ImageHeight": "200",
+        "ImageWidth": "320",
+        "Orientation": "6"
+      },
+      "native_status": 200,
+      "output_info": {
+        "FileSize": "39938",
+        "Format": "webp",
+        "FrameCount": "1",
+        "ImageHeight": "320",
+        "ImageWidth": "200"
+      },
+      "copy_source_version_matches": true,
+      "copy_target_version_matches": true,
+      "copy_target_etag_matches": true
+    },
+    {
+      "label": "avif",
+      "input_info": {
+        "FileSize": "462",
+        "Format": "avif",
+        "FrameCount": "1",
+        "ImageHeight": "8",
+        "ImageWidth": "16"
+      },
+      "native_status": 200,
+      "output_info": {
+        "FileSize": "112",
+        "Format": "webp",
+        "FrameCount": "1",
+        "ImageHeight": "8",
+        "ImageWidth": "16"
+      },
+      "copy_source_version_matches": true,
+      "copy_target_version_matches": true,
+      "copy_target_etag_matches": true
+    }
+  ],
+  "cleanup": {
+    "final_comparison_objects": 16,
+    "final_comparison_current_missing": 16,
+    "capability_objects": 9,
+    "capability_current_missing": 9,
+    "previous_stage_probe_objects": 40,
+    "previous_stage_probes_current_missing": 40,
+    "historical_versions": "retained",
+    "existing_user_objects_read": false,
+    "business_database_writes": false,
+    "target_credentials_transferred": false
+  }
+}

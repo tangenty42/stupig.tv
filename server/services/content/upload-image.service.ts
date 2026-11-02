@@ -1,24 +1,24 @@
 import type { runtime_config } from '@config/loader'
 import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
-import type { ImageProcessingOptions } from '@server/lib/webp-image-processing'
 import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { Connection, Pool, RowDataPacket } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
 import type { create_upload_sessions } from './upload-session.service'
 import { ApiError } from '@server/errors/ApiError'
+import { wake_background } from '@server/services/background/wakeup'
 import { create_image_jobs } from './image-job.service'
 import { publish_uploaded_attachment } from './upload-publication.service'
 
 type RuntimeOptions = ReturnType<typeof runtime_config>['app']['contentImages']
-type Options = Omit<RuntimeOptions, 'profile' | 'cloud'> & { profile: RuntimeOptions['profile'] | ImageProcessingOptions, cloud?: RuntimeOptions['cloud'] }
+type Options = Omit<RuntimeOptions, 'profile' | 'profileVersion'>
 /** Upload reservation and image intent are committed together, before any encoding. */
 export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection'>, storage: ReturnType<typeof create_aliyun_oss>, options: Options) {
-  const current = options.cloud ?? { enabled: false, profileVersion: options.profileVersion, profile: options.profile as ImageProcessingOptions }
+  const current = options.cloud
   const jobs = create_image_jobs(pool, storage, options.leaseSeconds, options.heartbeatSeconds)
   async function sealed(connection: Connection, row: UploadRow) {
     if (! row.intent.image)
       return
-    if (! options.enabled)
+    if (! options.enabled || ! current.enabled)
       throw new ApiError(503, '图片处理暂未启用')
     const input = row.result
     if (! input || ! ('key' in input))
@@ -29,7 +29,7 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
       is_private: row.intent.target_access === 'private',
       input: { key: input.key, etag: input.etag, version_id: input.oss_version_id, size: input.size, sha256: input.sha256 },
       profile_version: current.profileVersion, profile: current.profile,
-      ... (current.enabled ? { processor: 'oss' as const } : {}),
+      processor: 'oss',
     })
     await connection.execute('INSERT IGNORE INTO content_upload_images (session_id, job_id) VALUES (?, ?)', [row.id, job.id])
   }
@@ -80,6 +80,7 @@ export function create_upload_images(pool: Pick<Pool, 'execute' | 'getConnection
             failure_epoch = Number(current[0]?.execution_epoch)
           }
           await uploads.adopt(row.id, Number(row.actor_id), publish)
+          wake_background('sync')
         }
         catch {
           // Busy/late workers may not fail another worker. A terminal failure is

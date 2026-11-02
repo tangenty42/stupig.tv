@@ -1,9 +1,9 @@
 import type { create_aliyun_oss } from '@server/lib/aliyun-oss'
-import type { create_oss_image_processor } from '@server/lib/oss-image-processing'
+import type { copy_oss_image_original, create_oss_image_processor } from '@server/lib/oss-image-processing'
 import type { Pool } from 'mysql2/promise'
 import type { ImageJobIntent } from './image-job.service'
 import { createHash } from 'node:crypto'
-import { Readable } from 'node:stream'
+import { ApiError } from '@server/errors/ApiError'
 import sharp from 'sharp'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -16,7 +16,7 @@ const { image_original_key } = await import('./image-original-object')
 const base = {
   scope_id: 1, actor_id: 1, mode: 'upload', is_private: false, source: null,
   input: { key: 'content/att/staging/abc/def', etag: 'etag', version_id: 'version', size: 20, sha256: 'a'.repeat(64) },
-  original_name: 'image.png', original_mime: 'image/png', profile_version: 1,
+  original_name: 'image.png', original_mime: 'image/png', profile_version: 3, processor: 'oss' as const,
   profile: { maxInputBytes: 100, maxPixels: 100, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 30, timeoutSeconds: 10 },
 }
 describe('durable image intent', () => {
@@ -33,13 +33,16 @@ describe('durable image intent', () => {
     expect(image_job_intent_schema.safeParse({ ... base, input: { ... base.input, key: 'https://other/secret' } }).success).toBe(false)
     expect(image_job_intent_schema.safeParse({ ... base, profile: { ... base.profile, webpEffort: 99 } }).success).toBe(false)
   })
+  it.each([undefined, 'local', 'sharp'])('rejects the retired processor %s rather than interpreting it as an OSS task', (processor) => {
+    expect(image_job_intent_schema.safeParse({ ... base, processor }).success).toBe(false)
+  })
 })
 
-async function pipeline(cloud?: typeof create_oss_image_processor) {
+async function pipeline() {
   const bytes = await sharp({ create: { width: 4, height: 3, channels: 3, background: '#449988' } }).png().toBuffer()
-  const input = { ... base.input, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+  const input = { ... base.input, size: bytes.length }
   const objects = new Map([[input.key, { bytes, etag: input.etag, version_id: input.version_id }]])
-  let copy_fault: 'none' | 'lost' | 'corrupt' = 'none'
+  let copy_fault: 'none' | 'lost' | 'invalid-receipt' = 'none'
   let state = {
     job: { id: 'c'.repeat(32), scope_id: 1, status: 'queued', execution_epoch: 0, executor_id: null as string | null, active_attempt_id: null as string | null,
       intent: { ... base, input, profile: { ... base.profile, maxInputBytes: 1000 } } as ImageJobIntent,
@@ -146,21 +149,41 @@ async function pipeline(cloud?: typeof create_oss_image_processor) {
       return { etag: object.etag, version_id: object.version_id, size: object.bytes.length }
     }),
     get_object_access: vi.fn().mockResolvedValue('private'),
-    get_object_stream: vi.fn(async (key: string) => ({ stream: Readable.from([objects.get(key)!.bytes]), size: objects.get(key)!.bytes.length })),
+    get_object_stream: vi.fn(async () => { throw new Error('Unexpected application image read') }),
     put_object: vi.fn(async (key: string, body: Uint8Array) => {
       const etag = createHash('md5').update(body).digest('hex')
       objects.set(key, { bytes: Buffer.from(body), etag, version_id: key })
       return { etag, version_id: key }
     }),
-    copy_object: vi.fn(async (source: string, target: string) => {
-      await storage.put_object(target, copy_fault === 'corrupt' ? Buffer.alloc(bytes.length) : objects.get(source)!.bytes)
+    copy_object: vi.fn(async (source: string, target: string, _access?: string) => {
+      await storage.put_object(target, objects.get(source)!.bytes)
       if (copy_fault === 'lost')
         throw new Error('copy acknowledgement lost')
-      return { etag: objects.get(target)!.etag, version_id: target }
+      return { etag: objects.get(target)!.etag, version_id: copy_fault === 'invalid-receipt' ? 'wrong-version' : target }
     }),
     soft_delete_object: vi.fn(async (key: string) => { objects.delete(key) }),
   }
-  const jobs = create_image_jobs({ getConnection: async () => connection } as unknown as Pool, storage as unknown as ReturnType<typeof create_aliyun_oss>, 60, 10, cloud)
+  // Provider boundary: a native copy completes without application body reads.
+  const native_copy: typeof copy_oss_image_original = async (_storage, source, target, signal) => {
+    signal.throwIfAborted()
+    const receipt = await storage.copy_object(source.key, target, 'private')
+    signal.throwIfAborted()
+    const head = await storage.head_object(target)
+    if (receipt.etag !== head.etag || receipt.version_id !== head.version_id || head.size !== source.size)
+      throw new ApiError(409, '原图归档回执不符')
+    return { key: target, ... head, sha256: source.sha256 }
+  }
+  const encode = vi.fn<ReturnType<typeof create_oss_image_processor>>(async (request) => {
+    expect(state.attempts.at(- 1)).toMatchObject({ display_key: `${request.prefix}.webp`, fallback_key: `${request.prefix}.jpg`, adopted: 0 })
+    const webp_bytes = await sharp(objects.get(request.input.key)!.bytes).webp({ effort: 0 }).toBuffer()
+    const jpeg_bytes = await sharp(webp_bytes).jpeg().toBuffer()
+    const put = async (key: string, bytes: Buffer, mime: string) => ({ key, ... await request.storage.put_object(key, bytes, mime, 'private'), size: bytes.length, sha256: null })
+    const display = await put(`${request.prefix}.webp`, webp_bytes, 'image/webp')
+    const fallback = await put(`${request.prefix}.jpg`, jpeg_bytes, 'image/jpeg')
+    await request.checkpoint()
+    return { display: { ... display, version_id: display.version_id! }, fallback: { ... fallback, version_id: fallback.version_id! }, width: 4, height: 3, lqip: jpeg_bytes }
+  })
+  const jobs = create_image_jobs({ getConnection: async () => connection } as unknown as Pool, storage as unknown as ReturnType<typeof create_aliyun_oss>, 60, 10, () => encode, native_copy)
   async function adopt(node_revision = 1) {
     await connection.beginTransaction()
     try {
@@ -173,13 +196,13 @@ async function pipeline(cloud?: typeof create_oss_image_processor) {
     }
   }
   return {
-    jobs, adopt, input, bytes, objects, storage, connection,
+    jobs, adopt, input, bytes, objects, storage, connection, encode,
     get state() { return state },
     fault: (fault: typeof copy_fault) => copy_fault = fault,
   }
 }
 
-it.each([true, false])('publishes the verified original and both variants with an input digest supplied=%s', async (supplied) => {
+it.each([true, false])('publishes OSS roles without application readback with a trusted input digest supplied=%s', async (supplied) => {
   const f = await pipeline()
   if (! supplied)
     f.state.job.intent.input.sha256 = null
@@ -189,7 +212,9 @@ it.each([true, false])('publishes the verified original and both variants with a
     'content_uploads:1', 'content_uploads:1',
   ])
   const key = image_original_key(f.state.job.id, f.state.job.active_attempt_id!)
-  expect(f.state.job.result?.original).toMatchObject({ key, sha256: createHash('sha256').update(f.bytes).digest('hex'), size: f.input.size })
+  expect(f.state.job.result?.original).toMatchObject({ key, sha256: supplied ? f.input.sha256 : null, size: f.input.size })
+  expect(f.state.job.result).toMatchObject({ display: { sha256: null }, fallback: { sha256: null } })
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
   expect(f.objects.get(key)!.bytes).toEqual(f.bytes)
   expect(f.state.retired).toEqual([])
   await f.adopt()
@@ -209,29 +234,131 @@ it.each([true, false])('publishes the verified original and both variants with a
   expect(f.storage.soft_delete_object).not.toHaveBeenCalled()
 })
 
+async function cloud_pipeline() {
+  const f = await pipeline()
+  f.state.job.intent.input.sha256 = null
+  return { f, encode: f.encode }
+}
+
+function gate() {
+  let release!: () => void
+  const promise = new Promise<void>(resolve => release = resolve)
+  return { promise, release }
+}
+
 it('owns cloud targets before execution and adopts cloud receipts through the existing publisher', async () => {
-  const encode = vi.fn<ReturnType<typeof create_oss_image_processor>>()
-  const f = await pipeline(() => encode)
-  f.state.job.intent.processor = 'oss'
-  f.state.job.intent.profile_version = 2
-  encode.mockImplementation(async (request) => {
-    expect(f.state.attempts).toHaveLength(1)
-    expect(f.state.attempts[0]).toMatchObject({ display_key: `${request.prefix}.webp`, fallback_key: `${request.prefix}.jpg`, adopted: 0 })
-    const webp_bytes = await sharp(request.bytes).webp({ effort: 0 }).toBuffer()
-    const jpeg_bytes = await sharp(webp_bytes).jpeg().toBuffer()
-    const put = async (key: string, bytes: Buffer, mime: string) => ({ key, ... await request.storage.put_object(key, bytes, mime, 'private'), size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
-    const display = await put(`${request.prefix}.webp`, webp_bytes, 'image/webp')
-    const fallback = await put(`${request.prefix}.jpg`, jpeg_bytes, 'image/jpeg')
-    await request.checkpoint()
-    return { display: { ... display, version_id: display.version_id! }, fallback: { ... fallback, version_id: fallback.version_id! }, width: 4, height: 3, lqip: jpeg_bytes }
-  })
+  const { f, encode } = await cloud_pipeline()
   await f.jobs.run(f.state.job.id, 1)
   expect(encode).toHaveBeenCalledOnce()
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
   expect(f.state.job.status).toBe('ready')
+  expect(f.state.job.result).toMatchObject({ display: { sha256: null }, fallback: { sha256: null }, original: { sha256: null } })
   await f.adopt()
   expect(f.state.job.status).toBe('completed')
   expect(f.state.attachment.display_key).toBe(f.state.attempts[0]!.display_key)
   expect(f.state.attachment.original_key).toBe(image_original_key(f.state.job.id, f.state.job.active_attempt_id!))
+})
+
+it('overlaps cloud variants with its own upload archive and waits for both before readiness', async () => {
+  const { f, encode } = await cloud_pipeline()
+  const encoding = gate()
+  const archiving = gate()
+  const release_encoding = gate()
+  const release_archive = gate()
+  const produce = encode.getMockImplementation()!
+  const copy = f.storage.copy_object.getMockImplementation()!
+  encode.mockImplementation(async (request) => {
+    encoding.release()
+    await release_encoding.promise
+    return produce(request)
+  })
+  f.storage.copy_object.mockImplementation(async (... args) => {
+    archiving.release()
+    await release_archive.promise
+    return copy(... args)
+  })
+  const running = f.jobs.run(f.state.job.id, 1)
+  await Promise.all([encoding.promise, archiving.promise])
+  expect(f.state.job.status).toBe('processing')
+  release_archive.release()
+  const key = image_original_key(f.state.job.id, f.state.job.active_attempt_id!)
+  await vi.waitFor(() => expect(f.objects.has(key)).toBe(true))
+  expect(f.state.job.status).toBe('processing')
+  release_encoding.release()
+  await running
+  expect(f.state.job.status).toBe('ready')
+  expect(f.state.job.result?.original).toMatchObject({ key, sha256: f.input.sha256 })
+})
+
+it.each(['variants', 'archive'] as const)('aborts the sibling and drains its in-flight write after %s fails', async (failure) => {
+  const { f, encode } = await cloud_pipeline()
+  const encoding = gate()
+  const archiving = gate()
+  const release_survivor = gate()
+  const produce = encode.getMockImplementation()!
+  const copy = f.storage.copy_object.getMockImplementation()!
+  const error = new ApiError(502, 'controlled branch failure')
+  encode.mockImplementation(async (request) => {
+    encoding.release()
+    await archiving.promise
+    if (failure === 'variants')
+      throw error
+    await release_survivor.promise
+    return produce(request)
+  })
+  f.storage.copy_object.mockImplementation(async (... args) => {
+    archiving.release()
+    await encoding.promise
+    if (failure === 'archive')
+      throw error
+    await release_survivor.promise
+    return copy(... args)
+  })
+  let settled = false
+  const running = f.jobs.run(f.state.job.id, 1).then(() => null, error => error).finally(() => {
+    settled = true
+  })
+  await vi.waitFor(() => expect(encode.mock.calls[0]?.[0].signal.aborted).toBe(true))
+  expect(settled).toBe(false)
+  expect(f.state.job.status).toBe('processing')
+  release_survivor.release()
+  expect(await running).toBe(error)
+  expect(f.state.job.status).toBe('failed')
+  expect(f.state.attachment.original_key).toBeNull()
+  await f.jobs.cleanup()
+  const key = failure === 'variants' ? image_original_key(f.state.job.id, f.state.job.active_attempt_id!) : f.state.attempts[0]!.display_key
+  expect(f.objects.has(key)).toBe(true)
+  expect(f.state.retired).toContain(key)
+})
+
+it('fences cancellation while both cloud branches are in flight and retains cleanup ownership', async () => {
+  const { f, encode } = await cloud_pipeline()
+  const encoding = gate()
+  const archiving = gate()
+  const release = gate()
+  const produce = encode.getMockImplementation()!
+  const copy = f.storage.copy_object.getMockImplementation()!
+  encode.mockImplementation(async (request) => {
+    encoding.release()
+    await release.promise
+    return produce(request)
+  })
+  f.storage.copy_object.mockImplementation(async (... args) => {
+    archiving.release()
+    await release.promise
+    return copy(... args)
+  })
+  const running = f.jobs.run(f.state.job.id, 1).then(() => null, error => error)
+  await Promise.all([encoding.promise, archiving.promise])
+  await f.jobs.cancel(f.state.job.id, 1)
+  release.release()
+  expect(await running).toMatchObject({ statusCode: 409 })
+  expect(f.state.job.status).toBe('cancelled')
+  expect(f.state.attachment.original_key).toBeNull()
+  await f.jobs.cleanup()
+  const key = image_original_key(f.state.job.id, f.state.job.active_attempt_id!)
+  expect(f.state.retired).toContain(key)
+  await expect(f.adopt()).rejects.toMatchObject({ statusCode: 409 })
 })
 
 it('publishes a redacted pair on its private owner without changing its normal pixels or archive', async () => {
@@ -334,15 +461,36 @@ it('keeps the initial copy archive through subsequent overwrite edits and retire
   expect(f.state.retired).not.toContain(archive)
 })
 
-it.each(['missing', 'wrong-content'])('refuses a copy archive receipt that is %s', async (fault) => {
+it.each(['missing', 'wrong-size'])('refuses a copy archive receipt that is %s', async (fault) => {
   const { f } = await copy_pipeline()
   await f.jobs.run(f.state.job.id, 1)
   if (fault === 'missing')
     f.state.job.result!.original = null
   else
-    (f.state.job.result!.original as { sha256: string }).sha256 = f.input.sha256
+    (f.state.job.result!.original as { size: number }).size ++
   await expect(f.adopt()).rejects.toMatchObject({ statusCode: 409 })
   expect(f.state.attachment.original_key).toBeNull()
+})
+
+it('rejects an upload archive receipt that contradicts an existing trusted source digest', async () => {
+  const f = await pipeline()
+  await f.jobs.run(f.state.job.id, 1)
+  const original = f.state.job.result!.original as { sha256: string }
+  original.sha256 = 'b'.repeat(64)
+  await expect(f.adopt()).rejects.toMatchObject({ statusCode: 409 })
+  expect(f.state.attachment.original_key).toBeNull()
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
+})
+
+it('rejects an unmarked local task before claiming or reading any image bytes', async () => {
+  const f = await pipeline()
+  delete (f.state.job.intent as Partial<ImageJobIntent>).processor
+  await expect(f.jobs.run(f.state.job.id, 1)).rejects.toMatchObject({ statusCode: 409, message: '本地图片处理已退役，请重新上传' })
+  expect(f.state.attempts).toEqual([])
+  expect(f.state.job.status).toBe('queued')
+  expect(f.encode).not.toHaveBeenCalled()
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
+  expect(f.storage.copy_object).not.toHaveBeenCalled()
 })
 
 it('rolls back both the original pointer and input retirement when publication fails', async () => {
@@ -367,7 +515,7 @@ it.each(['original', 'display', 'fallback'])('refuses publication of a retiring 
 })
 
 it.each([
-  ['lost', 'upload'], ['corrupt', 'upload'], ['lost', 'copy'], ['corrupt', 'copy'],
+  ['lost', 'upload'], ['invalid-receipt', 'upload'], ['lost', 'copy'], ['invalid-receipt', 'copy'],
 ] as const)('recovers a %s archive for %s through the attempt ledger and fresh retry keys', async (fault, mode) => {
   const f = mode === 'copy' ? (await copy_pipeline()).f : await pipeline()
   f.fault(fault)
