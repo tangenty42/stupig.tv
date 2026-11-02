@@ -32,8 +32,8 @@
 ```powershell
 pnpm esa:deploy:dev --check
 pnpm esa:deploy:prod --check
-pnpm content:preload:check --env=dev
-pnpm content:preload:check --env=prod
+pnpm content:preload:check:dev
+pnpm content:preload:check:prod
 ```
 
 ESA 发布检查不会发布代码；预热检查需要对应数据库可达，但不提交任务。OSS 上传/替换/删除、短信受控号码、ACR 推拉仍需各自验收，不能用审计管理员成功代替应用身份。开发默认保持 OTP debug，不对开发测试号码发送真实短信。

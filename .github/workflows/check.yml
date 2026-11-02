@@ -360,10 +360,10 @@ jobs:
           ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
           ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
         run: |
-          pnpm migrate --maintenance
+          pnpm migrate:prod --maintenance
           # 第二遍：全部已记录，应直接判 up to date（执行器幂等路径）
-          pnpm migrate
-          pnpm migrate --status
+          pnpm migrate:prod
+          pnpm migrate:prod --status
 
       - name: Verify schema landed
         run: |

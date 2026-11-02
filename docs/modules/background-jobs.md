@@ -23,7 +23,7 @@
 `app.backgroundRunner.mode` 支持三种值：
 
 - `app`：随应用启动，开发默认通过 `pnpm dev` 一起运行。
-- `worker`：应用不登记消费者，使用 `pnpm background:worker` 启动独立进程；该命令会拒绝其他模式。
+- `worker`：应用不登记消费者，源码使用对应环境的 `pnpm background:worker:dev`／`pnpm background:worker:prod` 启动独立进程；命令会拒绝其他模式。
 - `disabled`：停止扫描，领域账本和待处理事实保留。
 
 独立 worker 命令当前在源码工作区运行。生产精简镜像没有打包 worker/status CLI，也没有相应 Compose 服务；现行生产交付保持 app 模式。要分离生产 worker，需先补齐运行产物和编排，再显式选择 production 配置并验收，不能只切换 YAML 开关。
@@ -46,7 +46,7 @@
 
 ## 状态与排障
 
-源码工作区的 `pnpm background:status` 只读汇总领域账本：各状态数量、到期候选、有效租约、最老待办及安全错误码。`admin.getBackgroundStatus` 需要 `admin_access:readonly`，另外返回当前应用进程的扫描统计；当前生产应用可通过该 API 查看状态，不能在精简镜像中直接运行 pnpm 命令。
+源码工作区的 `pnpm background:status:dev` 只读汇总领域账本：各状态数量、到期候选、有效租约、最老待办及安全错误码。`admin.getBackgroundStatus` 需要 `admin_access:readonly`，另外返回当前应用进程的扫描统计；当前生产应用可通过该 API 查看状态，不能在精简镜像中直接运行 pnpm 命令。
 
 CLI 是另一个进程，`process: null` 正常；应用快照也不是集群视图。独立 worker 要结合数据库租约及进程日志判断。状态中的 due 是候选数量，真正认领前还会重验权限、版本和对象引用；浏览器正在传输字节不等于后台有可执行任务。
 

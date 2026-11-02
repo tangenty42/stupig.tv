@@ -27,11 +27,10 @@ pnpm env:build:dev
 ```powershell
 docker compose --env-file .env.dev -f docker-compose.dev.yml up -d
 docker compose --env-file .env.dev -f docker-compose.dev.yml ps
-$env:NODE_ENV = 'development'
-pnpm migrate --status
+pnpm migrate:dev --status
 ```
 
-全新开发数据库执行 `pnpm migrate --maintenance`；已有数据先按[迁移手册](../operations/migrations.md)检查待执行步骤和备份需求。`--maintenance` 仅表示允许维护迁移，不能代替停止其他写入。当前完整 Content 迁移也属于维护步骤。
+全新开发数据库执行 `pnpm migrate:dev --maintenance`；已有数据先按[迁移手册](../operations/migrations.md)检查待执行步骤和备份需求。`--maintenance` 仅表示允许维护迁移，不能代替停止其他写入。当前完整 Content 迁移也属于维护步骤。
 
 配置 frpc 和回调服务器后执行：
 
@@ -87,18 +86,19 @@ Compose 重建时保留现有挂载；不要使用 `down -v`、`--renew-anon-vol
 | `pnpm test` | Vitest 单次执行 |
 | `pnpm exec nuxt typecheck` | 应用及共享类型检查 |
 | `pnpm exec tsc --project scripts/tsconfig.json --noEmit` | 工具与迁移 TypeScript 检查 |
-| `pnpm background:status` | 读取后台领域账本状态 |
-| `pnpm content:preload:check` | 查询预热额度、分层缓存配置、开关和账本；不代替真实交付验收，先阅读[预热说明](../modules/content/object-lifecycle.md) |
+| `pnpm background:status:dev` / `pnpm background:status:prod` | 读取对应环境的后台领域账本状态 |
+| `pnpm content:preload:check:dev` / `pnpm content:preload:check:prod` | 查询预热额度、分层缓存配置、开关和账本；不代替真实交付验收，先阅读[预热说明](../modules/content/object-lifecycle.md) |
+| `pnpm storage:inventory:dev` / `pnpm storage:inventory:prod` | 有界、可恢复的 OSS 元数据专项盘点，见[操作说明](../operations/storage-audit.md) |
 
-开发环境模板使用 `pnpm env:build:dev`，生产使用 `pnpm env:build:prod`。迁移、后台状态和预热工具可用 `--env=prod` 选择 `.env.prod`；ESA 用 `pnpm esa:deploy:dev` / `pnpm esa:deploy:prod` 固定选择环境，不需要复制文件或手动加载 dotenv。Nuxt 构建、生成及维护产物打包不属于日常 HMR 流程；在需要交付产物时按[部署手册](../deployment/README.md)运行。
+开发环境模板使用 `pnpm env:build:dev`，生产使用 `pnpm env:build:prod`。迁移、后台状态／worker、预热检查、盘点、样本导出和 ESA 发布均使用 `:dev`／`:prod` 后缀固定环境；不再提供依赖隐含环境的无后缀入口。后缀在依赖导入前选定 YAML 和对应 `.env.dev`／`.env.prod`，覆盖继承的 `NODE_ENV`；同名进程注入值仍按既有规则优先。无需再手填 `--env`，重复选择会被拒绝。开发重置仅提供 `content:reset:dev`；构建、测试、设置生成等不选择业务环境的命令保持原名。Nuxt 构建、生成及维护产物打包不属于日常 HMR 流程；在需要交付产物时按[部署手册](../deployment/README.md)运行。
 
 ## 测试数据与重置
 
 开发实例已有 `admin`、`user` 测试身份，是否仍存在以本机数据库为准。优先使用既有会话或密码登录；测试号码不是可以发送真实短信的号码白名单。
 
-`pnpm db:dump:dev` 是从所选数据库导出开发用脱敏 SQL 的工具，当前仅替换手机号、bcrypt 哈希及 IPv4。它不是完整隐私清洗，也不是恢复备份；正文、对象信息、历史迁移恢复材料等仍可能敏感。导出前选择正确环境，受控保存，并按[备份与恢复](../operations/backup-recovery.md)区分用途。
+`pnpm db:dump:dev`／`pnpm db:dump:prod` 从对应目标数据库导出开发用脱敏 SQL，输出用途相同，后缀表示来源环境。默认按配置地址连接；仅在显式设置 `MYSQL_CONTAINER` 时使用指定 Docker 容器，该覆盖不会自动选择或回退到其他目标。当前仅替换手机号、bcrypt 哈希及 IPv4。它不是完整隐私清洗，也不是恢复备份；正文、对象信息、历史迁移恢复材料等仍可能敏感。导出前选择正确环境，受控保存，并按[备份与恢复](../operations/backup-recovery.md)区分用途。
 
-`pnpm content:dev:reset` 是破坏性开发辅助工具，默认先盘点；实际删除需显式执行参数。它不属于安装或故障修复步骤，不应为了让测试通过而清空用户工作区。旧 S3 `storage:cleanup` 盘点入口已随旧表退役删除，当前 OSS 对账由后台领域任务负责。
+`pnpm content:reset:dev` 是破坏性开发辅助工具，默认先盘点；实际删除需显式执行参数。它不属于安装或故障修复步骤，不应为了让测试通过而清空用户工作区。旧 S3 `storage:cleanup` 盘点入口已随旧表退役删除，当前 OSS 对账由后台领域任务负责。
 
 ## 源码入口
 

@@ -99,7 +99,7 @@ console.table(performance.getEntriesByType('measure')
 
 阶段包括句柄回读 `source`、`resume`、`initialize`、续传 `checking`、`bytes`、`seal`、`await_completion`、`adopt`、`dom_update` 和 `total`，末尾带 returned／failed／stopped。`bytes` 包含 SDK 分片准备、MD5、签名及传输；`await_completion` 是客户端收到封口结果后等待状态回传的时间，不能当纯编码时长。`total` 从当前页面本次执行开始，到接收采用结果、工作区与落地回调交接并完成 Vue `nextTick`；不包含此前的文件选择／受理，不保证图片已解码或绘制。刷新恢复可能只有后半段，暂停／失败分别结束本次观测，不把恢复前的时间补成假数据。通知早于 HTTP 响应时，各调用仍独立等自己的响应再结束计时；DOM 观测不延长 finalizing 围栏。
 
-浏览器数据留在当前页面，不上报新接口；Performance 不可用或日志失败不改变业务结果。当前生产应用进程的观测应从管理员 API 读取；源码 `background:status` CLI 是另一个进程，只能看到自身观测，不能代替应用进程指标。部署后用代表性小图、照片和编辑输出重测整条链路；离线 fixture 的延迟不代表生产 OSS。
+浏览器数据留在当前页面，不上报新接口；Performance 不可用或日志失败不改变业务结果。当前生产应用进程的观测应从管理员 API 读取；源码 `background:status:dev`／`background:status:prod` CLI 是另一个进程，只能看到自身观测，不能代替应用进程指标。部署后用代表性小图、照片和编辑输出重测整条链路；离线 fixture 的延迟不代表生产 OSS。
 
 2026-11-02 的[脱敏验证](../../reviews/upload-observability-2026-11-02.json)包括开发桶真实调用、隔离数据库混合负载／连接池占满及浏览器 Performance 断言。开发桶各一次：460 字节 JPEG 约 2.03s，2,621,740 字节 PNG 约 1.78s；前者 JPEG 与尾部检查阶段约 0.90／0.50s，后者 WebP 阶段约 1.32s。阶段包含关联请求／校验，不是云端纯编码 CPU 时间，也不是生产 P95。两轮共 16 个专用对象均已软删除并确认当前缺失，历史版本保留；隔离数据库与浏览器测试实例已清理。
 

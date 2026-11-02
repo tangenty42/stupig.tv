@@ -17,17 +17,38 @@
 在具备目标配置和 MySQL 连接的源码工作区运行：
 
 ```sh
-pnpm storage:inventory --env=prod --parts --output .data/oss-inventory-prod-20261102
-pnpm storage:inventory --env=dev --parts --output .data/oss-inventory-dev-20261102
-pnpm storage:inventory --env=dev --metadata-only --parts --output .data/oss-inventory-dev-metadata-20261102
-pnpm storage:inventory --help
+pnpm storage:inventory:prod --parts --output .data/oss-inventory-prod-20261102
+pnpm storage:inventory:dev --parts --output .data/oss-inventory-dev-20261102
+pnpm storage:inventory:dev --metadata-only --parts --output .data/oss-inventory-dev-metadata-20261102
+pnpm storage:inventory:dev --help
 ```
 
 该命令仅发 OSS `GET` 和业务库 `SELECT`，数据库连接先设置 session read-only；不下载对象内容、不计算文件 SHA、不修改云端配置、业务行或日常盘点账本。额外读取桶版本控制、生命周期、全部版本／删除标记、multipart 和可选分片元数据。没有 `--apply`、删除、abort 或清理入队选项；不另设 cron 或 runner。
 
 `--metadata-only` 可在数据库不可达或版本不足时，仅盘点 OSS 配置、版本和分片元数据；不加载或连接数据库，所有对象归属均为 `unverified`，不产生清理候选，`protection_checks_complete=false`。这是显式缩小范围，不会在 DB 查询失败后自动降级；需使用独立 output，不能混用默认模式的断点。此模式退出 0 仅表示所选元数据范围完成。
 
-`--env` 复用现有环境选择；数据库和 OSS 使用对应配置。生产源码命令需要可达的 MySQL；精简应用镜像不包含此 pnpm 入口。需要 SSH 转发时，另建仅本地监听的连接，例如 `ssh -N -L 127.0.0.1:13347:127.0.0.1:3306 <SSH别名>`，在运行命令的终端临时将 `MYSQL_HOST=127.0.0.1`、`MYSQL_PORT=13347` 指向转发，完成后还原变量并关闭隧道。只读会话不要求修改业务数据库结构；开发库版本不足时返回 `database_schema_mismatch`，不会把查不到保护关系当成无归属。
+源码入口以 `:dev`／`:prod` 固定选择环境，数据库和 OSS 使用对应配置，不另传 `--env`。生产源码命令需要可达的 MySQL。需要 SSH 转发时，另建仅本地监听的连接，例如 `ssh -N -L 127.0.0.1:13347:127.0.0.1:3306 <SSH别名>`，在运行命令的终端临时将 `MYSQL_HOST=127.0.0.1`、`MYSQL_PORT=13347` 指向转发，完成后还原变量并关闭隧道。只读会话不要求修改业务数据库结构；开发库版本不足时返回 `database_schema_mismatch`，不会把查不到保护关系当成无归属。
+
+### 生产容器入口
+
+`maintenance:build` 将盘点工具打成 `.output/server/maintenance/storage-inventory.mjs`；生产镜像只带 Node 和自包含产物，不包含 pnpm、tsx 或 `scripts/`。发布包含本轮入口的新镜像后，可直接复用应用容器的生产环境和数据库网络：
+
+```sh
+docker exec stupig-tv node .output/server/maintenance/storage-inventory.mjs --parts --output /tmp/oss-inventory-prod
+```
+
+容器内入口继承 Compose 注入的 `NODE_ENV=production`，不传 `--env`。该操作只运行盘点进程，不启动应用、迁移或后台 worker。`/tmp` 的结果和断点随容器重建丢失；需要跨容器保留时，在生产部署目录用一次性容器挂载宿主机目录：
+
+```sh
+mkdir -p .data/oss-inventory-prod
+docker compose --env-file .env.prod -f docker-compose.yml run --rm --no-deps \
+  -v "$PWD/.data/oss-inventory-prod:/inventory" --entrypoint node \
+  app .output/server/maintenance/storage-inventory.mjs --parts --output /inventory
+```
+
+重复同一命令即可续跑；它不发布服务端口，也不执行服务默认的迁移／启动命令。构建产物尚未部署的旧容器没有这个文件，需先按正常发布流程更新镜像。
+
+### 预算、输出与恢复
 
 默认每次最多 50 次 OSS 逻辑请求、每页 25 项、请求间隔 100ms、时间预算 60 秒；可用 `--max-requests`、`--page-size`、`--pause-ms`、`--max-seconds` 调整。时间预算在 OSS 操作间检查，已开始的请求和当前页归属复核可以超出预算；OSS 单次 timeout 不超过 30 秒，SQL 设置 5 秒查询执行上限。默认全桶；`--prefix content/att/` 可缩小范围。候选年龄默认 30 天，`--min-age-days` 最低 7 天；年龄只是复核条件，不是删除授权。`--parts` 额外逐任务分页统计已上传分片字节，不加该参数时大小标记为未核实，不能当成 0 占用或实际账单。
 
@@ -86,8 +107,8 @@ pnpm storage:inventory --help
 ## 如何查看
 
 ```sh
-pnpm background:status
-pnpm background:status --storage-findings
+pnpm background:status:dev
+pnpm background:status:dev --storage-findings
 ```
 
 前者显示本地进程统计、阶段、计数、最近完成时间、下次执行时间、安全错误码及异常分类数量。CLI 是独立进程，`process: null` 正常；后者额外返回当前目标前 100 个未关闭异常。生产精简镜像不含该 CLI，使用 API：

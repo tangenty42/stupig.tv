@@ -61,7 +61,7 @@ export function inventory_sink(directory: string) {
 export async function inventory_main(args = process.argv.slice(2)) {
   const options = inventory_arguments(args)
   if (options.help) {
-    console.log('pnpm storage:inventory --env=dev|prod [--parts] [--metadata-only] [--output .data/oss-inventory-...] [--prefix content/att/] [--min-age-days 30] [--max-requests 50] [--page-size 25] [--max-seconds 60] [--pause-ms 100]\nGET/SELECT only. Reuse the same output and scan options to resume. Exit 0: selected scope complete; 2: partial/denied/budget; 1: failed. Metadata-only skips DB/protection checks. No delete/abort/enqueue mode.')
+    console.log('Source: pnpm storage:inventory:dev | pnpm storage:inventory:prod\nContainer: node .output/server/maintenance/storage-inventory.mjs (inherited NODE_ENV)\nOptions: [--parts] [--metadata-only] [--output .data/oss-inventory-...] [--prefix content/att/] [--min-age-days 30] [--max-requests 50] [--page-size 25] [--max-seconds 60] [--pause-ms 100]\nGET/SELECT only. Reuse the same output and scan options to resume. Exit 0: selected scope complete; 2: partial/denied/budget; 1: failed. Metadata-only skips DB/protection checks. No delete/abort/enqueue mode.')
     return 0
   }
   const config = load_aliyun_oss_config()

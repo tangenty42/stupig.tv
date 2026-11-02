@@ -1,5 +1,29 @@
-import { describe, expect, it } from 'vitest'
-import { redact_dump_line } from './export-sample'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { dump_command, redact_dump_line } from './export-sample'
+
+vi.mock('@config/loader', () => ({ load_database_config: () => ({ host: 'selected-db', port: 13306, user: 'sample-user', password: 'fixture-only', name: 'selected-database' }) }))
+
+afterEach(() => vi.unstubAllEnvs())
+
+describe('dump target', () => {
+  it('uses the selected database endpoint without probing or preferring local containers', () => {
+    vi.stubEnv('MYSQL_CONTAINER', undefined)
+    const command = dump_command()
+    expect(command.command).toBe('mysqldump')
+    expect(command.args).toEqual(['-h', 'selected-db', '-P', '13306', '-usample-user', '--single-transaction', '--routines', '--triggers', '--default-character-set=utf8mb4', 'selected-database'])
+    expect(command.env.MYSQL_PWD).toBe('fixture-only')
+    expect(command.args.join(' ')).not.toContain('fixture-only')
+  })
+
+  it('uses a container only when explicitly requested and keeps its credentials out of arguments', () => {
+    vi.stubEnv('MYSQL_CONTAINER', 'chosen-mysql')
+    const command = dump_command()
+    expect(command.command).toBe('docker')
+    expect(command.args).toEqual(['exec', '-i', '-e', 'MYSQL_PWD', 'chosen-mysql', 'mysqldump', '-usample-user', '--single-transaction', '--routines', '--triggers', '--default-character-set=utf8mb4', 'selected-database'])
+    expect(command.env.MYSQL_PWD).toBe('fixture-only')
+    expect(command.args.join(' ')).not.toContain('fixture-only')
+  })
+})
 
 const sample_hash = '$2b$10$abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTUVWXYZ12'
 

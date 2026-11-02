@@ -107,8 +107,8 @@ concat("", http.request.uri.args["response-content-disposition"])
 仅 edge 单层缓存时应用不提交预热。官方还说明预热不应用 URL 重写规则；本项目提交的是无签名/无 query 的规范对象 URL，不能依赖重写把另一个路径变成真实 key。预热 URL 的 hostname 必须是目标站点内启用代理的 DNS 记录，见[PreloadCaches](https://help.aliyun.com/zh/edge-security-acceleration/esa/api-esa-2024-09-10-preloadcaches)。
 
 ```powershell
-pnpm content:preload:check --policy
-pnpm content:preload:check
+pnpm content:preload:check:prod --policy
+pnpm content:preload:check:prod
 ```
 
 这两条不提交预热。生产 `enabled` 和 `deliveryVerified` 仍默认 false；只有原生预热完成、合法请求复用缓存、无权限仍拒绝、OSS 仍私有都验收后才开启。

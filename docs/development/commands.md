@@ -4,11 +4,11 @@
 
 2026-11-01 精简：package.json 从 **38 个入口减少到 33 个**，其中 2 个是安装钩子；先前精简到 34 个后，本轮再移除旧 S3 盘点入口。`check` 是本地与 CI unit job 的共同质量入口，`typecheck` 统一应用、工具和浏览器测试的类型检查。文件数量不等于需要手动记住的命令数量。
 
-ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校验入口，移除重复别名与未使用的静态生成命令。旧存储盘点已删除；样本导出和开发重置的运维改名仍是待实施建议。
+ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校验入口，移除重复别名与未使用的静态生成命令。旧存储盘点已删除。2026-11-02 新增 OSS 专项盘点，并按用户选择将有环境目标的源码运维入口统一为 `:dev`／`:prod`；当前共 40 个入口，含 2 个安装钩子。开发重置仅提供 `content:reset:dev`；样本导出默认使用所选环境的地址，容器须显式指定，脱敏边界见下表。
 
 ## package.json 全部入口
 
-下表均省略 `pnpm` 前缀。环境通过命令中固定参数、进程 `NODE_ENV` 或通用 `--env` 选择；不能仅看命令名猜测实际目标。
+下表均省略 `pnpm` 前缀，同实现的 dev/prod 入口合并列出。运维后缀固定传给环境加载器，先于依赖导入选择环境；同名进程注入值仍按既有规则优先。无环境目标的构建和测试命令保持原名。
 
 | 命令 | 当前用途、边界 | 整理建议 |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校�
 | `dev:tunnel` | 给已有应用启动授权代理和 frpc；`--prepare` 仅生成配置，`--verify` 准备并检查 frpc 版本／配置 | 共用 dev/frp.ts 的 CLI；不启动第二个应用 |
 | `build` | 使用 `.env.prod` 构建 Nuxt 服务端产物；Docker 构建会调用 | 保留 |
 | `preview` | 本机以 `.env.prod` 预览已构建产物；不是生产服务器启动入口 | 保留为交付排查入口 |
-| `maintenance:build` | 先生成 settings，再打包迁移执行器、旧存储盘点器、TS 迁移和 Sharp 运行依赖到 `.output` | 保留；Docker 和产物测试正在调用 |
+| `maintenance:build` | 先生成 settings，再打包迁移／发布执行器、OSS 专项盘点、TS 迁移和 Sharp 运行依赖到 `.output` | 保留；Docker 和产物测试正在调用 |
 | `env:build:dev` | 固定合成/补全 `.env.dev` | 保留 |
 | `env:build:prod` | 固定合成/补全 `.env.prod` | 保留 |
 | `env:encrypt` | 将 `.env.prod` 加密为 `.env.prod.gpg` | 保留；与 decrypt/check 已共用实现 |
@@ -27,12 +27,13 @@ ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校�
 | `settings:check` | 检查上述生成文件是否过期，CI 使用 | 保留；检查与写文件的职责明确 |
 | `esa:deploy:dev` | 固定 dev YAML/env，自动同步函数变量、创建版本、发布并读回；`--plan` 离线、`--check` 只读 | 已改，保留 |
 | `esa:deploy:prod` | 固定 prod YAML/env，同一发布实现；Deploy 在应用健康后调用 | 已改，保留 |
-| `migrate` | SQL/TS 统一版本链；`--status` 状态、`--dry-run` 预演，默认执行，维护步骤需 `--maintenance` | 保留一个实现；写入目标应明确指定环境，不拆回多套业务迁移命令 |
-| `background:worker` | 独立进程运行后台任务；要求 `app.backgroundRunner.mode=worker` | 保留；当前精简生产镜像未打包此入口，不能据此认为容器已有 worker 命令 |
-| `background:status` | 查询领域账本及全桶对账进度；`--storage-findings` 附带当前目标前 100 个未关闭异常 | 保留；查询和执行保持分开，不另设 cron |
-| `content:preload:check` | 查 ESA 额度、分层缓存、配置与预热账本；`--policy` 只输出建议 RAM 策略，不提交预热任务 | 保留；后续将 policy 分支改为只加载 ESA 配置，避免要求无关 DB/应用参数 |
-| `db:dump:dev` | 从所选库导出开发用 SQL，仅替换手机号、bcrypt 和 IPv4，可 `--gzip` | 建议改为 `db:export-sample`；名字中的 dev 目前是导出用途，不固定源库，容易误解 |
-| `content:dev:reset` | 开发 Content 重置，默认盘点；`--apply` 执行删除，支持清理记录续跑 | 建议改为 `content:reset:dev`，真正固定 dev 参数；继续保留环境/库/桶保护 |
+| `migrate:dev` / `migrate:prod` | SQL/TS 统一版本链；`--status` 状态、`--dry-run` 预演，默认执行，维护步骤需 `--maintenance` | 同一个实现，后缀固定环境；CI 用 prod 入口保持原生产配置验收 |
+| `background:worker:dev` / `background:worker:prod` | 独立进程运行后台任务；要求 `app.backgroundRunner.mode=worker` | 当前精简生产镜像未打包此入口，不能据此认为容器已有 worker 命令 |
+| `background:status:dev` / `background:status:prod` | 查询领域账本及全桶对账进度；`--storage-findings` 附带当前目标前 100 个未关闭异常 | 查询和执行保持分开，不另设 cron |
+| `content:preload:check:dev` / `content:preload:check:prod` | 查 ESA 额度、分层缓存、配置与预热账本；`--policy` 只输出建议 RAM 策略，不提交预热任务 | 后续将 policy 分支改为只加载 ESA 配置，避免要求无关 DB/应用参数 |
+| `storage:inventory:dev` / `storage:inventory:prod` | 只读专项盘点版本、删除标记及 multipart，支持断点／预算和显式纯元数据模式 | 生产另打包 `storage-inventory.mjs`，无需 pnpm；不是清理入口 |
+| `db:dump:dev` / `db:dump:prod` | 从对应来源环境导出开发用 SQL，仅替换手机号、bcrypt 和 IPv4，可 `--gzip` | 后缀表示来源环境；默认连接配置地址，仅显式 `MYSQL_CONTAINER` 才改走指定容器，不自动回退 |
+| `content:reset:dev` | 开发 Content 重置，默认盘点；`--apply` 执行删除，支持清理记录续跑 | 固定 dev 参数，保留环境/库/桶保护，不提供 prod 入口 |
 | `lint` | 全仓库 ESLint 检查 | 保留 |
 | `test` | 顺序执行单元、工具和挂载组件测试 | 筛选文件时使用下列分组入口 |
 | `test:unit` | app/server 纯逻辑测试 | 可指定文件和筛选参数 |
@@ -68,7 +69,8 @@ CI unit job 直接运行 `pnpm check`。`pnpm typecheck` 依次执行 Nuxt、scr
 | [`background/worker.ts`](../../scripts/background/worker.ts) | 独立 worker 适配器注册、保活、退出清理 | 保留 |
 | [`background/status.ts`](../../scripts/background/status.ts) | 领域账本状态查询及 DB 关闭 | 保留 |
 | [`content/preload-check.ts`](../../scripts/content/preload-check.ts) | 预热状态/额度/分层缓存检查及 RAM policy 输出 | 保留，按内容预热归属 content/ |
-| [`db/export-sample.ts`](../../scripts/db/export-sample.ts) | mysqldump 流式替换及可选 gzip；db:dump:dev 调用 | 保留；需补明确源库/容器选择，并修正 pnpm 命令的误导命名 |
+| [`db/export-sample.ts`](../../scripts/db/export-sample.ts) | mysqldump 流式替换及可选 gzip；db:dump:dev/prod 按来源环境调用 | 保留；显式容器选择；脱敏不等于完整隐私清洗或恢复备份 |
+| [`storage/inventory.ts`](../../scripts/storage/inventory.ts)、[`inventory-run.ts`](../../scripts/storage/inventory-run.ts)、[`inventory-catalog.ts`](../../scripts/storage/inventory-catalog.ts)、[`oss-inventory.ts`](../../scripts/storage/oss-inventory.ts) | 专项盘点 CLI、断点与预算、只读归属保护和 GET-only OSS 读取；源码命令及维护产物共用 | 保留；清单不可直接执行删除或 abort |
 | [`content/reset-dev.ts`](../../scripts/content/reset-dev.ts) | 开发重置盘点、保护条件、数据库清除和对象清理续跑 | 保留；不并入日常迁移或普通清理 |
 | [`migration/maintenance-build.ts`](../../scripts/migration/maintenance-build.ts) | 只调用 migration/build.ts 的 build_maintenance | 可将 CLI 入口放进 build.ts 后移除薄包装；保持 production 产物合同 |
 | [`migration/local.ts`](../../scripts/migration/local.ts) | 本地迁移入口：先构建冻结 TS 产物，再调用共同执行器 | 与容器入口有真实差异，不可简单删掉构建步骤 |
@@ -109,9 +111,9 @@ CI unit job 直接运行 `pnpm check`。`pnpm typecheck` 依次执行 Nuxt、scr
 2. 新增 `typecheck` 与 `check`，共 34 个入口。`test:all` 不包含生产 CSS、数据库集成或真实 MQTT，故不继续用该名字表达全量验证。
 3. `dev:tunnel` 直接调用 dev/frp.ts，已删除等价薄包装。
 
-### 后续：修正运维命名
+### 已完成：修正运维环境命名
 
-将 `db:dump:dev` 改为 `db:export-sample`、`content:dev:reset` 改为 `content:reset:dev`，仍需同步调用方与实际环境选择；本轮没有改名。旧 S3 `storage:cleanup`、对应脚本和 `cleanup.mjs` 打包入口已随五张旧表退役删除，不再改名保留。完整脚本职责及其保护边界见上表。
+运维入口统一为实际来源／操作环境后缀，移除迁移、状态、worker、预热与盘点的无后缀别名；开发重置改为 `content:reset:dev`。底层仍共用一个实现与环境预载，重复追加另一个 `--env` 会被拒绝。旧 S3 `storage:cleanup`、对应脚本和 `cleanup.mjs` 打包入口已随五张旧表退役删除，不再改名保留。完整脚本职责及其保护边界见上表。
 
 ### 已完成：按职责收拢 scripts
 
@@ -122,7 +124,7 @@ scripts/
   dev/         # 组合启动、隧道、代理、子进程管理、开发容器入口
   env/         # 模板合成、GPG、预载
   db/          # 开发样本导出
-  storage/     # 旧存储盘点
+  storage/     # OSS 元数据专项盘点、断点与保护关系核对
   content/     # 开发重置、预热诊断
   background/  # 独立 worker、状态查询
   deploy/      # 远端部署 shell
@@ -139,7 +141,7 @@ dev/tunnel.mjs 薄包装已删除。后续可让 migration/maintenance-build.ts 
 
 ### 统一规则
 
-- 命令以“领域:动作”为主；如使用 `:dev` / `:prod`，它只表示实际操作环境并且必须固定传给加载器，不能表示产物用途。发布命令保留两条便利入口；只读查询仍可共用 `--env`，避免把每个诊断都翻倍成两条命令。
+- 源码运维命令以“领域:动作:环境”为主，`:dev` / `:prod` 表示实际来源／操作环境，必须固定传给加载器，不能表示产物用途；读写命令使用同一环境命名规则。生产自包含 Node 产物继承容器环境。
 - 对同一目标的 plan/check/apply 使用参数区分，别为每一步都再新增 pnpm 名字。迁移已使用 `--dry-run` 和 `--status`，迁移语义保留，不能硬改成与 ESA 完全相同的步骤。
 - 同一领域共用实现和配置加载器，不建立新的“大而全脚本 runner”；后台任务 runner 和一次性运维 CLI 是不同生命周期。
 - 带写入的运维入口在实际执行前显示环境/目标；查询、预演不得先启动 worker 或执行业务变更。`--help` / policy 只加载必要配置，不依赖无关应用凭据。

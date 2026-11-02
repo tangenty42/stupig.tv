@@ -60,7 +60,7 @@ export function read_migrations(dir: string, manifest_path?: string): MigrationF
   if (! scripts.length)
     return files
   if (! manifest_path || ! existsSync(manifest_path))
-    throw new Error('脚本迁移缺少构建清单，请通过 pnpm migrate 或 maintenance:build 构建')
+    throw new Error('脚本迁移缺少构建清单，请通过 pnpm migrate:dev、pnpm migrate:prod 或 pnpm maintenance:build 构建')
   const manifest = JSON.parse(readFileSync(manifest_path, 'utf8')) as { version: number, scripts: { filename: string, checksum: string, source_checksum: string, artifact: string }[] }
   if (manifest.version !== 1 || ! Array.isArray(manifest.scripts) || manifest.scripts.length !== scripts.length)
     throw new Error('脚本迁移构建清单不匹配')

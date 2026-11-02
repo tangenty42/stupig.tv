@@ -1,7 +1,7 @@
 // 从生产 MySQL dump 一份脱敏数据，供本地开发导入。凭据走环境变量，无需输入。
 // 用法（在服务器或能连生产库的容器里执行）：
-//   pnpm db:dump:dev > stupig_tv_dev.sql
-//   pnpm db:dump:dev --gzip > stupig_tv_dev.sql.gz
+//   pnpm db:dump:prod > stupig_tv_dev.sql
+//   pnpm db:dump:prod --gzip > stupig_tv_dev.sql.gz
 // 导入本地库：
 //   docker exec -i <本地mysql容器> mysql -ustupig_tv -pstupig_tv stupig_tv < stupig_tv_dev.sql
 //
@@ -9,7 +9,7 @@
 //   手机号      → 199xxxxxxxx 递增假号（保持 users.phone 唯一约束）
 //   密码哈希    → 统一为 "Dev@123456" 的 bcrypt，本地所有账号同密码登录
 //   IPv4 地址   → 127.0.0.1
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { createGzip } from 'node:zlib'
 import { load_database_config } from '@config/loader'
@@ -33,19 +33,15 @@ export function redact_dump_line(line: string, state: RedactState): string {
     .replace(ipv4_pattern, `'127.0.0.1'`)
 }
 
-function dump_command(): { command: string, args: string[], env: NodeJS.ProcessEnv } {
+export function dump_command(): { command: string, args: string[], env: NodeJS.ProcessEnv } {
   const db = load_database_config()
   const env = { ... process.env, MYSQL_PWD: db.password }
   const args = ['--single-transaction', '--routines', '--triggers', '--default-character-set=utf8mb4', db.name]
-  // 有 docker 且目标容器存在时走 docker exec（服务器上库在容器网络里，host 不一定能直连）
-  const container = process.env.MYSQL_CONTAINER ?? '1Panel-mysql'
-  try {
-    execFileSync('docker', ['inspect', container], { stdio: 'ignore' })
-    return { command: 'docker', args: ['exec', '-i', '-e', `MYSQL_PWD=${db.password}`, container, 'mysqldump', `-u${db.user}`, ... args], env }
-  }
-  catch {
-    return { command: 'mysqldump', args: ['-h', db.host, '-P', String(db.port), `-u${db.user}`, ... args], env }
-  }
+  // 容器网络无法直连时显式指定；不能凭容器存在就绕过当前环境的数据库地址。
+  const container = process.env.MYSQL_CONTAINER?.trim()
+  if (container)
+    return { command: 'docker', args: ['exec', '-i', '-e', 'MYSQL_PWD', container, 'mysqldump', `-u${db.user}`, ... args], env }
+  return { command: 'mysqldump', args: ['-h', db.host, '-P', String(db.port), `-u${db.user}`, ... args], env }
 }
 
 async function main() {

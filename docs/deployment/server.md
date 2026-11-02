@@ -49,7 +49,7 @@ node .output/server/maintenance/migrate.mjs
 
 成功后用 `exec` 启动 `.output/server/index.mjs`。遇到尚未执行的 maintenance 迁移会停止，不能通过反复重启绕过。首次空库或旧 Content 升级应先停止写入，用同镜像、同 env 和同网络的一次性容器执行[维护迁移](../operations/migrations.md)。
 
-默认 `app.backgroundRunner.mode: app`，图片、上传生命周期、退役/刷新、预热、通知由应用内统一 runner 调度。源码工作区可切成 worker 模式并运行 `pnpm background:worker`，但当前生产 Compose 没有 worker 服务，maintenance 构建也只打包 migrate/cleanup，没有 worker 或 status CLI 产物；生产精简镜像不含 tsx。因而不能仅切换生产 YAML 就期待独立 worker 启动：需要先补齐独立进程的打包/编排并验收。现有生产交付保持 app 模式，机制见[后台任务](../modules/background-jobs.md)。
+默认 `app.backgroundRunner.mode: app`，图片、上传生命周期、退役/刷新、预热、通知由应用内统一 runner 调度。源码工作区可切成 worker 模式并运行 `pnpm background:worker:dev`／`pnpm background:worker:prod`，但当前生产 Compose 没有 worker 服务，maintenance 构建提供 migrate/release/storage-inventory，没有 worker 或 status CLI 产物；生产精简镜像不含 pnpm、tsx 和源码。因而不能仅切换生产 YAML 就期待独立 worker 启动：需要先补齐独立进程的打包/编排并验收。现有生产交付保持 app 模式，机制见[后台任务](../modules/background-jobs.md)。
 
 ## 健康、日志与退出
 
