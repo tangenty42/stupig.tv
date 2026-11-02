@@ -31,13 +31,26 @@
 
 图片尝试先记录任务、尝试身份及来源，生成 WebP，再从该 WebP 生成 JPEG 与小尺寸 LQIP。首次上传还把原始字节独立归档。对象私有权限、版本、大小与 OSS 操作回执经过确认后，才允许在数据库事务中采用一组完整角色。
 
-新任务在 intent 中冻结 `processor: oss` 和 cloud profile 3：WebP Q100、JPEG Q85、24px JPEG LQIP Q40。后台使用 OSS V4 请求头鉴权的 `processObjectSave`（`sys/saveas`），在 OSS 内直接持久化 WebP／JPEG；LQIP 使用有界 IMG GET，仍作为现有数据库字段保存。JPEG／LQIP 均读取已确认版本的最终 WebP。编码参数与先前中转方案相同，不另增 profile 或修改冻结迁移。没有浏览器转换 URL 或任意参数签名接口；用户继续走现有 Content／ESA 成品读取授权。本地 WebP 测试／维护编码使用 effort 4；OSS 没有对应的已验证 effort 参数。[Safari 14 才新增 WebP 支持](https://developer.apple.com/documentation/safari-release-notes/safari-14-release-notes)，按项目 Safari 13.1 起的兼容范围继续保留 JPEG 协商回退。`contentImages.profile` 仍保存冻结迁移所需的 AVIF profile 1；当前本地与云端处理均使用 `contentImages.cloud.profile` 的 WebP 合同，不会在关闭云端编码时改回 AVIF。
+新任务在 intent 中冻结必填 `processor: oss` 和 cloud profile 3：WebP Q100、JPEG Q85、24px JPEG LQIP Q40。后台使用 OSS V4 请求头鉴权的 `processObjectSave`（`sys/saveas`），在 OSS 内直接持久化 WebP／JPEG；LQIP 使用有界 IMG GET，仍作为现有数据库字段保存。JPEG／LQIP 均读取已确认版本的最终 WebP。编码参数与先前中转方案相同，不另增 profile 或修改冻结迁移。没有浏览器转换 URL 或任意参数签名接口；用户继续走现有 Content／ESA 成品读取授权。冻结 WebP 迁移／离线测量编码使用 effort 4；OSS 没有对应的已验证 effort 参数。[Safari 14 才新增 WebP 支持](https://developer.apple.com/documentation/safari-release-notes/safari-14-release-notes)，按项目 Safari 13.1 起的兼容范围继续保留 JPEG 协商回退。`contentImages.profile`／`profileVersion` 仅保留给冻结迁移读取 AVIF profile 1；运行时仅读取 `contentImages.cloud`，关闭 cloud 或图片受理时返回 503，已受理 OSS 任务仍按其 intent 执行，不回退本地编码。
 
 云端路径不下载完整输入、WebP、JPEG 或原图归档，也不进行整图 SHA-256 回读。后台仅读取有界 `image/info` JSON，检查实际格式、尺寸、帧数、方向与对象大小；LQIP 仍只读取最多 24px 的小图并保存数据库。源图片、产物的版本／ETag／大小／ACL 仍需一致；原生保存前确认私有桶及未使用目标，成功后显式钉住 private ACL。图片编辑继续要求无损 PNG，上传封口保留原有 12 字节格式头门禁，云端信息再次核对格式。该请求使用固定处理参数和 V4 请求头鉴权，不返回浏览器。[OSS 图片信息格式](https://help.aliyun.com/zh/oss/user-guide/query-the-exif-data-of-an-image-4)以 JSON 返回基础字段，源码限制响应大小，未把完整 EXIF 转发给用户。
 
-原图采用带来源 If-Match 的 OSS 原生复制，核对复制回执的来源版本、目标版本／ETag，并读回目标元数据与私有 ACL；不回读归档字节。新生成图像的 `sha256` 明确为 `null`，不以 ETag／CRC64 伪装 SHA-256。既有可信输入的摘要可随条件复制保留；历史元数据中的真实摘要不清空。当前应用按管理员上传场景信任 OSS 的编码／复制执行结果，普通附件也不作服务器整文件 SHA-256 回读；分片 MD5、大小、权限及版本检查仍有效。冻结迁移和已受理本地编码的 SHA-256 合同独立保留。
+原图采用带来源 If-Match 的 OSS 原生复制，核对复制回执的来源版本、目标版本／ETag，并读回目标元数据与私有 ACL；不回读归档字节。新生成图像的 `sha256` 明确为 `null`，不以 ETag／CRC64 伪装 SHA-256。既有可信输入的摘要可随条件复制保留；历史元数据中的真实摘要不清空。当前应用按管理员上传场景信任 OSS 的编码／复制执行结果，普通附件也不作服务器整文件 SHA-256 回读；分片 MD5、大小、权限及版本检查仍有效。完整字节摘要校验仅保留在冻结迁移及离线诊断实现中。
 
 SDK 的原生保存接口不能传入来源 If-Match，因此只使用尝试拥有的不可变来源，保存前后核对完整版本身份；JPEG／LQIP 生成后再次确认全部角色。云端首次上传的派生和归档可以并行，但必须都完成才能采用；任一分支失败会取消另一分支并等待在途操作结束，保留租约、资源槽及清理所有权。响应丢失、取消或租约失效不自动重发 POST，也不降级为下载或本地转换；未采用及迟到对象继续由既有尝试账本负责。
+
+### 运行时本地处理退役
+
+运行时已移除本地 Sharp 编码、输入／输出整图 SHA-256 计算及原图归档回读。任务必须明确标记 OSS；缺少标记的旧本地任务在认领和外部操作前返回明确的 409，不静默重解释编码合同。历史已完成任务和已有摘要保持原样；其结果仍可从附件元数据读取。`server/lib/webp-image-processing.ts`、`image-processing.ts` 以及 `server/services/content/image-original-object.ts` 的完整字节实现仍属于冻结迁移依赖，离线性能诊断可显式使用；应用图片任务不调用这些编码／回读函数。
+
+2026-11-02 12:34（Asia/Shanghai）的生产只读汇总为：本地已完成 42、OSS 已完成 7，未完成本地任务及待处理图片上传均为 0。计数只读任务账本，不下载对象或修改生产数据；见[退役前计数](../../reviews/oss-image-metadata-2026-11-02.json)。发布前再次执行以下只读检查，结果应为 0；有未完成任务时先完成或通过上传会话取消，再发布：
+
+```sql
+SELECT COUNT(*) AS unfinished_local_image_jobs
+FROM content_image_jobs
+WHERE status NOT IN ('completed', 'cancelled')
+  AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(intent, '$.processor')), 'local') <> 'oss';
+```
 
 [原生保存继承桶 ACL，不能自定义对象 ACL](https://help.aliyun.com/zh/oss/user-guide/sys-or-saveas)，所以 private 桶是创建前置条件。它也不复制源对象的 Cache-Control；浏览器的 `private, no-store` 继续由 OSS 签名读取的 `response-cache-control` 与 [ESA 出站响应规则](../../deployment/esa.md#esa-到客户端响应头)保证，不为补元数据自拷贝产生额外历史版本。RAM 仅补指定桶的 `GetBucketAcl` 及 staging／images 来源前缀的 `PostProcessTask`，目标仍使用原有 PutObject 权限，见 [RAM 清单](../../deployment/ram.md#图片原生持久化权限)。
 

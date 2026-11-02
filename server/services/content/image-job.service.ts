@@ -3,15 +3,15 @@ import type { Connection, Pool, ResultSetHeader, RowDataPacket } from 'mysql2/pr
 import type { ImageAccessRow } from './attachment-access.service'
 import type { RedactedVariantRow } from './redacted-variant'
 import { createHash, randomUUID } from 'node:crypto'
+import { webp_processing_options_schema } from '@config/schema'
 import { ApiError } from '@server/errors/ApiError'
 import { copy_oss_image_original, create_oss_image_processor } from '@server/lib/oss-image-processing'
-import { image_processing_options_schema, process_image_variants } from '@server/lib/webp-image-processing'
 import { content_image_formats } from '@shared/content-image-format'
 import { settings } from '@shared/settings'
 import { z } from 'zod'
 import { image_download_name, resolve_attachment_role } from './attachment-access.service'
 import { create_image_attempt_cleanup } from './image-attempt-cleanup.service'
-import { copy_image_original, image_object_identity, image_original_key } from './image-original-object'
+import { image_object_identity, image_original_key } from './image-original-object'
 import { require_adoptable_objects } from './object-adoption.service'
 import { enqueue_object_retirement } from './object-retirement.repository'
 import { enqueue_preload } from './preload.repository'
@@ -27,8 +27,8 @@ export const image_job_intent_schema = z.strictObject({
   mode: z.enum(['upload', 'copy', 'overwrite', 'redacted']), is_private: z.boolean(),
   input: object_identity.extend({ sha256: object_identity.shape.sha256.nullable() }), original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255),
   source: z.strictObject({ id: z.number().int().positive(), revision: z.number().int().positive(), node_revision: z.number().int().positive(), key: z.string().min(1).max(512), is_private: z.boolean() }).nullable(),
-  profile_version: z.number().int().positive(), profile: image_processing_options_schema,
-  processor: z.literal('oss').optional(),
+  profile_version: z.number().int().positive(), profile: webp_processing_options_schema,
+  processor: z.literal('oss'),
   input_basis: z.enum(['display', 'original']).optional(),
   redacted_policy: z.enum(['keep', 'discard']).optional(),
 }).superRefine((value, ctx) => {
@@ -58,7 +58,10 @@ interface JobRow extends RowDataPacket {
   attachment_id: number | null
 }
 function parse_intent(row: JobRow) {
-  return image_job_intent_schema.parse(typeof row.intent === 'string' ? JSON.parse(row.intent) : row.intent)
+  const intent = typeof row.intent === 'string' ? JSON.parse(row.intent) : row.intent
+  if (intent.processor !== 'oss')
+    throw new ApiError(409, '本地图片处理已退役，请重新上传')
+  return image_job_intent_schema.parse(intent)
 }
 function conflict() {
   return new ApiError(409, '图片处理状态、权限或版本已变化')
@@ -203,57 +206,13 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       const { input, profile } = claim.intent
       if (input.size > profile.maxInputBytes)
         throw new ApiError(400, '图片超过处理大小限制')
-      let bytes: Buffer | null = null
-      let sha256 = input.sha256
-      if (claim.intent.processor !== 'oss') {
-        const [head, access] = await Promise.all([storage.head_object(input.key), storage.get_object_access(input.key)])
-        if (head.etag !== input.etag || head.version_id !== input.version_id || head.size !== input.size || access !== 'private')
-          throw conflict()
-        const { stream, size } = await storage.get_object_stream(input.key, input.etag, abort.signal)
-        if (size !== input.size) {
-          stream.destroy()
-          throw conflict()
-        }
-        const chunks: Buffer[] = []
-        let length = 0
-        for await (const chunk of stream) {
-          length += chunk.length
-          if (length > input.size || length > profile.maxInputBytes) {
-            stream.destroy()
-            throw conflict()
-          }
-          chunks.push(Buffer.from(chunk))
-        }
-        bytes = Buffer.concat(chunks)
-        sha256 = createHash('sha256').update(bytes).digest('hex')
-        if (length !== input.size || (input.sha256 !== null && sha256 !== input.sha256))
-          throw conflict()
-      }
-      const output = async (key: string, body: Buffer, mime: string) => {
-        abort.signal.throwIfAborted()
-        const object = await storage.put_object(key, body, mime, 'private')
-        await renew()
-        if (! object.version_id || await storage.get_object_access(key) !== 'private')
-          throw conflict()
-        return { key, etag: object.etag, version_id: object.version_id, size: body.length, sha256: createHash('sha256').update(body).digest('hex') }
-      }
       const produce = async () => {
-        const result = claim.intent.processor === 'oss'
-          ? await cloud()({ storage, input, profile, prefix: claim.prefix, signal: abort.signal, checkpoint: renew, require_png: !! claim.intent.source })
-          : await (async () => {
-              const result = await process_image_variants(bytes!, profile)
-              jpeg_bytes(result.lqip.toString('base64'))
-              abort.signal.throwIfAborted()
-              await renew()
-              const display = await output(`${claim.prefix}.${content_image_formats.display.extension}`, result.display, content_image_formats.display.mime)
-              const fallback = await output(`${claim.prefix}.${content_image_formats.fallback.extension}`, result.fallback, content_image_formats.fallback.mime)
-              return { ... result, display, fallback }
-            })()
+        const result = await cloud()({ storage, input, profile, prefix: claim.prefix, signal: abort.signal, checkpoint: renew, require_png: !! claim.intent.source })
         jpeg_bytes(result.lqip.toString('base64'))
         return result
       }
       const { result, original } = await (async () => {
-        if (claim.intent.processor === 'oss' && claim.intent.mode === 'upload') {
+        if (claim.intent.mode === 'upload') {
           // Both targets are already owned by this attempt. Neither is adopted
           // until both complete; keep the lease/slots while a failed sibling drains.
           const pending = [produce(), cloud_copy(storage, input, image_original_key(id, claim.attempt), abort.signal)] as const
@@ -268,18 +227,9 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
           }
         }
         const result = await produce()
-        const archive = claim.intent.mode === 'upload' ? { ... input, sha256 } : claim.intent.mode === 'copy' ? result.display : null
-        let original: z.infer<typeof object_identity> | null = null
-        if (archive) {
-          if (claim.intent.processor === 'oss') {
-            original = await cloud_copy(storage, archive, image_original_key(id, claim.attempt), abort.signal)
-          }
-          else {
-            if (archive.sha256 === null)
-              throw conflict()
-            original = await copy_image_original(storage, { ... archive, sha256: archive.sha256 }, image_original_key(id, claim.attempt), abort.signal)
-          }
-        }
+        const original = claim.intent.mode === 'copy'
+          ? await cloud_copy(storage, result.display, image_original_key(id, claim.attempt), abort.signal)
+          : null
         return { result, original }
       })()
       const { display, fallback } = result
@@ -322,7 +272,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
         throw conflict()
       const intent = parse_intent(row)
       if (budgets) {
-        intent.profile = image_processing_options_schema.parse({ ... intent.profile,
+        intent.profile = webp_processing_options_schema.parse({ ... intent.profile,
           maxInputBytes: budgets.maxInputBytes, maxPixels: budgets.maxPixels, timeoutSeconds: budgets.timeoutSeconds })
       }
       // The original admission fingerprint remains the request identity. Only

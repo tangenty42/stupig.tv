@@ -8,9 +8,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { create_upload_images } from './upload-image.service'
 
 vi.mock('@server/lib/db', () => ({ db: {} }))
-const options: Parameters<typeof create_upload_images>[2] & { profile: import('@server/lib/webp-image-processing').ImageProcessingOptions } = {
-  enabled: true, leaseSeconds: 60, heartbeatSeconds: 10, concurrency: 1, scanLimit: 10, sweepIntervalSeconds: 5, profileVersion: 1,
-  profile: { maxInputBytes: 1000, maxPixels: 1000, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 },
+const options: Parameters<typeof create_upload_images>[2] = {
+  enabled: true, leaseSeconds: 60, heartbeatSeconds: 10, concurrency: 1, scanLimit: 10, sweepIntervalSeconds: 5,
+  cloud: { enabled: true, profileVersion: 3,
+    profile: { maxInputBytes: 1000, maxPixels: 1000, webpQuality: 100, webpEffort: 4, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 } },
 }
 const storage = {} as ReturnType<typeof create_aliyun_oss>
 const disposers: Array<() => void> = []
@@ -58,9 +59,9 @@ it('refreshes only execution budgets on explicit failed-image retry and preserve
   const job_id = 'b'.repeat(32)
   const intent = {
     scope_id: 1, actor_id: 7, mode: 'upload', is_private: false, source: null,
-    original_name: 'photo.jpg', original_mime: 'image/jpeg', profile_version: 1,
+    original_name: 'photo.jpg', original_mime: 'image/jpeg', profile_version: 3, processor: 'oss',
     input: { key: 'content/att/staging/a/b', etag: 'etag', version_id: 'version', size: 50, sha256: 'a'.repeat(64) },
-    profile: { ... options.profile, maxPixels: 10, maxInputBytes: 100, timeoutSeconds: 5, webpQuality: 45 },
+    profile: { ... options.cloud.profile, maxPixels: 10, maxInputBytes: 100, timeoutSeconds: 5, webpQuality: 45 },
   }
   const execute = vi.fn(async (sql: string, _values?: unknown[]) => {
     if (sql.includes('FROM content_stories'))
@@ -80,7 +81,7 @@ it('refreshes only execution budgets on explicit failed-image retry and preserve
   expect(update[0]).toContain('result = NULL')
   expect(update[0]).not.toContain('fingerprint =')
   expect(JSON.parse(update[1]![0] as string)).toEqual({ ... intent, profile: { ... intent.profile,
-    maxPixels: options.profile.maxPixels, maxInputBytes: options.profile.maxInputBytes, timeoutSeconds: options.profile.timeoutSeconds } })
+    maxPixels: options.cloud.profile.maxPixels, maxInputBytes: options.cloud.profile.maxInputBytes, timeoutSeconds: options.cloud.profile.timeoutSeconds } })
   expect(connection.commit).toHaveBeenCalledOnce()
   expect(connection.release).toHaveBeenCalledOnce()
   execute.mockClear()
@@ -89,7 +90,7 @@ it('refreshes only execution budgets on explicit failed-image retry and preserve
   expect(execute).not.toHaveBeenCalled()
 })
 
-it.each([false, true])('commits one versioned processing intent before linking its upload, cloud=%s', async (cloud_enabled) => {
+it('commits one OSS processing intent before linking its upload and rejects disabled cloud processing', async () => {
   let job: object | null = null
   const execute = vi.fn(async (sql: string, values: unknown[] = []) => {
     if (sql.includes('FROM content_stories'))
@@ -103,7 +104,7 @@ it.each([false, true])('commits one versioned processing intent before linking i
     return [{ affectedRows: 1 }]
   })
   const pool = { getConnection: vi.fn() } as unknown as Pool
-  const cloud = { enabled: cloud_enabled, profileVersion: 2, profile: { ... options.profile, webpQuality: 100 } }
+  const cloud = options.cloud
   const pipeline = create_upload_images(pool, storage, { ... options, cloud })
   const row = { id: randomUUID().replaceAll('-', ''), scope_id: 1, actor_id: 7,
     intent: { target_access: 'public', image: { mode: 'upload', source: null, original_name: 'a.png', original_mime: 'image/png' } },
@@ -111,13 +112,15 @@ it.each([false, true])('commits one versioned processing intent before linking i
   await pipeline.sealed({ execute } as unknown as Connection, row)
   const insert = execute.mock.calls.find(([sql]) => sql.includes('INSERT IGNORE INTO content_image_jobs'))!
   const intent = JSON.parse(insert[1]![5] as string)
-  expect(intent).toMatchObject({ profile_version: 2, mode: 'upload', input: { version_id: 'version' }, profile: cloud.profile })
-  expect(intent.processor).toBe(cloud_enabled ? 'oss' : undefined)
+  expect(intent).toMatchObject({ profile_version: 3, mode: 'upload', input: { version_id: 'version' }, profile: cloud.profile, processor: 'oss' })
   expect(execute.mock.calls.at(- 1)).toEqual(['INSERT IGNORE INTO content_upload_images (session_id, job_id) VALUES (?, ?)', [row.id, expect.any(String)]])
   expect(pool.getConnection).not.toHaveBeenCalled()
   await pipeline.sealed({ execute } as unknown as Connection, row)
   expect(execute.mock.calls.filter(([sql]) => sql.includes('INSERT IGNORE INTO content_image_jobs'))).toHaveLength(1)
   await expect(create_upload_images(pool, storage, { ... options, enabled: false }).sealed({ execute } as unknown as Connection, row)).rejects.toMatchObject({ statusCode: 503 })
+  execute.mockClear()
+  await expect(create_upload_images(pool, storage, { ... options, cloud: { ... cloud, enabled: false } }).sealed({ execute } as unknown as Connection, row)).rejects.toMatchObject({ statusCode: 503 })
+  expect(execute).not.toHaveBeenCalled()
 })
 
 it('recovers ready jobs without processing them again and fences stale scan errors by epoch', async () => {

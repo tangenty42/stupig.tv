@@ -103,7 +103,7 @@ CI 的 [Check 工作流](../../.github/workflows/check.yml) 包含 lint、生成
 
 临时草稿 broker 限制为 2 CPU／768MiB，使用随机测试发布凭据；清理包括其匿名卷，Docker 不响应时限时报告精确容器身份，不无限等待。完整生产编译与历史浏览器验证可运行 `pnpm exec playwright test --config tests/cloud-drafts-production.config.ts`：复用现有 legacy 夹具、生产 SSR/CSS/JS 编译，执行草稿／引用场景。须先按既有 legacy 手册准备本地浏览器二进制，不在验收时自动安装。此 profile 使用同样的随机数据库与供应商替身。
 
-共享草稿的隔离协议／通知／有界负载验证使用 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt --capacity`。仅接受本地开发 MySQL，创建随机 `stupig_cloud_draft_qa_<随机值>`，完整迁移并在 finally 删除；`--mqtt` 使用临时 EMQX 容器、随机回环端口和仅认证用途的 relay，结束时清理自己的容器与凭据。`--capacity` 记录深目录快照、两个写者／四个后台 SQL 占位和全局标题引用更新的延迟；单独运行，避免把同时构建造成的主机争用误当作目标规模基线。不会测试真实 OSS／短信，也不迁移业务库。
+共享草稿的隔离协议／通知／有界负载验证使用 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt --capacity`。仅接受本地开发 MySQL，创建随机 `stupig_cloud_draft_qa_<随机值>`，完整迁移并在 finally 删除；`--mqtt` 使用临时 EMQX 容器、随机回环端口和仅认证用途的 relay，结束时清理自己的容器与凭据。`--capacity` 记录深目录快照、两个写者／四个后台 SQL 占位和全局标题引用更新的延迟；其中两张图片走真实任务账本和可注入云端边界，成品夹具在计时前生成，处理回执固定延迟 5ms，禁止应用下载整图。该夹具验证数据库与任务并行，不测真实 OSS 转换速度或本地编码性能。单独运行，避免把同时构建造成的主机争用误当作目标规模基线。不会测试真实 OSS／短信，也不迁移业务库。
 
 `content-cloud-draft`、`content-draft-history`、`content-draft-tabs`、`content-draft-lost-response`、`content-draft-expiry` 浏览器场景分别验证云端自动保存／main 不变、快照核对、隐藏交接、真实提交后响应丢失、释放不可达时到期接管。跨浏览器使用独立 context；同浏览器 headless 标签页通常均保持 visible，测试明确驱动 document visibility 边界，不能把 focus 当作租约释放。网络失败用实际 route 阻断或提交后丢包，不用本地 offline 事件代替。
 

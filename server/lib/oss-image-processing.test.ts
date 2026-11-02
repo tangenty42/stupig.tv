@@ -1,5 +1,5 @@
 import type { create_aliyun_oss } from './aliyun-oss'
-import type { ImageProcessingOptions } from './webp-image-processing'
+import type { OssImageProcessingOptions } from './oss-image-processing'
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import sharp from 'sharp'
@@ -16,7 +16,7 @@ vi.mock('ali-oss', () => ({ default: class {
   constructor(config: Record<string, unknown>) { cloud.clients.push(config) }
 } }))
 const config = { bucket: 'private-test', region: 'oss-cn-shenzhen', endpoint: 'https://oss-cn-shenzhen.aliyuncs.com', publicBaseUrl: 'https://edge.test', accessKeyId: 'test', accessKeySecret: 'test', timeoutMs: 20000, copyPartSizeMb: 64, uploadRoleArn: null }
-const profile: ImageProcessingOptions = { maxInputBytes: 20971520, maxPixels: 9437184, webpQuality: 100, webpEffort: 4, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 60 }
+const profile: OssImageProcessingOptions = { maxInputBytes: 20971520, maxPixels: 9437184, webpQuality: 100, webpEffort: 4, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 60 }
 beforeEach(() => {
   vi.resetAllMocks()
   cloud.clients.length = 0

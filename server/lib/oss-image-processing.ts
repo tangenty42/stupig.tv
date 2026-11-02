@@ -1,6 +1,7 @@
+import type { webp_processing_options_schema } from '@config/schema'
+import type { z } from 'zod'
 import type { create_aliyun_oss } from './aliyun-oss'
 import type { PrivateOssObject } from './oss-object-identity'
-import type { ImageProcessingOptions } from './webp-image-processing'
 import { addAbortSignal, Readable } from 'node:stream'
 import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
@@ -12,6 +13,7 @@ import sharp from 'sharp'
 import { verify_private_oss_object } from './oss-object-identity'
 
 type Storage = ReturnType<typeof create_aliyun_oss>
+export type OssImageProcessingOptions = z.infer<typeof webp_processing_options_schema>
 export type OssImageObject = PrivateOssObject & { key: string, sha256: string | null }
 // SDK 6.23.0 implements this method; @types/ali-oss does not declare it.
 type ImageClient = OSS & {
@@ -21,7 +23,7 @@ type ImageClient = OSS & {
 interface Request {
   storage: Storage
   input: OssImageObject
-  profile: ImageProcessingOptions
+  profile: OssImageProcessingOptions
   prefix: string
   signal: AbortSignal
   checkpoint: () => Promise<void>

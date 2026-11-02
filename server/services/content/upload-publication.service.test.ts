@@ -449,7 +449,7 @@ it.each([false, true])('adopts a recovered ready image and publishes its exact r
   if (cover)
     story.cover = 'new.png'
   const job = { id: 'd'.repeat(32), status: 'ready', attachment_id: 0, active_attempt_id: 'e'.repeat(32),
-    intent: { scope_id: 1, actor_id: 7, ... session.intent.image, is_private: false, input, profile_version: 1,
+    intent: { scope_id: 1, actor_id: 7, ... session.intent.image, is_private: false, input, profile_version: 3, processor: 'oss',
       profile: { maxInputBytes: 1000, maxPixels: 1000, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 10 } },
     result: { display: { ... input, key: 'content/att/image.webp', etag: 'webp-v1' }, fallback: { ... input, key: 'content/att/image.jpg' },
       original: { ... input, key: `content/att/originals/${'d'.repeat(32)}/${'e'.repeat(32)}` }, width: 10, height: 10, lqip: '/9j/2Q==' },
