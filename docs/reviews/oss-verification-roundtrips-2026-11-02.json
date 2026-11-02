@@ -1,0 +1,721 @@
+{
+  "collected_at": "2026-11-02T12:50:23.710Z",
+  "baseline_commit": "8498a0c22f4157b4927d0716ef130c5816d40092",
+  "optimization": {
+    "standard_pipeline_requests_before": 45,
+    "standard_pipeline_requests_after": 36,
+    "request_reduction_percent": 20,
+    "conversion_requests_before": 36,
+    "conversion_requests_after": 28,
+    "archive_requests_before": 9,
+    "archive_requests_after": 8,
+    "scope": "one successful conversion plus original archive, no retries or upload/seal/adopt/browser/delivery validation calls"
+  },
+  "production_baseline": {
+    "release_sha": "8498a0c22f4157b4927d0716ef130c5816d40092",
+    "sampled_at": "2026-11-02T12:28:17.247Z",
+    "scope": "three user-operated sequential create uploads in a dedicated production test story; read-only timings only; optimized implementation not deployed",
+    "samples": [
+      {
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "accepted_to_published_ms": 5753,
+        "image_job_ms": 3840.97,
+        "webp_stage_ms": 2015.36,
+        "jpeg_stage_ms": 726.51,
+        "final_guard_ms": 664.39,
+        "image_queue_ms": 20,
+        "image_job_db_acquire_total_ms": 3.71
+      },
+      {
+        "input_bytes": 472258,
+        "width": 1216,
+        "height": 2688,
+        "accepted_to_published_ms": 4232,
+        "image_job_ms": 2064.87,
+        "webp_stage_ms": 707.07,
+        "jpeg_stage_ms": 725.28,
+        "final_guard_ms": 320.49,
+        "image_queue_ms": 32,
+        "image_job_db_acquire_total_ms": 2.11
+      },
+      {
+        "input_bytes": 11143,
+        "width": 62,
+        "height": 67,
+        "accepted_to_published_ms": 3672,
+        "image_job_ms": 2176.8,
+        "webp_stage_ms": 1524.91,
+        "jpeg_stage_ms": 404.77,
+        "final_guard_ms": 62.92,
+        "image_queue_ms": 58,
+        "image_job_db_acquire_total_ms": 2.24
+      }
+    ],
+    "limits": [
+      "Three samples, one run each, not production P95 or a load/capacity test.",
+      "Session lifetime starts at server acceptance; excludes selection/admission before row creation and browser paint after publication.",
+      "Client Performance measures are unavailable: transfer, browser wait and DOM handoff are not individually measured.",
+      "Image role stages include OSS processing, metadata/ACL checks, checkpoints and network latency; not pure encoder CPU time.",
+      "Archive overlaps conversion; multipart completion is nested in seal; stages must not be blindly summed.",
+      "Database acquire time includes acquisition/connection establishment, not SQL or transaction lock execution time.",
+      "Resource snapshots are post-upload or container-lifetime counters; no upload-specific CPU/RSS peak was captured.",
+      "All three operations are create uploads; no image-edit, redacted-variant, replacement or concurrency validation is claimed."
+    ]
+  },
+  "development_comparison": {
+    "scope": "standalone dev bucket, two inputs, three alternating baseline/optimized pairs per input, new source/output keys for every run; no production object reads or business DB writes; checkpoint is a no-op; no browser/seal/adopt timing or capacity/P95 claim",
+    "aggregate": [
+      {
+        "sample": "synthetic-small-jpeg",
+        "baseline": {
+          "runs": 3,
+          "min_ms": 357.17,
+          "median_ms": 423.12,
+          "max_ms": 481.93,
+          "requests": [
+            45
+          ]
+        },
+        "optimized": {
+          "runs": 3,
+          "min_ms": 323.14,
+          "median_ms": 324.51,
+          "max_ms": 363.2,
+          "requests": [
+            36
+          ]
+        }
+      },
+      {
+        "sample": "user-provided-png",
+        "baseline": {
+          "runs": 3,
+          "min_ms": 1015.31,
+          "median_ms": 1020.91,
+          "max_ms": 1081.04,
+          "requests": [
+            45
+          ]
+        },
+        "optimized": {
+          "runs": 3,
+          "min_ms": 1035.68,
+          "median_ms": 1042.98,
+          "max_ms": 1391.62,
+          "requests": [
+            36
+          ]
+        }
+      }
+    ],
+    "rows": [
+      {
+        "sample": "synthetic-small-jpeg",
+        "pair": 1,
+        "version": "baseline",
+        "input_bytes": 460,
+        "width": 256,
+        "height": 128,
+        "wall_ms": 481.93,
+        "requests": 45,
+        "requests_by_method": {
+          "HEAD": 19,
+          "GET": 21,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 94.68
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 38.11
+          },
+          {
+            "stage": "image_display",
+            "ms": 155.65
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 145.66
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 24.76
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 21.02
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 140,
+        "fallback_bytes": 478,
+        "lqip_bytes": 288,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "synthetic-small-jpeg",
+        "pair": 1,
+        "version": "optimized",
+        "input_bytes": 460,
+        "width": 256,
+        "height": 128,
+        "wall_ms": 363.2,
+        "requests": 36,
+        "requests_by_method": {
+          "GET": 17,
+          "HEAD": 14,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 19.87
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 19.79
+          },
+          {
+            "stage": "image_display",
+            "ms": 113.01
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 156.15
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 22.55
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 30.58
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 140,
+        "fallback_bytes": 478,
+        "lqip_bytes": 288,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "synthetic-small-jpeg",
+        "pair": 2,
+        "version": "optimized",
+        "input_bytes": 460,
+        "width": 256,
+        "height": 128,
+        "wall_ms": 323.14,
+        "requests": 36,
+        "requests_by_method": {
+          "GET": 17,
+          "HEAD": 14,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 16.95
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 24.06
+          },
+          {
+            "stage": "image_display",
+            "ms": 105.75
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 119.15
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 39.2
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 17.44
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 140,
+        "fallback_bytes": 478,
+        "lqip_bytes": 288,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "synthetic-small-jpeg",
+        "pair": 2,
+        "version": "baseline",
+        "input_bytes": 460,
+        "width": 256,
+        "height": 128,
+        "wall_ms": 357.17,
+        "requests": 45,
+        "requests_by_method": {
+          "GET": 21,
+          "HEAD": 19,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 14.26
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 38.15
+          },
+          {
+            "stage": "image_display",
+            "ms": 132.3
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 130.3
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 22.24
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 19.25
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 140,
+        "fallback_bytes": 478,
+        "lqip_bytes": 288,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "synthetic-small-jpeg",
+        "pair": 3,
+        "version": "baseline",
+        "input_bytes": 460,
+        "width": 256,
+        "height": 128,
+        "wall_ms": 423.12,
+        "requests": 45,
+        "requests_by_method": {
+          "HEAD": 19,
+          "GET": 21,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 39.56
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 40.23
+          },
+          {
+            "stage": "image_display",
+            "ms": 133.9
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 158.88
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 25.36
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 23.97
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 140,
+        "fallback_bytes": 478,
+        "lqip_bytes": 288,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "synthetic-small-jpeg",
+        "pair": 3,
+        "version": "optimized",
+        "input_bytes": 460,
+        "width": 256,
+        "height": 128,
+        "wall_ms": 324.51,
+        "requests": 36,
+        "requests_by_method": {
+          "GET": 17,
+          "HEAD": 14,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 18.22
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 23.92
+          },
+          {
+            "stage": "image_display",
+            "ms": 123.63
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 109.05
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 23.06
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 25.64
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 140,
+        "fallback_bytes": 478,
+        "lqip_bytes": 288,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "user-provided-png",
+        "pair": 1,
+        "version": "baseline",
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "wall_ms": 1015.31,
+        "requests": 45,
+        "requests_by_method": {
+          "HEAD": 19,
+          "GET": 21,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 28.88
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 40.07
+          },
+          {
+            "stage": "image_display",
+            "ms": 603.04
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 240.96
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 81.94
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 19.07
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 583292,
+        "fallback_bytes": 287912,
+        "lqip_bytes": 397,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "user-provided-png",
+        "pair": 1,
+        "version": "optimized",
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "wall_ms": 1035.68,
+        "requests": 36,
+        "requests_by_method": {
+          "HEAD": 14,
+          "GET": 17,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 26.81
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 46.78
+          },
+          {
+            "stage": "image_display",
+            "ms": 598.97
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 229.42
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 106.62
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 25.65
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 583292,
+        "fallback_bytes": 287912,
+        "lqip_bytes": 397,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "user-provided-png",
+        "pair": 2,
+        "version": "optimized",
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "wall_ms": 1391.62,
+        "requests": 36,
+        "requests_by_method": {
+          "GET": 17,
+          "HEAD": 14,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 36.05
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 45.37
+          },
+          {
+            "stage": "image_display",
+            "ms": 842.99
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 267.87
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 179.42
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 18.3
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 583292,
+        "fallback_bytes": 287912,
+        "lqip_bytes": 397,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "user-provided-png",
+        "pair": 2,
+        "version": "baseline",
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "wall_ms": 1020.91,
+        "requests": 45,
+        "requests_by_method": {
+          "GET": 21,
+          "HEAD": 19,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 17.4
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 37.2
+          },
+          {
+            "stage": "image_display",
+            "ms": 582.27
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 259.03
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 96.71
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 27.02
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 583292,
+        "fallback_bytes": 287912,
+        "lqip_bytes": 397,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "user-provided-png",
+        "pair": 3,
+        "version": "baseline",
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "wall_ms": 1081.04,
+        "requests": 45,
+        "requests_by_method": {
+          "GET": 21,
+          "HEAD": 19,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 32.78
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 44.52
+          },
+          {
+            "stage": "image_display",
+            "ms": 586.59
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 314.1
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 82.62
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 19.17
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 583292,
+        "fallback_bytes": 287912,
+        "lqip_bytes": 397,
+        "archive_receipt_match": true
+      },
+      {
+        "sample": "user-provided-png",
+        "pair": 3,
+        "version": "optimized",
+        "input_bytes": 2621740,
+        "width": 1536,
+        "height": 1024,
+        "wall_ms": 1042.98,
+        "requests": 36,
+        "requests_by_method": {
+          "GET": 17,
+          "HEAD": 14,
+          "PUT": 3,
+          "POST": 2
+        },
+        "stages": [
+          {
+            "stage": "image_source_guard",
+            "ms": 26.98
+          },
+          {
+            "stage": "image_source_info",
+            "ms": 47.83
+          },
+          {
+            "stage": "image_display",
+            "ms": 598.76
+          },
+          {
+            "stage": "image_fallback",
+            "ms": 218.68
+          },
+          {
+            "stage": "image_lqip",
+            "ms": 118.35
+          },
+          {
+            "stage": "image_final_guard",
+            "ms": 30.96
+          }
+        ],
+        "output_metadata_and_lqip_match": true,
+        "display_bytes": 583292,
+        "fallback_bytes": 287912,
+        "lqip_bytes": 397,
+        "archive_receipt_match": true
+      }
+    ],
+    "delivery": [
+      {
+        "acl": "private",
+        "anonymous_status": 403,
+        "signed_status": 200,
+        "cache_control": "private, no-store",
+        "mime": "image/webp"
+      },
+      {
+        "acl": "private",
+        "anonymous_status": 403,
+        "signed_status": 200,
+        "cache_control": "private, no-store",
+        "mime": "image/jpeg"
+      }
+    ],
+    "cleanup": {
+      "owned": 48,
+      "current_missing": 48,
+      "historical_versions": "retained"
+    },
+    "passed": true,
+    "limitations": [
+      "Three runs per sample per implementation, alternating order; no production P95 or speed guarantee.",
+      "Each run uses new source and output keys; no cache hit status was measured.",
+      "Metadata/ETag and LQIP equality do not constitute an independent full-image SHA-256 verification.",
+      "Photos did not show stable speed improvement in this bounded observation.",
+      "Development fixture checkpoints are no-ops; business database, frontend and actual lease timing are not measured."
+    ]
+  },
+  "verification": {
+    "pnpm_check": "passed",
+    "app_server_tests_passed": 1978,
+    "tool_tests_passed": 402,
+    "tool_tests_skipped": 1,
+    "component_tests_passed": 32,
+    "frozen_migration_digests": "unchanged",
+    "old_implementation_exceeds_request_budget": true,
+    "omitting_final_guard_detected_by_10_mutation_cases": true,
+    "mutation_probes_do_not_edit_live_source": true,
+    "documentation_links_checked": true
+  }
+}

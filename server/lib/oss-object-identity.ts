@@ -5,9 +5,8 @@ type Storage = Pick<ReturnType<typeof create_aliyun_oss>, 'head_object' | 'get_o
 type Identity = Awaited<ReturnType<Storage['head_object']>>
 export type PrivateOssObject = Identity & { version_id: string }
 
-/** Metadata identity only: never downloads bytes or treats ETag as a digest. */
-export async function verify_private_oss_object(storage: Storage, key: string, expected: Partial<Identity>, message: string): Promise<PrivateOssObject> {
-  const [head, access] = await Promise.all([storage.head_object(key), storage.get_object_access(key)])
+/** Validate an already-read HEAD/ACL pair, including native-copy metadata. */
+export function require_private_oss_identity(head: Identity, access: string, expected: Partial<Identity>, message: string): PrivateOssObject {
   if (! head.etag || ! head.version_id || ! Number.isSafeInteger(head.size) || head.size < 0 || access !== 'private'
     || (expected.size !== undefined && head.size !== expected.size)
     || (expected.etag !== undefined && head.etag !== expected.etag)
@@ -15,4 +14,10 @@ export async function verify_private_oss_object(storage: Storage, key: string, e
     throw new ApiError(409, message)
   }
   return { ... head, version_id: head.version_id }
+}
+
+/** Metadata identity only: never downloads bytes or treats ETag as a digest. */
+export async function verify_private_oss_object(storage: Storage, key: string, expected: Partial<Identity>, message: string): Promise<PrivateOssObject> {
+  const [head, access] = await Promise.all([storage.head_object(key), storage.get_object_access(key)])
+  return require_private_oss_identity(head, access, expected, message)
 }
