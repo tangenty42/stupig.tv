@@ -1,3 +1,11 @@
+import type { ContentAttachmentWorkspace, ContentStoryAttachment } from './content'
+
+export interface ContentUploadCompletion {
+  attachment_id: number
+  attachment: ContentStoryAttachment | null
+  workspace: ContentAttachmentWorkspace
+}
+
 /** Scope-wide occupancy only; never carries another uploader's credentials or byte metadata. */
 export interface ContentUploadReservation {
   id: string
@@ -9,6 +17,10 @@ export interface ContentUploadReservation {
 
 export interface ContentUploadSession {
   id: string
+  /** Durable publication identity; present only after adoption. */
+  attachment_id?: number
+  /** A completed-session query also supplies a freshly authorized workspace. */
+  completion?: ContentUploadCompletion
   parent_id?: number
   source_id?: number
   replacement_id?: number

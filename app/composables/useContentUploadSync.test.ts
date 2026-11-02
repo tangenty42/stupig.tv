@@ -1,14 +1,14 @@
 import type { ContentUploadSession } from '@shared/types/content-upload'
 import { createPinia, disposePinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { computed, effectScope, isRef, onScopeDispose, reactive, ref, watch } from 'vue'
+import { computed, effectScope, isRef, nextTick, onScopeDispose, reactive, ref, watch } from 'vue'
 import { useContentUploadsStore } from '~/stores/contentUploads'
 import { get_error_status } from './useApi'
 import { useContentUploadSync } from './useContentUploadSync'
 import { useSyncedData } from './useSyncedData'
 import { useSyncedState } from './useSyncedState'
 
-const state = vi.hoisted(() => ({ list: vi.fn(), toast: vi.fn() }))
+const state = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), adopt: vi.fn(), toast: vi.fn() }))
 vi.mock('~/utils/content/browser-upload', () => ({ create_browser_upload: vi.fn() }))
 const user = ref({ id: 7, is_admin: true })
 const resources = new Map<string, ReturnType<typeof ref>>()
@@ -16,7 +16,7 @@ const listeners = new Map<string, () => Promise<void>>()
 let pinia = createPinia()
 const scopes: ReturnType<typeof effectScope>[] = []
 const session = { id: 'a'.repeat(32), status: 'uploading', path: 'a.txt' } as ContentUploadSession
-for (const [name, value] of Object.entries({ computed, effectScope, isRef, reactive, ref, watch, get_error_status, useSyncedData, useSyncedState }))
+for (const [name, value] of Object.entries({ computed, effectScope, isRef, nextTick, reactive, ref, watch, get_error_status, useSyncedData, useSyncedState }))
   vi.stubGlobal(name, value)
 vi.stubGlobal('useCookie', () => user)
 vi.stubGlobal('useState', (key: string, init: () => unknown) => {
@@ -24,7 +24,7 @@ vi.stubGlobal('useState', (key: string, init: () => unknown) => {
     resources.set(key, ref(init()))
   return resources.get(key)
 })
-vi.stubGlobal('useApi', () => ({ content: { list_upload_sessions: state.list } }))
+vi.stubGlobal('useApi', () => ({ content: { list_upload_sessions: state.list, get_upload_session: state.get, adopt_upload_session: state.adopt } }))
 vi.stubGlobal('useMyToast', () => ({ error: state.toast }))
 vi.stubGlobal('onUnmounted', onScopeDispose)
 vi.stubGlobal('useDataSync', () => ({ subscribe: (resource: string, callback: () => Promise<void>) => {
@@ -53,6 +53,64 @@ function mount() {
   scopes.push(scope)
   return scope.run(() => useContentUploadSync(24))!
 }
+
+it('completes after one missing-list confirmation without an adoption round trip', async () => {
+  await mount()
+  const store = useContentUploadsStore(24)
+  const workspace = { attachments: [], folders: [], viewer_key: 'current', namespace_revision: 3 }
+  state.list.mockResolvedValueOnce({ enabled: true, sessions: [] })
+  state.get.mockResolvedValueOnce({ ... session, status: 'completed', revision: 3, attachment_id: 9,
+    completion: { attachment_id: 9, attachment: null, workspace } })
+  await listeners.get('content_uploads:24')!()
+  await vi.waitFor(() => expect(store.sessions).toEqual([]))
+  expect(state.list).toHaveBeenCalledTimes(2)
+  expect(state.get).toHaveBeenCalledExactlyOnceWith(session.id)
+  expect(state.adopt).not.toHaveBeenCalled()
+  expect(resources.get('content_attachment_workspace:24')?.value).toEqual(workspace)
+})
+
+it.each(['missing', 'mismatched', 'missing-workspace'])('retains the upload row when its %s completion receipt cannot prove the handoff', async (kind) => {
+  await mount()
+  const store = useContentUploadsStore(24)
+  state.list.mockResolvedValueOnce({ enabled: true, sessions: [] })
+  state.get.mockResolvedValueOnce({ ... session, status: 'completed', attachment_id: 9,
+    ... (kind === 'mismatched'
+      ? { completion: { attachment_id: 10, attachment: null, workspace: {} } }
+      : kind === 'missing-workspace' ? { completion: { attachment_id: 9, attachment: null } } : {}) })
+  await listeners.get('content_uploads:24')!()
+  await vi.waitFor(() => expect(store.errors.get(session.id)).toContain('上传完成回执缺失'))
+  expect(store.sessions).toHaveLength(1)
+  expect(state.adopt).not.toHaveBeenCalled()
+  expect(resources.get('content_attachment_workspace:24')?.value).toBeNull()
+})
+
+it.each(['cancelled', 'expired', 'failed'])('clears a confirmed %s row without loading or adopting a workspace', async (status) => {
+  await mount()
+  const store = useContentUploadsStore(24)
+  state.list.mockResolvedValueOnce({ enabled: true, sessions: [] })
+  state.get.mockResolvedValueOnce({ ... session, status })
+  await listeners.get('content_uploads:24')!()
+  await vi.waitFor(() => expect(store.sessions).toEqual([]))
+  expect(state.adopt).not.toHaveBeenCalled()
+  expect(resources.get('content_attachment_workspace:24')?.value).toBeNull()
+})
+
+it('ignores a completion workspace arriving after the uploader identity changes', async () => {
+  await mount()
+  const store = useContentUploadsStore(24)
+  let finish!: (value: unknown) => void
+  state.list.mockResolvedValueOnce({ enabled: true, sessions: [] })
+  state.get.mockImplementationOnce(() => new Promise(resolve => finish = resolve))
+  await listeners.get('content_uploads:24')!()
+  await vi.waitFor(() => expect(state.get).toHaveBeenCalledOnce())
+  user.value = { id: 8, is_admin: true }
+  finish({ ... session, status: 'completed', attachment_id: 9,
+    completion: { attachment_id: 9, attachment: { id: 9 }, workspace: { attachments: [{ id: 9 }], namespace_revision: 3, viewer_key: 'old-user' } } })
+  await nextTick()
+  expect(store.sessions).toEqual([])
+  expect(resources.get('content_attachment_workspace:24')?.value).toBeNull()
+  expect(state.adopt).not.toHaveBeenCalled()
+})
 
 it('shares a single list subscription and drops old identity responses', async () => {
   let finish!: (value: { enabled: boolean, sessions: ContentUploadSession[] }) => void

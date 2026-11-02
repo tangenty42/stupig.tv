@@ -1,4 +1,4 @@
-type Stage = 'total' | 'source' | 'resume' | 'initialize' | 'checking' | 'bytes' | 'seal' | 'await_completion' | 'adopt' | 'dom_update'
+type Stage = 'total' | 'source' | 'resume' | 'initialize' | 'checking' | 'bytes' | 'seal' | 'await_completion' | 'reconcile' | 'adopt' | 'dom_update'
 type Outcome = 'returned' | 'failed' | 'stopped'
 type Timeline = Pick<Performance, 'mark' | 'measure' | 'clearMarks' | 'clearMeasures'>
 const retained = new WeakMap<Timeline, { name: string, owner: Set<string> }[]>()

@@ -1,4 +1,5 @@
 import type { UploadBatch } from '@shared/content-upload'
+import type { ContentUploadCompletion, ContentUploadSession } from '@shared/types/content-upload'
 import type { RowDataPacket } from 'mysql2/promise'
 import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
@@ -60,6 +61,13 @@ export async function begin_upload_batch(actor: number, input: UploadBatch) {
   // replay this receipt; clients initialize each accepted session independently.
   return { ... result, sessions: await Promise.all(result.accepted.map(item => uploads.get(item.session_id, actor))) }
 }
+async function completed_workspace(scope: number, attachment_id: number, actor: number): Promise<ContentUploadCompletion> {
+  // Project current permissions/names/revisions rather than replaying a stale
+  // workspace stored at publication time or enqueueing another invalidation.
+  const viewer = await require_workspace_actor(actor, false)
+  const workspace = await get_attachment_workspace(scope, viewer)
+  return { attachment_id, attachment: workspace.attachments.find(file => file.id === attachment_id) ?? null, workspace }
+}
 export async function adopt_upload_session(session: string, actor: number) {
   return observe_upload('upload_adopt', async () => {
     const uploads = await service()
@@ -67,19 +75,23 @@ export async function adopt_upload_session(session: string, actor: number) {
     const receipt = await uploads.adopt(session, actor, uploads.images.publish)
     // Read after commit (also on receipt replay): the file, its ancestors and the
     // namespace revision must agree before the client retires its task row.
-    const viewer = await require_workspace_actor(actor, false)
-    const workspace = await get_attachment_workspace(state.scope_id!, viewer)
-    return { attachment_id: receipt.attachment_id, attachment: workspace.attachments.find(file => file.id === receipt.attachment_id) ?? null, workspace }
+    return completed_workspace(state.scope_id!, receipt.attachment_id, actor)
   }, { session_id: session })
 }
-export async function operate_upload_session(operation: 'get' | 'initialize' | 'resume' | 'seal' | 'cancel', session: string, actor: number) {
+export async function operate_upload_session(operation: 'get' | 'initialize' | 'resume' | 'seal' | 'cancel', session: string, actor: number): Promise<ContentUploadSession> {
   const action = async () => {
     const uploads = await service()
     if (operation === 'resume') {
       await uploads.get(session, actor)
       await uploads.images.retry(session, actor)
     }
-    const state = await uploads.images.state(await uploads[operation](session, actor))
+    const current = await uploads[operation](session, actor)
+    if (operation === 'get' && current.status === 'completed') {
+      if (! current.attachment_id)
+        throw new ApiError(409, '上传完成回执缺失，请刷新后重试')
+      return { ... current, completion: await completed_workspace(current.scope_id!, current.attachment_id, actor) }
+    }
+    const state = await uploads.images.state(current)
     // seal/retry have committed before a consumer can inspect their new intent.
     if ((operation === 'seal' || operation === 'resume') && ['queued', 'ready'].includes(state.image_status ?? ''))
       wake_background('images')

@@ -188,14 +188,28 @@ it('keeps background image publication fenced through a delayed completion recei
   await vi.waitFor(() => expect(store.active.size).toBe(0))
   expect(store.finalizing.has(session.id)).toBe(true)
   let publish!: (value: unknown) => void
-  state.api.adopt_upload_session.mockImplementation(() => new Promise(resolve => publish = resolve))
-  state.api.get_upload_session.mockResolvedValue({ ... session, status: 'completed', image_status: 'completed' })
+  state.api.get_upload_session.mockImplementation(() => new Promise(resolve => publish = resolve))
   store.apply_list({ enabled: true, sessions: [] })
-  await vi.waitFor(() => expect(state.api.adopt_upload_session).toHaveBeenCalledOnce())
+  await vi.waitFor(() => expect(state.api.get_upload_session).toHaveBeenCalledOnce())
   expect(store.finalizing.has(session.id)).toBe(true)
-  publish({ attachment: { id: 9, file_name: 'a.png' } })
+  publish({ ... session, status: 'completed', image_status: 'completed', attachment_id: 9,
+    completion: { attachment_id: 9, attachment: { id: 9, file_name: 'a.png' }, workspace: { attachments: [], folders: [], viewer_key: '7', namespace_revision: 1 } } })
   await vi.waitFor(() => expect(store.sessions).toEqual([]))
   expect(store.finalizing.size).toBe(0)
+  expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
+})
+
+it('uses a completed query receipt when retrying without retransmitting or replaying adoption', async () => {
+  const store = useContentUploadsStore(24)
+  store.apply_list({ enabled: true, sessions: [session] })
+  state.api.get_upload_session.mockResolvedValueOnce({ ... session, status: 'completed', attachment_id: 9,
+    completion: { attachment_id: 9, attachment: { id: 9, file_name: 'a.txt' }, workspace: { attachments: [], folders: [], viewer_key: '7', namespace_revision: 1 } } })
+  await store.resume(session.id)
+  expect(store.sessions).toEqual([])
+  expect(store.finalizing.size).toBe(0)
+  expect(state.api.get_upload_session).toHaveBeenCalledExactlyOnceWith(session.id)
+  expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
+  expect(state.run).not.toHaveBeenCalled()
 })
 
 it.each(['error', 'pause', 'reset'] as const)('releases the finalization fence on %s', async (outcome) => {
@@ -289,11 +303,13 @@ it('leaves encoding to the server and receives completion through synchronized s
   await vi.waitFor(() => expect(store.active.size).toBe(0))
   expect(store.sessions[0]?.image_status).toBe('queued')
   expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
-  state.api.get_upload_session.mockResolvedValue({ ... session, status: 'completed', image_status: 'completed' })
+  state.api.get_upload_session.mockResolvedValue({ ... session, status: 'completed', image_status: 'completed', attachment_id: 9,
+    completion: { attachment_id: 9, attachment: { id: 9, file_name: 'image.png' }, workspace: { attachments: [], folders: [], viewer_key: '7', namespace_revision: 1 } } })
   store.apply_list({ enabled: true, sessions: [] })
   await vi.waitFor(() => expect(on_landed).toHaveBeenCalledOnce())
   expect(store.sessions).toEqual([])
   expect(state.run).toHaveBeenCalledOnce()
+  expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
 })
 
 it('retries a failed image job using the existing sealed input without requiring a File', async () => {

@@ -1,7 +1,7 @@
 import type { DraftResult } from '@shared/types/content-draft'
 import { expect } from '@playwright/test'
 import { settings } from '@shared/settings'
-import { content_mutation, content_query, create_story, editor_text, login, markdown, ready, test } from '../support/e2e-browser'
+import { content_mutation, content_query, create_story, draft_timeout, editor_text, login, markdown, ready, test } from '../support/e2e-browser'
 
 test('autosaves one shared cloud draft, keeps main unchanged, and hands editing to another page', async ({ page, context, browser }) => {
   test.setTimeout(120_000)
@@ -29,7 +29,10 @@ test('autosaves one shared cloud draft, keeps main unchanged, and hands editing 
     await expect.poll(() => editor_text(second)).toContain('shared cloud text')
     await page.locator('a[href="/content"]').first().click()
     await page.getByRole('button', { name: '未发布草稿', exact: true }).click()
-    await expect(page.getByRole('link', { name: story.title })).toHaveAttribute('href', `/content/${story.id}/edit`)
+    await expect(page).toHaveURL(/view=drafts/)
+    const draft_link = page.getByRole('link', { name: story.title }).filter({ has: page.getByText('修改草稿', { exact: true }) })
+    // A failed initial list read recovers through the shared polling interval.
+    await expect(draft_link).toHaveAttribute('href', `/content/${story.id}/edit`, { timeout: draft_timeout })
     // If the final in-flight request failed, release is best effort and the
     // successor waits L + M + T; it must remain read only until then.
     await expect(second_editor).toBeEditable({ timeout: 2 * timing.keepaliveIntervalMs + 3 * timing.requestTimeoutMs + timing.leaseMarginMs })

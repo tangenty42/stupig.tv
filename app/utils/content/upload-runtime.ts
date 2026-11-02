@@ -158,6 +158,12 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
     else
       errors.set(id, error instanceof Error ? error.message : '查询上传会话失败，请重试')
   }
+  function accept_completion(id: string, state: ContentUploadSession) {
+    finalizing.add(id)
+    if (! state.completion?.workspace || state.completion.attachment_id !== state.attachment_id)
+      throw new Error('上传完成回执缺失，请刷新后重试')
+    complete(id, state.completion.attachment, state.completion.workspace)
+  }
   async function reconcile(id: string) {
     if (lookups.has(id) || resource.removed.has(id))
       return
@@ -167,7 +173,7 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
     if (known)
       observe_finalization(known)
     try {
-      const state = await api.get_upload_session(id)
+      const state = await timeline(id).measure('reconcile', () => api.get_upload_session(id))
       if (! current(epoch, id))
         return
       const previous = resource.state.value.sessions.find(item => item.id === id)
@@ -175,10 +181,7 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
         return
       observe_finalization(state)
       if (state.status === 'completed') {
-        finalizing.add(id)
-        const receipt = await timeline(id).measure('adopt', () => api.adopt_upload_session(id))
-        if (current(epoch, id))
-          complete(id, receipt.attachment, receipt.workspace)
+        accept_completion(id, state)
       }
       else if (['cancelled', 'expired', 'failed'].includes(state.status)) {
         complete(id)
@@ -257,11 +260,15 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
         : null
       if (driver)
         drivers.set(id, driver)
-      const ready = state.image_status ? await trace.measure('resume', () => api.resume_upload_session(id)) : driver ? await driver.run(input!) : await api.get_upload_session(id)
+      const ready = state.image_status ? await trace.measure('resume', () => api.resume_upload_session(id)) : driver ? await driver.run(input!) : await trace.measure('reconcile', () => api.get_upload_session(id))
       if (! live())
         return true
       resource.update(ready)
       observe_finalization(ready)
+      if (ready.status === 'completed' && ready.completion) {
+        accept_completion(id, ready)
+        return true
+      }
       if (ready.image_status && ready.status !== 'completed') {
         trace.start('await_completion')
         return true
