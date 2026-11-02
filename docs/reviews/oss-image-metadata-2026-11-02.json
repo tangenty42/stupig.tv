@@ -1,5 +1,28 @@
 {
   "measured_at": "2026-11-01T17:28:34.386Z",
+  "unspecified_orientation_regression": {
+    "observed_at": "2026-11-02T05:49:44.550Z",
+    "production_release": "12ad8bd1fcca42aaa5369483576f61ae59fd92dc",
+    "scope": "read-only failed task metadata and bounded OSS image/info; no image contents, object identifiers or database writes",
+    "matching_failed_records": 2,
+    "source_format": "jpg",
+    "source_orientation": "0",
+    "other_required_fields_valid": true,
+    "source_versions_unchanged": true,
+    "development_verification": {
+      "source": "synthetic 32x16 JPEG with actual EXIF Orientation=0",
+      "oss_reported_orientation": "0",
+      "output_width": 32,
+      "output_height": 16,
+      "display_bytes": 76,
+      "fallback_bytes": 289,
+      "lqip_bytes": 288,
+      "new_image_sha256": null,
+      "owned_objects": 3,
+      "cleanup_current_missing": 3,
+      "historical_versions": "retained"
+    }
+  },
   "local_encoder_retirement_readiness": {
     "sampled_at": "2026-11-02T04:34:48.810Z",
     "release_sha": "a4e037f6430733b8782f11a557c9bbbc844617b0",
