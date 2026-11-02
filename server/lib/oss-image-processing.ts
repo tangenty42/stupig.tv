@@ -1,4 +1,5 @@
 import type { create_aliyun_oss } from './aliyun-oss'
+import type { PrivateOssObject } from './oss-object-identity'
 import type { ImageProcessingOptions } from './webp-image-processing'
 import { addAbortSignal, Readable } from 'node:stream'
 import { runtime_config } from '@config/loader'
@@ -8,9 +9,10 @@ import { image_upload_error } from '@shared/content-image-upload'
 import { settings } from '@shared/settings'
 import OSS from 'ali-oss'
 import sharp from 'sharp'
+import { verify_private_oss_object } from './oss-object-identity'
 
 type Storage = ReturnType<typeof create_aliyun_oss>
-export type OssImageObject = Awaited<ReturnType<Storage['head_object']>> & { key: string, sha256: string | null, version_id: string }
+export type OssImageObject = PrivateOssObject & { key: string, sha256: string | null }
 // SDK 6.23.0 implements this method; @types/ali-oss does not declare it.
 type ImageClient = OSS & {
   processObjectSave: (source: string, target: string, process: string, bucket: string) => Promise<{ status: number }>
@@ -45,9 +47,7 @@ function controlled(error: unknown, signal: AbortSignal) {
 }
 
 async function unchanged(storage: Storage, object: OssImageObject) {
-  const [head, access] = await Promise.all([storage.head_object(object.key), storage.get_object_access(object.key)])
-  if (head.etag !== object.etag || head.version_id !== object.version_id || head.size !== object.size || access !== 'private')
-    throw conflict()
+  await verify_private_oss_object(storage, object.key, object, '云端图片产物或来源校验失败')
 }
 async function unused_target(storage: Storage, target: string) {
   try {
@@ -157,9 +157,9 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
         // saveas inherits bucket ACL. Pin private even if cancellation arrived during POST.
         await storage.set_object_access(target, 'private')
         await guard()
-        const [head, access] = await Promise.all([storage.head_object(target), storage.get_object_access(target), unchanged(storage, from)])
+        const [head] = await Promise.all([verify_private_oss_object(storage, target, {}, '云端图片产物或来源校验失败'), unchanged(storage, from)])
         const limit = settings.app.content.image.uploadMaxBytes * (format === 'webp' ? 1 : 4)
-        if (! head.version_id || head.size <= 0 || head.size > limit || access !== 'private')
+        if (head.size <= 0 || head.size > limit)
           throw conflict()
         const object = { key: target, ... head, version_id: head.version_id, sha256: null }
         const info = await image_info(client, object, bounded())
@@ -210,9 +210,9 @@ export async function copy_oss_image_original(storage: Storage, source: OssImage
     if (receipt['x-oss-copy-source-version-id'] !== source.version_id || ! receipt['x-oss-version-id'] || ! etag(receipt.etag))
       throw conflict('原图归档复制回执无效')
     signal.throwIfAborted()
-    const [head, access] = await Promise.all([storage.head_object(target), storage.get_object_access(target), unchanged(storage, source)])
-    if (head.etag !== etag(receipt.etag) || head.version_id !== receipt['x-oss-version-id'] || head.size !== source.size || access !== 'private')
-      throw conflict('原图归档大小、版本或访问权限校验失败')
+    const [head] = await Promise.all([verify_private_oss_object(storage, target, {
+      etag: etag(receipt.etag), version_id: receipt['x-oss-version-id'], size: source.size,
+    }, '原图归档大小、版本或访问权限校验失败'), unchanged(storage, source)])
     return { key: target, ... head, version_id: receipt['x-oss-version-id'], sha256: source.sha256 }
   }
   catch (error) { throw controlled(error, signal) }

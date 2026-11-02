@@ -52,6 +52,7 @@ function seal_fixture(bytes = Buffer.from('abc')) {
     return { stream: Readable.from(header), size: header.length }
   })
   const remote_parts = [{ part_number: 1, size: bytes.length, etag }]
+  const access = vi.fn().mockResolvedValue('private')
   const sql = vi.fn(async (query: string, args: unknown[] = []): Promise<unknown[]> => {
     if (query.startsWith('SELECT intent'))
       return [[{ intent: session.intent }]]
@@ -78,9 +79,9 @@ function seal_fixture(bytes = Buffer.from('abc')) {
   const uploads = create_upload_sessions({ ... dependencies,
     pool: { getConnection: async () => ({ execute: sql, beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() }) } as unknown as Pool,
     storage: { ... dependencies.storage, list_multipart_parts: vi.fn(async () => ({ parts: remote_parts, next_marker: null })),
-      head_object: head, complete_multipart_upload: complete, get_object_access: vi.fn().mockResolvedValue('private'), get_object_stream: stream },
+      head_object: head, complete_multipart_upload: complete, get_object_access: access, get_object_stream: stream },
   })
-  return { uploads, session, head, complete, stream, sql, metadata, remote_parts }
+  return { uploads, session, head, complete, stream, sql, metadata, remote_parts, access }
 }
 
 it('completes ordinary uploads using committed parts and object metadata without downloading their bytes', async () => {
@@ -111,6 +112,15 @@ it('refuses changed object identity after metadata validation', async () => {
   f.head.mockReset().mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce(f.metadata).mockResolvedValue({ ... f.metadata, version_id: 'changed' })
   await expect(f.uploads.seal(id, 1)).rejects.toMatchObject({ statusCode: 409 })
   expect(f.session.result).toBeNull()
+})
+
+it('refuses access changed to public before sealing without downloading the object', async () => {
+  const f = seal_fixture()
+  f.access.mockResolvedValueOnce('private').mockResolvedValue('public-read')
+  await expect(f.uploads.seal(id, 1)).rejects.toMatchObject({ statusCode: 409 })
+  expect(f.stream).not.toHaveBeenCalled()
+  expect(f.session.result).toBeNull()
+  expect(f.sql.mock.calls.some(([sql]) => sql.includes('SET status = \'verified\''))).toBe(false)
 })
 
 it('reconciles an already-completed object on the exact owned attempt without another completion or full read', async () => {

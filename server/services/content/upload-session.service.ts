@@ -4,6 +4,7 @@ import type { Connection, Pool, RowDataPacket } from 'mysql2/promise'
 import type { UploadAttempt, UploadIntent, UploadPublication, UploadRow } from './upload-session.repository'
 import { randomUUID } from 'node:crypto'
 import { ApiError } from '@server/errors/ApiError'
+import { verify_private_oss_object } from '@server/lib/oss-object-identity'
 import { attachment_path_violation, redactable_attachment_mime } from '@shared/content-markdown'
 import { redaction_image_mime } from '@shared/content-upload'
 import { z } from 'zod'
@@ -264,9 +265,7 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
       if (! snapshot_intent.image && redaction_image_mime(image_header) !== redactable_attachment_mime(state.path))
         throw new ApiError(400, '删减版实际格式与原图不一致')
     }
-    const after = await storage.head_object(attempt.target_key)
-    if (after.size !== state.size || after.etag !== metadata.etag || after.version_id !== metadata.version_id)
-      throw new ApiError(409, '上传对象大小或身份不符')
+    await verify_private_oss_object(storage, attempt.target_key, metadata, '上传对象大小、身份或私密状态不符')
     await owned(session, actor, async (connection, row) => {
       await heartbeat_transfer(connection, claim, limits.lease_seconds)
       await verify_transfer_attempt(connection, claim, attempt.id, { size: state.size, etag: metadata!.etag, oss_version_id: metadata!.version_id!, sha256: null })
