@@ -1,6 +1,6 @@
 # SQL 与 TypeScript 迁移
 
-`pnpm migrate` 是数据库结构与一次性数据迁移的统一入口。版本位于 `migrations/`，SQL 和 TS 按完整文件名共同排序。日常后台 runner 不执行这些迁移。
+`pnpm migrate:dev`／`pnpm migrate:prod` 是对应环境的数据库结构与一次性数据迁移入口。版本位于 `migrations/`，SQL 和 TS 按完整文件名共同排序。日常后台 runner 不执行这些迁移。
 
 ## 目录和版本身份
 
@@ -17,17 +17,16 @@
 
 ## 选择环境
 
-配置加载器按 `NODE_ENV=development` 或 `production` 同时选择 YAML 与 `.env.dev` / `.env.prod`。本地迁移入口默认 development，可用 `--env=prod` 明确选择生产；生产容器由 Compose 注入环境变量。
+源码命令用 `:dev`／`:prod` 后缀，在导入依赖前同时选择 YAML 与 `.env.dev` / `.env.prod`，不用另设 `NODE_ENV` 或传 `--env`。生产维护产物继承 Compose 注入的 `NODE_ENV=production` 和连接配置。
 
 开发 PowerShell：
 
 ```powershell
-$env:NODE_ENV = 'development'
-pnpm migrate --status
-pnpm migrate --dry-run
+pnpm migrate:dev --status
+pnpm migrate:dev --dry-run
 ```
 
-本地检查生产目标可执行 `pnpm migrate --env=prod --status`；它加载 `.env.prod`，仍需核对有效主机与库名，进程中显式注入的同名值优先。SQL-only 路径只校验 `db` 子树；脚本按需读取存储配置，不要求短信等无关密钥。
+本地检查生产目标可执行 `pnpm migrate:prod --status`；它加载 `.env.prod`，仍需核对有效主机与库名，进程中显式注入的同名值优先。SQL-only 路径只校验 `db` 子树；脚本按需读取存储配置，不要求短信等无关密钥。
 
 已冻结的 Content v1 产物使用 `migrations/lib/content-v1/config-loader.ts.snapshot`、`config-schema.ts.snapshot` 和 `settings.generated.ts.snapshot` 保留旧配置实现及生成设置，构建器在原模块身份下加载快照，确保既有摘要不变。当前迁移入口先加载所选环境再运行这些产物；不得修改快照或冻结清单来适配新环境。运行时公共设置可以继续由当前 YAML 生成，不改变历史迁移的依赖产物。
 
@@ -81,7 +80,7 @@ TS 流程为 `plan → apply → verify → completed`：
 
 ### 2026-10-28 引用历史升级
 
-升级顺序为 `20261028210000_reference_journal_entries.sql` → `20261028210100_reference_journal_entries.ts` → `20261028210200_reference_journal_contract.sql`。先备份数据库并停止应用、worker 和旧引用清理定时器，再运行 `pnpm migrate --maintenance`；全部完成后启动新代码。第一步展开表结构，第二步逐批转换 JSON 为 URI 事件行并按作用域保留 200 批，第三步删除旧 JSON 列及不再使用的反向索引列。不可让旧应用与转换步骤并行写入。
+升级顺序为 `20261028210000_reference_journal_entries.sql` → `20261028210100_reference_journal_entries.ts` → `20261028210200_reference_journal_contract.sql`。先备份数据库并停止应用、worker 和旧引用清理定时器，再运行 `pnpm migrate:dev --maintenance`；全部完成后启动新代码。第一步展开表结构，第二步逐批转换 JSON 为 URI 事件行并按作用域保留 200 批，第三步删除旧 JSON 列及不再使用的反向索引列。不可让旧应用与转换步骤并行写入。
 
 转换保持 scope/revision；每批转换在事务中完成，中断后按尚未转换的行继续。被裁剪历史通过 floor 明确失效，不能恢复已丢失历史，也不猜测修复历史上已漏改的 main。回滚需要恢复备份及旧应用，仅回退代码不足以恢复旧 schema。
 

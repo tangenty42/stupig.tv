@@ -62,6 +62,23 @@ const bundle_env = {
 }
 
 describe('维护脚本产物', () => {
+  it('盘点产物脱离源码和 pnpm 也能显示帮助并进入只读数据库连接', async () => {
+    const inventory = resolve(work_dir, 'storage-inventory.mjs')
+    await cp(resolve(project_root, '.output/server/maintenance/storage-inventory.mjs'), inventory)
+    const help = await run(process.execPath, [inventory, '--help'], { cwd: work_dir, env: { NODE_ENV: 'production' } })
+    expect(help.stdout).toContain('storage:inventory:prod')
+    expect(help.stdout).toContain('GET/SELECT only')
+    let failure: { stderr?: string } | undefined
+    try {
+      await run(process.execPath, [inventory, '--output', resolve(work_dir, 'inventory-output')], { cwd: work_dir, env: { ... bundle_env } })
+    }
+    catch (error) {
+      failure = error as typeof failure
+    }
+    expect(failure?.stderr).toContain('database_unavailable')
+    expect(failure?.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Dynamic require|Cannot find module/)
+  })
+
   it('图片迁移携带完整原生依赖，在工作区外编码 AVIF，并拒绝原生文件改动', async () => {
     const { writeFile } = await import('node:fs/promises')
     const root = resolve(work_dir, 'native')

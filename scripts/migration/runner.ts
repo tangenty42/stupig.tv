@@ -209,7 +209,7 @@ export async function run_migrations(options: MigrationOptions = {}) {
       if (script)
         scripts.set(file.filename, script)
       if (! maintenance && (script?.execution ?? classify_sql(file)) === 'maintenance')
-        throw new MigrationFailure('maintenance_required', `迁移 ${file.filename} 需要维护窗口，请显式运行 pnpm migrate --maintenance`)
+        throw new MigrationFailure('maintenance_required', `迁移 ${file.filename} 需要维护窗口，请显式指定 --maintenance`)
       const previous = runs.get(file.filename)
       if (! script && previous && previous.status !== 'completed' && options.retry_sql !== file.filename)
         throw new MigrationFailure('sql_recovery_required', `SQL ${file.filename} 可能已部分执行，请核对后显式使用 --retry-sql ${file.filename}`)
@@ -236,7 +236,7 @@ export async function run_migrations(options: MigrationOptions = {}) {
       await assert_active()
       const script = scripts.get(file.filename) ?? null
       if (script?.execution === 'maintenance' && ! maintenance)
-        throw new MigrationFailure('maintenance_required', `迁移 ${file.filename} 需要维护窗口，请显式运行 pnpm migrate --maintenance`)
+        throw new MigrationFailure('maintenance_required', `迁移 ${file.filename} 需要维护窗口，请显式指定 --maintenance`)
       const previous = runs.get(file.filename)
       if (! script && previous && previous.status !== 'completed' && options.retry_sql !== file.filename)
         throw new MigrationFailure('sql_recovery_required', `SQL ${file.filename} 可能已部分执行，请核对后显式使用 --retry-sql ${file.filename}`)

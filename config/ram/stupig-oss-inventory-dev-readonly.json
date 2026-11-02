@@ -1,0 +1,15 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetBucketVersioning", "oss:GetBucketLifecycle", "oss:ListObjectVersions", "oss:ListMultipartUploads"],
+      "Resource": "acs:oss:*:1225000469589595:stupig-static-dev"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "oss:ListParts",
+      "Resource": "acs:oss:*:1225000469589595:stupig-static-dev/*"
+    }
+  ]
+}

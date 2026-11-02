@@ -45,7 +45,7 @@ OSS 开启版本控制时，软删除不等于历史版本已经永久回收；�
 
 ## 运维观察与恢复边界
 
-通过 `pnpm background:status` 查看预热、退役及生命周期相关状态，结合错误码和目的身份排查。`pnpm content:preload:check` 用于预热相关核验，运行参数以[部署手册](../../deployment/esa.md)为准。不要把检查脚本误当作批量清理命令。
+通过 `pnpm background:status:dev` 查看预热、退役及生命周期相关状态，结合错误码和目的身份排查。`pnpm content:preload:check:dev` 用于预热相关核验，运行参数以[部署手册](../../deployment/esa.md)为准。不要把检查脚本误当作批量清理命令。
 
 当前没有业务回收站或自助恢复 UI。对象历史版本只能提供恢复材料，完整恢复还需要附件元数据、引用和授权状态；见[备份恢复](../../operations/backup-recovery.md)。
 

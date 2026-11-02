@@ -13,7 +13,7 @@
 | `.env.dev` / `.env.prod` 仍有 `<required>` | 重跑对应环境生成命令或在目标文件补齐，然后重新加载进程 |
 | 修改 MySQL／MQTT 密码后认证失败 | 环境值变化不保证现有数据库或 broker 账号被同步修改，核对真实账号；不要删除卷重建来掩盖差异 |
 
-`NODE_ENV` 只能是 development 或 production，分别选择 `.env.dev` / `.env.prod` 和对应 YAML。工具可以用 `--env=prod` 明确选择生产；旧 `.env` 不再加载。进程变量优先于文件，遇到意外连接目标或 GPG 口令不一致时先核对终端继承的同名变量。
+`NODE_ENV` 只能是 development 或 production，分别选择 `.env.dev` / `.env.prod` 和对应 YAML。源码运维命令用 `:dev`／`:prod` 后缀明确选择环境；底层预载仍通过固定的 `--env` 参数实现。旧 `.env` 不再加载。进程变量优先于文件，遇到意外连接目标或 GPG 口令不一致时先核对终端继承的同名变量。
 
 手动执行开发 Compose 的 `ps`、`logs`、`up` 等命令时都显式传 `--env-file .env.dev`；生产编排使用 `docker compose --env-file .env.prod -f docker-compose.yml …`。Compose 的 `${…}` 插值需要该环境文件，服务内的 `env_file` 不能代替命令行插值来源。
 
@@ -61,7 +61,7 @@
 
 ## 后台任务与实时同步
 
-先运行 `pnpm background:status` 读取持久状态，再结合运行进程日志和管理员状态接口确认扫描。CLI 没有应用进程内存快照，`process: null` 正常；某个应用的扫描状态也不是整个集群状态。
+先运行 `pnpm background:status:dev` 读取持久状态，再结合运行进程日志和管理员状态接口确认扫描。CLI 没有应用进程内存快照，`process: null` 正常；某个应用的扫描状态也不是整个集群状态。
 
 - mode=worker 时应用不消费后台工作，必须有独立 worker；disabled 保留待办但不扫描。
 - 检查有效租约、到期候选、重试时间、最老待办和资源槽，不手工把 running 改 pending。

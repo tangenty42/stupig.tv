@@ -123,7 +123,7 @@ WHERE status NOT IN ('completed', 'cancelled')
 
 旧另存图片等显式 `.avif` 逻辑文件名转为 `.webp`，保留目录与末尾 `.good`，同名冲突使用数字后缀；上传时保留的 `.png`／`.jpg` 等原始逻辑名称继续保留，与未来上传一致，实际下载名使用 WebP 后缀。迁移新增的 `content_webp_migration_objects` 保留源身份、目标所有权和采用回执；对象写入后事务失败可复用已验证结果，不重复编码。失败停在维护态，完成后才能启动新应用。新迁移将 `avif_key`、`jpeg_key`、`parent_avif_key` 及删减字段改为 `display_key`、`fallback_key`、`source_display_key`、`redacted_display_key`、`redacted_fallback_key`；LQIP 字段改为 `lqip`／`redacted_lqip`，尝试账本同步使用角色名；已结束的历史任务回执仍是历史事实。旧私有展示对象和历史版本暂留，未永久删除，不把代码回退当作数据回退。
 
-只读预检及执行参数沿用[迁移运维](../../operations/migrations.md)：源码环境先以 `pnpm migrate --preflight` 分类待办链，再以 `pnpm migrate --dry-run` 运行当前迁移的只读业务 plan；确认后使用 `pnpm migrate --maintenance`；生产使用同版本维护镜像／备份和既有维护发布流程。不能让旧应用连接已改字段的新库。迁移的真实 MySQL 验证入口为 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/webp-migration.ts`，仅创建随机隔离测试库，OSS 使用内存替身。
+只读预检及执行参数沿用[迁移运维](../../operations/migrations.md)：源码环境先以 `pnpm migrate:dev --preflight` 分类待办链，再以 `pnpm migrate:dev --dry-run` 运行当前迁移的只读业务 plan；确认后使用 `pnpm migrate:dev --maintenance`；生产使用同版本维护镜像／备份和既有维护发布流程。不能让旧应用连接已改字段的新库。迁移的真实 MySQL 验证入口为 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/webp-migration.ts`，仅创建随机隔离测试库，OSS 使用内存替身。
 
 `content_webp_migration_objects` 的[退出合同](../../operations/migrations.md#webp-回执表64的退出合同)规定生产完成及验收后至少保留 30 日，归档读回、责任交接后才通过独立维护迁移删除；不自动清表，不随回执删除旧对象或释放 pin。下一条旧 Content 退役迁移只删除五张已废弃且为空的旧表，保留本次 WebP 恢复明细。
 

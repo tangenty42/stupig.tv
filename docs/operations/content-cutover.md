@@ -47,16 +47,16 @@ NFC／大小写重名、文件作为父目录、非法路径、缺失档案、�
 
 ## 分阶段执行
 
-以下命令适用于已经选择正确环境的源码工作区；生产推荐使用[维护容器入口](./migrations.md)。阶段顺序相同，只替换命令前缀。
+以下以开发源码入口 `migrate:dev` 为例；生产源码使用 `migrate:prod`，生产推荐使用[维护容器入口](./migrations.md)。阶段顺序相同，只替换命令前缀。
 
 ```sh
-pnpm migrate --status
-pnpm migrate --through 20261024210000_content_cutover_state.sql
-pnpm migrate --dry-run --through 20261024210100_content_references.ts
-pnpm migrate --maintenance --through 20261024210100_content_references.ts
-pnpm migrate --dry-run
-pnpm migrate --maintenance
-pnpm migrate --status
+pnpm migrate:dev --status
+pnpm migrate:dev --through 20261024210000_content_cutover_state.sql
+pnpm migrate:dev --dry-run --through 20261024210100_content_references.ts
+pnpm migrate:dev --maintenance --through 20261024210100_content_references.ts
+pnpm migrate:dev --dry-run
+pnpm migrate:dev --maintenance
+pnpm migrate:dev --status
 ```
 
 预演输出安全计数、问题码和 scope/node 身份；前置尚未完成会显示 `blocked_by`。不要把早期预演中的后序阻塞当成完整对象迁移通过。原本已悬空的引用保持 warning，迁移不会凭空生成其目标。

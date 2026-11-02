@@ -24,7 +24,7 @@
 
 站点内所有域名共用这个范围，包括其他项目；独立 dev/prod 用户用于凭据生命周期管理，不保证 host 隔离。应用的预算也不能代替云端额度。依据：[刷新](https://help.aliyun.com/zh/edge-security-acceleration/esa/api-esa-2024-09-10-purgecaches)、[预热](https://help.aliyun.com/zh/edge-security-acceleration/esa/api-esa-2024-09-10-preloadcaches)、[额度](https://help.aliyun.com/zh/edge-security-acceleration/esa/api-esa-2024-09-10-getpurgequota)、[层级](https://help.aliyun.com/zh/edge-security-acceleration/esa/api-esa-2024-09-10-gettieredcache)。
 
-`pnpm content:preload:check --env=prod --policy` 可按当前配置打印策略草案；它使用账号通配符，本目录的可审阅版本进一步固定账号。该分支仍需完整应用配置，不作为 RAM 初始化的前置步骤。
+`pnpm content:preload:check:prod --policy` 可按当前配置打印策略草案；它使用账号通配符，本目录的可审阅版本进一步固定账号。该分支仍需完整应用配置，不作为 RAM 初始化的前置步骤。
 
 ## ESA 发布
 
