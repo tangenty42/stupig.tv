@@ -30,12 +30,12 @@ applyTo: "app/**/*.{vue,ts}"
 - Public API types come from `@shared/types/*`. `useApi.ts` is a facade, not a separate type/schema authority.
 - Pinia stores live with their owning feature and own client state that needs a shared lifecycle. Server-fetched resources remain in `useSyncedData`; do not move transport listeners or SSR cookie state into stores. Draft persistence contains serializable unsaved text/state, never `File` uploads.
 - `app/utils/` functions must remain pure: no composable calls or hidden configuration reads. Capture configuration in setup and pass it to utilities.
-- Use `@shared/settings` for stable browser parameters and `runtimeConfig.public` only for the validated public deployment subset; see [configuration](../../docs/deployment/configuration.md).
+- Use `@shared/settings` for stable browser parameters and `runtimeConfig.public` only for the validated public deployment subset; see [configuration](../../docs-legacy/deployment/configuration.md).
 
 ## Synchronization and hydration
 
 - Default to `useSyncedData` with `universal: true`. Use `universal: false` only for caller-specific behavior/side effects or an unkeyed `fetch_without_resource` query. Direct `useDataSync` listeners are for raw events that do not represent a shared fetched resource.
-- Keep server invalidations as the trigger for mutations; Content uses its transactional outbox. Preserve profile/session presence polling and admin quiet-time polling because derived time-dependent values produce no mutation event. See [realtime](../../docs/modules/realtime.md).
+- Keep server invalidations as the trigger for mutations; Content uses its transactional outbox. Preserve profile/session presence polling and admin quiet-time polling because derived time-dependent values produce no mutation event. See [realtime](../../docs-legacy/modules/realtime.md).
 - Server shared-proxy/listener maps are request-isolated; client maps share `useState`. An `immediate: false` proxy is trigger-only and must not supply initial rendered data. Immediate subscribers must await an existing in-flight fetch.
 - Hydration-visible state must be payload-backed or fetched identically on both sides. Use `useSyncedState()` for payload-backed refs, including writable computed wrappers. Fetchers return data rather than mutate render state; callbacks/data/loading remain staged until hydration finishes. Explicit ordinary refs are not staged.
 - Do not gate identity-sensitive fetches on client cookie/user refs. For incremental results use the server-issued `viewer_key` / `base_viewer_key`; HTTP identity comes from the current token cookie.
@@ -44,4 +44,4 @@ applyTo: "app/**/*.{vue,ts}"
 
 ## Verification
 
-Follow [testing](../../docs/development/testing.md). Cover pure logic in utilities, composables, stores and renderers; verify canvas, pointer, layout and native permissions in a browser. Run typecheck after significant type/import changes. Test behavior and source invariants only where each is appropriate; do not substitute source-text checks for reachable runtime contracts.
+Follow [testing](../../docs-legacy/development/testing.md). Cover pure logic in utilities, composables, stores and renderers; verify canvas, pointer, layout and native permissions in a browser. Run typecheck after significant type/import changes. Test behavior and source invariants only where each is appropriate; do not substitute source-text checks for reachable runtime contracts.

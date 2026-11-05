@@ -23,7 +23,7 @@ ESLint (`eslint.config.mjs`, Antfu flat config) is the sole formatter. Do not in
 - Search existing utilities, shared modules and composables before adding helpers or parallel formatting/parsing logic. Extend the owning implementation.
 - Keep `app/utils/` pure: capture composable values in setup and pass them explicitly.
 - Follow the [global configuration rules](../copilot-instructions.md): stable browser settings, server deployment configuration and secrets have separate owners. Generated settings are not hand-edited.
-- Documentation must describe current behavior, link to the authoritative code/config/policy, and distinguish unimplemented work or unverified external settings. Keep normative detail in one owning document.
+- Implementation and reference documentation must describe current behavior, link to the owning code/config/policy, and distinguish unimplemented work or unverified external settings. Human-maintained LAW and DESIGN documents define required behavior and implementation constraints under the [Swordoc charter](../../docs/README.md); report discrepancies rather than rewriting them to match code. Keep each requirement in one owning document.
 
 ## Comments and prose
 
@@ -67,5 +67,5 @@ Original prose and images stay here.
 
 - `pnpm lint` checks; `pnpm lint --fix` fixes. Hooks use lint-staged; VS Code can apply ESLint fixes on save. Use focused fixes to preserve unrelated working changes.
 - Test files obey the same style. Fix lint errors without weakening assertions or exempting whole files; use a narrow, justified disable only when a rule cannot apply.
-- Follow the [global testing rules](../copilot-instructions.md) and [testing guide](../../docs/development/testing.md). Type/import changes require typecheck; pure documentation changes require lint and link/command/source consistency checks.
+- Follow the [global testing rules](../copilot-instructions.md) and [testing guide](../../docs-legacy/development/testing.md). Type/import changes require typecheck; pure documentation changes require lint and link/command/source consistency checks.
 - Intentional exceptions use `eslint-disable-next-line` with a `-- reason` suffix.

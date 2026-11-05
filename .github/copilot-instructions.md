@@ -3,13 +3,14 @@
 ## Entry points
 
 - Read the applicable files in [instructions/](instructions/) before editing. They define frontend, backend, code-style and migration constraints.
-- [Documentation](../docs/README.md) describes the current system. Start with [architecture](../docs/architecture.md), then the relevant module. Operational procedures belong in docs, not additional instruction copies.
+- Read the human-maintained [Swordoc charter](../docs/README.md) before working on documentation or a covered feature. Follow applicable LAW and DESIGN documents; agents maintain AGENT and TMP documents. Documentation transition status is recorded in [docs/AGENT.md](../docs/AGENT.md).
+- Previous manuals are preserved in [docs-legacy](../docs-legacy/README.md). Use them as historical implementation and operations references while new documents are written; they do not become Swordoc authority by relocation. Keep operational procedures in their owning manuals rather than additional instruction copies.
 - Keep documentation synchronized with observable behavior. Source, validated configuration and executable policies take precedence over historical notes. Label unverified deployment assumptions explicitly.
 
 ## Workflow and runtime
 
 - Use **pnpm** and the existing lockfile; Node runs ESM. Do not introduce npm/yarn lockfiles or unnecessary dependencies.
-- Inspect the actual host/container environment and running processes. Check for an existing development server before starting another instance. `pnpm dev` owns Nuxt, the development authorization proxy and frpc; Docker dependencies stay running after Ctrl+C. See [development](../docs/development/README.md).
+- Inspect the actual host/container environment and running processes. Check for an existing development server before starting another instance. `pnpm dev` owns Nuxt, the development authorization proxy and frpc; Docker dependencies stay running after Ctrl+C. See [development](../docs-legacy/development/README.md).
 - Avoid `nuxt build`, `nuxt prepare` and `nuxt generate` during development unless explicitly requested. Normal installation lifecycle hooks and the documented CI build are separate workflows.
 - Plan structural/environmental changes first and obtain authorization (dependencies, schema, deployment configuration, major refactors). Existing authorization in the conversation applies; do not ask again for the approved work.
 - Preserve unrelated working-tree changes. Prefer focused edits. File deletion/recreation requires user authorization; a request to replace or reorganize the relevant files supplies that authorization.
@@ -26,23 +27,23 @@
 ## Configuration and secrets
 
 - Browser-safe application parameters: `config/app-settings.yaml` → `config/lib/schema.ts` → generated `server/shared/settings.generated.ts`. Consumers import `@shared/settings`; never hand-edit generated output. Run `pnpm settings:generate` after changes and `pnpm settings:check` to verify freshness.
-- Deployment configuration: `config/shared.yaml` → `dev.yaml` or `prod.yaml` → optional development-only `local.yaml`. The server loads it through `@config/loader`; environment interpolation is explicit. Tracked `.env.*.layer` templates define variable names, safe defaults and placeholders; real credentials belong in local `.env.dev` / `.env.prod` or the runtime environment. See [configuration](../docs/deployment/configuration.md).
+- Deployment configuration: `config/shared.yaml` → `dev.yaml` or `prod.yaml` → optional development-only `local.yaml`. The server loads it through `@config/loader`; environment interpolation is explicit. Tracked `.env.*.layer` templates define variable names, safe defaults and placeholders; real credentials belong in local `.env.dev` / `.env.prod` or the runtime environment. See [configuration](../docs-legacy/deployment/configuration.md).
 - `server/shared/` must remain browser-safe. Never import the configuration loader there at runtime, expose private configuration in Nuxt public config, or put secrets in application settings. Only the validated public subset may reach the browser.
 - If necessary secrets are unavailable, ask for their local setup; do not fabricate credentials or print their values. Database-only tools must not require unrelated service secrets.
 
 ## Data integrity and synchronization
 
 - `migrations/` in filename order is the schema source of truth. Never alter an applied SQL migration, including whitespace/comments, or a started TypeScript migration and its frozen dependency closure. Add a new version and preserve digest checks in `scripts/migration/frozen.test.ts`.
-- `migration_runs` is the sole current ledger. Do not recreate `schema_migrations`, invent receipts or bypass failed migration checks. Follow [migration rules](instructions/migrations.instructions.md) and [recovery procedures](../docs/operations/migrations.md).
+- `migration_runs` is the sole current ledger. Do not recreate `schema_migrations`, invent receipts or bypass failed migration checks. Follow [migration rules](instructions/migrations.instructions.md) and [recovery procedures](../docs-legacy/operations/migrations.md).
 - Store timestamps in UTC; MySQL connections force UTC. Convert `tinyint(1)` booleans before returning API data.
-- Mutations publish appropriate invalidations through the existing synchronization system. Content writes enqueue their outbox events on the business transaction connection; other domains use `server/lib/sync.ts`. Do not replace this with page-local refetches. See [realtime](../docs/modules/realtime.md).
-- Background work uses the shared runner and existing domain leases/checkpoints. Preserve cooperative shutdown and receipts for in-flight external effects. See [background jobs](../docs/modules/background-jobs.md).
+- Mutations publish appropriate invalidations through the existing synchronization system. Content writes enqueue their outbox events on the business transaction connection; other domains use `server/lib/sync.ts`. Do not replace this with page-local refetches. See [realtime](../docs-legacy/modules/realtime.md).
+- Background work uses the shared runner and existing domain leases/checkpoints. Preserve cooperative shutdown and receipts for in-flight external effects. See [background jobs](../docs-legacy/modules/background-jobs.md).
 
 ## Testing
 
 - Choose verification according to the behavior and risk. Add regression coverage for defects and meaningful behavior changes; documentation, formatting and trivial plumbing do not require ceremonial tests.
 - Keep unit tests beside modules as `<module>.test.ts`, mounted Vue/Nuxt tests as `<module>.nuxt.test.ts`, and browser workflows in `tests/e2e/*.spec.ts`. Shared fixtures and setup are appropriate when they remove repeated infrastructure without hiding the scenario.
-- Assert observable contracts. Mock infrastructure boundaries, never the unit under test. Use the real entry point when wiring is the risk. Follow [testing](../docs/development/testing.md) for aliases, mocks and hydration constraints.
+- Assert observable contracts. Mock infrastructure boundaries, never the unit under test. Use the real entry point when wiring is the risk. Follow [testing](../docs-legacy/development/testing.md) for aliases, mocks and hydration constraints.
 - Test observable behavior instead of source layout, private variable names or exact template strings. Replace redundant source assertions when runtime coverage exists. Preserve migration digests and other contracts whose actual subject is an artifact.
 - For security, concurrency and data-loss regressions, verify that the test detects the broken behavior when practical. This is not a mandatory mutation ritual for every guard. Do not weaken a business assertion merely to get a green run.
 - Run `pnpm test` for relevant behavior and `pnpm lint` for changes. After type/import refactors run `pnpm exec nuxt typecheck`; include the scripts TypeScript check when that scope changes. Resolve failures before reporting completion.

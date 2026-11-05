@@ -17,4 +17,5 @@ tmp.env
 .idea
 .github
 docs
+docs-legacy
 docker-compose.dev.yml
