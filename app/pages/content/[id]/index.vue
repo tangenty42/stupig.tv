@@ -39,53 +39,44 @@
 </template>
 
 <script setup lang="ts">
-import type { ContentStoryBody, ContentStorySummary } from '@shared/types/content'
 import { attachment_ancestor_folders } from '@shared/content-markdown'
 import { content_name_key } from '@shared/content-reference'
 import { has_permission } from '@shared/permissions'
-import { sync_resource } from '@shared/types/sync'
-import { story_front_cover_url } from '~/utils/content/attachment'
+import { content_browser_navigation } from '~/components/MyContent/internal/browser-navigation'
+import { useAttachmentPanel } from '~/features/content/attachments/panel'
+import { useContentStories, useContentStory } from '~/features/content/stories'
 import { format_event_range } from '~/utils/content/event'
-import { read_content_resource } from '~/utils/content/read-resource'
+import { story_front_cover_url } from '~/utils/content/story-cover'
 
 const route = useRoute()
-const { content } = useApi()
 const { user } = useAuth()
 const time_context = useDisplayTimeContext()
 
-const story_id = computed(() => Number(route.params.id))
-const attachment_panel = await useAttachmentPanel(story_id.value, () => '', true)
+const route_story_id = computed(() => String(route.params.id))
+const story_id = computed(() => Number(route_story_id.value))
+const attachment_panel = useAttachmentPanel({
+  scope: story_id.value,
+  markdown: () => '',
+  readonly: true,
+  interaction: content_browser_navigation,
+})
+await attachment_panel.ready
 const attachment_workspace = attachment_panel.catalog
 const workspace_attachments = computed(() => attachment_workspace.data.value?.attachments ?? [])
 const workspace_folders = computed(() => attachment_workspace.data.value?.folders ?? [])
 const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full') && has_permission(user.value, 'content_private', 'read'))
 
-const story = useSyncedState<ContentStoryBody | null>(`content_story_view_${String(route.params.id)}`, () => null)
-const loading = useState(`content_story_view_loading_${String(route.params.id)}`, () => false)
+const story_detail = useContentStory(route_story_id)
+await story_detail.ready
+const { story } = story_detail
 
 useHead({
   title: computed(() => story.value ? `蠢猪档案 - ${story.value.title}` : undefined),
 })
 
-await useSyncedData<ContentStoryBody | null>(
-  computed(() => {
-    const id = story_id.value
-    return Number.isInteger(id) && id > 0 ? sync_resource('content_story', id) : null
-  }),
-  () => read_content_resource(() => content.get_story_body(story_id.value)),
-  story,
-  loading,
-)
-
-const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
-const stories_loading = useState('content_stories_loading', () => false)
-
-await useSyncedData<ContentStorySummary[]>(
-  sync_resource('content_stories', 'all'),
-  () => content.list_stories(),
-  stories,
-  stories_loading,
-)
+const story_query = useContentStories()
+await story_query.ready
+const { stories } = story_query
 
 const attachment_section = ref<{ el: HTMLElement | null } | null>(null)
 function open_attachment_folder(folder: string) {

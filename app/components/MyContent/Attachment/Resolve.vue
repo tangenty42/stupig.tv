@@ -36,9 +36,9 @@
 <script setup lang="ts">
 import type { ErrorCategory, ErrorPolicy, WorkspaceIssue } from '@shared/content-workspace'
 import type { ContentWorkspaceNode } from '@shared/types/content'
-import type { MyContentAttachmentRow } from '~/utils/content/attachment-list'
+import type { MyContentAttachmentRow } from '~/features/content/attachments/list-model'
 import { attachment_name_key, error_categories, error_policy_schema } from '@shared/content-workspace'
-import { attachment_summary_tree } from '~/utils/content/attachment-list'
+import { attachment_summary_tree } from '~/features/content/attachments/list-model'
 
 const props = withDefaults(defineProps<{ resolution: { items: WorkspaceIssue[], valid_count: number, valid_targets?: string[] } | null, pending: boolean, nodes?: ContentWorkspaceNode[] }>(), { nodes: () => [] })
 const emit = defineEmits<{ submit: [policy: ErrorPolicy], close: [] }>()

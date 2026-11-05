@@ -28,8 +28,12 @@
 
 <script setup lang="ts">
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
-import { attachment_for_link, attachment_is_media, save_url_as } from '~/utils/content/attachment'
+import { settings } from '@shared/settings'
+import { save_url_as } from '~/components/MyContent/internal/browser-navigation'
+import { attachment_is_media } from '~/utils/content/attachment'
 import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
+import { useStoryPreview } from './internal/preview'
+import { attachment_for_link } from './internal/preview/attachment-links'
 
 const props = withDefaults(defineProps<{
   markdown: string
@@ -79,6 +83,7 @@ const { body_markdown, render_result, preview_attachments } = useStoryPreview(()
   folders: () => props.folders,
   stories: () => props.stories,
   static_url,
+  lqip_max_bytes: settings.app.content.image.lqipMaxBytes,
   folder_card_openable: () => props.folderOpenable,
   public_view: () => props.publicView,
 })

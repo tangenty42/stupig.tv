@@ -75,7 +75,7 @@
 <script setup lang="ts">
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { story_rating_rank } from '@shared/types/content'
-import { cover_alt, story_front_cover_url } from '~/utils/content/attachment'
+import { cover_alt, story_front_cover_url } from '~/utils/content/story-cover'
 
 const props = withDefaults(defineProps<{
   invalid?: boolean

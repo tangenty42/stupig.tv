@@ -20,11 +20,15 @@ applyTo: "app/**/*.{vue,ts}"
 
 ## APIs, ownership and injection
 
+- Domain-specific client state and operations live under `app/features/`; pages compose their public entries, while feature internals use explicit imports. Keep app-wide auto-imported context and lifecycle helpers in `app/composables/`.
+- Business entries capture Vue/Nuxt context and register lifecycle hooks synchronously. When initial queries are asynchronous, expose a `ready` promise for callers to await; do not initialize composables after an `await` inside an ordinary async function.
+- Component-specific DOM, viewport, focus, scroll and presentation-lifecycle logic stays beside its component and is imported explicitly. Nuxt component discovery is limited to Vue SFCs; do not promote an internal helper to a global composable merely because it has its own file.
 - Create `useApi()` synchronously in setup. Components/pages use its named domain methods, extending the matching facade and server router together. Only transport/auth infrastructure may bypass it to avoid dependency cycles.
 - `useMyToast()` and `useAuth()` require Vue injection context; never create them in asynchronous fetch handlers, MQTT callbacks or BroadcastChannel listeners. Capture needed actions in setup, or use the appropriate lower-level Nuxt-context APIs in those handlers.
-- The transport handles 401 logout once; `useSyncedData` suppresses duplicate 401 toasts. Do not re-toast authentication failures in callers.
+- The transport coalesces concurrent 401 logout handling; `useSyncedData` suppresses duplicate 401 toasts. Do not re-toast authentication failures in callers.
+- `useAuth()` and its cookie remain the client identity source. Account features may compose identity refresh and interactions, but must not introduce a second independent identity store; transport-level 401 and cross-tab logout continue through the lower-level auth channel to avoid an API/auth initialization cycle.
 - Public API types come from `@shared/types/*`. `useApi.ts` is a facade, not a separate type/schema authority.
-- Pinia owns client state that needs a shared lifecycle. Server-fetched resources remain in `useSyncedData`; do not move transport listeners or SSR cookie state into stores. Draft persistence contains serializable unsaved text/state, never `File` uploads.
+- Pinia stores live with their owning feature and own client state that needs a shared lifecycle. Server-fetched resources remain in `useSyncedData`; do not move transport listeners or SSR cookie state into stores. Draft persistence contains serializable unsaved text/state, never `File` uploads.
 - `app/utils/` functions must remain pure: no composable calls or hidden configuration reads. Capture configuration in setup and pass it to utilities.
 - Use `@shared/settings` for stable browser parameters and `runtimeConfig.public` only for the validated public deployment subset; see [configuration](../../docs/deployment/configuration.md).
 

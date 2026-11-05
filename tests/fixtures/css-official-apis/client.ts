@@ -17,8 +17,8 @@ import Toast from 'primevue/toast'
 import ToastService from 'primevue/toastservice'
 import ToggleButton from 'primevue/togglebutton'
 import { createApp, h, nextTick, ref } from 'vue'
-import { editor_markdown_lang } from '../../../app/utils/content/editor/language'
-import { theme_extensions } from '../../../app/utils/content/editor/themes'
+import { editor_markdown_lang } from '../../../app/components/MyContent/Markdown/internal/editor/language'
+import { theme_extensions } from '../../../app/components/MyContent/Markdown/internal/editor/themes'
 import { primevue_preset } from '../../../config/primevue-preset'
 
 export interface CssOfficialProbe {

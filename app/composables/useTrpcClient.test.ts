@@ -27,10 +27,15 @@ class FakeXHR {
 }
 
 const { TrpcApiError, useTrpcClient } = await import('./useTrpcClient')
+let active_app: object
+let active_logout: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.stubGlobal('useAuth', () => ({ logout: mocks.logout, user: ref(null) }))
+  active_app = {}
+  active_logout = mocks.logout
+  vi.stubGlobal('useNuxtApp', () => active_app)
+  vi.stubGlobal('useAuth', () => ({ logout: active_logout, user: ref(null) }))
   vi.stubGlobal('effectScope', effectScope)
   vi.stubGlobal('watch', watch)
   vi.stubGlobal('useReactiveDateNow', () => ref(0))
@@ -39,6 +44,53 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('tRPC application error transport', () => {
+  const unauthorized = () => Promise.reject(Object.assign(new Error('expired'), { status: 401 }))
+
+  it('isolates concurrent 401 handling between Nuxt application instances', async () => {
+    let finish_first!: () => void
+    const first_logout = vi.fn(() => new Promise<void>(resolve => finish_first = resolve))
+    const second_logout = vi.fn(async () => {})
+
+    active_app = {}
+    active_logout = first_logout
+    const first_client = useTrpcClient()
+    active_app = {}
+    active_logout = second_logout
+    const second_client = useTrpcClient()
+
+    const first = first_client.call(unauthorized()).catch(error => error)
+    await Promise.resolve()
+    const second = second_client.call(unauthorized()).catch(error => error)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(first_logout).toHaveBeenCalledOnce()
+    expect(second_logout).toHaveBeenCalledOnce()
+    finish_first()
+    await Promise.all([first, second])
+  })
+
+  it('coalesces concurrent 401 handling within one Nuxt application instance', async () => {
+    let finish_logout!: () => void
+    mocks.logout.mockImplementationOnce(() => new Promise<void>(resolve => finish_logout = resolve))
+    const first_client = useTrpcClient()
+    const second_client = useTrpcClient()
+    const first = first_client.call(unauthorized()).catch(error => error)
+    const second = second_client.call(unauthorized()).catch(error => error)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mocks.logout).toHaveBeenCalledOnce()
+    finish_logout()
+    await Promise.all([first, second])
+  })
+
+  it('handles another 401 after the previous application-scoped task completes', async () => {
+    const client = useTrpcClient()
+    await expect(client.call(unauthorized())).rejects.toMatchObject({ status: 401 })
+    await expect(client.call(unauthorized())).rejects.toMatchObject({ status: 401 })
+    expect(mocks.logout).toHaveBeenCalledTimes(2)
+  })
+
   it('starts a small pagehide release as keepalive, while ordinary mutations remain normal requests', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response('{}'))
     vi.stubGlobal('fetch', fetch)

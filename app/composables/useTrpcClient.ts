@@ -27,7 +27,7 @@ interface TrpcResponse<T> {
 
 const DEFAULT_API_ERROR_MESSAGE = '《我们仍未知道那天所发生の网络错误の名字》'
 
-let unauthorized_handled = false
+const unauthorized_tasks = new WeakMap<object, Promise<void>>()
 let last_request_at = 0
 let presence_started = false
 let ping_pending = false
@@ -67,6 +67,7 @@ export function get_last_trpc_request_at() {
 }
 
 export function useTrpcClient() {
+  const nuxt_app = useNuxtApp()
   const { logout, user } = useAuth()
   const trpc_path = `${settings.app.api.base.replace(/\/$/, '')}/trpc`
   const trpc_url = import.meta.server
@@ -116,13 +117,25 @@ export function useTrpcClient() {
     })],
   })
 
+  function handle_unauthorized() {
+    const active = unauthorized_tasks.get(nuxt_app)
+    if (active) {
+      return active
+    }
+
+    const task = Promise.resolve()
+      .then(() => logout())
+      .finally(() => unauthorized_tasks.delete(nuxt_app))
+    unauthorized_tasks.set(nuxt_app, task)
+    return task
+  }
+
   async function normalize_error(error: unknown): Promise<never> {
     const status = get_trpc_error_status(error)
     const message = error instanceof Error ? error.message : DEFAULT_API_ERROR_MESSAGE
 
-    if (status === 401 && ! unauthorized_handled) {
-      unauthorized_handled = true
-      await logout()
+    if (status === 401) {
+      await handle_unauthorized()
     }
 
     const data = error as { data?: { applicationError?: unknown }, code?: unknown, details?: unknown }

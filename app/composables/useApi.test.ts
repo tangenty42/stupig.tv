@@ -4,7 +4,7 @@ import { settings } from '@shared/settings'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { computed, ref, shallowRef, watch } from 'vue'
-import { useContentDraftStore } from '~/stores/contentDraft'
+import { useContentDraftStore } from '~/features/content/draft.store'
 import { useApi } from './useApi'
 
 function deferred<T>() {

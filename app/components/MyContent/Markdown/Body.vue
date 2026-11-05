@@ -6,8 +6,9 @@
 </template>
 
 <script setup lang="ts">
-import { create_preview_dom_patch, preview_html_fragment } from '~/utils/content/preview-dom'
-import { wrap_heading_sections } from '~/utils/content/sticky-headings'
+import { useStoryPreviewBody } from './internal/preview-body'
+import { create_preview_dom_patch, preview_html_fragment } from './internal/preview/preview-dom'
+import { wrap_heading_sections } from './internal/preview/sticky-headings'
 
 const props = defineProps<{ html: string }>()
 const initial_html = props.html

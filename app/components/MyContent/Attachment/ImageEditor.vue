@@ -205,10 +205,13 @@
 <script setup lang="ts">
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ContentStoryAttachment } from '@shared/types/content'
-import type { RedactionStroke } from '~/utils/content/redact'
+import type { RedactionStroke } from './image-editor/redact'
 import { settings } from '@shared/settings'
-import { normalize_editor_crop } from '~/utils/content/image-edit'
-import { paint_redaction_stroke } from '~/utils/content/redact'
+import { useImageEditorDialog } from './image-editor/dialog'
+import { normalize_editor_crop } from './image-editor/image-edit'
+import { paint_redaction_stroke } from './image-editor/redact'
+import { useImageEditSession } from './image-editor/session'
+import { useImageEditorViewport } from './image-editor/viewport'
 
 interface Props {
   visible: boolean

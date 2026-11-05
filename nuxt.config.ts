@@ -118,6 +118,14 @@ export default defineNuxtConfig({
   ignore: ['**/*.test.ts', '**/*.spec.ts'],
   alias,
 
+  components: {
+    dirs: [{
+      path: '~/components',
+      // Component-adjacent TypeScript modules are internal and explicitly imported.
+      extensions: ['vue'],
+    }],
+  },
+
   devServer: {
     port: Number(process.env.APP_PORT) || 3042,
   },

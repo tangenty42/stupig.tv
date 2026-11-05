@@ -50,8 +50,8 @@
 import type { ContentStorySummary } from '@shared/types/content'
 import type { ContentDraftSummary } from '@shared/types/content-draft'
 import { story_pinned, story_rating_rank } from '@shared/types/content'
-import { cover_alt, story_front_cover_url } from '~/utils/content/attachment'
 import { format_event_entry, format_event_range } from '~/utils/content/event'
+import { cover_alt, story_front_cover_url } from '~/utils/content/story-cover'
 
 const props = defineProps<{
   story?: ContentStorySummary

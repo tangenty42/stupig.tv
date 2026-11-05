@@ -41,7 +41,7 @@
           ref="markdown_editor"
           v-model="markdown"
           :readonly="reference_rewrite_pending || ! tab_writable"
-          :allow-write="draft_store.can_write_now"
+          :allow-write="can_write_now"
           :story-id="is_edit ? story_id : null"
           :view-state-key="user && cloud ? `${user.id}:${cloud.id}` : null"
           :attachments="stored_attachments"
@@ -127,7 +127,7 @@
     <div v-if="recovery" class="section-card-collapse mt-6" role="status">
       <p>编辑权已变更，以下修改未上传。可复制保留；关闭本页后将消失。</p>
       <Textarea :model-value="recovery" readonly class="mt-3 w-full" rows="8" aria-label="未上传修改恢复区" />
-      <Button label="关闭恢复区" text @click="draft_store.recovery = ''" />
+      <Button label="关闭恢复区" text @click="dismiss_recovery" />
     </div>
 
     <MyDialog v-model:visible="paste_visible" header="命名">
@@ -146,16 +146,15 @@
 
 <script setup lang="ts">
 import type { ContentStoryMeta } from '@shared/content-markdown'
-import type { ContentStorySummary } from '@shared/types/content'
 import type MyContentMarkdownEditor from '~/components/MyContent/Markdown/Editor.vue'
-import type { AttachmentUploadPick } from '~/utils/content/attachment'
-import { parse_story_markdown, story_markdown_template } from '@shared/content-markdown'
+import type { AttachmentUploadPick } from '~/features/content/uploads/picks'
+import { parse_story_markdown } from '@shared/content-markdown'
 import { content_name_key } from '@shared/content-reference'
 import { settings } from '@shared/settings'
-import { sync_resource } from '@shared/types/sync'
-import { storeToRefs } from 'pinia'
-import { useContentDraftStore } from '~/stores/contentDraft'
-import { content_attachment_drag_file_names, content_attachment_markdown, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/utils/content/attachment-drag'
+import { get_content_attachment_drag_data, get_content_folder_drag_data } from '~/components/MyContent/internal/attachment-drag'
+import { content_browser_navigation } from '~/components/MyContent/internal/browser-navigation'
+import { content_attachment_drag_file_names } from '~/features/content/attachments/drag'
+import { useStoryEditing } from '~/features/content/editing'
 import { format_event_range } from '~/utils/content/event'
 
 definePageMeta({
@@ -167,22 +166,7 @@ definePageMeta({
 })
 
 const route = useRoute()
-const { content } = useApi()
-const { user } = useAuth()
 const time_context = useDisplayTimeContext()
-const { ok, error } = useMyToast()
-const { confirm_require } = useMyConfirm()
-// Known stories for `@story` completion, duplicate-title and dead-reference
-// lints; kept in sync via the shared content_stories resource without touching
-// the editing content.
-const existing_stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
-const existing_stories_loading = useState('content_stories_loading', () => false)
-await useSyncedData<ContentStorySummary[]>(
-  sync_resource('content_stories', 'all'),
-  () => content.list_stories(),
-  existing_stories,
-  existing_stories_loading,
-)
 const raw_id = computed(() => route.params.id as string)
 const cloud_draft_id = /^draft-[a-f0-9]{32}$/.test(raw_id.value) ? raw_id.value.slice(6) : undefined
 const is_edit = computed(() => ! cloud_draft_id && raw_id.value !== 'new')
@@ -190,12 +174,18 @@ const story_id = computed(() => is_edit.value ? Number(raw_id.value) : 0)
 /** The draft this page instance owns; the store's key is bound to it at setup. */
 const draft_story_id = is_edit.value ? story_id.value : null
 
-const draft_store = useContentDraftStore(cloud_draft_id ?? draft_story_id)
-const { markdown, unconfirmed_changes } = storeToRefs(draft_store)
-
-// Confirmed cloud text is already covered by the server's draft reference check.
-const attachment_panel = await useAttachmentPanel(story_id.value, () => unconfirmed_changes.value ? markdown.value : '')
-const attachment_workspace = attachment_panel.catalog
+const markdown_editor = ref<InstanceType<typeof MyContentMarkdownEditor>>()
+const editing = useStoryEditing({
+  story_id: draft_story_id,
+  draft_id: cloud_draft_id,
+  editor: {
+    apply_reference_changes: (before, changes) => ! markdown_editor.value || markdown_editor.value.apply_reference_changes(before, changes),
+    insert_markdown: (text, position) => markdown_editor.value?.insert_at_position(text, position),
+  },
+  attachment_interaction: content_browser_navigation,
+})
+await editing.ready
+const { user, markdown, existing_stories, attachment_panel, attachment_workspace } = editing
 
 // Existing titles must reach the save/header validation too, or every `content://` reference
 // is flagged as dead (undefined existing_titles → `! undefined?.some()` is true).
@@ -238,7 +228,6 @@ const header_date = computed(() => {
   return meta ? format_event_range(meta.event_precision, meta.event_entries, time_context.value.timezone) : null
 })
 
-const markdown_editor = ref<InstanceType<typeof MyContentMarkdownEditor>>()
 const stored_attachments = computed(() => attachment_workspace.data.value?.attachments ?? [])
 const folder_names = computed(() => attachment_workspace.data.value?.folders ?? [])
 const header_cover_url = computed(() => {
@@ -250,43 +239,16 @@ const header_cover_url = computed(() => {
 
 const header_cover_image = computed(() => stored_attachments.value.find(item => content_name_key(item.file_name) === content_name_key(header_cover.value ?? '') && item.url === header_cover_url.value)?.image)
 
-const title_reference_version = useSyncedState<{ title_revision: number } | null>('content_title_reference_version', () => null)
-const editing = useStoryEditSession({
-  story_id: draft_story_id, draft_id: cloud_draft_id, draft_store, content, user, workspace: attachment_workspace.data, title_reference_version, markdown_editor,
-  reference_sync_pending: () => attachment_panel.uploads.finalizing.size > 0 || attachment_workspace.loading.value,
-  markdown_config: () => content_markdown_config.value,
-  new_markdown: () => story_markdown_template(datetime_build_string(time_context.value.now_ms, '{YYYY}/{M}/{D}', time_context.value.timezone)),
-  toast: { ok, error }, confirm_require,
-})
-const { cloud, private_blocked, page_disposed, editor_session_key, draft_storage_error, draft_dirty,
+const { cloud, draft_phase, private_blocked, editor_session_key, draft_storage_error, draft_dirty,
   draft_status_label, save_pending, reference_rewrite_pending, tab_writable, tab_lock_unavailable, delete_pending, discard_draft_pending,
   reference_history_warning_visible, confirm_reference_history_save, confirm_abandon_draft,
-  on_save_click, confirm_delete_story, delete_visible, delete_impact, delete_impact_loading, delete_impact_failure, load_delete_impact, delete_story_confirmed, recovery } = editing
+  on_save_click, confirm_delete_story, delete_visible, delete_impact, delete_impact_loading, delete_impact_failure, load_delete_impact, delete_story_confirmed,
+  upload_picks, can_write_now, recovery, dismiss_recovery } = editing
 
-watch(() => draft_store.phase, (phase) => {
+watch(draft_phase, (phase) => {
   if (phase === 'forbidden')
     last_valid_meta.value = null
 })
-if (import.meta.client)
-  await useSyncedData(sync_resource('content_titles', 'all'), () => content.get_title_reference_version(), title_reference_version, { server: false })
-
-async function upload_picks(picks: AttachmentUploadPick[], position: number | null) {
-  if (! is_edit.value)
-    return error('请先保存档案')
-  const owner = user.value?.id
-  const may_insert = draft_store.capture_write_permit()
-  await attachment_panel.start(picks.map(pick => ({
-    ... pick,
-    on_landed(file) {
-      if (position === null || page_disposed.value || user.value?.id !== owner || ! may_insert())
-        return
-      const text = content_attachment_markdown(file)
-      if (markdown_editor.value)
-        markdown_editor.value.insert_at_position(text, position)
-    },
-  })))
-}
-
 function on_editor_files_dropped(picks: AttachmentUploadPick[], position: number | null) {
   void upload_picks(picks, position)
 }

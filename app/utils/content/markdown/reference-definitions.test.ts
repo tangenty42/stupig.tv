@@ -7,7 +7,7 @@ import { create_story_markdown } from './index'
 // Keep the browser renderer integration in the app project. Shared/server
 // suites must not pull DOM-dependent renderer modules into their type graph.
 function render(source: string, name = 'a.txt') {
-  const md = create_story_markdown({ story_id: () => 1, attachments: () => [{ file_name: name, mime_type: 'text/plain', is_image: false, file_size: 1, version: 'v1', url: `/objects/${name}` }], stories: () => [], static_url: path => path, folder_card_openable: () => false })
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [{ file_name: name, mime_type: 'text/plain', is_image: false, file_size: 1, version: 'v1', url: `/objects/${name}` }], stories: () => [], static_url: path => path, lqip_max_bytes: 1024, folder_card_openable: () => false })
   return md.render(source, { images: [] })
 }
 
@@ -41,7 +41,7 @@ describe('rendered references and business dependencies agree', () => {
       titles: [], attachment_targets: [{ id: 1, name: 'docs/photo.png' }], title_targets: [],
     }).markdown
     const md = create_story_markdown({ story_id: () => 1, attachments: () => [{ file_name: 'docs/photo.png', mime_type: 'image/png', is_image: true, file_size: 1, version: 'v1', url: '/objects/photo' }],
-      stories: () => [], static_url: path => path, folder_card_openable: () => false })
+      stories: () => [], static_url: path => path, lqip_max_bytes: 1024, folder_card_openable: () => false })
     const html = md.render(next, { images: [] })
     expect(html).toContain('alt="photo.png"')
     expect(html).toContain('aria-label="预览：photo.png"')

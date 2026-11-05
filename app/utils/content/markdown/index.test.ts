@@ -8,6 +8,7 @@ function render(source: string, story_exists = false) {
     attachments: () => [{ file_name: 'a.txt', is_image: false, mime_type: 'text/plain', file_size: 1, version: 'v1', url: '/objects/a.txt' }],
     stories: () => story_exists ? [{ id: 2, title: 'Other', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null, cover: null, cover_label: null, cover_version: null, cover_url: null }] : [],
     static_url: path => path,
+    lqip_max_bytes: 1024,
     folder_card_openable: () => false,
   })
   return md.render(source, { images: [] })
@@ -49,6 +50,7 @@ describe('story Markdown preset contracts', () => {
       attachments: () => [],
       stories: () => [],
       static_url: path => path,
+      lqip_max_bytes: 1024,
       folder_card_openable: () => false,
     })
     const html = md.renderInline('<img src="/image.png" onerror="alert(1)"><iframe src="/frame"></iframe><a href="javascript:alert(1)">link</a>')
@@ -104,6 +106,7 @@ describe('story Markdown preset contracts', () => {
       attachments: () => [],
       stories: () => [],
       static_url: path => path,
+      lqip_max_bytes: 1024,
       folder_card_openable: () => false,
     })
     const text_rule = md.renderer.rules.text!

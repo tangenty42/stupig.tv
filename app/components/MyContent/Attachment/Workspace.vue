@@ -121,19 +121,24 @@
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ErrorPolicy } from '@shared/content-workspace'
 import type { ContentDeleteImpact } from '@shared/types/content-delete-impact'
-import type { AttachmentMenuItem, MyContentAttachmentRow } from '~/utils/content/attachment-list'
-import type { WorkspaceListRow } from '~/utils/content/workspace'
+import type { AttachmentMenuItem } from './internal/list-interaction'
+import type { MyContentAttachmentRow } from '~/features/content/attachments/list-model'
+import type { useAttachmentPanel } from '~/features/content/attachments/panel'
+import type { WorkspaceListRow } from '~/features/content/attachments/workspace-model'
 import { find_delete_references } from '@shared/content-delete-impact'
 import { attachment_mime_type, decrypted_attachment_name, split_attachment_editable_name } from '@shared/content-markdown'
-import { attachment_picks_from_data_transfer } from '~/utils/content/attachment'
-import { content_selection_markdown, set_content_attachment_drag_data, set_content_folder_drag_data } from '~/utils/content/attachment-drag'
-import { attachment_action_item, attachment_batch_action, attachment_menu_context, attachment_privacy_actions, attachment_selection_edges, guard_attachment_selection, normalize_attachment_selection, select_attachment_row } from '~/utils/content/attachment-list'
-import { folder_picker_rows, move_destination_folders } from '~/utils/content/folder-picker'
+import { set_content_attachment_drag_data, set_content_folder_drag_data } from '~/components/MyContent/internal/attachment-drag'
+import { attachment_picks_from_data_transfer } from '~/components/MyContent/internal/upload-picks'
+import { content_selection_markdown } from '~/features/content/attachments/drag'
+import { folder_picker_rows, move_destination_folders } from '~/features/content/attachments/folder-picker'
+import { attachment_batch_action, attachment_privacy_actions } from '~/features/content/attachments/list-model'
+import { attachment_action_item, attachment_menu_context, attachment_selection_edges, guard_attachment_selection, normalize_attachment_selection, select_attachment_row } from './internal/list-interaction'
 
 const props = withDefaults(defineProps<{ controller: Awaited<ReturnType<typeof useAttachmentPanel>>, dialogs?: boolean, layout?: 'stack' | 'columns' }>(), { dialogs: true, layout: 'columns' })
 const model = reactive(props.controller)
 const drag_parent = ref<number | null>(null)
 let marquee_base: Set<string> | null = null
+let selection_anchor: string | null = null
 let move_marquee_base: Set<string> | null = null
 let move_anchor: string | null = null
 const move_visible = ref(false)
@@ -201,15 +206,19 @@ function row_click(event: MouseEvent, row: MyContentAttachmentRow, picking = fal
     move_anchor = row.key
     return
   }
-  if (! model.readonly)
-    model.select(row.source, event)
+  if (! model.readonly) {
+    model.selected = select_attachment_row(model.rows, model.selected, selection_anchor, row.source, event)
+    selection_anchor = row.key
+  }
 }
 function toggle_selection(row: MyContentAttachmentRow, picking = false) {
   row_click({ ctrlKey: true, metaKey: false, shiftKey: false } as MouseEvent, row, picking)
 }
 function row_contextmenu(_event: MouseEvent, row: MyContentAttachmentRow) {
-  if (! model.readonly && ! model.selected.has(row.key))
-    model.select(row.source, { ctrlKey: false, metaKey: false, shiftKey: false } as MouseEvent)
+  if (! model.readonly && ! model.selected.has(row.key)) {
+    model.selected = select_attachment_row(model.rows, model.selected, selection_anchor, row.source, { ctrlKey: false, metaKey: false, shiftKey: false })
+    selection_anchor = row.key
+  }
 }
 function marquee_select(keys: string[], additive: boolean, phase: 'start' | 'move' | 'end', picking = false) {
   if (phase === 'start') {
@@ -235,6 +244,22 @@ function marquee_select(keys: string[], additive: boolean, phase: 'start' | 'mov
       model.selected = next
   }
 }
+function clear_selection_outside(event: PointerEvent) {
+  const element = event.target as HTMLElement | null
+  if (element && ! element.closest('.file-row, .folder-row, .p-contextmenu, .p-menu, .p-dialog, .p-confirmpopup')) {
+    model.selected = new Set()
+    selection_anchor = null
+  }
+}
+watch(() => model.rows.map(row => row.key), (keys) => {
+  if (selection_anchor && ! keys.includes(selection_anchor))
+    selection_anchor = null
+}, { flush: 'sync' })
+watch(() => model.uploads.identity_key, () => {
+  selection_anchor = null
+}, { flush: 'sync' })
+onMounted(() => document.addEventListener('pointerdown', clear_selection_outside))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', clear_selection_outside))
 function drag_over(event: DragEvent) {
   if (model.readonly)
     return

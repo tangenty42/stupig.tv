@@ -24,139 +24,12 @@ export function attachment_display_url(static_url: (path: string) => string, att
   return attachment.url ? attachment.is_private ? attachment.url : static_url(attachment.url) : ''
 }
 
-/** Use the attachment projection before link options; DOM .href also expands relative routes. */
-export function attachment_for_link<T>(attachments: ReadonlyMap<string, T>, link: Pick<HTMLAnchorElement, 'getAttribute'>) {
-  return attachments.get(link.getAttribute('data-attachment-url') ?? link.getAttribute('href') ?? '')
-}
-
 /** A redacted presentation belongs to this row; other attachments are independent. */
 export function redacted_version_of(attachments: ContentStoryAttachment[], file_name: string) {
   const source = attachments.find(item => content_name_key(item.file_name) === content_name_key(file_name))
   if (source?.redacted_url && source.redacted_image)
     return { ... source, url: source.redacted_url, image: source.redacted_image, is_private: false }
   return null
-}
-
-export type AttachmentUploadStatus = 'queued' | 'uploading' | 'paused' | 'completed' | 'error' | 'cancelled'
-
-/** A file plus the path it should be stored under; folder uploads carry nested paths. */
-export interface AttachmentUploadPick {
-  file: File
-  file_name: string
-  selection_root?: string
-  /** FileSystemFileHandle from a picker/drop, for zero-copy resume after refresh. */
-  handle?: FileSystemFileHandle | null
-}
-
-export function attachment_pick_from_file(file: File): AttachmentUploadPick {
-  return { file, file_name: file.webkitRelativePath || file.name, ... (file.webkitRelativePath ? { selection_root: file.webkitRelativePath.split('/')[0]! } : {}) }
-}
-
-/** Recursively flatten File System Access handles (files or folders) into picks. */
-async function collect_file_system_handle(handle: FileSystemHandle, parent: string, out: AttachmentUploadPick[]) {
-  const path = parent ? `${parent}/${handle.name}` : handle.name
-  if (handle.kind === 'file') {
-    try {
-      out.push({ file: await (handle as FileSystemFileHandle).getFile(), file_name: path, handle: handle as FileSystemFileHandle, ... (parent ? { selection_root: path.split('/')[0]! } : {}) })
-    }
-    catch {
-      // Skip unreadable files rather than failing the whole drop.
-    }
-    return
-  }
-  try {
-    for await (const child of (handle as FileSystemDirectoryHandle).values())
-      await collect_file_system_handle(child, path, out)
-  }
-  catch {
-    // Skip unreadable directories rather than failing the whole drop.
-  }
-}
-
-/** Flatten File System Access handles (files or folders) into upload picks. */
-export async function picks_from_file_handles(handles: FileSystemHandle[]): Promise<AttachmentUploadPick[]> {
-  const picks: AttachmentUploadPick[] = []
-  await Promise.all(handles.map(handle => collect_file_system_handle(handle, '', picks)))
-  return picks
-}
-
-function file_system_entry_file(entry: FileSystemFileEntry) {
-  return new Promise<File>((resolve, reject) => entry.file(resolve, reject))
-}
-
-function read_directory_batch(reader: FileSystemDirectoryReader) {
-  return new Promise<FileSystemEntry[]>((resolve, reject) => {
-    reader.readEntries(entries => resolve(entries), error => reject(error))
-  })
-}
-
-async function collect_file_system_entry(entry: FileSystemEntry, parent: string, out: AttachmentUploadPick[]) {
-  const path = parent ? `${parent}/${entry.name}` : entry.name
-  if (entry.isFile) {
-    try {
-      out.push({ file: await file_system_entry_file(entry as FileSystemFileEntry), file_name: path, ... (parent ? { selection_root: path.split('/')[0]! } : {}) })
-    }
-    catch {
-      // Skip unreadable files rather than failing the whole drop.
-    }
-    return
-  }
-  if (entry.isDirectory) {
-    try {
-      const reader = (entry as FileSystemDirectoryEntry).createReader()
-      let batch: FileSystemEntry[]
-      do {
-        batch = await read_directory_batch(reader)
-        for (const child of batch)
-          await collect_file_system_entry(child, path, out)
-      } while (batch.length)
-    }
-    catch {
-      // Skip unreadable directories rather than failing the whole drop.
-    }
-  }
-}
-
-/**
- * Flatten a drop into upload picks, preserving folder structure. Prefers the
- * File System Access handles (Chromium) so picks carry a resumable handle;
- * falls back to the entry API (Safari) and then the flat file list.
- */
-export async function attachment_picks_from_data_transfer(data_transfer: DataTransfer | null): Promise<AttachmentUploadPick[]> {
-  if (! data_transfer)
-    return []
-
-  if (typeof DataTransferItem.prototype.getAsFileSystemHandle === 'function') {
-    const handles: FileSystemHandle[] = []
-    for (const item of [... data_transfer.items]) {
-      try {
-        const handle = await item.getAsFileSystemHandle?.()
-        if (handle)
-          handles.push(handle)
-      }
-      catch {
-        // Internal drags have no handle; fall through to the entry API below.
-      }
-    }
-    if (handles.length) {
-      const picks = await picks_from_file_handles(handles)
-      if (picks.length)
-        return picks
-    }
-  }
-
-  const entries: FileSystemEntry[] = []
-  for (let index = 0; index < data_transfer.items.length; index ++) {
-    const entry = data_transfer.items[index]?.webkitGetAsEntry?.()
-    if (entry)
-      entries.push(entry)
-  }
-  if (! entries.length)
-    return [... data_transfer.files].map(attachment_pick_from_file)
-
-  const picks: AttachmentUploadPick[] = []
-  await Promise.all(entries.map(entry => collect_file_system_entry(entry, '', picks)))
-  return picks
 }
 
 export const file_icon_names = [
@@ -198,19 +71,6 @@ export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' |
 }
 
 /**
- * Triggers a browser save of `url`. For an http(s) URL the save name comes from
- * the response's Content-Disposition (see the signed download URL); `name` only
- * names blob: URLs, where no headers exist.
- */
-export function save_url_as(url: string, name?: string) {
-  const anchor = document.createElement('a')
-  anchor.href = url
-  if (name)
-    anchor.download = name
-  anchor.click()
-}
-
-/**
  * Whether the row is viewable in a browser tab (image, video, audio): it opens
  * inline by default and is exempt from the forced download; a download stays
  * available as its own action.
@@ -234,24 +94,4 @@ export function attachment_leading_action(attachment: Pick<ContentStoryAttachmen
   if (attachment.is_image)
     return 'preview'
   return attachment_is_media(attachment) ? 'open' : 'download'
-}
-
-export function story_front_cover_url(static_url: (path: string) => string, cover: string, cover_url?: string | null) {
-  const segments = cover.split('/')
-  // Bare names and folder paths point at the story's attachments.
-  if (! cover.startsWith('#') && ! /^[a-z][\w+.-]*:/i.test(cover) && segments.every(Boolean))
-    return cover_url ? static_url(cover_url) : undefined
-  return cover
-}
-
-/**
- * Alt text for a cover image: the markdown label (`![label](file.jpg)`) when
- * present, otherwise the cover's file name.
- */
-export function cover_alt(cover: string | null | undefined, cover_label: string | null | undefined, fallback: string) {
-  const label = cover_label?.trim()
-  if (label) {
-    return label
-  }
-  return cover?.split('/').pop() || fallback
 }

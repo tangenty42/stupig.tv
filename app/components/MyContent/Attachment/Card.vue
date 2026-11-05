@@ -71,9 +71,10 @@
 </template>
 
 <script setup lang="ts">
-import type { AttachmentMenuItem, MyContentAttachmentRow } from '~/utils/content/attachment-list'
+import type { AttachmentMenuItem } from './internal/list-interaction'
+import type { MyContentAttachmentRow } from '~/features/content/attachments/list-model'
 import { attachment_base_name, attachment_path_is_private } from '@shared/content-markdown'
-import { attachment_item_presentation, folder_item_presentation } from '~/utils/content/item-presentation'
+import { attachment_item_presentation, folder_item_presentation } from '~/features/content/attachments/presentation'
 import { format_bytes } from '~/utils/size'
 
 type MenuOpenEvent = Pick<MouseEvent, 'pageX' | 'pageY' | 'stopPropagation' | 'preventDefault'>

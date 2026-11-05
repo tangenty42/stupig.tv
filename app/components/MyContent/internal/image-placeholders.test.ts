@@ -1,0 +1,71 @@
+import { expect, it } from 'vitest'
+import { observe_image_placeholders, reset_image_placeholder } from './image-placeholders'
+
+function image_boundary(complete = false, naturalWidth = 0, lqip = false) {
+  const attributes = new Map<string, string>()
+  const frame = { dataset: {} as Record<string, string>, setAttribute: (key: string, value: string) => attributes.set(key, value), removeAttribute: (key: string) => attributes.delete(key) }
+  const image = Object.assign(new EventTarget(), { complete, naturalWidth, parentElement: frame })
+  if (lqip)
+    frame.dataset.lqip = ''
+  const root = { querySelectorAll: (selector: string) => selector === '.img-frame > img' || (lqip && selector === '.img-frame[data-lqip] > img') ? [image] : [] }
+  return { image, frame, attributes, root: root as unknown as HTMLElement }
+}
+
+it.each([false, true])('tracks loading, error, representation changes and cleanup with LQIP=%s', (lqip) => {
+  const { image, frame, attributes, root } = image_boundary(false, 0, lqip)
+  const cleanup = observe_image_placeholders(root)
+  expect(attributes.get('aria-busy')).toBe('true')
+  expect(frame.dataset.imageLoaded).toBeUndefined()
+  image.naturalWidth = 120
+  image.dispatchEvent(new Event('load'))
+  expect(frame.dataset.imageLoaded).toBe('')
+  expect(attributes.has('aria-busy')).toBe(false)
+  reset_image_placeholder(image as unknown as HTMLImageElement)
+  expect(frame.dataset.imageLoaded).toBeUndefined()
+  expect(attributes.get('aria-busy')).toBe('true')
+  image.dispatchEvent(new Event('error'))
+  expect(frame.dataset.imageError).toBe('')
+  expect(attributes.has('aria-busy')).toBe(false)
+  cleanup()
+  image.dispatchEvent(new Event('load'))
+  expect(frame.dataset.imageLoaded).toBeUndefined()
+  expect(frame.dataset.imageError).toBe('')
+})
+
+it.each([0, 120])('settles already-complete images before hydration with natural width %s', (width) => {
+  const { frame, attributes, root } = image_boundary(true, width)
+  const cleanup = observe_image_placeholders(root)
+  expect(frame.dataset[width ? 'imageLoaded' : 'imageError']).toBe('')
+  expect(attributes.has('aria-busy')).toBe(false)
+  cleanup()
+})
+
+it('tracks iframe loading across preview rebindings and resets for a new player', () => {
+  const attributes = new Map<string, string>()
+  let iframe = Object.assign(new EventTarget(), { contentWindow: null, contentDocument: null })
+  const frame = { dataset: {} as Record<string, string>, setAttribute: (key: string, value: string) => attributes.set(key, value), removeAttribute: (key: string) => attributes.delete(key), querySelector: () => iframe }
+  const root = { querySelectorAll: (selector: string) => selector === '.img-frame.iframe-frame' ? [frame] : [] } as unknown as HTMLElement
+  let cleanup = observe_image_placeholders(root)
+  expect(attributes.get('aria-busy')).toBe('true')
+  iframe.dispatchEvent(new Event('load'))
+  expect(frame.dataset.imageLoaded).toBe('')
+  expect(attributes.has('aria-busy')).toBe(false)
+  cleanup()
+  cleanup = observe_image_placeholders(root)
+  expect(frame.dataset.imageLoaded).toBe('')
+  cleanup()
+  iframe = Object.assign(new EventTarget(), { contentWindow: null, contentDocument: null })
+  cleanup = observe_image_placeholders(root)
+  expect(frame.dataset.imageLoaded).toBeUndefined()
+  expect(attributes.get('aria-busy')).toBe('true')
+  cleanup()
+})
+
+it('settles a cross-origin iframe that loaded before observation', () => {
+  const iframe = Object.assign(new EventTarget(), { contentWindow: {}, contentDocument: null })
+  const frame = { dataset: {} as Record<string, string>, setAttribute: () => {}, removeAttribute: () => {}, querySelector: () => iframe }
+  const root = { querySelectorAll: (selector: string) => selector === '.img-frame.iframe-frame' ? [frame] : [] } as unknown as HTMLElement
+  const cleanup = observe_image_placeholders(root)
+  expect(frame.dataset.imageLoaded).toBe('')
+  cleanup()
+})

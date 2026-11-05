@@ -1,0 +1,259 @@
+import type { ImageSaveMode } from '@shared/content-upload'
+import type { ErrorPolicy, WorkspaceCommand, WorkspaceIssue } from '@shared/content-workspace'
+import type { ContentStoryAttachment } from '@shared/types/content'
+import type { UploadEntry } from '../uploads/admission'
+import type { WorkspaceAction, WorkspaceCommandFootprint, WorkspaceListRow } from './workspace-model'
+import { attachment_folder_of, attachment_path_join, decrypted_attachment_name, normalized_attachment_extension, split_attachment_editable_name } from '@shared/content-markdown'
+import { error_policy_schema } from '@shared/content-workspace'
+import { has_permission } from '@shared/permissions'
+import { attachment_is_media } from '~/utils/content/attachment'
+import { useContentUploadsStore } from '../uploads/store'
+import { useContentUploadSync } from '../uploads/sync'
+import { create_upload_completion_context } from './completion'
+import { createAttachmentWorkspace } from './workspace'
+import { project_workspace_rows, workspace_capabilities, workspace_command_footprint, workspace_footprints_overlap, workspace_row_footprint } from './workspace-model'
+
+export interface AttachmentPanelInteraction {
+  open_url: (url: string) => void
+  save_url: (url: string, name?: string) => void
+}
+
+interface AttachmentPanelOptions {
+  scope: number
+  markdown: () => string
+  interaction: AttachmentPanelInteraction
+  readonly?: boolean
+  on_landed?: (file: ContentStoryAttachment) => void
+}
+
+/** One editing-context controller can feed both editor and page attachment panels. */
+export function useAttachmentPanel(options: AttachmentPanelOptions) {
+  const { scope, markdown, interaction, readonly = false, on_landed } = options
+  const { content } = useApi()
+  const { user } = useAuth()
+  const toast = useMyToast()
+  const uploads = useContentUploadsStore(scope)
+  const catalog = createAttachmentWorkspace(scope)
+  const sync_pending = ! readonly && scope > 0 ? useContentUploadSync(scope) : Promise.resolve()
+  const selected = ref(new Set<string>())
+  const expanded = ref(new Set<number>())
+  const drag_ids = ref<number[]>([])
+  const preview_visible = ref(false)
+  const preview_images = ref<string[]>([])
+  interface Operation {
+    command: WorkspaceCommand
+    footprint: WorkspaceCommandFootprint
+    pending: boolean
+    error: string
+    resolution: { items: WorkspaceIssue[], valid_count: number } | null
+    selection: Set<string>
+  }
+  const operations = ref<Operation[]>([])
+  const pending = computed(() => operations.value.some(operation => operation.pending))
+  const resolution_operation = computed(() => operations.value.find(operation => operation.resolution))
+  const resolution = computed(() => resolution_operation.value?.resolution ?? null)
+  const resolution_pending = computed(() => resolution_operation.value?.pending ?? false)
+  const request_error = computed(() => operations.value.find(operation => operation.error)?.error ?? '')
+  const failure_visible = ref(false)
+  watch([request_error, () => uploads.admission_error, pending, () => uploads.admitting], ([request, admission, working, admitting], previous) => {
+    if ((request && request !== previous?.[0]) || (admission && admission !== previous?.[1]))
+      failure_visible.value = true
+    else if (! request && ! admission && ! working && ! admitting)
+      failure_visible.value = false
+  }, { immediate: true, flush: 'sync' })
+  const completion = create_upload_completion_context()
+  let generation = 0
+  const rows = computed(() => project_workspace_rows(catalog.data.value?.nodes ?? [], readonly ? [] : uploads.sessions, catalog.data.value?.root_id ?? 0, expanded.value, readonly ? [] : uploads.preparations))
+  watch(() => rows.value.filter(row => row.preparation).map(row => row.key), (next, previous) => {
+    const removed = new Set(previous.filter(key => ! next.includes(key)))
+    if ([... selected.value].some(key => removed.has(key)))
+      selected.value = new Set([... selected.value].filter(key => ! removed.has(key)))
+  }, { flush: 'sync' })
+  watch(() => uploads.sessions.map(session => ({ key: `session:${session.id}`, replacing: session.purpose === 'replace' || session.purpose === 'redact' ? session.source_id : session.replacement_id })), (next, previous) => {
+    const hidden = new Set(next.filter(item => item.replacing).map(item => `node:${item.replacing}`))
+    for (const task of previous) {
+      if (! next.some(item => item.key === task.key))
+        hidden.add(task.key)
+    }
+    // File and task selections never inherit one another, including cancellation.
+    if ([... selected.value].some(key => hidden.has(key)))
+      selected.value = new Set([... selected.value].filter(key => ! hidden.has(key)))
+  }, { flush: 'sync' })
+  const root_id = computed(() => catalog.data.value?.root_id ?? 0)
+  const can_private = computed(() => has_permission(user.value, 'content_private', 'read'))
+  const draft_markdown = computed(markdown)
+  const get_delete_impact = (targets: number[]) => content.get_delete_impact({ kind: 'attachment', id: scope, targets })
+  const affected_operation = (row: WorkspaceListRow) => operations.value.find(operation => workspace_footprints_overlap(operation.footprint, workspace_row_footprint(row)))
+  const command_failed = (row: WorkspaceListRow) => !! affected_operation(row)?.error
+  const command_pending = (row: WorkspaceListRow) => operations.value.some(operation => operation.pending && workspace_footprints_overlap(operation.footprint, workspace_row_footprint(row)))
+  const command_moving = (row: WorkspaceListRow) => operations.value.some(operation => operation.pending && operation.command.operation === 'move' && row.node && operation.footprint.ids.includes(row.node.id))
+  const capabilities = (row: WorkspaceListRow) => {
+    const operation = affected_operation(row)
+    return workspace_capabilities(row, { readonly, can_private: can_private.value, pending: !! operation, pending_reason: operation?.pending ? '正在提交操作' : '此项操作结果待处理', nodes: catalog.data.value?.nodes, reservations: uploads.reservations })
+  }
+  function toggle_folder(row: WorkspaceListRow) {
+    if (row.node?.kind !== 'folder')
+      return
+    const next = new Set(expanded.value)
+    if (next.has(row.node.id))
+      next.delete(row.node.id)
+    else
+      next.add(row.node.id)
+    expanded.value = next
+  }
+  const selected_rows = computed(() => rows.value.filter(row => selected.value.has(row.key)))
+  const target = (row: WorkspaceListRow) => ({ id: row.node!.id, version: row.node!.version })
+  async function submit_operation(operation: Operation, policy?: ErrorPolicy) {
+    if (operation.pending)
+      return
+    if (policy)
+      operation.command = { ... operation.command, request_id: crypto.randomUUID(), on_error: policy }
+    operation.pending = true
+    const epoch = generation
+    operation.error = ''
+    try {
+      const result = await content.execute_workspace_command(operation.command)
+      if (epoch !== generation)
+        return
+      catalog.accept(result.workspace)
+      operations.value = operations.value.filter(item => item !== operation)
+      selected.value = new Set([... selected.value].filter(key => ! operation.selection.has(key)))
+    }
+    catch (error) {
+      if (epoch !== generation)
+        return
+      const value = error as { code?: string, details?: { items: WorkspaceIssue[], valid_count: number } }
+      if (value.code === 'BATCH_REJECTED' && value.details && 'valid_count' in value.details) {
+        operation.resolution = value.details
+      }
+      else {
+        // An old rejection cannot authorize a new command after this submission
+        // may have committed. Only retry its existing receipt until reconciled.
+        operation.resolution = null
+        operation.error = error instanceof Error ? error.message : '操作结果未知，请重试'
+        failure_visible.value = true
+      }
+    }
+    finally {
+      if (epoch === generation)
+        operation.pending = false
+    }
+  }
+  function submit(policy?: ErrorPolicy) {
+    const operation = policy ? resolution_operation.value : operations.value.find(item => item.error)
+    if (operation)
+      return submit_operation(operation, policy)
+  }
+  const can_execute = (input: WorkspaceAction) => ! operations.value.some(operation => workspace_footprints_overlap(operation.footprint, workspace_command_footprint(input, catalog.data.value?.nodes ?? [])))
+  function execute(input: WorkspaceAction) {
+    const command = { ... input, request_id: crypto.randomUUID(), scope_id: scope, on_error: error_policy_schema.parse({}) } as WorkspaceCommand
+    const footprint = workspace_command_footprint(command, catalog.data.value?.nodes ?? [])
+    const blocked = operations.value.find(operation => workspace_footprints_overlap(operation.footprint, footprint))
+    if (blocked) {
+      if (blocked.error)
+        failure_visible.value = true
+      else
+        toast.error('此目标仍有操作待完成，请先处理其结果')
+      return
+    }
+    operations.value.push({ command, footprint, pending: false, error: '', resolution: null, selection: new Set([... selected.value].filter(key => footprint.ids.some(id => key === `node:${id}`))) })
+    return submit_operation(operations.value[operations.value.length - 1]!)
+  }
+  function dismiss_resolution() {
+    const operation = resolution_operation.value
+    if (operation && ! operation.pending)
+      operations.value = operations.value.filter(item => item !== operation)
+  }
+  async function start(entries: UploadEntry[]) {
+    const footprint = { ids: entries.flatMap(entry => [entry.source?.id, entry.replacement?.id].filter((id): id is number => id !== undefined)), paths: entries.map(entry => ({ path: normalized_attachment_extension(entry.file_name) + (entry.access === 'private' ? '.good' : ''), subtree: false })) }
+    const blocked = operations.value.find(operation => workspace_footprints_overlap(operation.footprint, footprint))
+    if (blocked) {
+      if (blocked.error)
+        failure_visible.value = true
+      else
+        toast.error('上传目标仍有操作待完成，请先处理其结果')
+      return
+    }
+    const epoch = generation
+    try {
+      await uploads.start(entries.map(entry => ({ ... entry, on_landed: completion.bind((file) => {
+        entry.on_landed?.(file)
+        if (! entry.source)
+          on_landed?.(file)
+      }) })))
+    }
+    catch (error) {
+      if (epoch === generation) {
+        if (uploads.admission_error)
+          failure_visible.value = true
+        else
+          toast.error(error instanceof Error ? error.message : '无法开始上传')
+      }
+    }
+  }
+  async function download(row: WorkspaceListRow, role: 'display' | 'original' | 'redacted_display' = 'display') {
+    const file = row.node?.attachment
+    if (! file || (role === 'redacted_display' ? ! file.has_redacted : ! capabilities(row).download))
+      return
+    try {
+      interaction.save_url((await content.sign_attachment_download(scope, row.path, role)).url)
+    }
+    catch (error) {
+      toast.error(error instanceof Error ? error.message : '无法下载')
+    }
+  }
+  function preview(row: WorkspaceListRow, role: 'display' | 'redacted_display' = 'display') {
+    const file = row.node?.attachment
+    const cap = capabilities(row)
+    if (! file || (role === 'redacted_display' ? ! cap.preview_redacted : ! cap.preview))
+      return
+    preview_images.value = [role === 'redacted_display' ? file.redacted_url! : file.url!]
+    preview_visible.value = true
+  }
+  function open(row: WorkspaceListRow) {
+    if (row.node?.kind === 'folder')
+      return toggle_folder(row)
+    const file = row.node?.attachment
+    if (! file)
+      return
+    if (file.is_image)
+      return preview(row, capabilities(row).preview ? 'display' : 'redacted_display')
+    if (! capabilities(row).open)
+      return
+    if (attachment_is_media(file)) {
+      interaction.open_url(file.url!)
+    }
+    else {
+      void download(row)
+    }
+  }
+  function replace(row: WorkspaceListRow, file: File, keep_name: boolean) {
+    const folder = attachment_folder_of(row.path)
+    const name = keep_name
+      ? split_attachment_editable_name(row.path).editable + split_attachment_editable_name(file.name).locked
+      : file.name
+    const path = normalized_attachment_extension(attachment_path_join(folder, name))
+    return start([{ file, file_name: path, purpose: 'replace', source: target(row) }])
+  }
+  function edit_image(row: WorkspaceListRow, file: File, mode: ImageSaveMode, name: string, basis: 'display' | 'original') {
+    const folder = attachment_folder_of(row.path)
+    const path = mode !== 'copy' ? decrypted_attachment_name(row.path) : `${folder ? `${folder}/` : ''}${name}`
+    return start([{ file, file_name: path, purpose: ({ copy: 'create', overwrite: 'replace', redacted: 'redact' } as const)[mode], source: target(row), image_mode: mode, image_input_basis: basis }])
+  }
+  watch(() => uploads.identity_key, () => {
+    generation ++
+    completion.reset()
+    selected.value = new Set()
+    operations.value = []
+    failure_visible.value = false
+    preview_visible.value = false
+  }, { flush: 'sync' })
+  onUnmounted(() => {
+    completion.dispose()
+    generation ++
+    operations.value = []
+  })
+  const ready = Promise.all([catalog.ready, sync_pending]).then(() => undefined)
+  return { ready, catalog, uploads, selected, selected_rows, expanded, drag_ids, preview_visible, preview_images, rows, root_id, readonly, can_private, draft_markdown, get_delete_impact, pending, resolution, request_error, failure_visible,
+    resolution_pending, command_failed, command_pending, command_moving, can_execute, target, capabilities, toggle_folder, submit, execute, dismiss_resolution, start, open, preview, download, replace, edit_image }
+}

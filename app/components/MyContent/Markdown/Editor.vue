@@ -155,11 +155,14 @@
 
 <script setup lang="ts">
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
-import type { AttachmentUploadPick } from '~/utils/content/attachment'
-import type { LintListItem } from '~/utils/content/editor/lint'
-import { attachment_picks_from_data_transfer } from '~/utils/content/attachment'
-import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/utils/content/attachment-drag'
-import { completion_icon_names } from '~/utils/content/editor/completions'
+import type { LintListItem } from './internal/editor/lint'
+import type { AttachmentUploadPick } from '~/features/content/uploads/picks'
+import { content_attachment_drag_type, content_folder_drag_type, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/components/MyContent/internal/attachment-drag'
+import { attachment_picks_from_data_transfer } from '~/components/MyContent/internal/upload-picks'
+import { content_attachment_markdown, content_folder_markdown } from '~/features/content/attachments/drag'
+import { useStoryEditor } from './internal/editor'
+import { completion_icon_names } from './internal/editor/completions'
+import { useStoryEditorViewState } from './internal/view-state'
 
 const props = withDefaults(defineProps<{
   storyId?: number | null

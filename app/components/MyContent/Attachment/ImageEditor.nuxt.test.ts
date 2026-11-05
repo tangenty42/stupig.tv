@@ -3,29 +3,33 @@ import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import Select from 'primevue/select'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
 import ImageEditor from './ImageEditor.vue'
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), confirm: vi.fn(), release: vi.fn(), exported: vi.fn() }))
+vi.mock('./image-editor/session', async () => {
+  const { ref } = await import('vue')
+  return {
+    useImageEditSession: (options: {
+      on_ready: (size: { width: number, height: number }) => void
+      on_save: (file: File) => void
+    }) => ({
+      working: ref(false), loading: ref(false), load_error: ref(''),
+      natural_size: ref({ width: 32, height: 24 }), source_bitmap: ref({ width: 32, height: 24 }),
+      can_undo: ref(false), can_redo: ref(false), generation: 1,
+      load_source: () => options.on_ready({ width: 32, height: 24 }),
+      release_source: mocks.release, commit_action: vi.fn(), undo: vi.fn(), redo: vi.fn(),
+      submit: () => {
+        mocks.exported()
+        options.on_save(new File(['pixels'], 'edited.png'))
+      },
+    }),
+  }
+})
 mockNuxtImport('useApi', () => () => ({ content: { image_editor_source: mocks.load } }))
 mockNuxtImport('useMyToast', () => () => ({ error: vi.fn() }))
 mockNuxtImport('useMyConfirm', () => () => ({ confirm_require: mocks.confirm }))
 // Canvas decoding/export has its own tests. Keep the real dialog, template,
 // filename component and viewport while replacing only the bitmap session.
-mockNuxtImport('useImageEditSession', () => (options: {
-  on_ready: (size: { width: number, height: number }) => void
-  on_save: (file: File) => void
-}) => ({
-  working: ref(false), loading: ref(false), load_error: ref(''),
-  natural_size: ref({ width: 32, height: 24 }), source_bitmap: ref({ width: 32, height: 24 }),
-  can_undo: ref(false), can_redo: ref(false), generation: 1,
-  load_source: () => options.on_ready({ width: 32, height: 24 }),
-  release_source: mocks.release, commit_action: vi.fn(), undo: vi.fn(), redo: vi.fn(),
-  submit: () => {
-    mocks.exported()
-    options.on_save(new File(['pixels'], 'edited.png'))
-  },
-}))
 
 const wrappers: { unmount: () => void }[] = []
 beforeEach(() => {

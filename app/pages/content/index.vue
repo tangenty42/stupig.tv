@@ -105,9 +105,8 @@
 import type { ContentStorySummary } from '@shared/types/content'
 import { has_permission } from '@shared/permissions'
 import { story_pinned, story_rating_rank } from '@shared/types/content'
-import { sync_resource } from '@shared/types/sync'
+import { useContentStories } from '~/features/content/stories'
 
-const { content } = useApi()
 const { user } = useAuth()
 const route = useRoute()
 const router = useRouter()
@@ -119,15 +118,9 @@ const selected_view = computed({
   set: (value: string) => { void router.replace({ query: { ... route.query, view: value === 'drafts' ? 'drafts' : undefined } }) },
 })
 
-const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
-const loading = useState('content_stories_loading', () => false)
-
-await useSyncedData<ContentStorySummary[]>(
-  sync_resource('content_stories', 'all'),
-  () => content.list_stories(),
-  stories,
-  loading,
-)
+const story_query = useContentStories()
+await story_query.ready
+const { stories, loading } = story_query
 
 const active_labels = reactive(new Set<string>())
 const sort_by_rating = ref(false)

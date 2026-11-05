@@ -34,6 +34,8 @@ export interface StoryMarkdownOptions {
   /** Known stories so `[](content://title)` references render as story cards. */
   stories: () => ContentStorySummary[]
   static_url: (path: string) => string
+  /** Maximum decoded LQIP bytes accepted from attachment metadata. */
+  lqip_max_bytes: number
   /**
    * Whether a folder card can be activated. False leaves it inert: a card whose
    * host has nowhere to open the folder must not look or behave like a button.

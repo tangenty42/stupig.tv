@@ -11,7 +11,7 @@ const files: ContentStoryAttachment[] = [
 const story: ContentStorySummary = { id: 2, title: 'Known', labels: [], desc: null, cover: null, cover_label: null, cover_version: null, cover_url: null, event_dates: [], event_precision: 'day', created_at: '', updated_at: '' }
 
 function render(source: string, attachments = files) {
-  const md = create_story_markdown({ story_id: () => 1, attachments: () => attachments, folders: () => ['empty'], stories: () => [story], static_url: path => path, folder_card_openable: () => true })
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => attachments, folders: () => ['empty'], stories: () => [story], static_url: path => path, lqip_max_bytes: 1024, folder_card_openable: () => true })
   const env = { images: [] as string[] }
   const root = document.createElement('div')
   root.innerHTML = md.render(source, env)

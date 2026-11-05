@@ -3,8 +3,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { CONTENT_ATTACHMENT_DENIED_TEXT, CONTENT_IMAGE_DENIED_TEXT, upgrade_legacy_refs } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_DENIED_TEXT, CONTENT_PRIVATE_INLINE_PLACEHOLDER } from '@shared/content-private'
 import { describe, expect, it } from 'vitest'
-import { attachment_for_link } from '~/utils/content/attachment'
-import { content_attachment_markdown, content_folder_markdown } from '~/utils/content/attachment-drag'
+import { attachment_for_link } from '~/components/MyContent/Markdown/internal/preview/attachment-links'
+import { content_attachment_markdown, content_folder_markdown } from '~/features/content/attachments/drag'
 import { create_story_markdown } from '~/utils/content/markdown'
 import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
 import { sanitize_story_html } from '~/utils/content/markdown/sanitize'
@@ -23,7 +23,7 @@ function attachment(file_name: string, is_image: boolean): ContentStoryAttachmen
 
 it.each(['#top', '?download=1#top', '?version=wrong&download=1#top'])('retains download identity for attachment links with options: %s', (suffix) => {
   const file = { ... attachment('report.txt', false), url: '/api/content/attachments/7?version=server-version' }
-  const md = create_story_markdown({ story_id: () => 1, attachments: () => [file], static_url: path => path, stories: () => [], folder_card_openable: () => false })
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [file], static_url: path => path, lqip_max_bytes: 1024, stories: () => [], folder_card_openable: () => false })
   for (const label of ['', '下载']) {
     const html = sanitize_story_html(md.render(`[${label}](att://report.txt${suffix})`, { images: [] }))
     const href = html.match(/ href="([^"]*)"/)![1]!.replaceAll('&amp;', '&')
@@ -37,7 +37,7 @@ it.each(['#top', '?download=1#top', '?version=wrong&download=1#top'])('retains d
 
 it('resolves normalized attachment and title references and retains link options', () => {
   const file = { ... attachment('Docs/É.png', true), url: '/api/content/attachments/7?version=server-version' }
-  const md = create_story_markdown({ story_id: () => 1, attachments: () => [file], static_url: path => path, folders: () => [], folder_card_openable: () => false,
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [file], static_url: path => path, lqip_max_bytes: 1024, folders: () => [], folder_card_openable: () => false,
     stories: () => [{ id: 2, title: 'Other', labels: [], desc: null, cover: null }] as never })
   const html = md.render('![image](ATT://docs/E%CC%81.PNG?version=wrong&download=1#page2) [story](CONTENT://OTHER?view=card#top)', { images: [] })
   expect(html).toContain('/api/content/attachments/7?version=server-version&amp;download=1#page2')
@@ -47,11 +47,11 @@ it('resolves normalized attachment and title references and retains link options
 
 it('uses the shared cover renderer for story references, including dimensions and LQIP', () => {
   const image = { revision: 2, width: 120, height: 80, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: false }
-  const md = create_story_markdown({ story_id: () => 1, attachments: () => [], static_url: path => path, folder_card_openable: () => false,
+  const md = create_story_markdown({ story_id: () => 1, attachments: () => [], static_url: path => path, lqip_max_bytes: 1024, folder_card_openable: () => false,
     stories: () => [{ id: 2, title: 'Other', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null,
       cover: 'cover.png', cover_label: null, cover_url: '/cover', cover_version: 'v2', cover_image: image }] })
   const html = md.render('[](content://Other)', { images: [] })
-  expect(html).toContain(sanitize_story_html(render_story_cover('/cover', 'cover.png', image)))
+  expect(html).toContain(sanitize_story_html(render_story_cover('/cover', 'cover.png', image, 1024)))
 })
 
 /** A story holding a `cards` gallery plus a few neighbours. */
@@ -72,6 +72,7 @@ function render(markdown: string, list: ContentStoryAttachment[] = attachments, 
     folders: () => folders,
     stories: () => [],
     static_url: path => path,
+    lqip_max_bytes: 1024,
     folder_card_openable: () => folder_openable,
   })
   const environment = { images: [] as string[] }
@@ -232,7 +233,7 @@ describe('private bucket rendering during release A', () => {
   const private_image = { ... attachment('secret.png.good', true), is_private: true, url: '/api/content/attachments/11?version=v1' }
 
   it('uses same-origin authorized addresses without a ciphertext decoder or static host prefix', () => {
-    const md = create_story_markdown({ story_id: () => 1, attachments: () => [private_image], stories: () => [], static_url: path => `https://static.test${path}`, folder_card_openable: () => false })
+    const md = create_story_markdown({ story_id: () => 1, attachments: () => [private_image], stories: () => [], static_url: path => `https://static.test${path}`, lqip_max_bytes: 1024, folder_card_openable: () => false })
     const html = md.render('![](att://secret.png.good) [](att://secret.png.good)', { images: [] })
     expect(html).toContain('src="/api/content/attachments/11?version=v1"')
     expect(html).toContain('href="/api/content/attachments/11?version=v1"')
@@ -274,7 +275,7 @@ describe('explicit reference rendering', () => {
   })
   it('resolves a Chinese content:// title to the same card and labeled link as before', () => {
     const md = create_story_markdown({
-      story_id: () => 1, attachments: () => [], static_url: path => path,
+      story_id: () => 1, attachments: () => [], static_url: path => path, lqip_max_bytes: 1024,
       stories: () => [{ id: 2, title: '其他档案', labels: [], event_precision: 'day', event_dates: [], created_at: '', updated_at: '', desc: null, cover: null, cover_label: null, cover_version: null, cover_url: null }],
       folder_card_openable: () => false,
     })
@@ -735,6 +736,7 @@ describe('compiled icons', () => {
         cover_url: null,
       }],
       static_url: path => path,
+      lqip_max_bytes: 1024,
       folder_card_openable: () => true,
     })
     const markdown = [

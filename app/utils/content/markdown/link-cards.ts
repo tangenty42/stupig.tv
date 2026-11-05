@@ -5,8 +5,8 @@ import type { FileCardData, StoryCardMeta, StoryMarkdownContext, StoryMarkdownOp
 import { attachment_base_name, CONTENT_ATTACHMENT_DENIED_TEXT, decrypted_attachment_name, folder_file_count, is_attachment_folder } from '@shared/content-markdown'
 import { content_name_key, parse_content_ref } from '@shared/content-reference'
 import { story_rating, story_rating_rank } from '@shared/types/content'
-import { attachment_can_read, attachment_display_url, attachment_is_restricted, cover_alt, file_icon, redacted_version_of, story_front_cover_url } from '~/utils/content/attachment'
-import { render_story_cover } from '~/utils/content/story-cover'
+import { attachment_can_read, attachment_display_url, attachment_is_restricted, file_icon, redacted_version_of } from '~/utils/content/attachment'
+import { cover_alt, render_story_cover, story_front_cover_url } from '~/utils/content/story-cover'
 import { format_bytes } from '~/utils/size'
 import { apply_chip_gaps } from './chips'
 import { find_story_by_title, local_file_name, resolve_content_url, with_reference_suffix } from './links'
@@ -69,7 +69,7 @@ function story_card_inner(md: MarkdownIt, ctx: StoryMarkdownContext, story: Cont
     ? story_front_cover_url(ctx.options.static_url, story.cover, story.cover_url)
     : undefined
   const cover = cover_src
-    ? `<span class="story-card-cover">${render_story_cover(cover_src, cover_alt(story.cover, story.cover_label, story.title), story.cover_image)}</span>`
+    ? `<span class="story-card-cover">${render_story_cover(cover_src, cover_alt(story.cover, story.cover_label, story.title), story.cover_image, ctx.options.lqip_max_bytes)}</span>`
     : ''
   const desc = story.desc ? `<span class="story-card-desc">${md.utils.escapeHtml(story.desc)}</span>` : ''
   return `${brand}${cover}<span class="story-card-content"><span class="story-card-title">${md.utils.escapeHtml(story.title)}</span>${desc}${rating}</span>`

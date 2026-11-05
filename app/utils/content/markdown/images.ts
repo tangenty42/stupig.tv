@@ -79,7 +79,7 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
           token.attrSet('tabindex', '0')
           token.attrSet('aria-label', `预览：${label}`)
           const presentation = abridged ?? attachment
-          if (presentation?.image && image_lqip_style(presentation)) {
+          if (presentation?.image && image_lqip_style(presentation, ctx.options.lqip_max_bytes)) {
             token.attrSet('width', String(presentation.image.width))
             token.attrSet('height', String(presentation.image.height))
           }
@@ -93,7 +93,7 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
       : invalid ? '' : default_image_rule(tokens, idx, options, env, self)
     const unavailable = denied ? '' : `<span class="image-unavailable" role="img" aria-label="${invalid ? '附件不存在或引用无效' : '图片加载失败'}"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span>`
     const presentation = abridged ?? image_attachment
-    const lqip = denied || invalid ? null : image_lqip_style(presentation)
+    const lqip = denied || invalid ? null : image_lqip_style(presentation, ctx.options.lqip_max_bytes)
     // The validated metadata also reserves geometry in engines that ignore
     // width/height aspect hints once CSS sets both dimensions to auto.
     const dimensions = lqip && presentation?.image
