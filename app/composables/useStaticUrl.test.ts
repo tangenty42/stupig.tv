@@ -13,9 +13,8 @@ describe('bucket public asset addresses', () => {
     expect(url('')).toBe('')
   })
 
-  it('keeps private attachment reads on the authenticated same-origin route', () => {
+  it('keeps attachment reads on the authenticated same-origin route', () => {
     vi.stubGlobal('useRuntimeConfig', () => ({ public: { oss: { buckets: { public: { publicBaseUrl: 'https://assets.test' } } } } }))
-    expect(useStaticUrl()('/api/content/private-attachments/11?version=v1')).toBe('/api/content/private-attachments/11?version=v1')
-    expect(useStaticUrl()('/api/content/attachments/12?version=v2')).toBe('/api/content/attachments/12?version=v2')
+    expect(useStaticUrl()('/api/links/attachments/12?version=v2')).toBe('/api/links/attachments/12?version=v2')
   })
 })

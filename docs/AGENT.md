@@ -13,7 +13,7 @@
 - [SID#README](README.md)：人类编写的 Swordoc 机制与传统，定义目录、权威边界和四种文档类型。
 - [SID#0.0.LAW](0_overall/0_background/LAW.md)：项目背景与成员权限边界，当前文档状态为 PENDING，保留领域文档引用的 TODO。
 - [SID#0.1.LAW](0_overall/1_architecture/LAW.md)：六个功能板块、功能关系图与板块交界，人类已将文档状态标为 DONE，仍保留各板块文档引用的 TODO。
-- [SID#0.1.DESIGN](0_overall/1_architecture/DESIGN.md)：人类正在编写总体实现架构，状态为 PENDING；已有基础设施总览图、生产与开发授权回调对照图，以及代码产物结构表。
+- [SID#0.1.DESIGN](0_overall/1_architecture/DESIGN.md)：人类正在编写总体实现架构，状态为 PENDING；已有基础设施总览图、生产与开发授权回调对照图，以及代码结构章节（总体职责表、前端分区职责与分区依赖关系约定）。
 - 人类先前要求归档旧资料，随后明确将总体架构与领域业务细节分开，并继续将运行与维护设施合并为一个板块。
 - 人类要求将总体 DESIGN 草案中的领域实现与工程流程细节下放，随后将授权回调的环境差异独立成图，采用简洁的 flowchart 表达。
 - `SID#README` 为 Swordoc ID 增加 `SID#` 前缀，明确机制入口的标识为 `SID#README`；模板正文采用二级标题，AGENT 基线仍要求时间精确到秒并注明时区。

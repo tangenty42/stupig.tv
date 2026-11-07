@@ -120,7 +120,7 @@ export function useStoryEditSession(options: StoryEditSessionOptions) {
       if (current())
         await store.cycle()
       return cloud.value?.draft_revision ?? null
-    }, { immediate: false, server: false, universal: false, fetch_without_resource: true,
+    }, { immediate: false, server: false, universal: false, fetch_without_resource: true, refresh_policy: 'latest',
       query_key: `draft-page:${draft_random_id()}`, polling_interval: settings.app.content.draft.keepaliveIntervalMs, on_error: () => {} })
       .then((query) => {
         refresh = query.refresh

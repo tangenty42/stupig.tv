@@ -19,7 +19,7 @@
 | 引经据典 | 实现产物 | 现状 |
 | --- | --- | --- |
 | 人类批准的第一阶段 | `app/features/content/`、`app/components/MyContent/*/internal` 及邻近实现 | 草稿、上传、附件和组件内部逻辑已按归属迁移；Nuxt 组件发现仅包含 Vue SFC。第一阶段已通过人类补验 |
-| 人类批准的 Content 工具后续整理 | `app/features/content/{attachments,uploads}/`、`app/components/MyContent/**/internal/`、`app/utils/content/` | 上传与附件业务规则、组件交互、DOM 生命周期和纯渲染能力已按实际职责拆开；`markdown/` 及人类要求暂缓的纯模块保留，旧路径无转发层，已确认的 `draft-reference-bridge.ts` 死代码已删除 |
+| 人类批准的 Content 工具后续整理 | `app/features/content/`（含 `markdown/`、`image-editor/`、`attachments/`、`uploads/`） | 上传与附件业务规则、组件交互、DOM 生命周期和纯渲染能力已按实际职责拆开；2026-11-06 人类将 `app/utils/` 核定为全站通用后，`app/utils/content/` 已整体迁出并删除；随后人类决定 `app/components/` 只保留 Vue SFC，组件配套逻辑（编辑器、渲染器、图片编辑、拖放、占位图等）全部归入 `app/features/content/`。旧路径无转发层，已确认的 `draft-reference-bridge.ts` 死代码已删除 |
 | 人类批准的第二阶段 | `app/features/content/stories.ts`、`editing.ts` 与三个 content 页面 | 公共查询、编辑会话及上传正文回填已由业务入口负责；第二阶段已通过人类验收 |
 | `SID#0.1.LAW` 的账号与公共框架边界 | `app/features/account/auth.ts`、`app/components/MyAccount/AuthDialog.vue`、`app/app.vue` | 公共框架只组合身份入口和账号组件；登录注册、验证码及 pending 状态已退出 `app.vue` |
 | 人类批准的第三阶段 | `app/features/account/profile.ts`、三个 `MyAccount/Profile*` 组件及 `app/pages/u/[id].vue` | 资料、安全和会话的 API、同步与操作状态归账号 feature；路由页仅负责参数、SEO 和区块组合。结构核对与 SSR 隔离补验通过，第三阶段收尾 |

@@ -14,6 +14,7 @@ type BroadcastMessage
 
 type SyncListener = (event?: DataSyncEvent) => void | Promise<void>
 type SyncStatus = 'closed' | 'connecting' | 'open'
+interface PrivateSyncCredentials { username: string, password: string }
 
 const transports = new WeakMap<object, ReturnType<typeof create_data_sync_transport>>()
 
@@ -52,6 +53,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
   let started = false
   let suspended = false
   let reconnect_timer: ReturnType<typeof setTimeout> | null = null
+  let fetch_private_credentials: () => Promise<PrivateSyncCredentials> = () => Promise.reject(new Error('Private sync credentials are not configured'))
   let cancel_gather: (() => void) | null = null
 
   function get_listeners() {
@@ -246,13 +248,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
           return
         }
 
-        const credentials = private_mode
-          ? await fetch('/api/content-draft-sync/credentials', { credentials: 'include', cache: 'no-store' }).then(async (response) => {
-              if (! response.ok)
-                throw new Error('Private sync authorization rejected')
-              return await response.json() as { username: string, password: string }
-            })
-          : {}
+        const credentials = private_mode ? await fetch_private_credentials() : {}
         if (generation !== connection_generation || disposed || document.hidden)
           return
         const client = mqtt.connect(broker_url, {
@@ -679,11 +675,15 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     user: Ref<unknown>
     handle_remote_logout: () => void
     identity_changed: () => void
+    /** Supplied by the plugin so the transport never depends on the API client. */
+    fetch_private_credentials?: () => Promise<PrivateSyncCredentials>
   }) {
     if (import.meta.client && ! started && ! disposed) {
       started = true
       handle_remote_logout = options.handle_remote_logout
       identity_changed = options.identity_changed
+      if (options.fetch_private_credentials)
+        fetch_private_credentials = options.fetch_private_credentials
       let initial_gather_done = false
 
       start_cross_tab_transport()

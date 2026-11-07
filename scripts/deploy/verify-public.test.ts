@@ -36,7 +36,7 @@ beforeEach(() => {
   broken = ''
   sent.length = 0
   vi.stubGlobal('WebSocket', BrokerSocket)
-  vi.stubGlobal('fetch', vi.fn(async (url: URL) => url.pathname === '/healthz' ? Response.json({ status: 'ok' }) : new Response('home')))
+  vi.stubGlobal('fetch', vi.fn(async (url: URL) => url.pathname === '/api/hooks/healthz' ? Response.json({ status: 'ok' }) : new Response('home')))
 })
 afterEach(() => vi.unstubAllGlobals())
 

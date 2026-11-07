@@ -66,7 +66,7 @@ export function attachment_access_version(row: Pick<AttachmentRow, 'version' | '
 
 /** Stable same-origin entry; no expiring credentials in payloads or Markdown. */
 export function attachment_object_url(row: Pick<AttachmentRow, 'id' | 'version' | 'object_key' | 'storage_bucket' | 'is_private' | 'storage_provider' | 'oss_version_id'>) {
-  return `/api/content/attachments/${Number(row.id)}?version=${attachment_access_version(row)}`
+  return `/api/links/attachments/${Number(row.id)}?version=${attachment_access_version(row)}`
 }
 
 function format_row(row: AttachmentRow, private_readable = false): ContentStoryAttachment {

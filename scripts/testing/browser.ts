@@ -106,7 +106,7 @@ export default async function setup(playwright: FullConfig) {
     created = true
     await run_migrations({ maintenance: true, database_config: config.db })
     draft_broker = await start_cloud_draft_broker(directory, { username: config.mqtt.username, password: config.mqtt.password }, async (input) => {
-      const response = await fetch(`${base_url}/api/content-draft-sync/authenticate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(5000) })
+      const response = await fetch(`${base_url}/api/hooks/emqx/authenticate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(5000) })
       if (! response.ok)
         return { result: 'deny' }
       return response.json()
@@ -226,7 +226,7 @@ export default defineNuxtConfig({
         throw new Error(`Isolated Nuxt exited before readiness; see ${resolve(directory, 'server.log')}`)
       let response: Response | undefined
       try {
-        response = await fetch(`${base_url}/healthz`, { signal: AbortSignal.timeout(3000) })
+        response = await fetch(`${base_url}/api/hooks/healthz`, { signal: AbortSignal.timeout(3000) })
       }
       catch {}
       if (response?.ok) {

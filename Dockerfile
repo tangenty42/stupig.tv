@@ -33,12 +33,12 @@ COPY config ./config
 COPY migrations ./migrations
 EXPOSE 3042
 # 容器级健康检查：探针跟着镜像走，所以不经 compose 的 `docker run` 也有（compose 里
-# 那份同名检查会覆盖它，两边都指向 /healthz，不会走岔）。必须用 shell 形式以便运行时
+# 那份同名检查会覆盖它，两边都指向 /api/hooks/healthz，不会走岔）。必须用 shell 形式以便运行时
 # 读 PORT —— compose 会用 .env.prod 的 APP_PORT 覆盖它，在这里写死 3042 意味着换端口部署
 # 就永远 unhealthy。node 自带 fetch，基础镜像里没有 curl/wget 也不需要。
 # start-period 要涵盖启动前的迁移（ENTRYPOINT 先跑 migrate 再起服务）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3042)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3042)+'/api/hooks/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # sed 是必需的：Windows 工作区里这个脚本可能是 CRLF，而 #!/bin/sh\r 会让 exec 直接
 # 报 "no such file or directory" —— 容器起不来，且只有真跑起来才看得见。chmod 同理，
 # Windows 检出没有可执行位。

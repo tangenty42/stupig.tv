@@ -205,13 +205,13 @@
 <script setup lang="ts">
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ContentStoryAttachment } from '@shared/types/content'
-import type { RedactionStroke } from './image-editor/redact'
+import type { RedactionStroke } from '~/features/content/image-editor/redact'
 import { settings } from '@shared/settings'
-import { useImageEditorDialog } from './image-editor/dialog'
-import { normalize_editor_crop } from './image-editor/image-edit'
-import { paint_redaction_stroke } from './image-editor/redact'
-import { useImageEditSession } from './image-editor/session'
-import { useImageEditorViewport } from './image-editor/viewport'
+import { useImageEditorDialog } from '~/features/content/image-editor/dialog'
+import { normalize_editor_crop } from '~/features/content/image-editor/image-edit'
+import { paint_redaction_stroke } from '~/features/content/image-editor/redact'
+import { useImageEditSession } from '~/features/content/image-editor/session'
+import { useImageEditorViewport } from '~/features/content/image-editor/viewport'
 
 interface Props {
   visible: boolean
@@ -232,11 +232,9 @@ const emit = defineEmits<{
 
 const { error: toast_error } = useMyToast()
 const { confirm_require } = useMyConfirm()
-const { content } = useApi()
 const { mode, base_ready, original_name, display_name, save_confirmation,
   source_url, source_error, source_loading, modes,
   save, request_reset, save_disabled } = useImageEditorDialog(props, {
-  load: content.image_editor_source,
   confirm: confirm_require,
   save: (file, mode, name, basis) => emit('save', file, mode, name, basis),
 })

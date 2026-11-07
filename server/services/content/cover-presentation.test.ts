@@ -11,7 +11,7 @@ beforeEach(() => vi.resetAllMocks())
 it('returns the public cover dimensions and bounded LQIP in the same lookup as its URL', async () => {
   mocks.execute.mockResolvedValue([[base]])
   const result = (await list_cover_presentations([{ story_id: 1, file_name: 'cover.png' }])).get('1:cover.png')!
-  expect(result.url).toMatch(/^\/api\/content\/attachments\/4\?/)
+  expect(result.url).toMatch(/^\/api\/links\/attachments\/4\?/)
   expect(result.image).toMatchObject({ width: 120, height: 80, revision: 2, lqip: 'data:image/jpeg;base64,/9j/2Q==' })
   expect(JSON.stringify(result)).not.toContain('normal-webp')
   expect(mocks.execute).toHaveBeenCalledTimes(2)
@@ -20,7 +20,7 @@ it('returns the public cover dimensions and bounded LQIP in the same lookup as i
 it('resolves case and Unicode variants after fetching the story scope', async () => {
   mocks.execute.mockResolvedValue([[{ ... base, file_name: 'Docs/É.png' }]])
   const result = await list_cover_presentations([{ story_id: 1, file_name: 'docs/E\u0301.PNG' }])
-  expect(result.get('1:docs/E\u0301.PNG')?.url).toMatch(/^\/api\/content\/attachments\/4\?/)
+  expect(result.get('1:docs/E\u0301.PNG')?.url).toMatch(/^\/api\/links\/attachments\/4\?/)
   expect(mocks.execute.mock.calls[0]![1]).toEqual([1])
 })
 
@@ -55,7 +55,7 @@ it.each([
 
   expect(attachment_cover_url(private_row.file_name, rows)).toBeNull()
   expect(await list_cover_presentations([{ story_id: 1, file_name: private_row.file_name }])).toEqual(new Map())
-  expect(attachment_cover_url(public_row.file_name, rows)).toMatch(/^\/api\/content\/attachments\/9\?/)
+  expect(attachment_cover_url(public_row.file_name, rows)).toMatch(/^\/api\/links\/attachments\/9\?/)
 })
 
 it('keeps the cover on its own redaction and clears it when that redaction is removed', async () => {
@@ -66,7 +66,7 @@ it('keeps the cover on its own redaction and clears it when that redaction is re
   const cover = { story_id: 1, file_name: private_row.file_name }
   mocks.execute.mockResolvedValue([[private_row, public_row]])
   const result = (await list_cover_presentations([cover])).get('1:cover.png.good')!
-  expect(result.url).toMatch(/^\/api\/content\/attachments\/4\?.*&role=redacted$/)
+  expect(result.url).toMatch(/^\/api\/links\/attachments\/4\?.*&role=redacted$/)
   expect(result.image).toMatchObject({ width: 40, height: 30 })
 
   const without_redaction = { ... private_row, redacted_display_key: null, redacted_fallback_key: null }

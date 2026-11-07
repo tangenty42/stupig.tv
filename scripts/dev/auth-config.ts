@@ -16,11 +16,11 @@ const schema = z.strictObject({
   proxy: z.strictObject({
     listenHost: z.literal('127.0.0.1'), listenPort: port,
     targetHost: z.literal('127.0.0.1'), targetPort: port,
-    allowedMethod: z.literal('POST'), allowedPath: z.literal('/api/content/authorize'),
+    allowedMethod: z.literal('POST'), allowedPath: z.literal('/api/hooks/esa/authorize'),
   }),
   callbackUrl: z.string().url().refine((value) => {
     const url = new URL(value)
-    return url.protocol === 'https:' && ! url.username && ! url.password && ! url.search && ! url.hash && url.pathname === '/api/content/authorize'
+    return url.protocol === 'https:' && ! url.username && ! url.password && ! url.search && ! url.hash && url.pathname === '/api/hooks/esa/authorize'
   }),
 }).refine(value => value.proxy.listenPort !== value.proxy.targetPort, 'Proxy must not forward to itself')
 

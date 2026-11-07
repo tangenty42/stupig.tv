@@ -1,5 +1,5 @@
 // 开发回调专用代理：公网隧道只暴露授权回调端点，
-// 不把整个 dev server 挂到公网。仅放行 POST /api/content/authorize，
+// 不把整个 dev server 挂到公网。仅放行 POST /api/hooks/esa/authorize，
 // 转发到本机 dev server（当前 .env.dev 的 APP_PORT 为 3042），
 // 其余一律 404。只绑回环，公网入口由隧道进程连进来。
 import { createServer, request } from 'node:http'

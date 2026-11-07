@@ -121,13 +121,22 @@ export default defineNuxtConfig({
   components: {
     dirs: [{
       path: '~/components',
-      // Component-adjacent TypeScript modules are internal and explicitly imported.
+      // Only Vue SFCs are components; their TypeScript logic lives in app/features.
       extensions: ['vue'],
     }],
   },
 
   devServer: {
     port: Number(process.env.APP_PORT) || 3042,
+  },
+
+  typescript: {
+    appTsConfig: {
+      compilerOptions: {
+        // Merged into Nuxt's default lib list; types FileSystemDirectoryHandle.values() for folder uploads.
+        lib: ['dom.asynciterable'],
+      },
+    },
   },
 
   runtimeConfig: {
@@ -204,7 +213,7 @@ export default defineNuxtConfig({
     name: 'Stupig 蠢猪小组',
   },
   sitemap: {
-    sources: ['/api/_sitemap/urls'],
+    sources: ['/api/hooks/sitemap/urls'],
     exclude: ['/admin/**', '/content/new/**', '/content/*/edit'],
   },
   robots: {

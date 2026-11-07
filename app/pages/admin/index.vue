@@ -211,9 +211,10 @@
 
 <script setup lang="ts">
 import type { PermissionField, PermissionGrant, PermissionLevel } from '@shared/permissions'
-import type { AdminUser, AdminUserList } from '@shared/types/user'
+import type { AdminUser } from '@shared/types/user'
+import type { AdminUserCommand as BatchCommand } from '~/features/admin/users'
 import { has_permission, PERMISSIONS } from '@shared/permissions'
-import { settings } from '@shared/settings'
+import { useAdminUsers } from '~/features/admin/users'
 
 definePageMeta({
   middleware: 'require-admin-auth',
@@ -222,11 +223,8 @@ definePageMeta({
 useSeoMeta({ robots: 'noindex, nofollow' })
 
 type RefreshReason = 'initial' | 'query' | 'manual' | 'mutation'
-type BatchCommand = 'BAN' | 'UNBAN' | 'KICK' | 'VERIFY' | 'UNVERIFY' | 'PROMOTE' | 'DEMOTE'
 
 const rows_per_page_options = [10, 50, 100, 154800]
-const poll_interval_seconds = settings.app.admin.pollIntervalSeconds
-const poll_interval_ms = poll_interval_seconds * 1000
 
 const shortcut_commands = [
   { key: 'BAN', label: '封禁', severity: 'danger', icon: 'lucide:ban' },
@@ -238,7 +236,6 @@ const shortcut_commands = [
   { key: 'DEMOTE', label: '撤销管理员', severity: 'secondary', icon: 'lucide:shield-off' },
 ] as const satisfies ReadonlyArray<{ key: BatchCommand, label: string, severity: string, icon: string }>
 
-const { admin } = useApi()
 const { ok, error } = useMyToast()
 const { user: auth_user } = useAuth()
 
@@ -258,8 +255,17 @@ const active_filter = ref('')
 const page = ref(1)
 const page_size = ref(rows_per_page_options[0]!)
 
-const users_result = useSyncedState<AdminUserList | null>('admin-users-result', () => null)
-const users_loading = ref(false)
+const last_sync_at = ref<number | null>(null)
+const last_sync_reason = ref<RefreshReason>('initial')
+
+let refresh_reason: RefreshReason = 'initial'
+
+const users_query = useAdminUsers({ page, page_size, filter: active_filter }, () => {
+  last_sync_reason.value = refresh_reason
+  last_sync_at.value = Date.now()
+  prune_selection()
+})
+const { result: users_result, loading: users_loading } = users_query
 const selected_ids = ref(new Set<number>())
 
 const pending_disable_user_ids = ref(new Set<number>())
@@ -275,11 +281,6 @@ const permission_dialog_visible = ref(false)
 const permission_target = ref<AdminUser | null>(null)
 const permission_draft = ref<Partial<Record<PermissionField, PermissionLevel | 'none'>>>({})
 const permission_pending = ref(false)
-
-const last_sync_at = ref<number | null>(null)
-const last_sync_reason = ref<RefreshReason>('initial')
-
-let refresh_reason: RefreshReason = 'initial'
 
 const users = computed<AdminUser[]>(() => users_result.value?.users ?? [])
 const total = computed(() => users_result.value?.total ?? 0)
@@ -350,30 +351,11 @@ function toggle_current_page_selection() {
   selected_ids.value = next
 }
 
-const { refresh: refresh_users } = await useSyncedData<AdminUserList>(
-  null,
-  () => admin.list_users({
-    page: page.value,
-    page_size: page_size.value,
-    filter: active_filter.value || undefined,
-  }),
-  users_result,
-  users_loading,
-  {
-    universal: false,
-    fetch_without_resource: true,
-    polling_interval: poll_interval_ms,
-    on_data: () => {
-      last_sync_reason.value = refresh_reason
-      last_sync_at.value = Date.now()
-      prune_selection()
-    },
-  },
-)
+await users_query.ready
 
 async function reload_users(reason: RefreshReason) {
   refresh_reason = reason
-  await refresh_users()
+  await users_query.refresh()
 }
 
 function apply_filter(filter: string) {
@@ -433,27 +415,7 @@ async function perform_command(command: BatchCommand, ids: number[], verified_no
 
   try {
     for (const id of ids) {
-      if (command === 'BAN') {
-        await admin.set_banned(id, true)
-      }
-      else if (command === 'UNBAN') {
-        await admin.set_banned(id, false)
-      }
-      else if (command === 'KICK') {
-        await admin.force_logout(id)
-      }
-      else if (command === 'VERIFY') {
-        await admin.set_verification(id, true, verified_note)
-      }
-      else if (command === 'UNVERIFY') {
-        await admin.set_verification(id, false)
-      }
-      else if (command === 'PROMOTE') {
-        await admin.set_admin_role(id, true)
-      }
-      else if (command === 'DEMOTE') {
-        await admin.set_admin_role(id, false)
-      }
+      await users_query.run(command, id, verified_note)
     }
 
     ok(`${success_map[command]}：${target_users_label(ids)}`)
@@ -604,7 +566,7 @@ async function submit_permissions() {
 
   permission_pending.value = true
   try {
-    await admin.set_permissions(target.id, grants)
+    await users_query.set_permissions(target.id, grants)
     ok(`已更新 ${target_users_label([target.id])}的权限`)
     permission_dialog_visible.value = false
     await reload_users('mutation')

@@ -3,7 +3,7 @@
 - 本文档状态：PENDING（草稿已整理，供人类编写与核对）
 - 覆盖范围：前端、后端及前后端共享模块的组织规则、关键入口与使用边界
 - 整理基线：2026-11-04（Asia/Shanghai）；提交 `67f8dad0a15c76acdb079c1334b143fcc146b935` 加本次核对时的工作区
-- 权威依据：[SID#README](../../README.md)、[SID#0.1.LAW](LAW.md)、[SID#0.1.DESIGN](DESIGN.md#通用模块)
+- 权威依据：[SID#README](../../README.md)、[SID#0.1.LAW](LAW.md)、[SID#0.1.DESIGN](DESIGN.md#代码结构)
 
 本文按最新 DESIGN 的“前端／后端／前后端共享”模板起草。模块说明来自相关源码的静态核对，组织约束参考现有[前端规则](../../../.github/instructions/frontend.instructions.md)和[后端规则](../../../.github/instructions/backend-api.instructions.md)；尚未成为人类确认的权威设计，本次未重新执行业务验收。
 

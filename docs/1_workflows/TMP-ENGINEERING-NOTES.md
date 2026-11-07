@@ -27,7 +27,7 @@
 
 [Check](../../.github/workflows/check.yml) 编排生成一致性、lint、类型、单元／组件测试、浏览器、CSS、MQTT 和迁移验证；[Deploy](../../.github/workflows/deploy.yml) 负责镜像、部署编排与 ESA 发布；[维护部署流程](../../.github/workflows/maintenance-deploy.yml) 处理专门维护场景。这里说明验证和交付结构，不表示本轮已经执行这些检查。
 
-`/healthz` 核对数据库查询及迁移回执表可读性；`system.health` 仅返回简单在线响应。两者都不能替代全部外部服务和业务链路的验收。
+`/api/hooks/healthz` 核对数据库查询及迁移回执表可读性；`system.health` 仅返回简单在线响应。两者都不能替代全部外部服务和业务链路的验收。
 
 冻结迁移、备份恢复、生产切换和部署前提在 workflows 中详细规定。架构文档保存它们的边界与依赖，不重复每条操作命令。
 

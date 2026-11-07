@@ -42,11 +42,11 @@
 import { attachment_ancestor_folders } from '@shared/content-markdown'
 import { content_name_key } from '@shared/content-reference'
 import { has_permission } from '@shared/permissions'
-import { content_browser_navigation } from '~/components/MyContent/internal/browser-navigation'
 import { useAttachmentPanel } from '~/features/content/attachments/panel'
+import { content_browser_navigation } from '~/features/content/browser-navigation'
+import { format_event_range } from '~/features/content/event'
 import { useContentStories, useContentStory } from '~/features/content/stories'
-import { format_event_range } from '~/utils/content/event'
-import { story_front_cover_url } from '~/utils/content/story-cover'
+import { story_front_cover_url } from '~/features/content/story-cover'
 
 const route = useRoute()
 const { user } = useAuth()

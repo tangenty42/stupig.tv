@@ -38,7 +38,7 @@ Docker 数据目录应持久化并进入备份策略。开发使用命名卷 `my
 
 ## 核验
 
-先验证应用容器可以解析并连接 MySQL 的网络地址，再检查 `/healthz` 与业务请求。`/healthz` 只查询 MySQL 迁移账本，不验证 Redis。MySQL 不通会让健康端点返回 503；Redis 连通性应使用运维工具单独核验，当前业务请求成功不代表 Redis 可达。
+先验证应用容器可以解析并连接 MySQL 的网络地址，再检查 `/api/hooks/healthz` 与业务请求。`/api/hooks/healthz` 只查询 MySQL 迁移账本，不验证 Redis。MySQL 不通会让健康端点返回 503；Redis 连通性应使用运维工具单独核验，当前业务请求成功不代表 Redis 可达。
 
 数据备份、恢复演练、密钥与旧 AES 恢复材料的保存见[备份恢复](../operations/backup-recovery.md)。
 

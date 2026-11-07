@@ -1,6 +1,5 @@
 import type { ContentWorkspaceCommandResult } from '@shared/types/content'
 import { ApiError } from '@server/errors/ApiError'
-import { require_auth_user } from '@server/services/auth-guards.service'
 import {
   get_story_body,
   list_stories,
@@ -9,11 +8,12 @@ import {
 import { image_editor_source } from '@server/services/content/attachment-access.service'
 import { get_attachment_workspace } from '@server/services/content/attachment-workspace.service'
 import { get_delete_impact } from '@server/services/content/delete-impact.service'
+import { draft_sync_credentials } from '@server/services/content/draft-sync.service'
 import { acquire_draft, command_draft, create_draft, get_draft, list_drafts } from '@server/services/content/draft.service'
 import { get_title_reference_version, rewrite_draft_references } from '@server/services/content/reference-history.service'
 import { adopt_upload_session, begin_upload_batch, list_upload_sessions, operate_upload_session, sign_upload_session_part } from '@server/services/content/upload-api.service'
 import { execute_workspace_command } from '@server/services/content/workspace-command.service'
-import { permission_procedure, public_procedure, router } from '@server/trpc/init'
+import { optional_auth_user, permission_procedure, protected_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema, draft_schema } from '@server/trpc/schemas'
 import { upload_batch_schema } from '@shared/content-upload'
 import { workspace_command_schema } from '@shared/content-workspace'
@@ -27,6 +27,8 @@ export const content_router = router({
   getDraft: content_admin_procedure.input(draft_schema.get).mutation(({ ctx, input }) => get_draft(ctx.auth_user, input)),
   acquireDraft: content_admin_procedure.input(draft_schema.acquire).mutation(({ ctx, input }) => acquire_draft(ctx.auth_user, input)),
   commandDraft: content_admin_procedure.input(draft_schema.command).mutation(({ ctx, input }) => command_draft(ctx.auth_user, input)),
+  // Short-lived MQTT reader credentials; the service applies the draft permission check.
+  draftSyncCredentials: protected_procedure.query(({ ctx }) => draft_sync_credentials(ctx.auth_user)),
   getDeleteImpact: content_admin_procedure.input(api_schema.content.delete_impact)
     .query(({ ctx, input }) => get_delete_impact(input, has_permission(ctx.auth_user, 'content_private', 'read'))),
   imageEditorSource: content_admin_procedure.input(api_schema.content.image_editor_source)
@@ -61,28 +63,10 @@ export const content_router = router({
   getTitleReferenceVersion: public_procedure.query(() => get_title_reference_version()),
   getStoryBody: public_procedure
     .input(api_schema.content.get_story_body)
-    .query(async ({ ctx, input }) => {
-      let viewer = null
-      try {
-        viewer = await require_auth_user(ctx.event)
-      }
-      catch {
-        viewer = null
-      }
-      return get_story_body(input.id, viewer, input.base_representation_version)
-    }),
+    .query(async ({ ctx, input }) => get_story_body(input.id, await optional_auth_user(ctx.event), input.base_representation_version)),
   getAttachmentWorkspace: public_procedure
     .input(api_schema.content.get_attachment_workspace)
-    .query(async ({ ctx, input }) => {
-      let viewer = null
-      try {
-        viewer = await require_auth_user(ctx.event)
-      }
-      catch {
-        viewer = null
-      }
-      return get_attachment_workspace(input.id, viewer)
-    }),
+    .query(async ({ ctx, input }) => get_attachment_workspace(input.id, await optional_auth_user(ctx.event))),
 
   createStory: content_admin_procedure
     .input(api_schema.content.create_story)
@@ -104,16 +88,6 @@ export const content_router = router({
   // and every ancestor archive are authorized by the download service.
   signAttachmentDownload: public_procedure
     .input(api_schema.content.sign_attachment_download)
-    .mutation(async ({ ctx, input }) => {
-      let viewer = null
-      try {
-        viewer = await require_auth_user(ctx.event)
-      }
-      catch (error) {
-        if (! (error instanceof ApiError) || error.statusCode !== 401)
-          throw error
-      }
-      return sign_attachment_download(input.story_id, input.file_name, viewer, input.role)
-    }),
+    .mutation(async ({ ctx, input }) => sign_attachment_download(input.story_id, input.file_name, await optional_auth_user(ctx.event), input.role)),
 
 })

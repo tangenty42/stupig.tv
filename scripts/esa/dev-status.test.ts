@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { create_commit_description } from './commit'
+import { create_commit_description, source_fingerprint } from './commit'
 import { load_publish_config, publish_variables } from './config'
 import { inspect_dev_esa, local_dev_receipt } from './dev-status'
 
@@ -57,10 +57,16 @@ describe('development ESA notice', () => {
 
   it('reports non-secret configuration drift without exposing values', async () => {
     const { api, state } = harness()
-    state.variables.CONTENT_AUTH_URL.Value = 'https://other.example.test/api/content/authorize'
+    state.variables.CONTENT_AUTH_URL.Value = 'https://other.example.test/api/hooks/esa/authorize'
     const result = await inspect_dev_esa(config, api, source)
     expect(result).toEqual({ source: 'matches', configuration: 'differs', evidence: 'metadata' })
     expect(JSON.stringify(result)).not.toContain('other.example.test')
+  })
+
+  it('still reads fingerprints from versions with a hyphenated run UUID', async () => {
+    const { api, state } = harness()
+    state.description = `dev-${source_fingerprint(source)}-${run.slice(- 36)}`
+    expect(await inspect_dev_esa(config, api, source)).toEqual({ source: 'matches', configuration: 'matches', evidence: 'metadata' })
   })
 
   it('reads older versions when permitted and otherwise reports uncertainty', async () => {

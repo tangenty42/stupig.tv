@@ -62,7 +62,7 @@ services:
       EMQX_AUTHENTICATION__2__MECHANISM: password_based
       EMQX_AUTHENTICATION__2__BACKEND: http
       EMQX_AUTHENTICATION__2__METHOD: post
-      EMQX_AUTHENTICATION__2__URL: http://host.docker.internal:${APP_PORT:-3000}/api/content-draft-sync/authenticate
+      EMQX_AUTHENTICATION__2__URL: http://host.docker.internal:${APP_PORT:-3000}/api/hooks/emqx/authenticate
       EMQX_AUTHENTICATION__2__HEADERS: '{"content-type":"application/json"}'
       EMQX_AUTHENTICATION__2__BODY: '{"username":"$${username}","password":"$${password}"}'
       EMQX_AUTHENTICATION__2__REQUEST_TIMEOUT: 3s

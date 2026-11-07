@@ -298,10 +298,43 @@ pnpm exec playwright test tests/e2e/content-reference-attachments.spec.ts tests/
 
 本批次未重跑浏览器场景及真实云服务验收；生产代码零改动。
 
+### 清空 `utils/content/` 批次实施记录
+
+2026-11-06 00:44–01:10 +08:00（Asia/Shanghai）。人类已在 `SID#0.1.DESIGN` 中将 `app/utils/` 核定为「全站通用」工具，上文「暂缓及保留结论」及默认保留 `markdown/`、`event.ts`、附件纯规则的理由随之失效；人类明确要求 `markdown/` 一并迁移。本批次只移动文件和改写导入路径，不改行为。
+
+| 原位置 | 新位置 | 依据 |
+| --- | --- | --- |
+| `markdown/`（含测试） | `app/components/MyContent/Markdown/internal/render/` | 生产调用方只有 `Markdown/Preview.vue` 与 `Markdown/internal/preview.ts`；阅读与编辑预览均经 `Preview.vue` 共用，迁入组件组不影响共用 |
+| `alerts.ts`、`html.ts` | `app/components/MyContent/Markdown/internal/` | 仅 Markdown 渲染器与编辑器使用 |
+| `attachment.ts`（含测试） | `app/features/content/attachments/rules.ts` | 附件可读性、受限、展示地址、删减版和打开方式等业务规则；附件 feature、Markdown 渲染与编辑器共用 |
+| `event.ts` | `app/features/content/event.ts` | 档案日期格式化规则，与 `stories.ts` 同属档案业务 |
+| `story-cover.ts`、`lqip.ts`（含测试） | `app/components/MyContent/internal/` | 只被 MyContent 组件、阅读页及 Markdown 渲染器用于生成封面与占位样式 |
+
+- 依赖方向：组件引用 feature（`rules.ts`、`event.ts`），feature 不引用组件；`lqip.ts` 引用 `attachments/rules.ts` 符合该方向。
+- `editor/language.ts` 保持相对导入 `../html`，因为 CSS 官方 API 夹具在不支持 `~` 别名的 tests 类型检查中导入它；`render.test.ts` 读取 `server/shared/content-private.ts` 的相对路径随目录层级更新；`server/shared/content-markdown-syntax.ts` 的注释改指新位置。
+- 验证：`pnpm settings:check`、`pnpm lint`、Nuxt／scripts／tests 三套 typecheck 通过；组件测试 11 文件 72 项通过；应用及服务端单测 156 文件中 155 文件、1969 项通过。未通过项全部来自当前沙箱环境：`server/api/trpc/[trpc].test.ts` 3 项依赖本机回环 HTTP，独立的 Node 回环 `fetch` 探测同样 4 秒超时，而 2026-11-05 23:42 同一测试通过；工具测试 5 个文件（`stage-env`、`dev/cli`、`esa/workflow`、`maintenance-build`、`e2e-query`）失败于 `sh` fork 崩溃（`0xC0000005`）、回环连接或容器数据库不可达，且均不导入任何 `app/` 代码。2026-11-06 01:22 +08:00 前，人类在沙箱外对同一未提交工作区执行 `pnpm check`，确认全部通过（结尾为组件测试 11 文件 72 项通过，无 `ELIFECYCLE`），上述沙箱失败项据此确认为环境限制。本批次只移动文件与改写导入，未重跑浏览器场景及真实云服务。
+
+### 组件目录只保留 Vue SFC 批次实施记录
+
+2026-11-06 15:35–16:00 +08:00（Asia/Shanghai）。人类决定 `app/components/` 不再放 `.ts` 实现，放宽 feature 语义，将组件配套逻辑全部归入 `app/features/content/`；组件保持现有平铺的 `.vue` 文件和标签名，不改为同名文件夹。只移动文件与改写导入，不改行为。
+
+| 原位置（`app/components/MyContent/` 下） | 新位置（`app/features/content/` 下） |
+| --- | --- |
+| `Markdown/internal/`（编辑器、预览 DOM、渲染器、alerts、html 等） | `markdown/`（保留原子目录 `editor/`、`preview/`、`render/`） |
+| `Attachment/image-editor/` | `image-editor/` |
+| `Attachment/internal/list-interaction.ts` | `attachments/list-interaction.ts` |
+| `internal/attachment-drag.ts` | `attachments/drag-transfer.ts` |
+| `internal/upload-picks.ts` | `uploads/browser-picks.ts` |
+| `internal/browser-navigation.ts`、`image-placeholders.ts`、`lqip.ts`、`story-cover.ts` | 同名文件，直接位于 `features/content/` |
+
+- 共移动 81 个文件、改写 31 个文件的导入；`app/components/` 现在只含 `.vue` 与 `.nuxt.test.ts`，四个 `internal`／`image-editor` 目录已删除。
+- `markdown/editor/language.ts` 保持相对导入 `../html`，供不支持 `~` 别名的 CSS 夹具类型检查；`render.test.ts` 的服务端相对路径随层级更新；`nuxt.config.ts` 注释、`frontend.instructions.md` 的组件规则和 `server/shared/content-markdown-syntax.ts` 注释改为新归属；修正 [TMP-IMPLEMENTATION-NOTES](../../2_domains/TMP-IMPLEMENTATION-NOTES.md) 的失效链接。
+- 验证：`pnpm lint`、`pnpm typecheck`（Nuxt／scripts／tests）通过；应用单测 62 文件 725 项、组件测试 11 文件 72 项通过。服务端单测与工具测试仅一行注释受影响，因沙箱回环与子进程限制未在沙箱内运行，需人类在沙箱外执行 `pnpm check` 确认。未运行浏览器场景及真实云服务。
+
 ## 收尾条件
 
 - 各阶段分别通过验收，剩余问题有明确处理结论。
-- 已迁移文件不再保留旧运行入口或无必要的转发层；剩余 `utils/content/` 文件均有保留理由。
+- 已迁移文件不再保留旧运行入口或无必要的转发层；`utils/content/` 已在清空批次整体删除。
 - 业务模块、渲染模块和组件交互之间没有新增循环或反向依赖。
 - Markdown 渲染器的保留或迁移结论注明所依据的权威规则，不以目录整齐替代设计决策。
 - `draft-reference-bridge.ts` 已删除，仍需保留的行为断言已落在现行草稿 store 的真实入口；其他无生产调用候选也有保留或删除结论及核对依据。

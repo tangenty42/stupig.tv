@@ -19,4 +19,4 @@
 
 # 回调地址由隧道检查与 ESA 发布工具共用，不放在 devAuthTunnel 下。
 # esaFunction:
-#   callbackUrl: https://auth.example.com/api/content/authorize
+#   callbackUrl: https://auth.example.com/api/hooks/esa/authorize

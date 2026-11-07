@@ -386,7 +386,7 @@ it('fences late upload results after identity reset', async () => {
   expect(state.pause).toHaveBeenCalled()
   expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
   expect(store.sessions).toEqual([])
-  expect(store.ready).toBe(false)
+  expect(store.loaded).toBe(false)
 })
 
 it('does not restore an authorized attachment snapshot from an old identity completion', async () => {

@@ -9,7 +9,7 @@
 | 字段 | 职责 |
 | --- | --- |
 | `name` | 环境层指定已存在的函数名；开发 `stupig-content-auth-bypass-dev`，生产 `stupig-content-auth-bypass-prod` |
-| `callbackUrl` | 完整 HTTPS `/api/content/authorize` 地址；开发隧道校验也读取此处 |
+| `callbackUrl` | 完整 HTTPS `/api/hooks/esa/authorize` 地址；开发隧道校验也读取此处 |
 | `entry` | 相对仓库的入口，默认 `config/esa/content-auth.mjs` |
 | `environment` | ESA 发布槽位，当前两个函数均为 `production` |
 | `siteId` | 从对应 env 的 `ALIYUN_ESA_SITE_ID` 读取，与缓存维护共用站点标识 |
@@ -19,7 +19,7 @@
 | `readinessTimeoutMs` | 创建版本、等待就绪与等待部署读回的时间预算，默认 300000 ms |
 | `authTimeoutMs` | 函数授权回调超时，默认 5000 ms，范围 1–15000 |
 
-Content 域名和签名密钥直接复用同环境的 `aliyun.esa.baseUrl` / `aliyun.esa.authKey`，不重复配置。生产默认回调为 `https://www.stupig.tv/api/content/authorize`；若使用独立授权域名，只修改 prod YAML 的 `esaFunction.callbackUrl`。
+Content 域名和签名密钥直接复用同环境的 `aliyun.esa.baseUrl` / `aliyun.esa.authKey`，不重复配置。生产默认回调为 `https://www.stupig.tv/api/hooks/esa/authorize`；若使用独立授权域名，只修改 prod YAML 的 `esaFunction.callbackUrl`。
 
 两个命令内部固定传入 `--env=dev` / `--env=prod`，同时选择对应 YAML 和 env 文件；无需手动加环境参数，也不要再追加另一个 `--env`。dev/prod 不是 ESA 的槽位名称，必须有不同函数名及 Content 域名。工具拒绝临时 `--name` 覆盖；改名只改相应 YAML 的 `name`。根目录旧 `esa.jsonc`、旧 `pnpm esa` 和无环境后缀的 `pnpm esa:deploy` 入口已移除。
 

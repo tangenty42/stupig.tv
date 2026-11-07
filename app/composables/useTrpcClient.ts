@@ -111,7 +111,7 @@ export function useTrpcClient() {
     links: [splitLink({
       // A release must start immediately during pagehide, before timers freeze.
       // Large final snapshots still rely on normal requests and lease expiry.
-      condition: operation => /^content\.(?:createDraft|listDrafts|getDraft|acquireDraft|commandDraft)$/.test(operation.path),
+      condition: operation => /^content\.(?:createDraft|listDrafts|getDraft|acquireDraft|commandDraft|draftSyncCredentials)$/.test(operation.path),
       true: httpLink(transport_options),
       false: httpBatchLink(transport_options),
     })],

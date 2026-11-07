@@ -10,7 +10,7 @@ export async function useContentUploadSync(scope: number) {
   interface Snapshot { epoch: number, value: Awaited<ReturnType<typeof content.list_upload_sessions>> }
   // Use the same resource projection for subscription writes and command receipts.
   const data = useSyncedState(computed<Snapshot | null>({
-    get: () => store.ready ? { epoch: store.snapshot_epoch(), value: { enabled: store.enabled, sessions: store.sessions, reservations: store.reservations } } : null,
+    get: () => store.loaded ? { epoch: store.snapshot_epoch(), value: { enabled: store.enabled, sessions: store.sessions, reservations: store.reservations } } : null,
     set: (result) => {
       if (result)
         store.apply_list(result.value, result.epoch)

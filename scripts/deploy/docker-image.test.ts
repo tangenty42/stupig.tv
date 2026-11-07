@@ -136,22 +136,22 @@ describe('镜像自带的运行期配置注入', () => {
 // 送不对或换不到位只在线上暴露），要么是"健康门必须真的接在某处"的接线。真实的判定行为由
 // scripts/deploy/remote.test.ts 用替身 docker 跑真实脚本覆盖。
 describe('部署的健康检查与自愈接线', () => {
-  it('镜像自带探 /healthz 的 HEALTHCHECK，且运行时读 PORT', () => {
+  it('镜像自带探 /api/hooks/healthz 的 HEALTHCHECK，且运行时读 PORT', () => {
     const dockerfile = read('Dockerfile')
 
     expect(dockerfile).toMatch(/^HEALTHCHECK /m)
-    expect(dockerfile).toMatch(/127\.0\.0\.1:'\+\(process\.env\.PORT\|\|3042\)\+'\/healthz'/)
+    expect(dockerfile).toMatch(/127\.0\.0\.1:'\+\(process\.env\.PORT\|\|3042\)\+'\/api\/hooks\/healthz'/)
     // 写死端口的话，用 APP_PORT 换端口部署的机器会永远 unhealthy
-    expect(dockerfile).not.toMatch(/HEALTHCHECK[^\n]*3042\/healthz/)
+    expect(dockerfile).not.toMatch(/HEALTHCHECK[^\n]*3042\/api\/hooks\/healthz/)
     // 启动前要跑迁移，start-period 太短会把慢启动误判成不健康
     expect(dockerfile).toMatch(/HEALTHCHECK[^\n]*--start-period=/)
   })
 
-  it('compose 探 /healthz（不是 /），并保留自愈所需的 restart 策略', () => {
+  it('compose 探 /api/hooks/healthz（不是 /），并保留自愈所需的 restart 策略', () => {
     const app = parse(read('docker-compose.yml')).services.app
 
     // `/` 的 200 说明不了数据库可用：SSR 渲染外壳成功也会是 200
-    expect(app.healthcheck.test).toEqual(['CMD', 'node', '-e', expect.stringMatching(/^fetch\("http:\/\/127\.0\.0\.1:\$\{APP_PORT\}\/healthz"\)/)])
+    expect(app.healthcheck.test).toEqual(['CMD', 'node', '-e', expect.stringMatching(/^fetch\("http:\/\/127\.0\.0\.1:\$\{APP_PORT\}\/api\/hooks\/healthz"\)/)])
     expect(app.healthcheck.test[3]).not.toMatch(/fetch\("http:\/\/127\.0\.0\.1:\$\{APP_PORT\}\/"\)/)
     // 容器崩了要能自己起来；没有这一行，"自愈"只剩健康门那半
     expect(app.restart).toBe('unless-stopped')

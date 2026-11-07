@@ -121,18 +121,18 @@
 import type { ImageSaveMode } from '@shared/content-upload'
 import type { ErrorPolicy } from '@shared/content-workspace'
 import type { ContentDeleteImpact } from '@shared/types/content-delete-impact'
-import type { AttachmentMenuItem } from './internal/list-interaction'
+import type { AttachmentMenuItem } from '~/features/content/attachments/list-interaction'
 import type { MyContentAttachmentRow } from '~/features/content/attachments/list-model'
 import type { useAttachmentPanel } from '~/features/content/attachments/panel'
 import type { WorkspaceListRow } from '~/features/content/attachments/workspace-model'
 import { find_delete_references } from '@shared/content-delete-impact'
 import { attachment_mime_type, decrypted_attachment_name, split_attachment_editable_name } from '@shared/content-markdown'
-import { set_content_attachment_drag_data, set_content_folder_drag_data } from '~/components/MyContent/internal/attachment-drag'
-import { attachment_picks_from_data_transfer } from '~/components/MyContent/internal/upload-picks'
 import { content_selection_markdown } from '~/features/content/attachments/drag'
+import { set_content_attachment_drag_data, set_content_folder_drag_data } from '~/features/content/attachments/drag-transfer'
 import { folder_picker_rows, move_destination_folders } from '~/features/content/attachments/folder-picker'
+import { attachment_action_item, attachment_menu_context, attachment_selection_edges, guard_attachment_selection, normalize_attachment_selection, select_attachment_row } from '~/features/content/attachments/list-interaction'
 import { attachment_batch_action, attachment_privacy_actions } from '~/features/content/attachments/list-model'
-import { attachment_action_item, attachment_menu_context, attachment_selection_edges, guard_attachment_selection, normalize_attachment_selection, select_attachment_row } from './internal/list-interaction'
+import { attachment_picks_from_data_transfer } from '~/features/content/uploads/browser-picks'
 
 const props = withDefaults(defineProps<{ controller: Awaited<ReturnType<typeof useAttachmentPanel>>, dialogs?: boolean, layout?: 'stack' | 'columns' }>(), { dialogs: true, layout: 'columns' })
 const model = reactive(props.controller)

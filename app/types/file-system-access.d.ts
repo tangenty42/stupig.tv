@@ -1,8 +1,9 @@
 /**
- * Augment lib.dom.d.ts with the File System Access APIs that TypeScript 5.9
- * does not type yet. Interface merging keeps the existing `FileSystemHandle`
- * hierarchy intact while adding the Chromium-only methods this project uses
- * for zero-copy upload resume.
+ * Augment lib.dom.d.ts with the Chromium-only File System Access APIs used for
+ * zero-copy upload resume. TypeScript's DOM lib only ships APIs supported by
+ * two or more browser engines, so a newer TypeScript will not add these.
+ * Interface merging keeps the existing `FileSystemHandle` hierarchy intact;
+ * `FileSystemDirectoryHandle.values()` comes from the `dom.asynciterable` lib.
  */
 
 interface FileSystemHandlePermissionDescriptor {
@@ -12,10 +13,6 @@ interface FileSystemHandlePermissionDescriptor {
 interface FileSystemFileHandle {
   requestPermission: (descriptor?: FileSystemHandlePermissionDescriptor) => Promise<PermissionState>
   queryPermission: (descriptor?: FileSystemHandlePermissionDescriptor) => Promise<PermissionState>
-}
-
-interface FileSystemDirectoryHandle {
-  values: () => AsyncIterableIterator<FileSystemHandle>
 }
 
 interface DataTransferItem {

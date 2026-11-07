@@ -66,13 +66,13 @@ async function mqtt_probe(url: string, mode: 'public' | 'private-topic' | 'anony
 }
 
 export async function verify_public(targets: PublicTargets) {
-  for (const path of ['/', '/healthz']) {
+  for (const path of ['/', '/api/hooks/healthz']) {
     const response = await fetch(new URL(path, targets.site), { signal: AbortSignal.timeout(15000), redirect: 'error', cache: 'no-store' })
     if (! response.ok)
       throw new Error('Public HTTP acceptance failed')
-    if (path === '/healthz' && (await response.json() as { status?: string }).status !== 'ok')
+    if (path === '/api/hooks/healthz' && (await response.json() as { status?: string }).status !== 'ok')
       throw new Error('Public readiness response invalid')
-    if (path !== '/healthz')
+    if (path !== '/api/hooks/healthz')
       await response.body?.cancel()
   }
   await mqtt_probe(targets.public_ws, 'public')

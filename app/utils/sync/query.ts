@@ -3,6 +3,8 @@ export interface QueryFailure {
   notified: boolean
 }
 
+export type QueryRefreshPolicy = 'join' | 'latest'
+
 export interface QuerySubscriber<T> {
   fetcher: () => Promise<T>
   data: (value: T) => void
@@ -10,7 +12,6 @@ export interface QuerySubscriber<T> {
   error: (failure: QueryFailure) => void
   invalidate?: () => void
   polling_interval?: number
-  ignore_stale_responses: boolean
   resources: readonly string[]
 }
 
@@ -46,7 +47,7 @@ export class Query<T> {
 
   constructor(
     private environment: QueryEnvironment,
-    private shared: boolean,
+    readonly refresh_policy: QueryRefreshPolicy,
     private on_empty: () => void,
   ) {}
 
@@ -135,11 +136,11 @@ export class Query<T> {
     return this.refresh()
   }
 
-  refresh(): Promise<void> {
+  refresh(policy = this.refresh_policy): Promise<void> {
     if (this.disposed) {
       return Promise.resolve()
     }
-    if (this.shared && this.task) {
+    if (policy === 'join' && this.task) {
       return this.task
     }
     const provider = this.subscribers.values().next().value
@@ -148,13 +149,11 @@ export class Query<T> {
     }
     const version = ++ this.version
     const epoch = this.epoch
-    const current = (subscriber: QuerySubscriber<T>) => ! this.disposed
-      && (this.shared || ! subscriber.ignore_stale_responses || version === this.version)
+    const current = () => ! this.disposed
+      && version === this.version
       && epoch === this.epoch
     for (const subscriber of this.subscribers) {
-      if (subscriber.ignore_stale_responses) {
-        call_query_subscriber(() => subscriber.invalidate?.())
-      }
+      call_query_subscriber(() => subscriber.invalidate?.())
       call_query_subscriber(() => subscriber.loading(true))
     }
     let response: Promise<T>
@@ -165,27 +164,31 @@ export class Query<T> {
       response = Promise.reject(error)
     }
     const task = response.then((value) => {
-      if (this.shared && ! this.subscribers.has(provider)) {
+      if (! current()) {
+        return
+      }
+      if (! this.subscribers.has(provider)) {
         this.dirty = true
         return
       }
-      if (! this.disposed && epoch === this.epoch && (this.shared || version === this.version)) {
-        this.value = value
-        this.fetched = true
-      }
+      this.value = value
+      this.fetched = true
       for (const subscriber of this.subscribers) {
-        if (current(subscriber)) {
+        if (current()) {
           call_query_subscriber(() => subscriber.data(value))
         }
       }
     }, (error: unknown) => {
-      if (this.shared && ! this.subscribers.has(provider)) {
+      if (! current()) {
+        return
+      }
+      if (! this.subscribers.has(provider)) {
         this.dirty = true
         return
       }
       const failure: QueryFailure = { error, notified: false }
       for (const subscriber of this.subscribers) {
-        if (current(subscriber)) {
+        if (current()) {
           call_query_subscriber(() => subscriber.error(failure))
         }
       }
@@ -233,12 +236,15 @@ export class QueryClient {
 
   constructor(private environment: QueryEnvironment) {}
 
-  acquire<T>(key: string | null) {
+  acquire<T>(key: string | null, refresh_policy: QueryRefreshPolicy = 'join') {
     const existing = key === null ? undefined : this.shared.get(key)
     if (existing) {
+      if (existing.refresh_policy !== refresh_policy) {
+        throw new Error('Subscribers to the same query must use the same refresh_policy')
+      }
       return existing as Query<T>
     }
-    const query = new Query<T>(this.environment, key !== null, () => {
+    const query = new Query<T>(this.environment, refresh_policy, () => {
       this.queries.delete(query as Query<unknown>)
       if (key !== null) {
         this.shared.delete(key)

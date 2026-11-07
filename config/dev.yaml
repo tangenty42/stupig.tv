@@ -44,7 +44,7 @@ app:
 esaFunction:
   name: stupig-content-auth-bypass-dev
   # 同时供开发隧道校验和 ESA 发布使用。
-  callbackUrl: https://stupig-content-auth-dev.cina.cs.tangenty.com/api/content/authorize
+  callbackUrl: https://stupig-content-auth-dev.cina.cs.tangenty.com/api/hooks/esa/authorize
 
 # 开发授权通道：仅由开发启动脚本读取，不进入应用运行配置或浏览器。
 devAuthTunnel:
@@ -74,4 +74,4 @@ devAuthTunnel:
     targetHost: 127.0.0.1
     targetPort: ${APP_PORT}
     allowedMethod: POST
-    allowedPath: /api/content/authorize
+    allowedPath: /api/hooks/esa/authorize

@@ -49,7 +49,7 @@
 
 `MQTT_DRAFT_WEB_URL` 是浏览器安全的完整 WSS 地址。未设置时客户端从公开 URL 推导同域 `/mqtt-drafts`；生产反代把该路径接到宿主机 `127.0.0.1:${MQTT_DRAFT_WS_PORT:-8086}`，上游 WebSocket 路径须改写为 `/mqtt`。公开 `/mqtt` 继续接公开 listener，不可把草稿路径接回匿名 listener。反代仍由运维配置；发布会验证公网 WS 升级、公开主题订阅、公开连接拒绝草稿主题，以及草稿 listener 拒绝匿名和伪票。此探针不发布业务事件，也不替代真实登录态下的编辑／发布验收。
 
-Compose 在全局认证链的内置数据库之后添加 HTTP 认证器，回调应用 `/api/content-draft-sync/authenticate`。浏览器先经有 httpOnly cookie 的 `/api/content-draft-sync/credentials` 获取最多 30 秒的签名凭据，绑定账号、session 和实际 token generation；broker CONNECT 时再次读取当前授权。返回凭据 ACL 仅允许订阅私有前缀，随后 deny all，不能发布。过期强制断开，重连重新取票；签名不是租约 token，也不能用于调用草稿命令。
+Compose 在全局认证链的内置数据库之后添加 HTTP 认证器，回调应用 `/api/hooks/emqx/authenticate`。浏览器先经 tRPC 的 `content.draftSyncCredentials` 获取最多 30 秒的签名凭据，绑定账号、session 和实际 token generation；broker CONNECT 时再次读取当前授权。返回凭据 ACL 仅允许订阅私有前缀，随后 deny all，不能发布。过期强制断开，重连重新取票；签名不是租约 token，也不能用于调用草稿命令。
 
 既有连接的撤权上界为剩余票期，最多 30 秒；这期间消息只有不透明资源的失效信号。草稿 API 每次事务即时重新授权，不等待 MQTT。公开 ACL 只允许 `stupig/sync/#`，共享 schema 拒绝把私有前缀放进公开前缀内。JWT 密钥轮换同时改变频道和签名；客户端重新查询并取票，不提供旧密钥过渡。
 

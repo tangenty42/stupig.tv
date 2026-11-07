@@ -45,7 +45,7 @@ export function parse_publish_config(input: unknown, env: NodeJS.ProcessEnv, cwd
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port)
       throw new PublishError('ESA callback/delivery must be HTTPS URLs without credentials, query, fragment or custom port')
   }
-  if (callback.pathname !== '/api/content/authorize' || delivery.pathname !== '/' || callback.origin === delivery.origin)
+  if (callback.pathname !== '/api/hooks/esa/authorize' || delivery.pathname !== '/' || callback.origin === delivery.origin)
     throw new PublishError('Invalid ESA callback path or delivery origin; callback must not loop into delivery')
   return { ... config, entry, appEnvironment: env.NODE_ENV === 'production' ? 'prod' : 'dev' }
 }

@@ -138,7 +138,7 @@ it('clears the resource on authorization loss without a fetch loop or a remote c
   state.list.mockRejectedValueOnce(Object.assign(new Error('权限已撤销'), { status: 403 }))
   await listeners.get('content_uploads:24')!()
   expect(store.sessions).toEqual([])
-  expect(store.ready).toBe(false)
+  expect(store.loaded).toBe(false)
   expect(state.list).toHaveBeenCalledTimes(2)
   expect(state.toast).toHaveBeenCalledOnce()
 })
