@@ -1,4 +1,4 @@
-import type { Query, QueryFailure, QueryRefreshPolicy } from '~/utils/sync/query'
+import type { Query, QueryFailure, QueryRefreshPolicy, QuerySubscriber } from '~/utils/sync/query'
 import { call_query_subscriber, QueryClient } from '~/utils/sync/query'
 import { is_synced_state } from './useSyncedState'
 
@@ -24,7 +24,7 @@ interface UseSyncedDataOptions<T = unknown> {
   polling_interval?: number
   /** Called after data is applied, including shared cached data; deferred during hydration for synced state. */
   on_data?: (value: T | null) => void
-  /** Override query identity with a literal or ref, not event subscriptions. Defaults to the normalized resource set; null disables unless fetch_without_resource. */
+  /** Identify the data with a literal or ref; a change replaces the query, while resource-only changes just move subscriptions. Defaults to the normalized resource set; null disables unless fetch_without_resource. */
   query_key?: SyncedResource
 }
 
@@ -208,6 +208,8 @@ export async function useSyncedData<T>(
     nuxt_app.vueApp?.onUnmount(() => owned_client.dispose())
   }
   let query: Query<T> | null = null
+  let subscriber: QuerySubscriber<T> | null = null
+  let active_key: string | null = null
   let unsubscribe: (() => void) | null = null
 
   function handle_error(failure: QueryFailure) {
@@ -260,11 +262,13 @@ export async function useSyncedData<T>(
     unsubscribe?.()
     unsubscribe = null
     query = null
+    subscriber = null
     if (disposed) {
       return
     }
     const resources = resolve_resources()
     const key = resolve_key(resources)
+    active_key = key
     if (! key && ! fetch_without_resource) {
       update_loading(false)
       if (throw_resource_null_error) {
@@ -274,7 +278,7 @@ export async function useSyncedData<T>(
     }
     query = client!.acquire<T>(universal && import.meta.client ? key : null, options.refresh_policy)
     const had_data = query.has_data()
-    unsubscribe = query.add({
+    subscriber = {
       fetcher,
       data: update_data,
       loading: update_loading,
@@ -282,7 +286,8 @@ export async function useSyncedData<T>(
       invalidate: clear_deferred_updates,
       resources,
       polling_interval,
-    })
+    }
+    unsubscribe = query.add(subscriber)
     if (immediate && ! had_data) {
       const task = query.refresh('join')
       if (! stage_hydration_updates) {
@@ -296,6 +301,12 @@ export async function useSyncedData<T>(
         const resources = resolve_resources()
         return JSON.stringify([resources, resolve_key(resources)])
       }, () => {
+        const resources = resolve_resources()
+        // Same key means the same data; only the notification sources changed.
+        if (query && subscriber && resolve_key(resources) === active_key) {
+          query.set_resources(subscriber, resources)
+          return
+        }
         void start_subscription()
       }, { flush: 'sync' })
     : () => {}
@@ -306,6 +317,7 @@ export async function useSyncedData<T>(
       unsubscribe?.()
       unsubscribe = null
       query = null
+      subscriber = null
       has_deferred_data = false
       has_deferred_error = false
       for (const remove_hook of remove_hooks) {

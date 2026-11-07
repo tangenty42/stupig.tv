@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { effectScope, isRef, ref, watch } from 'vue'
+import { computed, effectScope, isRef, ref, watch } from 'vue'
 import { useSyncedState } from './useSyncedState'
 
 describe('useSyncedData hydration updates', () => {
@@ -617,6 +617,60 @@ describe('useSyncedData hydration updates', () => {
     await refresh()
     expect(data.value).toBe('refreshed')
     expect(subscribe).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('moves subscriptions without refetching when only resources change (universal: %s)', async (universal) => {
+    vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
+    vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
+    const listeners = new Map<string, () => Promise<void>>()
+    vi.stubGlobal('useDataSync', () => ({
+      subscribe: (resource: string, invalidate: () => Promise<void>) => {
+        listeners.set(resource, invalidate)
+        return () => listeners.delete(resource)
+      },
+    }))
+    const { useSyncedData } = await import('./useSyncedData')
+    const channel = ref<string | null>(null)
+    const data = ref<string | null>(null)
+    const fetcher = vi.fn(async () => {
+      channel.value = 'drafts:hmac'
+      return 'list'
+    })
+    await useSyncedData(channel, fetcher, data, {
+      universal, fetch_without_resource: ! universal, query_key: `drafts:${universal}`,
+    })
+
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect([... listeners.keys()]).toEqual(['drafts:hmac'])
+    expect(data.value).toBe('list')
+    await listeners.get('drafts:hmac')!()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([true, false])('replaces the query and drops the previous response when the query key changes (universal: %s)', async (universal) => {
+    vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
+    vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
+    vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
+    const { useSyncedData } = await import('./useSyncedData')
+    const page = ref(1)
+    const data = ref<string | null>(null)
+    const resolvers = new Map<number, (value: string) => void>()
+    const fetcher = vi.fn(() => {
+      const current = page.value
+      return new Promise<string>(resolve => resolvers.set(current, resolve))
+    })
+    const ready = useSyncedData(null, fetcher, data, {
+      universal, fetch_without_resource: ! universal, query_key: computed(() => `page:${universal}:${page.value}`),
+    })
+
+    page.value = 2
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    resolvers.get(2)!('page 2')
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    resolvers.get(1)!('page 1')
+    await ready
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(data.value).toBe('page 2')
   })
 
   it('keeps the server snapshot until hydration resolves for an unkeyed resource', async () => {

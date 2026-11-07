@@ -77,6 +77,15 @@ export class Query<T> {
     }
   }
 
+  /** Change which notifications reach this subscriber without replacing the query or its data. */
+  set_resources(subscriber: QuerySubscriber<T>, resources: readonly string[]) {
+    if (this.disposed || ! this.subscribers.has(subscriber)) {
+      return
+    }
+    subscriber.resources = resources
+    this.sync_subscriptions()
+  }
+
   has_data() {
     return this.fetched
   }
