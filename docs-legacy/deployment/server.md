@@ -1,6 +1,6 @@
 # 服务端与反向代理
 
-生产事实源：[Compose](../../docker-compose.yml)、[Dockerfile](../../Dockerfile)、[入口脚本](../../docker-entrypoint.sh)、[健康端点](../../server/routes/healthz.get.ts)。当前 Compose 接入已经存在的外部 Docker 网络，应用不是在生产宿主机直接执行 `pnpm dev`。
+生产事实源：[Compose](../../docker-compose.yml)、[Dockerfile](../../Dockerfile)、[入口脚本](../../docker-entrypoint.sh)、[健康端点](../../server/api/hooks/healthz.get.ts)。当前 Compose 接入已经存在的外部 Docker 网络，应用不是在生产宿主机直接执行 `pnpm dev`。
 
 ## 主机准备
 
@@ -33,7 +33,7 @@ location / {
 
 ## Content 授权回调
 
-回调为应用的 `POST /api/content/authorize`，ESA 函数请求它获取当前读取决定。正常授权返回 204 并携带 `X-Content-Authorization`，拒绝返回 403；其它异常在 ESA 端按失败关闭处理。
+回调为应用的 `POST /api/hooks/esa/authorize`，ESA 函数请求它获取当前读取决定。正常授权返回 204 并携带 `X-Content-Authorization`，拒绝返回 403；其它异常在 ESA 端按失败关闭处理。
 
 生产可给现有应用配置独立 HTTPS 入口，或使用与 Content 读取域名不同源的主站入口。必须保持 POST JSON 与证明响应头，不重定向至登录页，不加需要浏览器交互的挑战，不缓存授权结果。该地址记录在 ESA 函数的 `CONTENT_AUTH_URL`，不是单靠修改 YAML 就能上线。
 
@@ -56,7 +56,7 @@ node .output/server/maintenance/migrate.mjs
 ```sh
 docker compose --env-file .env.prod ps
 docker compose --env-file .env.prod logs --tail 100 app
-curl --fail http://127.0.0.1:3042/healthz
+curl --fail http://127.0.0.1:3042/api/hooks/healthz
 ```
 
 容器探针每 30 秒检查一次，超时 5 秒，连续失败 3 次判不健康，启动宽限 120 秒。部署脚本另有健康门，见 [GitHub/ACR](github-acr.md)。`restart: unless-stopped` 能处理进程退出；仅 unhealthy 而进程未退出，并不等于 Docker 会自动重启它。

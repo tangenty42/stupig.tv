@@ -67,6 +67,7 @@
 <script setup lang="ts">
 import type AutoComplete from 'primevue/autocomplete'
 import sqlParser from 'node-sql-parser'
+import { useAdminCommandMeta } from '~/features/admin/users'
 
 const props = defineProps<{
   selected_ids: Set<number>
@@ -90,9 +91,7 @@ type AutoCompleteInstance = InstanceType<typeof AutoComplete> & {
 }
 
 // Suggestion lists (populated from server)
-const fields = ref<string[]>([])
-const sql_keywords = ref<string[]>([])
-const commands = ref<string[]>([])
+const { fields, sql_keywords, commands, ready: command_meta_ready } = useAdminCommandMeta()
 
 const ac_ref = ref<AutoCompleteInstance | null>(null)
 
@@ -117,16 +116,7 @@ onMounted(() => {
   }, { capture: true })
 })
 
-const { admin } = useApi()
-try {
-  const meta = await admin.get_keywords()
-  fields.value = meta.fields
-  sql_keywords.value = meta.keywords
-  commands.value = [... meta.commands, 'VERIFY', 'UNVERIFY', 'PROMOTE', 'DEMOTE']
-}
-catch {
-  commands.value = ['BAN', 'UNBAN', 'KICK', 'ALL', 'VERIFY', 'UNVERIFY', 'PROMOTE', 'DEMOTE']
-}
+await command_meta_ready
 
 const cmd = ref('')
 const suggestions = ref<string[]>([])

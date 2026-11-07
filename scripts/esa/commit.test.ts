@@ -1,8 +1,8 @@
-import type { ExecFileOptions } from 'node:child_process'
+import type { ExecFileException, ExecFileOptions } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { commit_source, create_commit_description, parse_commit_version, source_fingerprint } from './commit'
+import { commit_source, CommitFailure, create_commit_description, diagnose_commit_failure, parse_commit_version, source_fingerprint } from './commit'
 import { load_publish_config } from './config'
 
 const { exec } = vi.hoisted(() => ({ exec: vi.fn() }))
@@ -10,14 +10,18 @@ vi.mock('node:child_process', () => ({ execFile: exec }))
 afterEach(() => vi.unstubAllEnvs())
 
 describe('pinned ESA CLI output contract', () => {
-  it.each(['dev', 'prod'] as const)('uses compact %s cloud metadata while preserving the unique run identity', (environment) => {
+  it('keeps dev cloud metadata within 49 characters without losing the fingerprint or run identity', () => {
     const uuid = 'c0ad047b-fbfe-4725-b295-d43012181152'
     const source = Buffer.from('export default {}\n')
-    const description = create_commit_description(environment, `2026-10-25T06-01-45-871Z-${uuid}`, source)
-    expect(description.length).toBeLessThanOrEqual(64)
-    expect(description).toContain(environment === 'dev' ? `dev-${source_fingerprint(source)}-` : 'stupig-prod-')
-    expect(description).toContain(uuid)
-    expect(create_commit_description(environment, '2026-10-25T06-01-45-871Z-00000000-0000-0000-0000-000000000000', source)).not.toBe(description)
+    const description = create_commit_description('dev', `2026-10-25T06-01-45-871Z-${uuid}`, source)
+    expect(description).toHaveLength(49)
+    expect(description.startsWith(`dev-${source_fingerprint(source)}-`)).toBe(true)
+    expect(Buffer.from(description.slice(- 22), 'base64url').toString('hex')).toBe(uuid.replaceAll('-', ''))
+  })
+
+  it('preserves the production description format', () => {
+    const uuid = 'c0ad047b-fbfe-4725-b295-d43012181152'
+    expect(create_commit_description('prod', `2026-10-25T06-01-45-871Z-${uuid}`, Buffer.from('export default {}'))).toBe(`stupig-prod-${uuid}`)
   })
 
   it('compares source fingerprints across line-ending conventions', () => {
@@ -58,7 +62,7 @@ describe('pinned ESA CLI output contract', () => {
     })
     if (failure) {
       const error = await commit_source(config, source, 'test-description').catch(error => error as Error)
-      expect(String(error)).toContain('commit failed or timed out')
+      expect(String(error)).toContain('ESA commit failed; a version may already exist')
       expect(String(error)).not.toContain('selected-secret')
     }
     else {
@@ -66,5 +70,68 @@ describe('pinned ESA CLI output contract', () => {
     }
     expect(end).toHaveBeenCalledOnce()
     expect(existsSync(directory)).toBe(false)
+  })
+})
+
+describe('commit failure diagnostics', () => {
+  const id = 'LTAI5tAbCdEfGh1234567890'
+  const secret = 'S3cr3tValueWithDigits0123456789ab'
+  const exit = (code: number) => Object.assign(new Error(`Command failed ${secret}`), { code }) as ExecFileException
+  // Shape of a Tea SDK error printed through console.error by esa-cli.
+  const sdk_stderr = (code: string) => [
+    `Error calling CreateRoutineWithAssetsCodeVersion: Error: code: 400, Routine code versions exceed the limit. request id: 0E5C2B1A-4F3D-5A6B-9C8D-7E6F5A4B3C2D`,
+    `    at Client.doRPCRequest (client.js:409:19) {`,
+    `  code: '${code}',`,
+    `  statusCode: 400,`,
+    `  data: { AccessKeyId: '${id}', Signature: '${secret}', Code: '${code}' }`,
+    `}`,
+  ].join('\n')
+  const stdout = '├  Checking login status\n│  Logged in\n◇  Routine has already exists\n├  Generating code version\n│  Generate version failed'
+
+  it('reports the failing API, error code, status and request id without credentials', () => {
+    const result = diagnose_commit_failure(exit(1), stdout, sdk_stderr('Routine.CodeVersionQuotaExceeded'), [id, secret])
+    expect(result).toEqual({
+      timed_out: false,
+      exit_code: 1,
+      reached: 'generating-version',
+      failed_at: 'generate-version',
+      api: 'CreateRoutineWithAssetsCodeVersion',
+      error_code: 'Routine.CodeVersionQuotaExceeded',
+      http_status: 400,
+      request_id: '0E5C2B1A-4F3D-5A6B-9C8D-7E6F5A4B3C2D',
+    })
+    expect(JSON.stringify(result)).not.toMatch(new RegExp(`${id}|${secret}`))
+  })
+
+  it('refuses an error code that could be a credential', () => {
+    expect(diagnose_commit_failure(exit(1), stdout, sdk_stderr(id), [id, secret]).error_code).toBeUndefined()
+    expect(diagnose_commit_failure(exit(1), stdout, sdk_stderr('InvalidAccessKeyId'), ['InvalidAccessKeyId']).error_code).toBeUndefined()
+  })
+
+  it('distinguishes a timeout from a failed exit', () => {
+    const killed = Object.assign(new Error('timeout'), { killed: true, signal: 'SIGTERM' }) as ExecFileException
+    expect(diagnose_commit_failure(killed, '├  Checking login status\n│  Logged in', '', [])).toEqual({ timed_out: true, signal: 'SIGTERM', reached: 'logged-in' })
+  })
+
+  it.each([
+    ['│  You are not logged in', '', 'login'],
+    ['', 'Error uploading to OSS: FetchError: socket hang up', 'oss-upload'],
+    ['│  Missing CodeVersion in response', '', 'missing-version'],
+  ])('labels the failing step: %s%s', (out, err, label) => {
+    expect(diagnose_commit_failure(exit(1), out, err, []).failed_at).toBe(label)
+  })
+
+  it('surfaces the diagnostics on the thrown error without forwarding raw output', async () => {
+    const config = load_publish_config({ NODE_ENV: 'development', ALIYUN_ESA_PUBLISH_ACCESS_KEY_ID: id, ALIYUN_ESA_PUBLISH_ACCESS_KEY_SECRET: secret })
+    exec.mockImplementation((_node: string, _args: string[], _options: ExecFileOptions, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+      callback(exit(1), stdout, sdk_stderr('Routine.CodeVersionQuotaExceeded'))
+      return { stdin: { end: vi.fn() } }
+    })
+    const error = await commit_source(config, Buffer.from('export default {}'), 'test-description').then(() => null, (error: unknown) => error)
+    expect(error).toBeInstanceOf(CommitFailure)
+    const { message } = error as CommitFailure
+    expect(message).toContain('error_code=Routine.CodeVersionQuotaExceeded')
+    expect(message).toContain('api=CreateRoutineWithAssetsCodeVersion')
+    expect(message).not.toMatch(new RegExp(`${id}|${secret}|exceed the limit`))
   })
 })

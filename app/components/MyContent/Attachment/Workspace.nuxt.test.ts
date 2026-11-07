@@ -7,8 +7,8 @@ import { DOMWrapper, flushPromises } from '@vue/test-utils'
 import { afterEach, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import { content_selection_markdown } from '~/features/content/attachments/drag'
+import { get_content_attachment_drag_data, get_content_folder_drag_data } from '~/features/content/attachments/drag-transfer'
 import { project_workspace_rows, workspace_capabilities } from '~/features/content/attachments/workspace-model'
-import { get_content_attachment_drag_data, get_content_folder_drag_data } from '../internal/attachment-drag'
 import Workspace from './Workspace.vue'
 
 mockNuxtImport('useMyToast', () => () => ({ error: vi.fn() }))

@@ -6,7 +6,7 @@ import type { WorkspaceAction, WorkspaceCommandFootprint, WorkspaceListRow } fro
 import { attachment_folder_of, attachment_path_join, decrypted_attachment_name, normalized_attachment_extension, split_attachment_editable_name } from '@shared/content-markdown'
 import { error_policy_schema } from '@shared/content-workspace'
 import { has_permission } from '@shared/permissions'
-import { attachment_is_media } from '~/utils/content/attachment'
+import { attachment_is_media } from '~/features/content/attachments/rules'
 import { useContentUploadsStore } from '../uploads/store'
 import { useContentUploadSync } from '../uploads/sync'
 import { create_upload_completion_context } from './completion'

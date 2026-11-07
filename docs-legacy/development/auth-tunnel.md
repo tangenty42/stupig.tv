@@ -11,7 +11,7 @@ frpc ── WSS :443 ── frps-service.cina.cs.tangenty.com ── 反代 ─�
 
 ESA ── HTTPS ── stupig-content-auth-dev.cina.cs.tangenty.com
     ── 反代 ── frps:15550 ── frpc ── 127.0.0.1:55500
-    ── POST /api/content/authorize ── 127.0.0.1:APP_PORT
+    ── POST /api/hooks/esa/authorize ── 127.0.0.1:APP_PORT
 ```
 
 | 地址／端口 | 用途 |
@@ -22,7 +22,7 @@ ESA ── HTTPS ── stupig-content-auth-dev.cina.cs.tangenty.com
 | 本机 55500 | 授权专用代理 |
 | 本机 `APP_PORT` | Nuxt，模板当前为 3042 |
 
-这两个公网域名不能互换。`esaFunction.callbackUrl` 包含完整 `/api/content/authorize` 路径；修改后运行 `pnpm esa:deploy:dev` 才同步变量并发布到 ESA。
+这两个公网域名不能互换。`esaFunction.callbackUrl` 包含完整 `/api/hooks/esa/authorize` 路径；修改后运行 `pnpm esa:deploy:dev` 才同步变量并发布到 ESA。
 
 ## 本机准备
 
@@ -58,7 +58,7 @@ WSS 连接域名需要把 WebSocket Upgrade 转给 frps 的 7000；授权回调�
 下面是授权 HTTPS 站点的 Nginx/OpenResty location 示例；证书和站点声明沿用现有部署管理方式，`proxy_pass` 按容器拓扑调整：
 
 ```nginx
-location = /api/content/authorize {
+location = /api/hooks/esa/authorize {
     limit_except POST { deny all; }
     client_max_body_size 8k;
     proxy_pass http://127.0.0.1:15550;

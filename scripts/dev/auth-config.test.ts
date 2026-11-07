@@ -5,8 +5,8 @@ const input = {
   // eslint-disable-next-line no-template-curly-in-string -- Exercise the project's literal YAML interpolation syntax.
   frp: { executable: 'frpc', serverAddr: 'frp.example.test', serverPort: 443, protocol: 'wss', token: '${DEV_FRP_TOKEN}', version: '0.71.0', proxy: { name: 'dev-auth', type: 'tcp', remotePort: 15550 } },
   // eslint-disable-next-line no-template-curly-in-string -- Exercise the project's literal YAML interpolation syntax.
-  proxy: { listenHost: '127.0.0.1', listenPort: 55500, targetHost: '127.0.0.1', targetPort: '${APP_PORT}', allowedMethod: 'POST', allowedPath: '/api/content/authorize' },
-  callbackUrl: 'https://auth.example.test/api/content/authorize',
+  proxy: { listenHost: '127.0.0.1', listenPort: 55500, targetHost: '127.0.0.1', targetPort: '${APP_PORT}', allowedMethod: 'POST', allowedPath: '/api/hooks/esa/authorize' },
+  callbackUrl: 'https://auth.example.test/api/hooks/esa/authorize',
 }
 
 describe('development frp configuration', () => {
@@ -14,7 +14,7 @@ describe('development frp configuration', () => {
     const config = load_dev_auth_config({ DEV_FRP_TOKEN: 'fixture-token', APP_PORT: '3042' })
     expect(config.frp).toMatchObject({ token: 'fixture-token', protocol: 'wss', version: '0.71.0' })
     expect(config.proxy.targetPort).toBe(3042)
-    expect(config.callbackUrl).toBe('https://stupig-content-auth-dev.cina.cs.tangenty.com/api/content/authorize')
+    expect(config.callbackUrl).toBe('https://stupig-content-auth-dev.cina.cs.tangenty.com/api/hooks/esa/authorize')
     expect(() => load_dev_auth_config({ APP_PORT: '3042' })).toThrow(/DEV_FRP_TOKEN/)
   })
   it('keeps the token out of the generated file and preserves special characters at rendering', () => {
@@ -35,8 +35,8 @@ describe('development frp configuration', () => {
       expect(() => parse_dev_auth_config(input, { DEV_FRP_TOKEN: token, APP_PORT: '3042' })).toThrow(/token/)
     for (const patch of [
       { callbackUrl: null },
-      { callbackUrl: 'http://auth.example.test/api/content/authorize' },
-      { callbackUrl: 'https://user:secret@auth.example.test/api/content/authorize' },
+      { callbackUrl: 'http://auth.example.test/api/hooks/esa/authorize' },
+      { callbackUrl: 'https://user:secret@auth.example.test/api/hooks/esa/authorize' },
       { frp: { ... input.frp, proxy: { ... input.frp.proxy, remotePort: null } } },
       { frp: { ... input.frp, serverAddr: 'https://frp.example.test' } },
       { proxy: { ... input.proxy, listenHost: '0.0.0.0' } },

@@ -11,8 +11,8 @@
 <script setup lang="ts">
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { settings } from '@shared/settings'
-import { observe_image_placeholders } from '~/components/MyContent/internal/image-placeholders'
-import { render_story_cover } from '~/utils/content/story-cover'
+import { observe_image_placeholders } from '~/features/content/image-placeholders'
+import { render_story_cover } from '~/features/content/story-cover'
 
 const props = defineProps<{ src?: string, alt: string, image?: ContentStoryAttachment['image'], constrained?: boolean }>()
 const root = useTemplateRef<HTMLElement>('root')

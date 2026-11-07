@@ -1,6 +1,6 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { attachment_path_is_private } from '@shared/content-markdown'
-import { file_icon } from '~/utils/content/attachment'
+import { file_icon } from '~/features/content/attachments/rules'
 
 export interface ContentItemPresentation {
   icon: string

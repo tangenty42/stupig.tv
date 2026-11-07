@@ -21,7 +21,7 @@
 | `app/features/` | 按业务组织客户端状态、操作与业务协作 | content 的草稿、附件、上传和编辑会话已迁入所属 feature；业务内部实现显式导入 |
 | `app/stores/` | 草稿页面内存状态、上传协调状态 | 持久业务状态来自服务端；不把正文草稿保存到浏览器存储 |
 | `app/utils/` | Markdown 渲染、引用、编辑器扩展、工作区与上传辅助等 | 通用逻辑接收必要参数，不隐式读取私有服务端配置 |
-| `server/api/`、`server/routes/` | tRPC 适配、附件跳转、授权回调、通知凭证及健康探针 | HTTP 协议入口和业务服务分别承担职责 |
+| `server/api/` | tRPC 适配（`trpc/`）、外部系统回调（`hooks/`：ESA 授权、EMQX 认证、站点地图、健康探针）及浏览器原生链接（`links/`：附件跳转） | HTTP 协议入口和业务服务分别承担职责 |
 | `server/trpc/` | `auth`、`profile`、`admin`、`content`、`presence`、`system` 路由，输入校验及鉴权中间件 | 将业务交给 services；保留可识别的状态与中文错误消息 |
 | `server/services/` | 账号、权限、事务、Content 状态变化、跨对象协调 | 业务数据库访问与发布条件由服务持有 |
 | `server/lib/` | 数据库、存储、消息、云 SDK、签名、日志等底层接入 | 接入能力不承担页面编排 |
@@ -55,7 +55,7 @@
 - [useApi](../../app/composables/useApi.ts) 提供领域方法，[useTrpcClient](../../app/composables/useTrpcClient.ts) 负责传输与认证失败处理。
 - [useSyncedData](../../app/composables/useSyncedData.ts) 与查询工具管理取数、请求共享、失效和可见页面轮询；SSR 查询状态按 Nuxt 应用实例隔离，不能把用户数据放进跨请求共享的可变缓存。
 - [useSyncedState](../../app/composables/useSyncedState.ts) 和 [useDisplayTimeContext](../../app/composables/useDisplayTimeContext.ts) 处理首屏状态及时间显示一致性。服务端时间以 UTC 保存，界面按显示时区转换。
-- [content 草稿 store](../../app/features/content/draft.store.ts) 保存页面内存文本、确认快照、租约和待核对命令；不持久化正文到 localStorage、sessionStorage 或 IndexedDB。[编辑界面偏好](../../app/components/MyContent/Markdown/internal/view-state.ts) 与 [上传句柄](../../app/features/content/uploads/upload-file-handle.ts) 另有各自的本地保存机制。
+- [content 草稿 store](../../app/features/content/draft.store.ts) 保存页面内存文本、确认快照、租约和待核对命令；不持久化正文到 localStorage、sessionStorage 或 IndexedDB。[编辑界面偏好](../../app/features/content/markdown/view-state.ts) 与 [上传句柄](../../app/features/content/uploads/upload-file-handle.ts) 另有各自的本地保存机制。
 - 返回数据中的访问者标识和版本用于防止旧身份、旧页面或旧请求的结果覆盖当前状态；不能将客户端 Cookie 的展示信息当作权限事实。
 
 ## 账号与权限
@@ -102,11 +102,11 @@
 
 ### 文件读取与在线授权
 
-同源附件入口按附件身份、版本和访问者选择表示 → 返回签名读取地址 → ESA 函数验证签名并回调 `/api/content/authorize` → 应用按当前数据库事实判断 → ESA 原生缓存／OSS 交付。
+同源附件入口按附件身份、版本和访问者选择表示 → 返回签名读取地址 → ESA 函数验证签名并回调 `/api/hooks/esa/authorize` → 应用按当前数据库事实判断 → ESA 原生缓存／OSS 交付。
 
 [ESA 函数](../../config/esa/content-auth.mjs) 不代理文件字节，也不缓存成功授权结果；回调失败时拒绝放行。缓存命中不能绕过授权。已经下载的副本和已经开始的传输有各自边界，不能把撤权描述为远程抹除客户端文件。
 
-`/api/content/private-attachments/:id` 是返回 410 的旧入口。头像和站点静态资源按公开交付规则处理，不复用 Content 的全部私密附件模型。
+头像和站点静态资源按公开交付规则处理，不复用 Content 的全部私密附件模型。
 
 ## 运行与维护设施
 

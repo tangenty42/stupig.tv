@@ -29,11 +29,12 @@
 <script setup lang="ts">
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import { settings } from '@shared/settings'
-import { save_url_as } from '~/components/MyContent/internal/browser-navigation'
-import { attachment_is_media } from '~/utils/content/attachment'
-import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
-import { useStoryPreview } from './internal/preview'
-import { attachment_for_link } from './internal/preview/attachment-links'
+import { useAttachmentDownload } from '~/features/content/attachments/download'
+import { attachment_is_media } from '~/features/content/attachments/rules'
+import { save_url_as } from '~/features/content/browser-navigation'
+import { useStoryPreview } from '~/features/content/markdown/preview'
+import { attachment_for_link } from '~/features/content/markdown/preview/attachment-links'
+import { story_compiled_icons } from '~/features/content/markdown/render/compiled-icons'
 
 const props = withDefaults(defineProps<{
   markdown: string
@@ -71,7 +72,7 @@ const emit = defineEmits<{
 const compiled_icons = story_compiled_icons
 
 const static_url = useStaticUrl()
-const api = useApi()
+const attachment_download = useAttachmentDownload()
 const { error: toast_error } = useMyToast()
 const preview_visible = ref(false)
 const preview_index = ref(0)
@@ -113,8 +114,7 @@ async function download_plain(attachment: ContentStoryAttachment) {
   if (! story_id)
     return
   try {
-    const { url } = await api.content.sign_attachment_download(story_id, attachment.file_name)
-    save_url_as(url)
+    save_url_as(await attachment_download.sign(story_id, attachment.file_name))
   }
   catch {
     toast_error('附件下载失败')

@@ -191,6 +191,9 @@ export function useApi() {
     list_drafts: (after = '', limit = 30) => draft_call(signal => trpc.content.listDrafts.query({ after, limit }, { signal })),
     acquire_draft: (input: RouterInputs['content']['acquireDraft']) => draft_call(signal => trpc.content.acquireDraft.mutate(input, { signal })),
     command_draft: (input: RouterInputs['content']['commandDraft']) => draft_call(signal => trpc.content.commandDraft.mutate(input, { signal })),
+    async draft_sync_credentials() {
+      return trpc_call(trpc.content.draftSyncCredentials.query())
+    },
     async execute_workspace_command(payload: Parameters<typeof trpc.content.executeWorkspaceCommand.mutate>[0]) {
       return trpc_call(trpc.content.executeWorkspaceCommand.mutate(payload))
     },

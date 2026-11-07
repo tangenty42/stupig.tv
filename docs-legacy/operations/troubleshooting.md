@@ -19,7 +19,7 @@
 
 ## 迁移与健康检查
 
-`/healthz` 查询 `migration_runs` 的 completed 记录，数据库不可用或账本查询失败时返回 503。它不验证所有 OSS 对象、所有待执行版本、ESA 回调或 MQTT 消费健康；首页 200 的覆盖范围更小。
+`/api/hooks/healthz` 查询 `migration_runs` 的 completed 记录，数据库不可用或账本查询失败时返回 503。它不验证所有 OSS 对象、所有待执行版本、ESA 回调或 MQTT 消费健康；首页 200 的覆盖范围更小。
 
 | 错误／状态 | 下一步 |
 | --- | --- |

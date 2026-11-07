@@ -30,7 +30,7 @@ services:
       # 只绑回环，外部流量由 openresty 反代进来
       - 127.0.0.1:${APP_PORT}:${APP_PORT}
     healthcheck:
-      # 探 /healthz 而不是 /：首页 SSR 渲染成功不代表数据库可用。镜像自带一份等价的
+      # 探 /api/hooks/healthz 而不是 /：首页 SSR 渲染成功不代表数据库可用。镜像自带一份等价的
       # HEALTHCHECK，这里保留一份是为了能按 .env.prod 的 APP_PORT 插值（镜像里只能运行时
       # 读 PORT）。端口必须用 compose 插值，别写成 ${process.env.APP_PORT}：compose
       # 会先按自己的格式解析而报错。
@@ -38,7 +38,7 @@ services:
         - CMD
         - node
         - -e
-        - 'fetch("http://127.0.0.1:${APP_PORT}/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
+        - 'fetch("http://127.0.0.1:${APP_PORT}/api/hooks/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
       interval: 30s
       timeout: 5s
       retries: 3
@@ -62,7 +62,7 @@ services:
       EMQX_AUTHENTICATION__2__MECHANISM: password_based
       EMQX_AUTHENTICATION__2__BACKEND: http
       EMQX_AUTHENTICATION__2__METHOD: post
-      EMQX_AUTHENTICATION__2__URL: http://app:${APP_PORT}/api/content-draft-sync/authenticate
+      EMQX_AUTHENTICATION__2__URL: http://app:${APP_PORT}/api/hooks/emqx/authenticate
       EMQX_AUTHENTICATION__2__HEADERS: '{"content-type":"application/json"}'
       EMQX_AUTHENTICATION__2__BODY: '{"username":"$${username}","password":"$${password}"}'
       EMQX_AUTHENTICATION__2__REQUEST_TIMEOUT: 3s

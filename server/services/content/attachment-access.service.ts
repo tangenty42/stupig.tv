@@ -128,7 +128,7 @@ export async function image_editor_source(id: number, version: string, viewer: A
   require_attachment_read(row, viewer)
   if (attachment_access_version(row) !== version || ! row.display_key || ! row.fallback_key)
     throw new ApiError(409, '图片尚未处理就绪或版本已变化')
-  const base = `/api/content/attachments/${id}?version=${version}`
+  const base = `/api/links/attachments/${id}?version=${version}`
   const display_url = `${base}&role=${redacted && has_redacted_variant(row) ? 'redacted_display' : 'display'}`
   try {
     await resolve_attachment_role(row, 'original', viewer)

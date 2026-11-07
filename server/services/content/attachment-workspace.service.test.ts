@@ -52,7 +52,7 @@ describe('independent attachment workspace snapshot', () => {
     expect(guest.attachments[0]).toMatchObject({ is_private: true, url: null })
     expect(guest.attachments[0]).not.toHaveProperty('image')
     const admin = await get_attachment_workspace(1, { id: 7, is_admin: true } as AuthUser)
-    expect(admin.attachments[0]?.url).toMatch(/^\/api\/content\/attachments\/11\?version=[\da-f]{64}$/)
+    expect(admin.attachments[0]?.url).toMatch(/^\/api\/links\/attachments\/11\?version=[\da-f]{64}$/)
     expect(admin.attachments[0]?.image?.lqip).toBe('data:image/jpeg;base64,/9j/2Q==')
     expect(admin.attachments[0]).not.toHaveProperty('encryption_key')
     expect(admin.attachments[0]).not.toHaveProperty('is_encrypted')

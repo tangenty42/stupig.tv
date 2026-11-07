@@ -4,7 +4,7 @@ import bypass_deployment, { authorize_content_request, content_authorization_pro
 import { create_esa } from './esa'
 
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ aliyun: { esa: null } }) }))
-const function_env = vi.hoisted(() => ({ ALIYUN_ESA_AUTH_KEY: undefined as string | undefined, CONTENT_AUTH_URL: 'https://auth.example.test/api/content/authorize' }))
+const function_env = vi.hoisted(() => ({ ALIYUN_ESA_AUTH_KEY: undefined as string | undefined, CONTENT_AUTH_URL: 'https://auth.example.test/api/hooks/esa/authorize' }))
 vi.mock('alibaba:workers', () => ({ env: function_env }))
 const config = { baseUrl: 'https://esa.example.test', authKey: 'test-key#'.repeat(8), urlTtlSeconds: 300 }
 beforeEach(() => vi.useRealTimers())

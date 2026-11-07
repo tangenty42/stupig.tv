@@ -1,4 +1,4 @@
-import { require_auth_user, resolve_operate_target } from '@server/services/auth-guards.service'
+import { resolve_operate_target } from '@server/services/auth-guards.service'
 import {
   change_profile_password,
   change_profile_password_by_otp,
@@ -12,7 +12,7 @@ import {
   upload_profile_avatar,
 } from '@server/services/profile.service'
 import { get_login_sessions } from '@server/services/session.service'
-import { permission_procedure, protected_procedure, public_procedure, router } from '@server/trpc/init'
+import { optional_auth_user, permission_procedure, protected_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
 
 const admin_edit_procedure = permission_procedure('admin_access', 'full')
@@ -20,16 +20,7 @@ const admin_edit_procedure = permission_procedure('admin_access', 'full')
 export const profile_router = router({
   get: public_procedure
     .input(api_schema.profile.get)
-    .query(async ({ ctx, input }) => {
-      let viewer = null
-      try {
-        viewer = await require_auth_user(ctx.event)
-      }
-      catch {
-        viewer = null
-      }
-      return get_profile(viewer, input.id)
-    }),
+    .query(async ({ ctx, input }) => get_profile(await optional_auth_user(ctx.event), input.id)),
 
   getMe: protected_procedure.query(({ ctx }) => get_profile(ctx.auth_user, ctx.auth_user.id)),
 

@@ -1,4 +1,4 @@
-import type { Query, QueryFailure } from '~/utils/sync/query'
+import type { Query, QueryFailure, QueryRefreshPolicy } from '~/utils/sync/query'
 import { call_query_subscriber, QueryClient } from '~/utils/sync/query'
 import { is_synced_state } from './useSyncedState'
 
@@ -14,8 +14,8 @@ interface UseSyncedDataOptions<T = unknown> {
   universal?: boolean
   /** Fetch even without a query key; requires universal: false. Default: false. */
   fetch_without_resource?: boolean
-  /** Ignore superseded independent refreshes. Disposal and invalidation always discard stale results. Default: true. */
-  ignore_stale_responses?: boolean
+  /** Join the in-flight request or start a new one and discard superseded responses. Shared subscribers must agree. Default: join. */
+  refresh_policy?: QueryRefreshPolicy
   /** Report an inactive/null key through on_error (or toast), not by throwing. Default: false. */
   throw_resource_null_error?: boolean
   /** Handle fetch failures instead of the default toast; 401 is suppressed. */
@@ -75,7 +75,6 @@ export async function useSyncedData<T>(
     server: true,
     universal: true,
     fetch_without_resource: false,
-    ignore_stale_responses: true,
     throw_resource_null_error: false,
   }
   if (isRef(_3)) {
@@ -105,7 +104,6 @@ export async function useSyncedData<T>(
   const server = options.server as boolean
   const universal = options.universal as boolean
   const fetch_without_resource = options.fetch_without_resource as boolean
-  const ignore_stale_responses = options.ignore_stale_responses as boolean
   const throw_resource_null_error = options.throw_resource_null_error as boolean
   const polling_interval = options.polling_interval as number | undefined
   if (fetch_without_resource && universal) {
@@ -274,7 +272,7 @@ export async function useSyncedData<T>(
       }
       return
     }
-    query = client!.acquire<T>(universal && import.meta.client ? key : null)
+    query = client!.acquire<T>(universal && import.meta.client ? key : null, options.refresh_policy)
     const had_data = query.has_data()
     unsubscribe = query.add({
       fetcher,
@@ -284,10 +282,9 @@ export async function useSyncedData<T>(
       invalidate: clear_deferred_updates,
       resources,
       polling_interval,
-      ignore_stale_responses,
     })
     if (immediate && ! had_data) {
-      const task = query.refresh()
+      const task = query.refresh('join')
       if (! stage_hydration_updates) {
         await task
       }

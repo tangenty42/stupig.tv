@@ -151,11 +151,11 @@ import type { AttachmentUploadPick } from '~/features/content/uploads/picks'
 import { parse_story_markdown } from '@shared/content-markdown'
 import { content_name_key } from '@shared/content-reference'
 import { settings } from '@shared/settings'
-import { get_content_attachment_drag_data, get_content_folder_drag_data } from '~/components/MyContent/internal/attachment-drag'
-import { content_browser_navigation } from '~/components/MyContent/internal/browser-navigation'
 import { content_attachment_drag_file_names } from '~/features/content/attachments/drag'
+import { get_content_attachment_drag_data, get_content_folder_drag_data } from '~/features/content/attachments/drag-transfer'
+import { content_browser_navigation } from '~/features/content/browser-navigation'
 import { useStoryEditing } from '~/features/content/editing'
-import { format_event_range } from '~/utils/content/event'
+import { format_event_range } from '~/features/content/event'
 
 definePageMeta({
   middleware: 'require-content-draft-auth',

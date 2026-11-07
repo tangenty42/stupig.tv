@@ -1,5 +1,6 @@
 import type { TrpcContext } from '@server/trpc/context'
 import type { PermissionField, PermissionLevel } from '@shared/permissions'
+import type { H3Event } from 'h3'
 import { ApiError } from '@server/errors/ApiError'
 import { INTERNAL_ERROR_MESSAGE } from '@server/errors/public-message'
 import { ReferenceSafetyError } from '@server/errors/ReferenceSafetyError'
@@ -97,6 +98,18 @@ export const protected_procedure = public_procedure.use(async ({ ctx, next }) =>
   const auth_user = await require_auth_user(ctx.event)
   return next({ ctx: { auth_user } })
 })
+
+/** The signed-in caller, or null when unauthenticated (401). Other failures propagate. */
+export async function optional_auth_user(event: H3Event) {
+  try {
+    return await require_auth_user(event)
+  }
+  catch (error) {
+    if (error instanceof ApiError && error.statusCode === 401)
+      return null
+    throw error
+  }
+}
 
 export function permission_procedure(field: PermissionField, level: PermissionLevel) {
   return public_procedure.use(async ({ ctx, next }) => {

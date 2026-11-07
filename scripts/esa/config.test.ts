@@ -17,7 +17,7 @@ describe('eSA publication configuration', () => {
     expect(dev).toMatchObject({ name: 'stupig-content-auth-bypass-dev', appEnvironment: 'dev', environment: 'production', accessKeyId: 'test-publish-id' })
     expect(prod).toMatchObject({ name: 'stupig-content-auth-bypass-prod', appEnvironment: 'prod', environment: 'production', accessKeyId: 'prod-id' })
     expect(dev.callbackUrl).toBe(load_dev_auth_config({ DEV_FRP_TOKEN: 'test-token', APP_PORT: '3042' }).callbackUrl)
-    expect(prod.callbackUrl).toBe('https://www.stupig.tv/api/content/authorize')
+    expect(prod.callbackUrl).toBe('https://www.stupig.tv/api/hooks/esa/authorize')
     expect(prod.deliveryUrl).not.toBe(dev.deliveryUrl)
     expect(() => require_publish_credentials(dev)).not.toThrow()
     const plan = JSON.stringify(publish_plan(dev))
@@ -32,9 +32,9 @@ describe('eSA publication configuration', () => {
   })
 
   it.each([
-    { callbackUrl: 'https://stupig-static-dev.oss.tangenty.cn/api/content/authorize' },
-    { callbackUrl: 'http://auth.example.test/api/content/authorize' },
-    { callbackUrl: 'https://user:password@auth.example.test/api/content/authorize' },
+    { callbackUrl: 'https://stupig-static-dev.oss.tangenty.cn/api/hooks/esa/authorize' },
+    { callbackUrl: 'http://auth.example.test/api/hooks/esa/authorize' },
+    { callbackUrl: 'https://user:password@auth.example.test/api/hooks/esa/authorize' },
     { callbackUrl: 'https://auth.example.test/' },
     { deliveryUrl: 'https://cdn.example.test/content/' },
     { entry: '../outside.mjs' },

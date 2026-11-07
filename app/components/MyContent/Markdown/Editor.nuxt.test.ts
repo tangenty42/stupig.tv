@@ -2,7 +2,7 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { DOMWrapper, flushPromises } from '@vue/test-utils'
 import { afterEach, expect, it, vi } from 'vitest'
 import { reactive, ref } from 'vue'
-import { set_content_attachment_drag_data, set_content_folder_drag_data } from '../internal/attachment-drag'
+import { set_content_attachment_drag_data, set_content_folder_drag_data } from '~/features/content/attachments/drag-transfer'
 
 import Editor from './Editor.vue'
 
@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 }))
 // CodeMirror, its view-state persistence and the browser file-entry adapters
 // are the boundaries; the drop wiring under test is the real SFC.
-vi.mock('./internal/editor', () => ({
+vi.mock('~/features/content/markdown/editor', () => ({
   useStoryEditor: () => ({
     editor_ready: ref(true),
     issues: ref([]),
@@ -27,8 +27,8 @@ vi.mock('./internal/editor', () => ({
     position_at_coords: mocks.position_at_coords,
   }),
 }))
-vi.mock('./internal/view-state', () => ({ useStoryEditorViewState: vi.fn() }))
-vi.mock('../internal/upload-picks', () => ({ attachment_picks_from_data_transfer: (... args: unknown[]) => mocks.picks(... args) }))
+vi.mock('~/features/content/markdown/view-state', () => ({ useStoryEditorViewState: vi.fn() }))
+vi.mock('~/features/content/uploads/browser-picks', () => ({ attachment_picks_from_data_transfer: (... args: unknown[]) => mocks.picks(... args) }))
 
 const wrappers: { unmount: () => void, setProps: (props: Record<string, unknown>) => Promise<void> }[] = []
 afterEach(() => {

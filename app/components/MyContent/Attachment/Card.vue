@@ -71,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import type { AttachmentMenuItem } from './internal/list-interaction'
+import type { AttachmentMenuItem } from '~/features/content/attachments/list-interaction'
 import type { MyContentAttachmentRow } from '~/features/content/attachments/list-model'
 import { attachment_base_name, attachment_path_is_private } from '@shared/content-markdown'
 import { attachment_item_presentation, folder_item_presentation } from '~/features/content/attachments/presentation'

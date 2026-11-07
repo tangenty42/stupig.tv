@@ -24,6 +24,8 @@ vi.mock('@server/services/content/workspace-command.service', () => workspace_mo
 vi.mock('@server/services/content/attachment-workspace.service', () => workspace_mocks)
 const background_mocks = vi.hoisted(() => ({ get_background_status: vi.fn() }))
 vi.mock('@server/services/background/status.service', () => background_mocks)
+const draft_sync_mocks = vi.hoisted(() => ({ draft_sync_credentials: vi.fn(), authenticate_draft_sync: vi.fn() }))
+vi.mock('@server/services/content/draft-sync.service', () => draft_sync_mocks)
 const audit_mocks = vi.hoisted(() => ({ get_storage_audit_findings: vi.fn() }))
 vi.mock('@server/services/storage-audit/service', () => audit_mocks)
 // Router contracts supply their own deployment fixture, never local credentials.
@@ -89,6 +91,17 @@ describe('tRPC router contracts', () => {
     const caller = app_router.createCaller({ event: create_event() })
     const content = caller.content as unknown as { getBilibiliVideoCards: (input: { hrefs: string[] }) => Promise<unknown> }
     await expect(content.getBilibiliVideoCards({ hrefs: ['https://www.bilibili.com/video/BV1Pvnd6JEVD'] })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('issues draft sync credentials only to an authenticated caller', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    auth_mocks.require_auth_user.mockRejectedValueOnce(new ApiError(401, '请先登录'))
+    await expect(caller.content.draftSyncCredentials()).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+    expect(draft_sync_mocks.draft_sync_credentials).not.toHaveBeenCalled()
+    auth_mocks.require_auth_user.mockResolvedValueOnce(auth_user)
+    draft_sync_mocks.draft_sync_credentials.mockResolvedValueOnce({ username: 'draft-v1', password: 'signed', expires_at: 1 })
+    expect(await caller.content.draftSyncCredentials()).toEqual({ username: 'draft-v1', password: 'signed', expires_at: 1 })
+    expect(draft_sync_mocks.draft_sync_credentials).toHaveBeenCalledWith(auth_user)
   })
 
   it('waits for commit and the current viewer workspace before acknowledging a command, including receipt replay', async () => {
@@ -229,6 +242,26 @@ describe('tRPC router contracts', () => {
       code: 'UNAUTHORIZED',
       message: '请先登录',
     })
+  })
+
+  it('treats only an authentication failure as an anonymous viewer, and surfaces other auth errors', async () => {
+    const caller = app_router.createCaller({ event: create_event() })
+    const snapshot = { nodes: [], attachments: [], folders: [], namespace_revision: 1, viewer_key: 'anonymous' }
+    workspace_mocks.get_attachment_workspace.mockResolvedValue(snapshot)
+    auth_mocks.require_auth_user.mockRejectedValueOnce(new ApiError(401, '请先登录'))
+    expect(await caller.content.getAttachmentWorkspace({ id: 24 })).toEqual(snapshot)
+    expect(workspace_mocks.get_attachment_workspace).toHaveBeenLastCalledWith(24, null)
+    auth_mocks.require_auth_user.mockResolvedValueOnce(auth_user)
+    await caller.content.getAttachmentWorkspace({ id: 24 })
+    expect(workspace_mocks.get_attachment_workspace).toHaveBeenLastCalledWith(24, auth_user)
+    workspace_mocks.get_attachment_workspace.mockClear()
+    auth_mocks.require_auth_user.mockRejectedValueOnce(new Error('session lookup failed'))
+    await expect(caller.content.getAttachmentWorkspace({ id: 24 })).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' })
+    expect(workspace_mocks.get_attachment_workspace).not.toHaveBeenCalled()
+    auth_mocks.require_auth_user.mockRejectedValueOnce(new Error('session lookup failed'))
+    await expect(caller.presence.ping()).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' })
+    auth_mocks.require_auth_user.mockRejectedValueOnce(new ApiError(401, '请先登录'))
+    expect(await caller.presence.ping()).toEqual({ online: false })
   })
 
   it('rejects invalid Zod inputs before invoking a service', async () => {

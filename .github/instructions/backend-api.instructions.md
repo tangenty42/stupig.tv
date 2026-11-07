@@ -9,6 +9,7 @@ applyTo: "server/**/*.ts"
 ## Boundaries and types
 
 - Add operations to domain routers in `server/trpc/routers/`, composed by `server/trpc/router.ts`. The Nitro tRPC route is a transport adapter only.
+- Frontend business calls go through tRPC. Plain Nitro endpoints exist only for callers that require a specific HTTP shape, grouped by caller under `server/api/`: `hooks/` for other systems calling us (ESA, EMQX, sitemap module, health checks) and `links/` for URLs the browser opens natively (`<img>`, `<a>`). Do not add `server/routes/`.
 - Procedures use the appropriate public/protected/admin procedure, validate with Zod, call services and return data. Throw `ApiError` for expected failures; preserve Chinese user-facing messages and transport status. Do not return raw exceptions.
 - Keep business DB queries in `server/services/`. `server/lib/` contains low-level integrations; services orchestrate them, procedures do not bypass services, and lib must not depend on services.
 - Use `@server` aliases. Public API payloads/responses and sync identifiers belong in `server/shared/types/` (`@shared/types/*`). Server-only auth/JWT types stay in `server/types/`; private service types stay beside their owner.

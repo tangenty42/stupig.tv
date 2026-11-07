@@ -11,8 +11,8 @@ Content 管理『蠢猪档案』：以 Markdown 保存档案正文和元数据�
 | `/content/:id/edit` | 正文编辑、草稿、附件工作区、图片编辑和预览 |
 | `/content/new/edit`、`/content/draft-<id>/edit`、`/content?view=drafts` | 创建、继续编辑与在档案首页找回云端草稿；要求管理及机密读取双权限，旧 `/content/drafts` 地址跳转到首页 |
 | `content` tRPC router | 档案、工作区、上传会话、引用重放及下载签发 |
-| `/api/content/attachments/:id` | 绑定附件身份和版本的读取入口 |
-| `/api/content/authorize` | ESA 的在线授权回调；不传输附件字节 |
+| `/api/links/attachments/:id` | 绑定附件身份和版本的读取入口 |
+| `/api/hooks/esa/authorize` | ESA 的在线授权回调；不传输附件字节 |
 
 档案元数据位于正文开头的 front matter：标题、标签、事件日期、说明和封面。事件日期支持日／月精度。评分和置顶通过共享规则解释，普通标签与内部标记在展示时分别处理。准确语法和校验见 [Markdown 与引用](markdown.md)。
 

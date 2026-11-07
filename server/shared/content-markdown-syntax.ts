@@ -8,7 +8,7 @@ export function create_content_markdown_parser() {
 }
 
 // HTML wrappers that are allowed to contain markdown: every element except
-// raw-text/code/embedded ones (see utils/content/html).
+// raw-text/code/embedded ones (see features/content/markdown/html).
 
 // A wrapper whose content is entirely markdown (no blank lines, or the block
 // parser would have split it) arrives as one html_block token — but one token

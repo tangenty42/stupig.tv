@@ -23,4 +23,4 @@ flowchart TB
   end
 ```
 
-两条链路分别表示对应环境的授权回调请求，目标均为 `POST /api/content/authorize`。开发环境的 FRP 反代是公网 HTTPS 入口，本机专用代理只转发此接口。
+两条链路分别表示对应环境的授权回调请求，目标均为 `POST /api/hooks/esa/authorize`。开发环境的 FRP 反代是公网 HTTPS 入口，本机专用代理只转发此接口。

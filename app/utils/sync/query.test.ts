@@ -42,7 +42,6 @@ function setup() {
       error: vi.fn(),
       resources: ['profile:1'],
       polling_interval,
-      ignore_stale_responses: true,
     }
   }
   return {
@@ -80,6 +79,27 @@ describe('queryClient', () => {
     expect(first.error).toHaveBeenCalledOnce()
     expect(second.error).toHaveBeenCalledOnce()
     expect(vi.mocked(first.error).mock.calls[0]![0]).toBe(vi.mocked(second.error).mock.calls[0]![0])
+  })
+
+  it('joins refreshes for an independent query with the default policy', async () => {
+    const { client, subscriber } = setup()
+    const request = deferred<string>()
+    const consumer = subscriber(vi.fn(() => request.promise))
+    const query = client.acquire<string>(null)
+    query.add(consumer)
+    const first = query.refresh()
+    expect(query.refresh()).toBe(first)
+    request.resolve('result')
+    await first
+    expect(consumer.fetcher).toHaveBeenCalledOnce()
+    expect(consumer.data).toHaveBeenCalledExactlyOnceWith('result')
+  })
+
+  it('requires subscribers to the same key to agree on the refresh policy', () => {
+    const { client } = setup()
+    const query = client.acquire('query:1', 'latest')
+    expect(client.acquire('query:1', 'latest')).toBe(query)
+    expect(() => client.acquire('query:1', 'join')).toThrow('same refresh_policy')
   })
 
   it('refetches once for invalidations during a request and does not publish obsolete data', async () => {

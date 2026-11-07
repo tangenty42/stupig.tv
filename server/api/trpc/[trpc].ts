@@ -9,7 +9,7 @@ function draft_path(path: string) {
     path = decodeURIComponent(path)
   }
   catch {}
-  return /content\.(?:createDraft|listDrafts|getDraft|acquireDraft|commandDraft)/.test(path)
+  return /content\.(?:createDraft|listDrafts|getDraft|acquireDraft|commandDraft|draftSyncCredentials)/.test(path)
 }
 
 export default defineEventHandler((event) => {

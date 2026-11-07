@@ -17,18 +17,7 @@
 </template>
 
 <script setup lang="ts">
-import { settings } from '@shared/settings'
+import { useContentDraftList } from '~/features/content/draft-list'
 
-const { content } = useApi()
-const { user } = useAuth()
-const after = ref('')
-const viewer = computed(() => JSON.stringify([user.value?.id, user.value?.is_admin, user.value?.permissions]))
-const data = ref<Awaited<ReturnType<typeof content.list_drafts>> | null>(null)
-const loading = ref(false)
-void useSyncedData(computed(() => data.value?.channel ?? null), () => content.list_drafts(after.value), data, loading, {
-  server: false, universal: false, fetch_without_resource: true, query_key: computed(() => `draft-list:${viewer.value}:${after.value}`), polling_interval: settings.app.content.draft.keepaliveIntervalMs,
-})
-watch([viewer, after], () => {
-  data.value = null
-}, { flush: 'sync' })
+const { data, loading, after } = useContentDraftList()
 </script>

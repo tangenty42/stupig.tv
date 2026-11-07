@@ -89,7 +89,7 @@
 
 <script setup lang="ts">
 import type { MenuItem } from 'primevue/menuitem'
-import type { AttachmentMenuItem } from './internal/list-interaction'
+import type { AttachmentMenuItem } from '~/features/content/attachments/list-interaction'
 import type { MyContentAttachmentRow } from '~/features/content/attachments/list-model'
 import type { AttachmentUploadPick } from '~/features/content/uploads/picks'
 import { attachment_folder_of } from '@shared/content-markdown'

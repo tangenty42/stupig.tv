@@ -322,7 +322,7 @@ describe('useSyncedData hydration updates', () => {
     expect(nuxt_app.hook).not.toHaveBeenCalled()
   })
 
-  it('keeps the newest non-universal refresh when responses arrive out of order', async () => {
+  it.each([true, false])('keeps the newest refresh with the latest policy (shared: %s)', async (universal) => {
     vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
@@ -336,7 +336,8 @@ describe('useSyncedData hydration updates', () => {
     })
     const { refresh } = await useSyncedData(ref('users:1'), fetcher, data, loading, {
       immediate: false,
-      universal: false,
+      universal,
+      refresh_policy: 'latest',
     })
 
     const first = refresh()
@@ -417,7 +418,7 @@ describe('useSyncedData hydration updates', () => {
     const pending: Array<{ resolve: (value: string) => void, reject: (error: Error) => void }> = []
     const { refresh } = await useSyncedData(ref('users:1'), () => new Promise<string>((resolve, reject) => {
       pending.push({ resolve, reject })
-    }), data, loading, { immediate: false, universal: false, on_error })
+    }), data, loading, { immediate: false, refresh_policy: 'latest', on_error })
 
     const first = refresh()
     const second = refresh()
@@ -572,25 +573,27 @@ describe('useSyncedData hydration updates', () => {
     expect(data.value).toBe('new identity')
   })
 
-  it('allows older responses when stale-response protection is disabled', async () => {
-    vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
+  it('joins the initial fetch for a new subscriber to a shared latest-policy query', async () => {
+    const nuxt_app = { isHydrating: false, hook: vi.fn() }
+    vi.stubGlobal('useNuxtApp', () => nuxt_app)
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
 
     const { useSyncedData } = await import('./useSyncedData')
-    const data = ref<string | null>(null)
-    const pending: Array<(value: string) => void> = []
-    const { refresh } = await useSyncedData(ref('users:1'), () => new Promise<string>((resolve) => {
-      pending.push(resolve)
-    }), data, { immediate: false, universal: false, ignore_stale_responses: false })
+    const first_data = ref<string | null>(null)
+    const second_data = ref<string | null>(null)
+    let resolve_request!: (value: string) => void
+    const fetcher = vi.fn(() => new Promise<string>((resolve) => {
+      resolve_request = resolve
+    }))
+    const first = useSyncedData('users:1', fetcher, first_data, { refresh_policy: 'latest' })
+    const second = useSyncedData('users:1', fetcher, second_data, { refresh_policy: 'latest' })
 
-    const first = refresh()
-    const second = refresh()
-    pending[1]!('newer')
-    await second
-    pending[0]!('older')
-    await first
-    expect(data.value).toBe('older')
+    expect(fetcher).toHaveBeenCalledOnce()
+    resolve_request('users')
+    await Promise.all([first, second])
+    expect(first_data.value).toBe('users')
+    expect(second_data.value).toBe('users')
   })
 
   it('fetches and refreshes an unkeyed resource without subscribing to sync events', async () => {

@@ -19,7 +19,8 @@ export function useContentUploadsStore(scope: number) {
     const workspace = useState<ContentAttachmentWorkspace | null>(`content_attachment_workspace:${scope}`, () => null)
     const sessions = computed(() => resource.state.value.sessions)
     const enabled = computed(() => resource.state.value.enabled)
-    const ready = computed(() => resource.state.value.ready)
+    // Whether the upload session list has been read; not an awaitable `ready`.
+    const loaded = computed(() => resource.state.value.loaded)
     const reservations = computed(() => {
       const own = new Map(sessions.value.map(session => [session.id, session]))
       const all = new Map(resource.state.value.reservations.filter(item => ! resource.removed.has(item.id) && ! own.has(item.id)).map(item => [item.id, item]))
@@ -73,6 +74,6 @@ export function useContentUploadsStore(scope: number) {
     }
     // Pinia's own effect scope survives the component that first created it.
     watch(identity_key, reset, { flush: 'sync' })
-    return { identity_key, snapshot_epoch, enabled, ready, sessions, reservations, progress, errors, active, queued, finalizing, preparations, can_cancel_preparation, cancel_preparation, busy, resolution, admission_error, admitting, submit, dismiss_resolution, has_file, apply_list, start, resume, pause, cancel, reset }
+    return { identity_key, snapshot_epoch, enabled, loaded, sessions, reservations, progress, errors, active, queued, finalizing, preparations, can_cancel_preparation, cancel_preparation, busy, resolution, admission_error, admitting, submit, dismiss_resolution, has_file, apply_list, start, resume, pause, cancel, reset }
   })()
 }

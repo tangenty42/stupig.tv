@@ -2,7 +2,7 @@ import type { ContentUploadReservation, ContentUploadSession } from '@shared/typ
 
 /** The synchronized server resource has one owner; Pinia only exposes its projection. */
 export function createContentUploadResource(scope: number) {
-  const state = useState(`content_upload_resource:${scope}`, () => ({ enabled: false, ready: false, sessions: [] as ContentUploadSession[], reservations: [] as ContentUploadReservation[] }))
+  const state = useState(`content_upload_resource:${scope}`, () => ({ enabled: false, loaded: false, sessions: [] as ContentUploadSession[], reservations: [] as ContentUploadReservation[] }))
   const removed = new Set<string>()
   function update(session: ContentUploadSession) {
     if (removed.has(session.id))
@@ -14,7 +14,7 @@ export function createContentUploadResource(scope: number) {
   }
   function merge(value: { enabled: boolean, sessions: ContentUploadSession[], reservations?: ContentUploadReservation[] }) {
     state.value.enabled = value.enabled
-    state.value.ready = true
+    state.value.loaded = true
     state.value.reservations = value.reservations ?? []
     const missing = state.value.sessions.filter(session => ! value.sessions.some(item => item.id === session.id))
     for (const session of value.sessions)
@@ -29,7 +29,7 @@ export function createContentUploadResource(scope: number) {
   }
   function reset() {
     removed.clear()
-    state.value = { enabled: false, ready: false, sessions: [], reservations: [] }
+    state.value = { enabled: false, loaded: false, sessions: [], reservations: [] }
   }
   return { state, update, merge, remove, reset, removed }
 }

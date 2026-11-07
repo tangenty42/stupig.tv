@@ -1,7 +1,8 @@
 import type { RowDataPacket } from 'mysql2/promise'
 import { db } from '@server/lib/db'
-import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { extract_attachment_names, extract_story_reference_titles, upgrade_legacy_refs } from '@shared/content-markdown'
+import { sync_resource } from '@shared/types/sync'
+import { enqueue_content_refresh } from './sync-outbox.repository'
 
 interface ReferenceMigrationRow extends RowDataPacket {
   id: number
@@ -39,10 +40,9 @@ export async function migrate_content_references(apply = false, report: (item: R
       if (connection && changed) {
         // Metadata/cover and related ids have the same meaning; revision remains untouched.
         await connection.execute('UPDATE content_stories SET markdown = ? WHERE id = ?', [rewritten, story.id])
+        await enqueue_content_refresh(connection, [sync_resource('content_story', story.id)])
       }
       await connection?.commit()
-      if (apply && changed)
-        publish_refresh({ resource: sync_resource('content_story', story.id) })
       const item = {
         story_id: story.id,
         changed,

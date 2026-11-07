@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import ImageEditor from './ImageEditor.vue'
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), confirm: vi.fn(), release: vi.fn(), exported: vi.fn() }))
-vi.mock('./image-editor/session', async () => {
+vi.mock('~/features/content/image-editor/session', async () => {
   const { ref } = await import('vue')
   return {
     useImageEditSession: (options: {
