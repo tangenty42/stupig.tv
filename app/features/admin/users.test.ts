@@ -1,20 +1,48 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useAdminCommandMeta, useAdminUsers } from './users'
 
 let admin: Record<'list_users' | 'set_banned' | 'force_logout' | 'set_verification' | 'set_admin_role' | 'set_permissions' | 'get_keywords', ReturnType<typeof vi.fn>>
+let synced_refresh: ReturnType<typeof vi.fn>
+let synced_call: { fetcher: () => unknown, options: { query_key: { value: string } } }
 
 beforeEach(() => {
   admin = {
     list_users: vi.fn(), set_banned: vi.fn(), force_logout: vi.fn(), set_verification: vi.fn(),
     set_admin_role: vi.fn(), set_permissions: vi.fn(), get_keywords: vi.fn(),
   }
+  synced_refresh = vi.fn(async () => {})
   vi.stubGlobal('ref', ref)
+  vi.stubGlobal('computed', computed)
   vi.stubGlobal('useApi', () => ({ admin }))
   vi.stubGlobal('useSyncedState', (_key: string, init: () => unknown) => ref(init()))
-  vi.stubGlobal('useSyncedData', vi.fn(async () => ({ refresh: vi.fn() })))
+  vi.stubGlobal('useSyncedData', vi.fn(async (_resource: unknown, fetcher: () => unknown, _data: unknown, _loading: unknown, options: typeof synced_call.options) => {
+    synced_call = { fetcher, options }
+    return { refresh: synced_refresh }
+  }))
 })
 afterEach(() => vi.unstubAllGlobals())
+
+it('changes the query once for a combined page change and refreshes an unchanged query', async () => {
+  const page = ref(1)
+  const page_size = ref(10)
+  const filter = ref('')
+  const users = useAdminUsers({ page, page_size, filter }, vi.fn())
+  await users.ready
+  const initial_key = synced_call.options.query_key.value
+
+  page.value = 3
+  page_size.value = 50
+  expect(synced_call.options.query_key.value).toBe(initial_key)
+  await users.refresh()
+  expect(synced_call.options.query_key.value).not.toBe(initial_key)
+  expect(synced_refresh).not.toHaveBeenCalled()
+  synced_call.fetcher()
+  expect(admin.list_users).toHaveBeenLastCalledWith({ page: 3, page_size: 50, filter: undefined })
+
+  await users.refresh()
+  expect(synced_refresh).toHaveBeenCalledOnce()
+})
 
 it.each([
   ['BAN', 'set_banned', [7, true]],

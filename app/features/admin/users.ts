@@ -12,16 +12,36 @@ export function useAdminUsers(query: { page: Ref<number>, page_size: Ref<number>
   const { admin } = useApi()
   const result = useSyncedState<AdminUserList | null>('admin-users-result', () => null)
   const loading = ref(false)
+  const snapshot = () => ({ page: query.page.value, page_size: query.page_size.value, filter: query.filter.value })
+  // Applied together so a page and page-size change start one request, not two.
+  const params = ref(snapshot())
   let refresh: () => Promise<void> = async () => {}
   const ready = useSyncedData<AdminUserList>(
     null,
-    () => admin.list_users({ page: query.page.value, page_size: query.page_size.value, filter: query.filter.value || undefined }),
+    () => admin.list_users({ page: params.value.page, page_size: params.value.page_size, filter: params.value.filter || undefined }),
     result,
     loading,
-    { share: false, fetch_without_resource: true, refresh_policy: 'latest', polling_interval: settings.app.admin.pollIntervalSeconds * 1000, on_data },
+    {
+      share: false,
+      fetch_without_resource: true,
+      refresh_policy: 'latest',
+      query_key: computed(() => `admin-users:${JSON.stringify(params.value)}`),
+      polling_interval: settings.app.admin.pollIntervalSeconds * 1000,
+      on_data,
+    },
   ).then((synced) => {
     refresh = synced.refresh
   })
+
+  /** Load the current page and filter; a changed query replaces the list, an unchanged one is refreshed. */
+  function reload() {
+    const next = snapshot()
+    if (JSON.stringify(next) !== JSON.stringify(params.value)) {
+      params.value = next
+      return Promise.resolve()
+    }
+    return refresh()
+  }
 
   async function run(command: AdminUserCommand, id: number, verified_note?: string | null) {
     switch (command) {
@@ -39,7 +59,7 @@ export function useAdminUsers(query: { page: Ref<number>, page_size: Ref<number>
     result,
     loading,
     ready,
-    refresh: () => refresh(),
+    refresh: reload,
     run,
     set_permissions: (id: number, grants: PermissionGrant[]) => admin.set_permissions(id, grants),
   }
