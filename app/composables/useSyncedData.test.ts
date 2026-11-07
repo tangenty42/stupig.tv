@@ -120,7 +120,7 @@ describe('useSyncedData hydration updates', () => {
     await useSyncedData([], fetcher)
     expect(fetcher).not.toHaveBeenCalled()
     await useSyncedData([], fetcher, { query_key: 'standalone' })
-    await useSyncedData(null, fetcher, { universal: false, fetch_without_resource: true })
+    await useSyncedData(null, fetcher, { share: false, fetch_without_resource: true })
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(subscribe).not.toHaveBeenCalled()
   })
@@ -322,7 +322,7 @@ describe('useSyncedData hydration updates', () => {
     expect(nuxt_app.hook).not.toHaveBeenCalled()
   })
 
-  it.each([true, false])('keeps the newest refresh with the latest policy (shared: %s)', async (universal) => {
+  it.each([true, false])('keeps the newest refresh with the latest policy (shared: %s)', async (share) => {
     vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
@@ -336,7 +336,7 @@ describe('useSyncedData hydration updates', () => {
     })
     const { refresh } = await useSyncedData(ref('users:1'), fetcher, data, loading, {
       immediate: false,
-      universal,
+      share,
       refresh_policy: 'latest',
     })
 
@@ -362,7 +362,7 @@ describe('useSyncedData hydration updates', () => {
     const pending: Array<(value: string) => void> = []
     const { refresh } = await useSyncedData(resource, () => new Promise<string>((resolve) => {
       pending.push(resolve)
-    }), data, { immediate: false, universal: false })
+    }), data, { immediate: false, share: false })
 
     const old_request = refresh()
     resource.value = 'users:2'
@@ -393,7 +393,7 @@ describe('useSyncedData hydration updates', () => {
     const data = useSyncedState('users:stale-hydration', () => 'ssr snapshot')
     const on_data = vi.fn()
     await useSyncedData(resource, async () => 'old page', data, {
-      universal: false,
+      share: false,
       on_data,
     })
     await new Promise<void>(resolve => setTimeout(resolve, 0))
@@ -609,7 +609,7 @@ describe('useSyncedData hydration updates', () => {
       .mockResolvedValueOnce('refreshed')
 
     const { refresh } = await useSyncedData(ref(null), fetcher, data, {
-      universal: false,
+      share: false,
       fetch_without_resource: true,
     })
 
@@ -619,7 +619,7 @@ describe('useSyncedData hydration updates', () => {
     expect(subscribe).not.toHaveBeenCalled()
   })
 
-  it.each([true, false])('moves subscriptions without refetching when only resources change (universal: %s)', async (universal) => {
+  it.each([true, false])('moves subscriptions without refetching when only resources change (share: %s)', async (share) => {
     vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     const listeners = new Map<string, () => Promise<void>>()
@@ -637,7 +637,7 @@ describe('useSyncedData hydration updates', () => {
       return 'list'
     })
     await useSyncedData(channel, fetcher, data, {
-      universal, fetch_without_resource: ! universal, query_key: `drafts:${universal}`,
+      share, fetch_without_resource: ! share, query_key: `drafts:${share}`,
     })
 
     expect(fetcher).toHaveBeenCalledOnce()
@@ -647,7 +647,7 @@ describe('useSyncedData hydration updates', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
-  it.each([true, false])('replaces the query and drops the previous response when the query key changes (universal: %s)', async (universal) => {
+  it.each([true, false])('replaces the query and drops the previous response when the query key changes (share: %s)', async (share) => {
     vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
@@ -660,7 +660,7 @@ describe('useSyncedData hydration updates', () => {
       return new Promise<string>(resolve => resolvers.set(current, resolve))
     })
     const ready = useSyncedData(null, fetcher, data, {
-      universal, fetch_without_resource: ! universal, query_key: computed(() => `page:${universal}:${page.value}`),
+      share, fetch_without_resource: ! share, query_key: computed(() => `page:${share}:${page.value}`),
     })
 
     page.value = 2
@@ -694,7 +694,7 @@ describe('useSyncedData hydration updates', () => {
     }))
 
     await useSyncedData(ref(null), fetcher, data, {
-      universal: false,
+      share: false,
       fetch_without_resource: true,
       on_data,
     })

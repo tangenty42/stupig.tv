@@ -9,7 +9,7 @@ export function useContentDraftList() {
   const data = ref<Awaited<ReturnType<typeof content.list_drafts>> | null>(null)
   const loading = ref(false)
   const ready = useSyncedData(computed(() => data.value?.channel ?? null), () => content.list_drafts(after.value), data, loading, {
-    server: false, universal: false, fetch_without_resource: true, query_key: computed(() => `draft-list:${viewer.value}:${after.value}`), polling_interval: settings.app.content.draft.keepaliveIntervalMs,
+    server: false, share: false, fetch_without_resource: true, query_key: computed(() => `draft-list:${viewer.value}:${after.value}`), polling_interval: settings.app.content.draft.keepaliveIntervalMs,
   }).then(() => undefined)
   watch([viewer, after], () => {
     data.value = null

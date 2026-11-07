@@ -35,7 +35,7 @@ applyTo: "app/**/*.{vue,ts}"
 
 ## Synchronization and hydration
 
-- Default to `useSyncedData` with `universal: true`. Use `universal: false` only for caller-specific behavior/side effects or an unkeyed `fetch_without_resource` query. Direct `useDataSync` listeners are for raw events that do not represent a shared fetched resource.
+- Default to `useSyncedData` with `share: true`. Use `share: false` only for caller-specific behavior/side effects or an unkeyed `fetch_without_resource` query. Direct `useDataSync` listeners are for raw events that do not represent a shared fetched resource.
 - Keep server invalidations as the trigger for mutations; Content uses its transactional outbox. Preserve profile/session presence polling and admin quiet-time polling because derived time-dependent values produce no mutation event. See [realtime](../../docs-legacy/modules/realtime.md).
 - Server shared-proxy/listener maps are request-isolated; client maps share `useState`. An `immediate: false` proxy is trigger-only and must not supply initial rendered data. Immediate subscribers must await an existing in-flight fetch.
 - Hydration-visible state must be payload-backed or fetched identically on both sides. Use `useSyncedState()` for payload-backed refs, including writable computed wrappers. Fetchers return data rather than mutate render state; callbacks/data/loading remain staged until hydration finishes. Explicit ordinary refs are not staged.
