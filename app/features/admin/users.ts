@@ -18,7 +18,7 @@ export function useAdminUsers(query: { page: Ref<number>, page_size: Ref<number>
     () => admin.list_users({ page: query.page.value, page_size: query.page_size.value, filter: query.filter.value || undefined }),
     result,
     loading,
-    { universal: false, fetch_without_resource: true, refresh_policy: 'latest', polling_interval: settings.app.admin.pollIntervalSeconds * 1000, on_data },
+    { share: false, fetch_without_resource: true, refresh_policy: 'latest', polling_interval: settings.app.admin.pollIntervalSeconds * 1000, on_data },
   ).then((synced) => {
     refresh = synced.refresh
   })

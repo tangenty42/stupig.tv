@@ -11,8 +11,8 @@ interface UseSyncedDataOptions<T = unknown> {
   /** Allow the initial fetch during SSR; requires immediate. Default: true. */
   server?: boolean
   /** Share client requests/cache by query key, not across SSR requests. Default: true. */
-  universal?: boolean
-  /** Fetch even without a query key; requires universal: false. Default: false. */
+  share?: boolean
+  /** Fetch even without a query key; requires share: false. Default: false. */
   fetch_without_resource?: boolean
   /** Join the in-flight request or start a new one and discard superseded responses. Shared subscribers must agree. Default: join. */
   refresh_policy?: QueryRefreshPolicy
@@ -73,7 +73,7 @@ export async function useSyncedData<T>(
   const options: Readonly<UseSyncedDataOptions<T>> = {
     immediate: true,
     server: true,
-    universal: true,
+    share: true,
     fetch_without_resource: false,
     throw_resource_null_error: false,
   }
@@ -102,12 +102,12 @@ export async function useSyncedData<T>(
 
   const immediate = options.immediate as boolean
   const server = options.server as boolean
-  const universal = options.universal as boolean
+  const share = options.share as boolean
   const fetch_without_resource = options.fetch_without_resource as boolean
   const throw_resource_null_error = options.throw_resource_null_error as boolean
   const polling_interval = options.polling_interval as number | undefined
-  if (fetch_without_resource && universal) {
-    throw new Error('fetch_without_resource requires universal: false')
+  if (fetch_without_resource && share) {
+    throw new Error('fetch_without_resource requires share: false')
   }
   const nuxt_app = useNuxtApp()
   const has_data_ref = isRef(_3)
@@ -276,7 +276,7 @@ export async function useSyncedData<T>(
       }
       return
     }
-    query = client!.acquire<T>(universal && import.meta.client ? key : null, options.refresh_policy)
+    query = client!.acquire<T>(share && import.meta.client ? key : null, options.refresh_policy)
     const had_data = query.has_data()
     subscriber = {
       fetcher,
