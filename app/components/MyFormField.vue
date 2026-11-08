@@ -96,6 +96,9 @@ import { FormField } from '@primevue/forms'
 import { phone_schema } from '@shared/schemas'
 import { useApi } from '~/composables/useApi'
 
+interface OtpChannels { phone: string | null, identity: string | null }
+interface OtpCooldownSnapshot { until: string | null, channels: OtpChannels | null }
+
 interface MyFormFieldOtpSendOptions {
   sendHandler: () => Promise<void>
   targetPhone: string
@@ -191,28 +194,34 @@ if (props.otpSend) {
 
   // Cooldown channels are keyed server-side; the browser cannot derive them,
   // so the subscription sources follow whatever the last query returned.
-  const otp_channels = ref<{ phone: string | null, identity: string | null }>({ phone: null, identity: null })
+  const otp_channels = ref<OtpChannels>({ phone: null, identity: null })
 
-  async function sync_otp_cooldown() {
+  // Channels travel with the result so a superseded response cannot replace them.
+  async function sync_otp_cooldown(): Promise<OtpCooldownSnapshot> {
     const target_phone = otp_target_phone.value
 
     if (! target_phone) {
-      return null
+      return { until: null, channels: null }
     }
 
     try {
       const data = await auth_api.get_otp_cooldown({ phone: target_phone })
-
-      if (data?.channels) {
-        otp_channels.value = data.channels
-      }
-
-      return data?.next_available_at ?? null
+      return { until: data?.next_available_at ?? null, channels: data?.channels ?? null }
     }
     catch {
-      return null
+      return { until: null, channels: null }
     }
   }
+
+  const otp_cooldown_snapshot = useSyncedState(computed<OtpCooldownSnapshot | null>({
+    get: () => ({ until: otp_cooldown_until.value, channels: null }),
+    set: (snapshot) => {
+      otp_cooldown_until.value = snapshot?.until ?? null
+      if (snapshot?.channels) {
+        otp_channels.value = snapshot.channels
+      }
+    },
+  }))
 
   const otp_sync_source_has_error = ref(false)
 
@@ -235,10 +244,10 @@ if (props.otpSend) {
   const otp_sync_source = computed(() => otp_sync_ready.value ? otp_channels.value.phone : null)
   const otp_sync_by_identity_source = computed(() => otp_sync_ready.value ? otp_channels.value.identity : null)
 
-  await useSyncedData<string | null>(
+  await useSyncedData<OtpCooldownSnapshot>(
     [otp_sync_source, otp_sync_by_identity_source],
     sync_otp_cooldown,
-    otp_cooldown_until,
+    otp_cooldown_snapshot,
     otp_sync_loading,
     // The query key is the typed phone, not the channels: it exists before the
     // first fetch (so the initial query can run with no channel known yet),
