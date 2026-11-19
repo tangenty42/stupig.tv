@@ -54,8 +54,8 @@ resolve 对话框按理由分组，标题行可展开／折叠，默认折叠；
 
 - 命令合同：[`content-workspace.ts`](../../../server/shared/content-workspace.ts)。
 - 事务与回执：[`workspace.repository.ts`](../../../server/services/content/workspace.repository.ts)、[`workspace-command.service.ts`](../../../server/services/content/workspace-command.service.ts)。
-- UI 编排：[`useAttachmentPanel.ts`](../../../app/composables/useAttachmentPanel.ts)、[`Attachment/Workspace.vue`](../../../app/components/MyContent/Attachment/Workspace.vue)。
+- UI 编排：[`panel.ts`](../../../app/features/content/attachments/panel.ts)、[`Attachment/Workspace.vue`](../../../app/components/MyContent/Attachment/Workspace.vue)。
 - 删除影响：[`content-delete-impact.ts`](../../../server/shared/content-delete-impact.ts)、[`delete-impact.service.ts`](../../../server/services/content/delete-impact.service.ts)、[`DeleteImpact.vue`](../../../app/components/MyContent/DeleteImpact.vue)。
-- 共享菜单／列表：[`attachment-list.ts`](../../../app/utils/content/attachment-list.ts)、[`workspace.ts`](../../../app/utils/content/workspace.ts)、[`Attachment/Resolve.vue`](../../../app/components/MyContent/Attachment/Resolve.vue)。
+- 共享菜单／列表：[`list-model.ts`](../../../app/features/content/attachments/list-model.ts)、[`workspace.ts`](../../../app/features/content/attachments/workspace.ts)、[`Attachment/Resolve.vue`](../../../app/components/MyContent/Attachment/Resolve.vue)。
 
 同目录测试覆盖名称、继承机密、子树、预约交叠、批量拒绝、回执和版本。浏览器需检查混合选择、上传任务多选右键、冲突树展开及窄屏布局；这些交互不能只由纯状态测试证明。

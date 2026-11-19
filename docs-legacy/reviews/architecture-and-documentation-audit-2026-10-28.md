@@ -1,5 +1,7 @@
 # 架构与文档一致性审查
 
+历史源码导航按本报告基线处理。可核对到基线提交的入口链接固定快照，其余保留原路径和行号。现行目录及后续重构记录见 [SID#0.1.AGENT](../../docs/0_overall/1_architecture/AGENT.md)。
+
 审查日期：2026-10-28。基线：`348ae2a`，开始审查时工作区干净。本报告按用户要求独立保存，记录发现和待决策事项；不是替代现有模块手册的新规范。最初审查只新增报告和导航；后续用户选定 A01 的统一引用方案，工作区实现进展单独标注。未标注解决的发现仍指审查基线，不代表本轮全部修复；生产状态未核验。
 
 ## 结论与证据范围
@@ -31,7 +33,7 @@
 | 短事务与长上传分离 | 上传预约、分片、核验、图片处理、采用有各自事实；网络请求不长期占住工作区事务，取消和迟到完成有明确仲裁 | [上传会话](../../server/services/content/upload-session.service.ts)、[发布](../../server/services/content/upload-publication.service.ts) |
 | 不可变对象及退役账本 | 逻辑改名不搬字节，发布新版本不覆盖旧 key；回收和采用协调，避免“刚清理又发布”及未知外部结果被盲目重试 | [对象采用](../../server/services/content/object-adoption.service.ts)、[退役](../../server/services/content/object-retirement.service.ts)、[对账清理](../../server/services/storage-audit/cleanup.ts) |
 | 访问控制落在服务端和交付边界 | 正文先删减，附件按角色投影；缓存命中仍做在线授权，撤权不等待物理删除。代价是授权服务成为读取可用性的依赖 | [正文](../../server/services/content/story.service.ts)、[在线授权](../../server/services/content/edge-read.service.ts)、[边缘函数](../../config/esa/content-auth.mjs) |
-| 多种版本承担不同责任 | 正文 revision、namespace/title revision、对象身份和 viewer_key 分开，避免把所有变化都当正文覆盖；引用重放检查完整客户端快照 | [引用历史](../../server/services/content/reference-history.service.ts)、[草稿桥接](../../app/utils/content/draft-reference-bridge.ts) |
+| 多种版本承担不同责任 | 正文 revision、namespace/title revision、对象身份和 viewer_key 分开，避免把所有变化都当正文覆盖；引用重放检查完整客户端快照 | [引用历史](../../server/services/content/reference-history.service.ts)、[草稿桥接](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/utils/content/draft-reference-bridge.ts) |
 | SSR 状态与浏览器副作用分开 | payload、hydration 提交时机、时区/时钟、身份变化有专门机制；复杂度虽高，但不是可随意删除的冗余 | [useSyncedData](../../app/composables/useSyncedData.ts)、[时间插件](../../app/plugins/timezone.ts) |
 | 配置公开边界和迁移冻结 | settings 与部署秘密分开；数据库工具可只验证所需配置；迁移冻结完整依赖闭包，避免历史迁移随当前 helper 改变 | [loader](../../config/lib/loader.ts)、[公开配置守卫](../../server/plugins/public-config-guard.ts)、[冻结测试](../../scripts/migration/frozen.test.ts) |
 | 按验证层级组织测试 | 纯逻辑、服务边界、真实组件、浏览器和迁移演练各有入口；文档明确云 SDK 夹具不证明真实云端行为 | [测试指南](../development/testing.md)、[Vitest](../../vitest.config.ts)、[CI](../../.github/workflows/check.yml) |
@@ -46,13 +48,13 @@
 
 | 路径 | 当前机制 | 与本项的关系 |
 | --- | --- | --- |
-| 旧草稿追赶附件/标题变化，保存前校正引用 | [replay_locked_references](../../server/services/content/reference-history.service.ts#L142) 按两种 baseline 读取各自 journal，再调用共享 replay；保存正文也调用它 | 不依赖 `related_story_ids`，没有这里的 200 项截断；保留这一机制 |
-| 附件改名/移动后同步已保存正文 | [finish_namespace_change](../../server/services/content/reference-history.service.ts#L63) 已知所属 story，直接改写该正文/封面并写入 journal | 无须跨 story 查找引用者，不属于本项指出的索引问题 |
+| 旧草稿追赶附件/标题变化，保存前校正引用 | [replay_locked_references](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/reference-history.service.ts#L142) 按两种 baseline 读取各自 journal，再调用共享 replay；保存正文也调用它 | 不依赖 `related_story_ids`，没有这里的 200 项截断；保留这一机制 |
+| 附件改名/移动后同步已保存正文 | [finish_namespace_change](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/reference-history.service.ts#L63) 已知所属 story，直接改写该正文/封面并写入 journal | 无须跨 story 查找引用者，不属于本项指出的索引问题 |
 | story 改名同步其他已保存正文，或删除前检查引用者 | [改名](../../server/services/content/story.service.ts)和[删除](../../server/services/content/story.service.ts)通过 `JSON_CONTAINS(related_story_ids, ...)` 找引用者 | 依赖索引完整性；本项的缺口在这里 |
 
 **索引行为静态确认，完整失败场景待真实数据库复现。** [resolve_related_story_ids](../../server/services/content/story.service.ts) 将引用标题截断到前 200 项，只把当时存在的目标解析为 ID；[创建档案](../../server/services/content/story.service.ts)只计算新档案自身的索引，没有回填既有正文。
 
-具体场景：A 先保存 `[](content://B)`，当时 B 不存在，索引为空；后来创建 B，渲染按当前标题可以解析到 B，但 A 的索引仍为空。若 A 没有重新保存，此后 B 改名为 C，标题 journal 会正常记录 `B → C`，但改名事务按反向索引找不到 A，因此漏改其已保存正文；若此时直接删除 B，引用保护同样可能漏掉 A。第 201 个不同引用有类似遗漏。这与[草稿合同](../modules/content/drafts.md#L23)允许悬空引用以后按同名目标解析的规则衔接不完整。
+具体场景：A 先保存 `[](content://B)`，当时 B 不存在，索引为空；后来创建 B，渲染按当前标题可以解析到 B，但 A 的索引仍为空。若 A 没有重新保存，此后 B 改名为 C，标题 journal 会正常记录 `B → C`，但改名事务按反向索引找不到 A，因此漏改其已保存正文；若此时直接删除 B，引用保护同样可能漏掉 A。第 201 个不同引用有类似遗漏。这与[草稿合同](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/drafts.md#L23)允许悬空引用以后按同名目标解析的规则衔接不完整。
 
 持有改名前 baseline 的旧草稿，在历史仍可用时可以通过 replay 把 `content://B` 改为 `content://C`；这不等于数据库中遗漏的 A 会自动修复。[get_story_body](../../server/services/content/story.service.ts)返回存储正文和当前 title revision，没有在读取时重放这篇正文。因此，改名后首次打开 A、没有旧本地草稿时，也不能依赖旧 journal 自动补救。保存前 replay 校正的是本次提交，不能替代对所有已保存引用者的发现和删除保护。
 
@@ -80,7 +82,7 @@
 
 **2026-10-30 实施安排：** [实现方案](../designs/shared-cloud-draft-implementation-2026-10-30.md)逐项对应 A01–A10、D01–D20，并区分云端草稿必需改动、容量验收和独立清理。工作区已将保存/引用状态收进 store，并补页面代次和身份检查；localStorage 仍没有账号归属，服务端草稿/租约尚未实现，不能因此关闭 A02 或将全部 D15 场景视为通过。原设计补充了锁后 token generation 核验和 MQTT 通知可见性选择；本次只形成方案，未执行迁移或部署。
 
-**键和调用路径静态确认；跨账号及迟到保存的完整浏览器场景待复现。** [contentDraft](../../app/stores/contentDraft.ts#L40) 的 Pinia ID、localStorage key 和草稿记录均只有档案 ID/`new`，没有 actor ID；[编辑会话](../../app/composables/useStoryEditSession.ts#L235)的 Web Lock 也相同。[登出](../../app/composables/useAuth.ts)清除用户状态并重载，没有处理草稿归属。
+**键和调用路径静态确认；跨账号及迟到保存的完整浏览器场景待复现。** [contentDraft](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/stores/contentDraft.ts#L40) 的 Pinia ID、localStorage key 和草稿记录均只有档案 ID/`new`，没有 actor ID；[编辑会话](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/composables/useStoryEditSession.ts#L235)的 Web Lock 也相同。[登出](../../app/composables/useAuth.ts)清除用户状态并重载，没有处理草稿归属。
 
 因此同一浏览器配置中，后登录且有编辑权限的另一账号可能恢复前一账号的未提交内容；新建页的 `new` 草稿尤其没有服务端正文权限可用于区分。这不是仅靠服务端保存权限就能解决的本地数据隔离问题。
 
@@ -92,7 +94,7 @@
 
 ### A03 · P2 · 工作区读取是全量快照，存在二次复杂度
 
-[get_attachment_workspace](../../server/services/content/attachment-workspace.service.ts#L18)先读全部节点，再读全部文件；为每个文件/节点反复 `find()`，并调用会重新过滤全量 rows 的 [node_version](../../server/services/content/workspace.repository.ts#L49)。平坦目录也会产生二次扫描；深目录还要多次遍历子树。响应同时包含 `nodes[].attachment` 和 `attachments`，文件数据重复序列化。[list_stories](../../server/services/content/story.service.ts)也全量返回，无分页。
+[get_attachment_workspace](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/attachment-workspace.service.ts#L18)先读全部节点，再读全部文件；为每个文件/节点反复 `find()`，并调用会重新过滤全量 rows 的 [node_version](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/workspace.repository.ts#L49)。平坦目录也会产生二次扫描；深目录还要多次遍历子树。响应同时包含 `nodes[].attachment` 和 `attachments`，文件数据重复序列化。[list_stories](../../server/services/content/story.service.ts)也全量返回，无分页。
 
 - 选项 A：保留快照合同，先建立 ID/path 索引，单次构造树和版本，减少重复查询/序列化。
 - 选项 B：目录分页和增量变更协议，客户端按 revision 合并；扩展性更好，但同步复杂度更高。
@@ -100,7 +102,7 @@
 
 ### A04 · P2 · scope 串行与全局标题锁构成明确扩展上限
 
-[workspace_transaction](../../server/services/content/workspace.repository.ts#L104)锁整篇档案；[begin_namespace_change](../../server/services/content/reference-history.service.ts#L46)锁该档案全部附件。正文读取/保存取得全局标题命名空间共享锁；创建、改名、删除及历史清理取得排他锁，改名还在事务内改写引用者正文。
+[workspace_transaction](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/workspace.repository.ts#L104)锁整篇档案；[begin_namespace_change](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/reference-history.service.ts#L46)锁该档案全部附件。正文读取/保存取得全局标题命名空间共享锁；创建、改名、删除及历史清理取得排他锁，改名还在事务内改写引用者正文。
 
 这使正确性容易推理，却让同一档案的无关路径操作排队，也让跨档案的标题维护可能阻塞正文读写。UI 显示“无关文件仍可操作”不等于数据库会并行提交。
 
@@ -110,7 +112,7 @@
 
 ### A05 · P2 · 静态交付依赖在线应用，后台重任务又与其共享资源
 
-[authorize_edge_read](../../server/services/content/edge-read.service.ts#L37)每次读取都开启数据库事务；授权与业务、后台扫描共用 [10 连接、无限等待队列的池](../../server/lib/db.ts#L12)。生产采用 app runner，图片处理也在应用进程内。每张图的首次同源入口加 ESA 回调会产生额外应用请求；缓存只能省字节回源，不能消除这些授权依赖。
+[authorize_edge_read](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/edge-read.service.ts#L37)每次读取都开启数据库事务；授权与业务、后台扫描共用 [10 连接、无限等待队列的池](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/lib/db.ts#L12)。生产采用 app runner，图片处理也在应用进程内。每张图的首次同源入口加 ESA 回调会产生额外应用请求；缓存只能省字节回源，不能消除这些授权依赖。
 
 - 选项 A：保留每请求撤权语义，补池等待/授权延迟/队列年龄监控和有界背压，完成生产 worker 打包后隔离重任务。
 - 选项 B：允许短时间撤权延迟，缓存授权决定；这是产品和安全合同变更。
@@ -138,7 +140,7 @@
 
 ### A08 · P2 · 两种通知保证使相似功能具有不同失效模式
 
-Content 使用 outbox；账号/资料使用 [publish_refresh](../../server/lib/sync.ts) 和 [进程内 MQTT 队列](../../server/lib/mqtt.ts#L95)，队列达到上限会丢弃旧项，重启也不持久化。现有重连刷新和部分页面轮询有补偿，但不构成所有账号资源的事务通知保证。
+Content 使用 outbox；账号/资料使用 [publish_refresh](../../server/lib/sync.ts) 和 [进程内 MQTT 队列](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/lib/mqtt.ts#L95)，队列达到上限会丢弃旧项，重启也不持久化。现有重连刷新和部分页面轮询有补偿，但不构成所有账号资源的事务通知保证。
 
 - 选项 A：接受不同保证，明确账号资源的最终重读触发和最大陈旧时间。
 - 选项 B：将有可靠通知需求的账号变更也纳入事务 outbox，复用传输和确认机制。
@@ -166,22 +168,22 @@ Content 使用 outbox；账号/资料使用 [publish_refresh](../../server/lib/s
 
 ### D01 · P2 · 生产拓扑仍称只部署应用容器
 
-- **说法**：[架构第 59 行](../architecture.md#L59)称 MySQL、Redis、EMQX 都是外部服务。
+- **说法**：[架构第 59 行](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/architecture.md#L59)称 MySQL、Redis、EMQX 都是外部服务。
 - **实际**：[Compose](../../docker-compose.yml)已有 `app` 和 `emqx`，应用加入外部网络和项目 mqtt 网络，broker 只加入 mqtt 网络；[服务器手册](../deployment/server.md)已是新模型。
 - **选项**：A 更新架构图及说明；B 恢复外部 broker 方案并调整部署。
 - **建议 A**。按仓库声明描述“当前交付拓扑”，另标线上反代切换是否验收；本轮不能证明生产已运行这一 Compose。
 
 ### D02 · P2 · 架构仍将 Redis 描述为在用业务缓存
 
-- **说法**：[架构图及依赖表](../architecture.md#L34)有 `App → Redis` 和“外部信息等缓存”；[redis.ts 注释](../../server/lib/redis.ts#L7)仍描述调用者缓存失败后回源。
+- **说法**：[架构图及依赖表](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/architecture.md#L34)有 `App → Redis` 和“外部信息等缓存”；[redis.ts 注释](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/lib/redis.ts#L7)仍描述调用者缓存失败后回源。
 - **实际**：Bilibili 元数据已移除。[Redis 手册](../deployment/mysql-redis.md)已说明无其他业务读写；当前搜索仅见连接模块、worker 导入/退出及配置/测试接线，没有业务命令调用。
 - **选项**：A 标为保留基础设施，无当前业务消费者；B 完整退役依赖、schema、env 和 Compose/CI 接线。
 - **建议先 A**，再作为独立环境变更评估 B。不要只删连接模块而让启动仍要求 Redis 配置。
 
 ### D03 · P1 · “旧引用只在离线迁移转换”与草稿行为冲突
 
-- **说法**：[Markdown 手册](../modules/content/markdown.md#L44)称旧相对附件及 `@标题` 不再在线推断，历史转换属于离线迁移。
-- **实际**：[store](../../app/stores/contentDraft.ts#L182)在 `initialize`、`restore`、`advance_base`、`mark_saved` 中都调用 `upgrade_legacy_refs`，不只升级 v2 草稿。真实函数探针把 `[text](relative.pdf)` 转成 `[text](att://relative.pdf)`；v2 草稿升级也有[通过的现有测试](../../app/stores/contentDraft.test.ts#L137)。用户输入的普通相对链接可能在后续载入/保存回读时改变语义。
+- **说法**：[Markdown 手册](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/markdown.md#L44)称旧相对附件及 `@标题` 不再在线推断，历史转换属于离线迁移。
+- **实际**：[store](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/stores/contentDraft.ts#L182)在 `initialize`、`restore`、`advance_base`、`mark_saved` 中都调用 `upgrade_legacy_refs`，不只升级 v2 草稿。真实函数探针把 ``text`（历史定位 `docs-legacy/reviews/relative.pdf`）` 转成 `[text](att://relative.pdf)`；v2 草稿升级也有[通过的现有测试](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/stores/contentDraft.test.ts#L137)。用户输入的普通相对链接可能在后续载入/保存回读时改变语义。
 - **选项**：A 文档承认并详细约定在线自动转换；B 只在明确旧 schema 草稿导入时转换，当前内容不猜测。
 - **建议 B**，保留 v2 恢复能力；增加“当前正文相对链接、当前 schema 草稿、保存后回读均不被改写”的验证，再同步文档。
 
@@ -189,8 +191,8 @@ Content 使用 outbox；账号/资料使用 [publish_refresh](../../server/lib/s
 
 **2026-10-31 后续修复：** 用户确认退出旧同名配对逻辑。封面读取及事务变更检测只选择指定附件本身的公开／删减表示，没有表示时返回空封面。回归覆盖独立同名公开附件、改名、目标缺失及删除删减版；下列内容保留为修复前证据。生产发布另行核验。
 
-- **说法**：[图片手册](../modules/content/images.md#L54)描述同 row 删减版，不再按同名文件配对；封面段也以本附件表示解释输出。
-- **实际**：[cover_attachment](../../server/services/content-attachments.service.ts#L145)在未找到同 row 删减版时，仍尝试去掉 `.good` 查找另一公开文件。探针用机密行 ID 1 和公开同名行 ID 2，得到 `/api/content/attachments/2?...`。
+- **说法**：[图片手册](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/images.md#L54)描述同 row 删减版，不再按同名文件配对；封面段也以本附件表示解释输出。
+- **实际**：[cover_attachment](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content-attachments.service.ts#L145)在未找到同 row 删减版时，仍尝试去掉 `.good` 查找另一公开文件。探针用机密行 ID 1 和公开同名行 ID 2，得到 `/api/content/attachments/2?...`。
 - **选项**：A 明确封面是例外，继续允许跨附件回退；B 封面遵守稳定附件身份，只读取本 row 允许的表示，否则占位。
 - **建议 B**。这不证明机密字节泄漏，但会展示不同身份的内容，也让删除删减版后的封面语义难以预测。补删除删减版、创建同名公开文件、重命名三组测试。
 
@@ -199,41 +201,41 @@ Content 使用 outbox；账号/资料使用 [publish_refresh](../../server/lib/s
 **2026-11-01 后续修复：** 生产库只读统计发现 136 个附件、121 个已处理图片，`archive_source_id` 和 `archive_source_key` 均为零。运行时已移除跨附件原图追溯及祖先 key 校验；仅使用本行原图，缺失时返回不可用。旧元数据不会参与原图选择，编辑来源版本校验和冻结迁移保持不变。下列内容保留为审查基线，代码交付状态以实际 PR 和发布回执为准。
 
 - **说法**：[图片模型](../modules/content/images.md)及[读取操作](../modules/content/access.md)把原图解释为本行归档、独立副本不依赖源附件。
-- **实际**：[resolve_attachment_role](../../server/services/content/attachment-access.service.ts#L71)仍可按 `archive_source_id` 追溯同 scope 祖先，校验 `archive_source_key`；[现有测试](../../server/services/content/attachment-access.service.test.ts#L68)明确保留该行为且通过。新副本独立归档的描述成立，但并非唯一可读模型。
+- **实际**：[resolve_attachment_role](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/attachment-access.service.ts#L71)仍可按 `archive_source_id` 追溯同 scope 祖先，校验 `archive_source_key`；[现有测试](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/attachment-access.service.test.ts#L68)明确保留该行为且通过。新副本独立归档的描述成立，但并非唯一可读模型。
 - **选项**：A 文档增加“仅历史行”的兼容例外及删除/权限依赖；B 盘点并补齐独立归档后移除追溯。
 - **建议先 A，后 B**。没有数据盘点前不删除该分支，也不把它说成当前新副本创建方式。
 
 ### D06 · P1 · CAPTCHA 的 503 到 tRPC 边界变成了 500
 
-- **说法**：[短信/CAPTCHA](../deployment/sms-captcha.md#L23)承诺上游不可用返回 503；后端规则也要求保留传输状态。
-- **实际**：[captcha.ts](../../server/lib/captcha.ts#L54)抛 `ApiError(503)`，但 [tRPC 转换](../../server/trpc/init.ts#L34)未覆盖 503，落到 `INTERNAL_SERVER_ERROR`。真实 router/错误格式化探针得到 `httpStatus: 500`。失败关闭仍有效，偏差在错误分类。
+- **说法**：[短信/CAPTCHA](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/deployment/sms-captcha.md#L23)承诺上游不可用返回 503；后端规则也要求保留传输状态。
+- **实际**：[captcha.ts](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/lib/captcha.ts#L54)抛 `ApiError(503)`，但 [tRPC 转换](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/trpc/init.ts#L34)未覆盖 503，落到 `INTERNAL_SERVER_ERROR`。真实 router/错误格式化探针得到 `httpStatus: 500`。失败关闭仍有效，偏差在错误分类。
 - **选项**：A 补 503→`SERVICE_UNAVAILABLE` 映射；B 文档明确 tRPC 统一返回 500。
 - **建议 A**。同时核对其他实际使用的 `ApiError` 状态，补传输层断言；只测试 service 抛出 503 不够。
 
 ### D07 · P2 · 预热范围不止 AVIF/JPEG
 
-- **说法**：[对象生命周期](../modules/content/object-lifecycle.md#L15)称当前预热针对正常/删减 AVIF 与 JPEG。
-- **实际**：[发布流程](../../server/services/content/upload-publication.service.ts#L60)也为 `!image && mime.startsWith('image/')` 的原样图片入队，覆盖 GIF/SVG 等；[入队器](../../server/services/content/preload.repository.ts)按大小筛选，[执行器](../../server/services/content/preload.service.ts)也承认当前 `object_key`。[现有 GIF 发布预热测试](../../server/services/content/upload-publication.service.test.ts#L114)已在本轮通过。
+- **说法**：[对象生命周期](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/object-lifecycle.md#L15)称当前预热针对正常/删减 AVIF 与 JPEG。
+- **实际**：[发布流程](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/upload-publication.service.ts#L60)也为 `!image && mime.startsWith('image/')` 的原样图片入队，覆盖 GIF/SVG 等；[入队器](../../server/services/content/preload.repository.ts)按大小筛选，[执行器](../../server/services/content/preload.service.ts)也承认当前 `object_key`。[现有 GIF 发布预热测试](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/upload-publication.service.test.ts#L114)已在本轮通过。
 - **选项**：A 文档改为“可交付图片表示，含原样图片”；B 收紧入队到 AVIF/JPEG，并处理已有任务。
 - **建议 A**，保留大小、开关、配额限制及已有原样图片入队验证；若产品希望限制成本，再选择 B。
 
 ### D08 · P2 · 共享类型仍承诺 AES 密文、密钥和独立私有桶
 
-- **说法**：[ContentStoryAttachment](../../server/shared/types/content.ts#L52)注释仍称 `.good` 对象是 AES-GCM 密文、授权用户会得到 base64 key，`is_private` 为“Release A”的独立桶模型。
-- **实际**：当前上传用 private OSS 明文字节和在线 ACL；[格式化](../../server/services/content-attachments.service.ts#L72)不返回 key，[读取守卫](../../server/services/content/attachment-access.service.ts#L34)拒绝未迁移加密行。`.good` 与加密已经不是同一概念。
+- **说法**：[ContentStoryAttachment](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/shared/types/content.ts#L52)注释仍称 `.good` 对象是 AES-GCM 密文、授权用户会得到 base64 key，`is_private` 为“Release A”的独立桶模型。
+- **实际**：当前上传用 private OSS 明文字节和在线 ACL；[格式化](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content-attachments.service.ts#L72)不返回 key，[读取守卫](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content/attachment-access.service.ts#L34)拒绝未迁移加密行。`.good` 与加密已经不是同一概念。
 - **选项**：A 将旧字段标为仅历史兼容，订正注释；B 盘点调用方后从当前 DTO 去掉旧字段，历史类型单列。
 - **建议先 A、再 B**，全链路核对后再收窄类型。冻结迁移里的旧加密说明仍是历史事实，不应随之改写。
 
 ### D09 · P2 · URL 和 version 注释混淆 ETag、读取身份与静态域名
 
-- **说法**：[共享类型](../../server/shared/types/content.ts#L48)称把 ETag 直接放进 `?version=`，并要求给 `url` 加 static base。
-- **实际**：[attachment_access_version](../../server/services/content-attachments.service.ts#L56)是对象/权限/提供方等身份的 SHA-256；返回的 `version` 字段仍是 row ETag，URL 则是同源 API 入口。[useStaticUrl](../../app/composables/useStaticUrl.ts)特意保留 Content API 路径。若按注释实现新消费方，可能签错版本或请求错域名。
+- **说法**：[共享类型](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/shared/types/content.ts#L48)称把 ETag 直接放进 `?version=`，并要求给 `url` 加 static base。
+- **实际**：[attachment_access_version](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content-attachments.service.ts#L56)是对象/权限/提供方等身份的 SHA-256；返回的 `version` 字段仍是 row ETag，URL 则是同源 API 入口。[useStaticUrl](../../app/composables/useStaticUrl.ts)特意保留 Content API 路径。若按注释实现新消费方，可能签错版本或请求错域名。
 - **选项**：A 订正并列出 ETag、访问版本、node version、read revision 的责任；B 同时重命名公共字段，消除歧义。
 - **建议先 A**，再在有类型/API 迁移计划时评估 B，不因注释错误修改现有正确 URL。
 
 ### D10 · P3 · 当前引用函数注释仍以旧语法举例
 
-- **说法**：[story.service](../../server/services/content/story.service.ts)、[共享解析器](../../server/shared/content-markdown.ts#L1215)及[编辑页](../../app/pages/content/[id]/edit.vue)仍使用 `@ref`、`[](@title)`、裸 `file.jpg` 说明当前补全/解析/改写。
+- **说法**：[story.service](../../server/services/content/story.service.ts)、[共享解析器](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/shared/content-markdown.ts#L1215)及[编辑页](../../app/pages/content/[id]/edit.vue)仍使用 `@ref`、`[](@title)`、裸 `file.jpg` 说明当前补全/解析/改写。
 - **实际**：当前业务引用使用 `content://` / `att://`；旧语法的显式转换在另一个函数中，D03 已揭示它的实际调用范围。
 - **选项**：A 当前函数注释换用当前语法，迁移函数说明保留旧语法；B 在线重新支持两种业务语法。
 - **建议 A**。不要全仓替换 `@title`，冻结迁移、旧输入测试和历史说明必须保留各自语义。
@@ -247,42 +249,42 @@ Content 使用 outbox；账号/资料使用 [publish_refresh](../../server/lib/s
 
 ### D12 · P3 · 附件删除 helper 的调用顺序注释相反
 
-- **说法**：[delete_story_attachment_rows](../../server/services/content-attachments.service.ts#L129)称调用时 story row 已被删除。
+- **说法**：[delete_story_attachment_rows](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/server/services/content-attachments.service.ts#L129)称调用时 story row 已被删除。
 - **实际**：[delete_story](../../server/services/content/story.service.ts)先删附件行，再删 story row，并在同一事务中处理退役意图和通知。
 - **选项**：A 改注释为真实前置条件；B 为迎合旧注释改变删除顺序。
 - **建议 A**，注明事务和先收集对象身份的责任；无需改迁移或删除顺序。
 
 ### D13 · P2 · 草稿冲突并非在加载时就提示
 
-- **说法**：[草稿文档](../modules/content/drafts.md#L11)称加载时比较草稿与服务端，决定恢复、提示冲突或舍弃。
-- **实际**：[onMounted](../../app/composables/useStoryEditSession.ts#L208)直接恢复可用草稿，保留旧 base revision；主要冲突提示在保存返回 409 后由 `show_save_conflict()` 触发。服务端并发保护仍在，偏差是用户发现冲突的时机。
+- **说法**：[草稿文档](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/drafts.md#L11)称加载时比较草稿与服务端，决定恢复、提示冲突或舍弃。
+- **实际**：[onMounted](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/composables/useStoryEditSession.ts#L208)直接恢复可用草稿，保留旧 base revision；主要冲突提示在保存返回 409 后由 `show_save_conflict()` 触发。服务端并发保护仍在，偏差是用户发现冲突的时机。
 - **选项**：A 文档改为“先恢复，保存时检查冲突”；B 加载时就明确提示基线过旧，同时保留保存时检查。
 - **建议 B**，提示不应自动舍弃内容；如果暂不调整交互，先采用 A 消除误导。
 
 ### D14 · P2 · 草稿失焦并不总是立即释放编辑锁
 
-- **说法**：[草稿文档](../modules/content/drafts.md#L9)称失焦/离开时立即保存并释放。
-- **实际**：[finish_tab_release](../../app/composables/useStoryEditSession.ts#L246)在保存或引用同步中会等待；持久化失败且未关闭时也保留锁。无 Web Locks 时当前逻辑保持只读，不能仅理解为失去多标签优化。
+- **说法**：[草稿文档](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/drafts.md#L9)称失焦/离开时立即保存并释放。
+- **实际**：[finish_tab_release](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/composables/useStoryEditSession.ts#L246)在保存或引用同步中会等待；持久化失败且未关闭时也保留锁。无 Web Locks 时当前逻辑保持只读，不能仅理解为失去多标签优化。
 - **选项**：A 描述“先只读、保存/同步完成且持久化成功后交接”，明确不支持 Web Locks 的结果；B 强制立即释放并另建冲突协议。
 - **建议 A**。现有等待具有数据保护意义；补慢网、存储满、缺失 Web Locks 的验收说明。
 
 ### D15 · P1 · 文档对全部异步结果和页面级 store 隔离的保证过强
 
-- **说法**：[草稿文档](../modules/content/drafts.md#L11)泛称切换身份/销毁页面使旧异步结果失效；[store 注释](../../app/stores/contentDraft.ts#L34)将状态描述为创建它的页面实例拥有。
-- **实际**：引用 bridge 的快照围栏确实存在；但 [do_save](../../app/composables/useStoryEditSession.ts#L520)等流程没有同等统一检查。store 实际按档案 ID 复用，不能保证同一档案的新旧页面实例完全独立，且无账号键。详见 A02。
+- **说法**：[草稿文档](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/drafts.md#L11)泛称切换身份/销毁页面使旧异步结果失效；[store 注释](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/stores/contentDraft.ts#L34)将状态描述为创建它的页面实例拥有。
+- **实际**：引用 bridge 的快照围栏确实存在；但 [do_save](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/app/composables/useStoryEditSession.ts#L520)等流程没有同等统一检查。store 实际按档案 ID 复用，不能保证同一档案的新旧页面实例完全独立，且无账号键。详见 A02。
 - **选项**：A 把说明缩到已实现的 bridge 和不同 target 隔离；B 补全所有写回路径的操作代次/身份校验和账号归属，再保留较强承诺。
 - **建议 B**，期间先使用准确的 A 说明。验证同档案离开/返回、迟到保存、账号切换，不以不同档案测试替代。
 
 ### D16 · P3 · 后台适配器数量未同步
 
-- **说法**：[草稿文档](../modules/content/drafts.md#L43)仍称“五类” runner 适配器；部分部署枚举也未列全桶对账。
+- **说法**：[草稿文档](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/modules/content/drafts.md#L43)仍称“五类” runner 适配器；部分部署枚举也未列全桶对账。
 - **审查基线实际**：[装配器](../../server/services/content/background.service.ts)当时为 images、uploads、retirement、preload、sync、storage_audit 六类，后续新增 receipts 压缩，现行清单见[后台手册](../modules/background-jobs.md)。审查基线的引用清理在外部；后续 A01 已移除独立清理并更新草稿/后台手册，其他部署枚举仍需核对。
 - **选项**：A 更新数字及各重复清单；B 删除各处易漂移的数字，链接到拥有清单的后台文档。
 - **建议 B**；后台文档保留完整表即可。不要将引用清理误算为第七个已接入的适配器。
 
 ### D17 · P2 · “全部命令”清单和 test 参数说明已经过期
 
-- **说法**：[命令清单](../development/commands.md#L5)以 31 个入口、旧 scripts 盘点为依据，表中 `test` 仍写可追加文件/筛选参数。
+- **说法**：[命令清单](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/development/commands.md#L5)以 31 个入口、旧 scripts 盘点为依据，表中 `test` 仍写可追加文件/筛选参数。
 - **实际**：[package.json](../../package.json#L34)已有 36 个入口，新增 `test:unit/tools/component/e2e/all`；`test` 是三个命令的串联，尾随参数不能视为对三组统一筛选。旧盘点可作为 2026-10-25 历史事实，但不能再充当当前全部入口和删减数量依据。
 - **选项**：A 更新为当前调用关系，并使用 `test:unit` / `test:tools` / `test:component` 或直接 Vitest 指定范围；B 设计真正的统一参数转发 CLI。
 - **建议 A**，不为清单增加总调度器。保留仍未实施建议的标记，重新计算建议后的数量，补 testing/ci 等新增脚本职责。
@@ -290,20 +292,20 @@ Content 使用 outbox；账号/资料使用 [publish_refresh](../../server/lib/s
 ### D18 · P2 · OSS 策略说明既允许全桶列举又称不允许
 
 - **说法**：[RAM 参考表](../deployment/ram-reference.md)列出 `ListObjects`，紧接的第 17 行又称“不允许任意列举桶对象”。
-- **实际**：[生产策略](../../config/ram/stupig-oss-app-prod-access.json#L7)和开发对应策略授予指定桶的 `oss:ListObjects`，没有 prefix 条件。对象内容读取仍限制到受控前缀；不能把元数据列举和内容读取混为一谈。
+- **实际**：[生产策略](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/config/ram/stupig-oss-app-prod-access.json#L7)和开发对应策略授予指定桶的 `oss:ListObjects`，没有 prefix 条件。对象内容读取仍限制到受控前缀；不能把元数据列举和内容读取混为一谈。
 - **选项**：A 改为“允许指定桶全量元数据列举，不允许任意前缀内容读取/跨桶操作”；B 加 prefix 条件并缩小对账范围。
 - **建议 A**，符合全桶对账设计。本轮只核对策略文件，未重新验证云端 RAM 绑定。
 
 ### D19 · P2 · 历史发布快照被写成持续有效的当前状态
 
-- **说法**：[故障排查](../operations/troubleshooting.md#L32)仍称生产未迁移，与[切换记录](../operations/content-cutover.md)的 2026-10-25 已完成矛盾；[导航](../README.md#L75)/[对账文档](../operations/storage-audit.md#L67)使用“本次待合并”“本 PR”；切换/云台账仍说工作区尚未提交。
+- **说法**：[故障排查](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/operations/troubleshooting.md#L32)仍称生产未迁移，与[切换记录](../operations/content-cutover.md)的 2026-10-25 已完成矛盾；[导航](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/README.md#L75)/[对账文档](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/operations/storage-audit.md#L67)使用“本次待合并”“本 PR”；切换/云台账仍说工作区尚未提交。
 - **实际**：当前 Git 历史已有相关 Content 迁移与对账实现提交，当前基线包含自动清理实现。但代码已提交、已合并、已部署、开关已启用是四件不同的事，本轮未读线上，无法直接把“未部署”替换成“已部署”。
 - **选项**：A 将这些表述改为带日期/版本的历史回执，“当前线上状态”只由单一台账的最近验收负责；B 删除历史记录，只留当前说明。
 - **建议 A**。保留镜像/备份摘要等恢复证据，修正明确的文档内部矛盾，线上部分标“本轮未复核”；不凭 Git 推断部署状态。
 
 ### D20 · P2 · 排障中的 Compose 命令漏选环境文件
 
-- **说法**：[故障排查](../operations/troubleshooting.md#L12)用 `docker compose -f docker-compose.dev.yml ps`。
+- **说法**：[故障排查](https://github.com/tangenty42/stupig.tv/blob/348ae2a5c1e6124450a5c0ddb1d0caa1a8f390dd/docs/operations/troubleshooting.md#L12)用 `docker compose -f docker-compose.dev.yml ps`。
 - **实际**：[开发 Compose](../../docker-compose.dev.yml)的插值依赖 `.env.dev` 提供的变量，仓库已不使用旧 `.env`；项目其它正确命令显式传 `--env-file .env.dev`。是否偶然成功取决于调用终端已有变量。
 - **选项**：A 补 `docker compose --env-file .env.dev -f docker-compose.dev.yml ps`；B 要求每个终端预先注入全部变量。
 - **建议 A**，同时检查复制到运维清单中的同类命令。不要为兼容旧命令重新引入跨环境 `.env` 兜底。

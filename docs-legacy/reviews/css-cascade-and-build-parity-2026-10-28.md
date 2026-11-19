@@ -1,5 +1,7 @@
 # CSS 层叠与生产构建一致性调查
 
+历史源码导航按本报告基线处理。可核对到基线提交的入口链接固定快照，其余保留原路径和行号。现行目录及后续重构记录见 [SID#0.1.AGENT](../../docs/0_overall/1_architecture/AGENT.md)。
+
 调查日期：2026-10-28。源码基线：`348ae2a` 及当前工作区；工作区已有其他任务的修改。本报告独立记录调查证据与建议，不是已实施的样式规范。上一轮已在 `Preview.vue` 移除标题公共规则的 `z-10`，本轮只新增本报告，没有迁移 layer、修改构建配置或部署生产。
 
 本文保留调查时的事实和建议。后续路线已调整为[官方主题 API 与 Tailwind 选择器策略](css-official-apis-validation-2026-10-29.md)，当前接入、生产 / 旧引擎验收和发布门槛从该入口查阅；下文建议不表示已经启用全站 cascade layers。
@@ -105,7 +107,7 @@
 | PrimeVue 主题 | `cssLayer: false`；主题在运行时生成规则及变量 | 可在兼容策略确定后统一进入 `primevue` 层；优先用 preset/design tokens 表达主题值 |
 | PrimeVue 覆盖 | [primevue-overrides.css](../../app/assets/css/primevue-overrides.css) 用 `html:root`、重复类名和更具体选择器抗衡注入顺序 | 保留已验证的修复，逐项迁移后再减权重，不能先批量删除 |
 | Viewer、Cropper、图标 | Viewer/PrimeIcons 在 Nuxt 全局 CSS 列表；Cropper CSS 在 [头像组件](../../app/components/MyAvatarCropUpload.vue) 中导入 | 评估全局与懒加载两种入口，统一第三方层归属，避免重复导入一份未分层副本 |
-| CodeMirror | [themes.ts](../../app/utils/content/editor/themes.ts) 使用 `EditorView.theme()` 动态生成 CSS；[Editor.vue](../../app/components/MyContent/Markdown/Editor.vue) 还覆盖其 DOM | 优先把编辑器主题调整放回主题 API；动态样式与静态覆盖应一起处理 |
+| CodeMirror | `themes.ts`（历史定位 `app/utils/content/editor/themes.ts`） 使用 `EditorView.theme()` 动态生成 CSS；[Editor.vue](../../app/components/MyContent/Markdown/Editor.vue) 还覆盖其 DOM | 优先把编辑器主题调整放回主题 API；动态样式与静态覆盖应一起处理 |
 | CAPTCHA、首屏遮罩与行内样式 | 第三方 SDK、Nuxt head 中的遮罩、Vue/JS 的尺寸与位置样式 | 分别标记为外部边界、应用启动样式、运行时几何值；layer 不替代这些机制 |
 
 这里的文件计数排除了测试，只是工作区快照，不应成为静态测试断言。
@@ -268,7 +270,7 @@ for (const version of [61, 80, 99]) {
 
 ## 文档验证
 
-本报告的相对文件链接已检查，无缺失目标；文件使用无 BOM 的 UTF-8。全仓 ESLint 通过已安装的入口执行，报告了本轮未修改的 [useStoryEditSession.ts](../../app/composables/useStoryEditSession.ts) 中两个 unused-vars 错误：`begin_operation`、`operation_current`。未为使文档检查通过而改动该任务的代码；本报告没有 ESLint 错误。完整 Nuxt 构建和 E2E 未执行，前文已逐项区分静态检查、内存编译与浏览器实验。
+本报告的相对文件链接已检查，无缺失目标；文件使用无 BOM 的 UTF-8。全仓 ESLint 通过已安装的入口执行，报告了本轮未修改的 `useStoryEditSession.ts`（历史定位 `app/composables/useStoryEditSession.ts`） 中两个 unused-vars 错误：`begin_operation`、`operation_current`。未为使文档检查通过而改动该任务的代码；本报告没有 ESLint 错误。完整 Nuxt 构建和 E2E 未执行，前文已逐项区分静态检查、内存编译与浏览器实验。
 
 ## 待决定事项
 

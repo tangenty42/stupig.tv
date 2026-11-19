@@ -111,6 +111,6 @@ console.table(performance.getEntriesByType('measure')
 
 会话过期、取消、被替代的尝试由上传生命周期扫描处理，包括普通文件和图片输入。暂存 key 可能已被正式普通附件采用，不能按 `staging/` 前缀直接删除；见[对象生命周期](object-lifecycle.md)。
 
-核心实现：[`upload-api.service.ts`](../../../server/services/content/upload-api.service.ts)、[`upload-session.service.ts`](../../../server/services/content/upload-session.service.ts)、[`upload-publication.service.ts`](../../../server/services/content/upload-publication.service.ts)、[`upload-runtime.ts`](../../../app/utils/content/upload-runtime.ts)、[`contentUploads.ts`](../../../app/stores/contentUploads.ts)。
+核心实现：[`upload-api.service.ts`](../../../server/services/content/upload-api.service.ts)、[`upload-session.service.ts`](../../../server/services/content/upload-session.service.ts)、[`upload-publication.service.ts`](../../../server/services/content/upload-publication.service.ts)、[`runtime.ts`](../../../app/features/content/uploads/runtime.ts)、[`store.ts`](../../../app/features/content/uploads/store.ts)。
 
 自动测试覆盖分片、完整性、权限、未知结果、取消与发布竞态、finalizing 交接。浏览器验收应分别进行多文件和文件夹上传、`.good` 继承、慢网速替换、暂停刷新、原生句柄撤权重选、失败任务多选和取消后恢复。

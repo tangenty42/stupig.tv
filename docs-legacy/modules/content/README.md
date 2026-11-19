@@ -55,4 +55,4 @@ Content 管理『蠢猪档案』：以 Markdown 保存档案正文和元数据�
 
 ## 实现入口
 
-主路由是 [`server/trpc/routers/content.ts`](../../../server/trpc/routers/content.ts)，领域服务位于 [`server/services/content/`](../../../server/services/content/)。客户端编排在 [`app/composables/`](../../../app/composables/)，渲染与纯状态规则在 [`app/utils/content/`](../../../app/utils/content/)，UI 在 [`app/components/MyContent/`](../../../app/components/MyContent/)。数据库结构以 [`migrations/`](../../../migrations/) 的完整版本链为准，不能只读初始化 SQL。
+主路由是 [`server/trpc/routers/content.ts`](../../../server/trpc/routers/content.ts)，领域服务位于 [`server/services/content/`](../../../server/services/content/)。客户端业务编排、渲染与交互规则位于 [`app/features/content/`](../../../app/features/content)，UI 在 [`app/components/MyContent/`](../../../app/components/MyContent/)。数据库结构以 [`migrations/`](../../../migrations/) 的完整版本链为准，不能只读初始化 SQL。

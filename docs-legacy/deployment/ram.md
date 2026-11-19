@@ -40,7 +40,9 @@ ESA 发布检查不会发布代码；预热检查需要对应数据库可达，�
 
 ## 专项盘点只读权限
 
-专项版本／multipart 元数据盘点使用 [开发](../../config/ram/stupig-oss-inventory-dev-readonly.json)／[生产](../../config/ram/stupig-oss-inventory-prod-readonly.json)只读补充策略，仅允许指定桶的版本控制、生命周期、版本与 multipart 列举，以及分片元数据读取。不包含对象内容、删除或 abort；本轮临时绑定，验收后手动解除，策略没有自动到期。命令、网络前置和清理边界见[专项盘点](../operations/storage-audit.md#历史版本与-multipart-专项盘点)。现有应用身份绑定额外策略后，其原有权限仍有效，不能把它描述为完整只读身份。
+专项版本／multipart 元数据盘点使用独立的 `stupig-oss-inventory-dev`／`stupig-oss-inventory-prod` 用户，分别绑定 [开发](../../config/ram/stupig-oss-inventory-dev-readonly.json)／[生产](../../config/ram/stupig-oss-inventory-prod-readonly.json)只读策略。它们仅允许指定桶的版本控制、生命周期、版本与 multipart 列举，以及分片元数据读取，不包含对象内容、删除或 abort。创建、绑定和凭据注入统一见 [SID#1.4 专项盘点](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#准备权限)。策略没有自动到期，临时授权须在完成后解除；应用用户保持各自的 app 策略。
+
+历史盘点曾临时给应用用户附挂只读策略，当时应用用户原有权限仍然有效。2026-11-09 已读回确认两名 OSS 应用用户均解除盘点策略，详见[核对记录](../../config/ram/CLOUD-AUDIT-2026-11-09.md#云端核对结果)。
 
 ## 图片原生持久化权限
 

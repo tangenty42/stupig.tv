@@ -1,6 +1,6 @@
 # 旧 Content 数据切换
 
-本手册用于已有旧档案、附件和引用的数据集。完整迁移已接入统一版本链；2026-10-25 已完成生产副本预演、停写备份、正式迁移与新应用同步上线。当前运行时没有旧附件任务或旧对象读取回退，不能直接用新代码服务尚未迁移的旧数据。
+本手册记录旧档案、附件和引用的历史切换。2026-10-25 已完成生产副本预演、停写备份、正式迁移与应用上线。重演需要包含对应冻结迁移的历史版本和匹配的配置。现行升级入口见[迁移查询与失败恢复](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#迁移查询与失败恢复)。
 
 2026-10-25 切换验收结果：9 篇档案、107 个文件和 3 个原有文件夹，297 个目标对象完成 private、大小与完整 SHA-256 读回验证，9 个 scope 均 adopted，24 项迁移 completed，旧存储文件指针为零。原有 1 项悬空引用保持 warning，未凭空创建目标。应用和 ESA 的完整下载、HEAD、Range、匿名权限与删减版读取已通过；该轮未验收登录后的上传、编辑和会话撤销。
 
@@ -14,7 +14,7 @@
 | `20261024210100_content_references.ts` | 旧正文及封面引用转换 |
 | `20261024210200_content_workspace.ts` | 显式目录、对象复制、图片版本和档案事务切换 |
 
-实现位于 [migrations/lib/content-v1/](../../migrations/lib/content-v1/)，已经冻结，不因文档调整修改源码。
+实现曾位于 `migrations/lib/content-v1/`，已经冻结，不因文档调整修改源码；2026-11-12 新基线后该目录随旧 TS 迁移删除，本节保留历史身份。
 
 ## 何时迁移、何时移除旧凭据
 
@@ -47,11 +47,11 @@ NFC／大小写重名、文件作为父目录、非法路径、缺失档案、�
 
 ## 分阶段执行
 
-以下以开发源码入口 `migrate:dev` 为例；生产源码使用 `migrate:prod`，生产推荐使用[维护容器入口](./migrations.md)。阶段顺序相同，只替换命令前缀。
+以下是历史执行命令。在含这三条迁移、且与恢复数据及冻结摘要匹配的源码或镜像中执行。历史发布镜像身份见本文开头。生产使用同版本维护容器和配置。
 
 ```sh
 pnpm migrate:dev --status
-pnpm migrate:dev --through 20261024210000_content_cutover_state.sql
+pnpm migrate:dev --maintenance --through 20261024210000_content_cutover_state.sql
 pnpm migrate:dev --dry-run --through 20261024210100_content_references.ts
 pnpm migrate:dev --maintenance --through 20261024210100_content_references.ts
 pnpm migrate:dev --dry-run

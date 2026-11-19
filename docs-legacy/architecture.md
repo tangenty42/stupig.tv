@@ -65,9 +65,9 @@ Content 读取链路中，边缘函数先验证请求并调用应用授权接口
 | 位置 | 责任与边界 |
 | --- | --- |
 | `app/pages/`、`app/components/` | 页面、交互和展示，复用 `My` 组件 |
-| `app/composables/` | 页面会话、API facade、同步资源、编辑/上传协调 |
-| `app/stores/` | 跨组件保留的客户端状态；草稿与上传分别管理 |
-| `app/utils/` | 纯逻辑与渲染辅助，配置由调用方传入 |
+| `app/composables/` | 全站通用的上下文、API 门面、同步资源等能力 |
+| `app/features/` | 业务状态、草稿、上传和业务组件的渲染／交互实现 |
+| `app/utils/` | 全站通用工具，环境与配置由调用方传入 |
 | `server/trpc/` | 过程入口、输入校验、认证中间件；业务交给 services |
 | `server/api/` | tRPC 适配器及授权/附件等 HTTP 协议入口 |
 | `server/services/` | 授权、事务、业务状态机与对外操作协调 |

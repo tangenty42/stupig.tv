@@ -1,5 +1,7 @@
 # EMQX 生产配置与权限验收
 
+> 当前镜像交付见 [SID#1.3.AGENT-DESIGN](../../docs/1_workflows/3_deliver/AGENT-DESIGN.md)，升级、账号轮换与排查见 [SID#1.4.AGENT-DESIGN](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#emqx-升级与凭据轮换)。本文保留首次接入配置、协议说明和历史切换记录。
+
 当前浏览器匿名连接 WS/WSS，只订阅刷新事件；服务端用用户名/密码连接内网 TCP，发布刷新事件。消息不是业务数据源，客户端收到后通过 API 重新授权、读取数据，协议见[实时同步](../modules/realtime.md)。
 
 事实源：[生产 Compose](../../docker-compose.yml)、[Dockerfile](../../Dockerfile)、[生产初始化](../../scripts/deploy/emqx-entrypoint.sh)、[共享账号初始化](../../scripts/dev/emqx-entrypoint.sh)、[ACL](../../emqx-acl.conf)、[服务端 MQTT](../../server/lib/mqtt.ts)、[浏览器连接](../../app/composables/useDataSync.ts)。
@@ -59,13 +61,11 @@ Compose 在全局认证链的内置数据库之后添加 HTTP 认证器，回调
 
 ## 自动构建与部署
 
-Check 的 `mqtt` 作业构建 Dockerfile 的 `mqtt` 目标，并运行[真实集成测试](../../scripts/deploy/emqx.integration.test.ts)。测试使用随机 Compose 项目、临时账号和卷，不连接生产；覆盖账号初始化、实际收发、拒绝矩阵、失效凭据健康检查及重启后账号可用，结束时清理自己的资源。
-
-main 的 Check 全部成功后，[Deploy](../../.github/workflows/deploy.yml) 构建并推送应用 `:${SHA}` 与 broker `:mqtt-${SHA}`，保留 latest/mqtt 别名；运行 env 的 APP_IMAGE/MQTT_IMAGE 固定对应 RepoDigest。上传 Compose 和运行 env 后，由[远端脚本](../../scripts/deploy/remote.sh)启动并检查两个服务。镜像包含 ACL、初始化和健康检查脚本；密码只在运行时注入，不进入镜像。
+镜像测试的范围与隔离方式见 [SID#1.2 的 MQTT 镜像与 CI 汇总](../../docs/1_workflows/2_test/AGENT-DESIGN.md#mqtt-镜像与-ci-汇总)，构建、digest 固定及启动顺序见 [SID#1.3 的普通发布与准入](../../docs/1_workflows/3_deliver/AGENT-DESIGN.md#普通发布与准入)。镜像包含 ACL、初始化和健康检查脚本；密码只在运行时注入，不进入镜像。
 
 首次启动从 `MQTT_USERNAME/PASSWORD` 创建内置数据库超级发布账号。认证器、TCP/WS 开关、唯一 File 授权源及 deny/disconnect 策略由 Compose 环境变量统一管理，不需要进 Dashboard 配置。不要再通过 Dashboard 改同一批字段；当前 HTTP Dashboard、SSL 和 WSS listener 均关闭。
 
-应用等待 broker 的凭据健康检查通过后才启动。同为 cloud-v1 的兼容发布失败可恢复旧镜像与配置；首次跨云端草稿协议的启动失败则停止应用、保留当前数据库和配置，禁止自动重启旧的无租约写者。首次引入 broker 的其他失败路径只移除本次新增容器并保留卷，不碰旧 1Panel 实例。回滚不恢复数据库或外部反代，见[备份恢复](../operations/backup-recovery.md)。
+失败恢复按 [SID#1.3 的失败阶段表](../../docs/1_workflows/3_deliver/AGENT-DESIGN.md#失败后先确认停在哪一步)判断。首次引入 broker 的安全回退路径只移除本次新增容器并保留卷，不碰旧 1Panel 实例；反代切换仍按下节处理。
 
 ### 网络与持久化
 
@@ -77,7 +77,7 @@ main 的 Check 全部成功后，[Deploy](../../.github/workflows/deploy.yml) �
 
 broker 只加入项目专用 `mqtt` bridge，不加入 MySQL/Redis 的外部网络；应用同时加入两个网络。TCP 1883、Dashboard、SSL/WSS 不映射宿主机，WS 只映射回环 `${MQTT_WS_PORT:-8085}`。这是普通 bridge，不承诺阻断 broker 出站流量；不能设置 `internal: true` 后仍假定宿主机端口可正常发布。
 
-`mqtt-data` 和 `mqtt-log` 命名卷保存数据和日志；节点名固定为 `stupig@127.0.0.1`。不要使用 `down -v`、清空 Mnesia、修改节点名或换空卷排除故障。备份数据时保留节点身份，并在隔离副本验证恢复；旧 1Panel 节点的数据不直接挂到新节点上。[官方备份恢复](https://docs.emqx.com/en/emqx/v6.2/operations/backup-restore.html)。
+卷、节点身份及升级备份按 [SID#1.4 的保留数据与节点身份](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#保留数据与节点身份)处理。旧 1Panel 节点的数据不直接挂到新节点上。[官方备份恢复](https://docs.emqx.com/en/emqx/v6.2/operations/backup-restore.html)。
 
 ### 首次从 1Panel 切换
 
@@ -93,42 +93,11 @@ broker 只加入项目专用 `mqtt` bridge，不加入 MySQL/Redis 的外部网�
 
 ## 凭据与配置维护
 
-bootstrap **只初始化，不覆盖已存在用户**。改 `.env.prod` 后重启不等于轮换 Mnesia 密码，健康检查会拒绝与内置库不匹配的凭据。当前不是自动改密或通用用户管理工具。
-
-轮换前保留旧发布账号：通过受控管理 CLI/API 创建第二个超级发布账号，在内网验证后更新应用与 broker 的 `MQTT_USERNAME/PASSWORD`、重新加密生产环境并部署。确认新连接发布和健康检查成功后，再撤销旧账号并让旧连接断开。Dashboard 默认不开放，不要为省事把 18083 映射公网。账号管理操作须先在隔离实例验证，不打印或提交密码。
-
-诊断使用生产部署目录中的同一份 Compose/env，通过包装入口运行 CLI，以使用一致的节点 Cookie：
-
-```sh
-docker compose --env-file .env.prod ps
-docker compose --env-file .env.prod logs --tail 80 emqx
-docker compose --env-file .env.prod exec emqx /bin/sh /opt/emqx/etc/production-entrypoint.sh --cli ctl status
-docker compose --env-file .env.prod exec emqx /bin/sh /opt/emqx/etc/production-entrypoint.sh --cli ctl conf show authorization
-```
-
-完整认证配置和引导文件只在服务器本地查看，不能分享其中的凭据。配置、ACL 改动走仓库和新镜像；用户权限变化需断开旧连接后重新验收。应用通过可信 Docker 网络使用明文 MQTT TCP，单改端口为 8883 不会启用 TLS，不要跨不可信网络直接使用。
+账号轮换、生产 CLI 诊断、配置修改和重连验收统一见 [SID#1.4 的轮换发布账号](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#轮换发布账号)。完整认证配置和引导文件只在服务器本地查看，不能分享其中的凭据。
 
 ## WSS 反代与应用参数
 
-应用 TCP 地址由生产 Compose 固定为 `emqx:1883`；`MQTT_WEB_URL` 是浏览器访问的完整 URL，例如 `wss://mqtt.stupig.tv/mqtt`。以下上游默认使用宿主机回环的 8085，与 `MQTT_WS_PORT` 保持一致。
-
-以下合并到实际 HTTPS server，upstream 按反代所在网络替换：
-
-```nginx
-location /mqtt {
-    proxy_pass http://127.0.0.1:8085;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
-}
-```
-
-**先确认反代的网络模式。** 宿主机进程或 host 网络反代可以使用上述回环上游；bridge 容器里的 `127.0.0.1` 是反代自身，且只接入旧外部网络的反代不能解析新 broker 的 `emqx` 服务名。此时需要单独规划反代到项目网络的接入或宿主机代理，不能直接复制示例或把 TCP/Dashboard 一并暴露；本次没有替生产更改该网络。
-
-保持 MQTT 子协议和 `/mqtt` 路径，不缓存升级请求；不要加需要登录或浏览器挑战的网关。公网只开放 HTTPS/WSS。浏览器业务登录令牌不参与 broker 认证。[Nginx WebSocket 官方说明](https://nginx.org/en/docs/http/websocket.html)。
+公开与草稿的两路 Nginx 示例、路径改写和网络接法见 [SID#1.0 的 MQTT WSS 反代](../../docs/1_workflows/0_setup/AGENT-DESIGN.md#mqtt-wss-反代)。本页继续保留 broker 协议、认证与历史切换证据。
 
 ## 上线验收表
 

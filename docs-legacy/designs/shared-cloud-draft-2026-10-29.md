@@ -1,5 +1,7 @@
 # 共享云端草稿与编辑租约设计
 
+历史源码导航按本报告基线处理。可核对到基线提交的入口链接固定快照，其余保留原路径和行号。现行目录及后续重构记录见 [SID#0.1.AGENT](../../docs/0_overall/1_architecture/AGENT.md)。
+
 日期：2026-10-29。2026-10-31 状态核对：**实现已随 [PR #48](https://github.com/tangenty42/stupig.tv/pull/48) 合并；本地隔离验收和开发库迁移记录保留，生产状态以独立发布回执为准**。本页的阶段描述及“未部署”记录指当时验证范围，不作为当前线上状态证明。
 
 本文承接 [A02 架构审查](../reviews/architecture-and-documentation-audit-2026-10-28.md)，保留协议及设计取舍。工作区现行行为以[草稿手册](../modules/content/drafts.md)、源码和[实施记录](shared-cloud-draft-implementation-2026-10-30.md)为准；概念接口名称不替代实际 DTO。代码落地不能证明线上已切换。
@@ -25,8 +27,8 @@
 
 | 当前入口 | 已有能力 | 本设计中的处理 |
 | --- | --- | --- |
-| [contentDraft.ts](../../app/stores/contentDraft.ts) | 按 story ID / `new` 保存 Pinia 状态和 localStorage 明文，拥有保存、引用结果应用及确认状态 | 改为内存中的编辑状态和串行命令；移除常规正文持久化、旧草稿自动恢复和个人正文冲突选择 |
-| [useStoryEditSession.ts](../../app/composables/useStoryEditSession.ts) | 编辑页生命周期、store action 接线和同浏览器 Web Locks 交接 | 由服务端租约成为唯一编辑权依据；保留页面适配及身份/操作代次保护，业务状态继续由 store 拥有 |
+| `contentDraft.ts`（历史定位 `app/stores/contentDraft.ts`） | 按 story ID / `new` 保存 Pinia 状态和 localStorage 明文，拥有保存、引用结果应用及确认状态 | 改为内存中的编辑状态和串行命令；移除常规正文持久化、旧草稿自动恢复和个人正文冲突选择 |
+| `useStoryEditSession.ts`（历史定位 `app/composables/useStoryEditSession.ts`） | 编辑页生命周期、store action 接线和同浏览器 Web Locks 交接 | 由服务端租约成为唯一编辑权依据；保留页面适配及身份/操作代次保护，业务状态继续由 store 拥有 |
 | [useSyncedData.ts](../../app/composables/useSyncedData.ts) / [query.ts](../../app/utils/sync/query.ts) | 可见页面轮询、请求完成时间、事件失效、迟到结果过滤；共享查询可合并请求 | 复用 `polling_interval = M`。占用/保存使用页面独立请求，不共享查询结果 |
 | [useTrpcClient.ts](../../app/composables/useTrpcClient.ts) | API 传输、统一 401 退出、站点在线保活 | 扩展草稿请求的超时/取消支持；站点 presence 保活不能替代 draft 续租 |
 | [story.service.ts](../../server/services/content/story.service.ts) | main 创建/保存、正文 revision 检查、标题校验、引用事务 | 提取可复用的同事务发布步骤；正式写入 main 必须经过草稿租约 |
@@ -286,7 +288,7 @@ UI 最少区分“正在连接”“其他页面正在编辑”“修改待上�
 
 服务端在租约有效且命令合法的前提下，先按 A 的基线重放到当前引用版本，再保存，避免把旧链接写回。不能单纯因 `draft_revision` 被机械更新就要求用户解决“多人正文冲突”。
 
-客户端只在提交快照仍匹配时应用响应正文/补丁；发送后已有输入则保留新文本及其旧基线，用现有[引用 bridge](../../app/utils/content/draft-reference-bridge.ts)对当前文本重新核对，并在重放期间短暂只读。不能给尚未重放的新文本直接盖上响应中的新 baseline。
+客户端只在提交快照仍匹配时应用响应正文/补丁；发送后已有输入则保留新文本及其旧基线，用现有`引用 bridge`（历史定位 `app/utils/content/draft-reference-bridge.ts`）对当前文本重新核对，并在重放期间短暂只读。不能给尚未重放的新文本直接盖上响应中的新 baseline。
 
 如果任一基线未知、早于 floor 或超前，不自动写入不确定正文。可在合法租约下仅续租并返回 `reference_review_required`；用户核对后以绑定当前快照的确认继续保存。现有手工核对流程应保留，不能把引用历史不足当成租约失效，也不能按 M 无限重试同一不确定写入。
 

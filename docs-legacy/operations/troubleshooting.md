@@ -1,46 +1,31 @@
 # 故障排查
 
+> 当前排查入口分别见[开发](../../docs/1_workflows/1_develop/AGENT-DESIGN.md)、[发布](../../docs/1_workflows/3_deliver/AGENT-DESIGN.md#失败后先确认停在哪一步)与[维护](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#故障排查)补充说明。本文保留领域问题线索及历史案例，业务内部机制仍按所属领域核对。
+
 先定位失败层：应用进程、数据库／迁移、授权回调、对象存储、ESA 交付、后台扫描或浏览器状态。保留时间、动作、身份类别、请求 ID、安全错误码及状态变化；不要分享 token、完整签名 URL、请求正文或原始 SDK 凭据。
 
 ## 开发启动
 
-| 症状 | 检查与处理 |
-| --- | --- |
-| `APP_PORT` 已占用 | 确认原终端和监听进程。复用已有应用时只补 `dev:tunnel`；不要启动第二套或让端口自动漂移 |
-| 55500 被占用 | 查看是否为带 `X-Dev-Auth-Proxy: 1` 的已知代理。未知进程由操作者核实后处理，启动器不会接管 |
-| frpc 不能执行／版本不符 | 核对 `devAuthTunnel.frp.executable`、版本 0.71.0 和操作系统实际错误；不通过关闭防护或跳过 TLS 校验解决 |
-| Docker 依赖未启动 | `docker compose --env-file .env.dev -f docker-compose.dev.yml ps` 并检查对应服务日志；Compose 失败时组合入口不会继续启动应用 |
-| `.env.dev` / `.env.prod` 仍有 `<required>` | 重跑对应环境生成命令或在目标文件补齐，然后重新加载进程 |
-| 修改 MySQL／MQTT 密码后认证失败 | 环境值变化不保证现有数据库或 broker 账号被同步修改，核对真实账号；不要删除卷重建来掩盖差异 |
+应用／代理端口、Compose 依赖及复用检查见 [SID#1.1 开发进程与端口](../../docs/1_workflows/1_develop/AGENT-DESIGN.md#开发进程与端口)，frpc 检查见 [授权隧道与 ESA 提示](../../docs/1_workflows/1_develop/AGENT-DESIGN.md#授权隧道与-esa-提示)，环境选择和变量优先级见 [配置实际从哪里来](../../docs/1_workflows/1_develop/AGENT-DESIGN.md#配置实际从哪里来)。
 
-`NODE_ENV` 只能是 development 或 production，分别选择 `.env.dev` / `.env.prod` 和对应 YAML。源码运维命令用 `:dev`／`:prod` 后缀明确选择环境；底层预载仍通过固定的 `--env` 参数实现。旧 `.env` 不再加载。进程变量优先于文件，遇到意外连接目标或 GPG 口令不一致时先核对终端继承的同名变量。
+仍需核对具体实例的情况：
 
-手动执行开发 Compose 的 `ps`、`logs`、`up` 等命令时都显式传 `--env-file .env.dev`；生产编排使用 `docker compose --env-file .env.prod -f docker-compose.yml …`。Compose 的 `${…}` 插值需要该环境文件，服务内的 `env_file` 不能代替命令行插值来源。
+- frpc 不能执行时查看操作系统实际错误，不通过关闭防护或跳过 TLS 校验解决。
+- env 仍有 `<required>` 时，重跑对应环境生成命令或补齐目标文件，再重新加载进程。
+- 修改 MySQL／MQTT 密码后认证失败，核对真实账号；环境值变化不会自动同步已有数据库或 broker 账号，不删除卷来掩盖差异。
 
 ## 迁移与健康检查
 
-`/api/hooks/healthz` 查询 `migration_runs` 的 completed 记录，数据库不可用或账本查询失败时返回 503。它不验证所有 OSS 对象、所有待执行版本、ESA 回调或 MQTT 消费健康；首页 200 的覆盖范围更小。
+迁移锁、维护准入、SQL／TS 失败和摘要异常见 [SID#1.4 迁移查询与失败恢复](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#迁移查询与失败恢复)；`healthz` 与公网／业务验收的范围见 [故障排查](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#故障排查)。
 
-| 错误／状态 | 下一步 |
-| --- | --- |
-| `maintenance_required` | 停止业务写入、完成备份后使用维护入口；不是删除门禁 |
-| `blocked_by` | 前序 schema／脚本未完成，按顺序阶段执行后重新预演 |
-| checksum／artifact 不匹配 | 对照冻结摘要和产物；恢复历史字节，修复追加新迁移 |
-| `lock_busy` | 查明另一执行者，不删锁或并行启动更多迁移 |
-| SQL running／failed | 核对已落地 DDL，确认可重入后精确 `--retry-sql` |
-| TS verify 失败 | 检查业务结果及回执，重跑只验证，不删除账本重做 apply |
-| 旧 `schema_migrations` 再出现 | 查明是否启动了旧版本，核对账本协议，禁止自动重新 baseline |
-
-恢复步骤见[迁移手册](./migrations.md)和 [Content 切换](./content-cutover.md)。2026-10-25 的回执记录生产 Content 已完成副本预演和正式迁移；后续版本仍须独立核对迁移链与发布回执，不能把新镜像重启成功当成切换验收。截至 2026-11-01 的生产发布信息与核验边界见[云端台账](../deployment/aliyun.md#截至-2026-11-01-的发布信息)。
+恢复步骤见[迁移手册](./migrations.md)和 [Content 切换](./content-cutover.md)。2026-10-25 的回执记录生产 Content 已完成副本预演和正式迁移；后续版本仍须独立核对迁移链与发布回执，不能把新镜像重启成功当成切换验收。2026-11-01 早先的 #54 发布信息与核验边界见[云端台账](../deployment/aliyun.md#2026-11-01-早先的-54-发布核对)。
 
 ## 授权回调和 ESA
 
-按[隧道连接图](../development/auth-tunnel.md)逐段检查：本机应用 → 本机授权代理 → frpc 注册 → 公网回调 → ESA 函数变量／路由 → 原生缓存与 OSS。
+回调通道逐段诊断见 [SID#1.1 授权隧道与 ESA 提示](../../docs/1_workflows/1_develop/AGENT-DESIGN.md#授权隧道与-esa-提示)，发布参数、失败阶段及真实交付验收见 [SID#1.3 单独发布 ESA](../../docs/1_workflows/3_deliver/AGENT-DESIGN.md#单独发布-esa)。
 
-- 回调域名根路径返回 404 是有意限制；空 JSON 授权返回 403 也是预期拒绝路径。二者都不证明合法授权成功。
 - frpc running、WebSocket 101 只说明局部进程或通道条件，继续核对代理注册和回调响应。
 - 合法授权应验证状态与 HMAC；再验 GET/HEAD/Range 及完整文件大小和摘要。
-- 回调 URL 统一在环境 YAML 的 `esaFunction.callbackUrl` 修改，再运行 `pnpm esa:deploy:dev` / `pnpm esa:deploy:prod`；先用 `--plan` 看目标、`--check` 只读核查。失败阶段和脱敏记录位于 `.data/esa-deploy/`，不要直接粘贴 SDK 原始异常。
 - 当前读取每次经过在线授权，回调故障会拒绝交付。不要为了恢复可用性改为缓存成功授权或只验证旧签名。
 - 缓存 HIT 后拒绝旧 URL 属于业务撤权；对象删除和缓存刷新是后续物理清理，二者分开检查。
 
@@ -48,10 +33,10 @@
 
 ## OSS 上传与图片
 
+AccessDenied 和浏览器上传失败的初查见 [SID#1.4 故障排查](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#故障排查)。其他领域症状：
+
 | 症状 | 检查范围 |
 | --- | --- |
-| AccessDenied | 先区分应用 RAM、分片签名上传、对象读取或 ESA 回源失败；核对桶／地域／Action，不混用凭据。当前上传不调用 AssumeRole |
-| 浏览器上传失败但服务端探测正常 | 检查上传会话与分片签名有效期、MD5／分片身份、CORS 的 origin／方法／请求头及响应头暴露 |
 | 网络断开后完成结果不明 | 保留会话和精确对象身份，让生命周期／对账处理；不要重复创建同目标或删除未知 multipart |
 | 图片格式／像素预算拒绝 | 核对实际字节、静态处理白名单、预算和错误码。GIF/SVG 等应按原样附件路径判断，不能只看后缀 |
 | 上传成功但列表／正文未同步 | 检查 publication 回执、workspace revision、引用桥接及通知 outbox；不要仅凭对象存在判定业务提交完成 |
@@ -61,11 +46,9 @@
 
 ## 后台任务与实时同步
 
-先运行 `pnpm background:status:dev` 读取持久状态，再结合运行进程日志和管理员状态接口确认扫描。CLI 没有应用进程内存快照，`process: null` 正常；某个应用的扫描状态也不是整个集群状态。
+后台状态查询、worker 模式和预热停滞的检查见 [SID#1.4 后台任务与日常存储检查](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#后台任务与日常存储检查)。领域侧继续核对：
 
-- mode=worker 时应用不消费后台工作，必须有独立 worker；disabled 保留待办但不扫描。
 - 检查有效租约、到期候选、重试时间、最老待办和资源槽，不手工把 running 改 pending。
-- 预热暂停可能来自开关、交付未验证、额度预算或云端状态；区分预热与刷新权限。
 - Content 通知经过事务 outbox 和 MQTT ACK；broker 暂时不可用时保留重试。普通页面重载不能证明 outbox 已清空。
 - 浏览器仅活动标签维护连接，其他标签通过 BroadcastChannel 接收；登录身份变化和 SSR hydration 的状态交接也要纳入检查。
 

@@ -1,5 +1,7 @@
 # 真实旧浏览器 CSS 验收
 
+历史源码导航按本报告基线处理。可核对到基线提交的入口链接固定快照，其余保留原路径和行号。现行目录及后续重构记录见 [SID#0.1.AGENT](../../docs/0_overall/1_architecture/AGENT.md)。
+
 日期：2026-10-29。承接[生产产物一致性验收](css-production-parity-2026-10-29.md)，本轮安装并运行真实历史引擎，使用同一个隔离生产构建入口，不改写 User-Agent，也不注入兼容补丁。
 
 后续工作区已接入云端草稿并以服务端租约替换 Web Locks；旧引擎编辑流程的隔离复验和生产边界见[实施记录](../designs/shared-cloud-draft-implementation-2026-10-30.md)。下文保留 CSS 独立 PR 的当时证据。
@@ -31,7 +33,7 @@ pnpm exec playwright test --config tests/css-legacy.config.ts
 
 ## 初次实测（修复前）
 
-Chromium 80 已稳定复现应用错误：正文挂载后进入 Nuxt 500 错误界面，正文标记消失，错误为 `.story-section > :is(h1, h2, h3, h4, h5, h6)` 不是有效选择器。实际调用点为[吸顶标题布局](../../app/utils/content/sticky-headings.ts)与[编辑滚动同步](../../app/composables/useMarkdownEditorScrollSync.ts)。Vite 的 CSS target 不处理 JavaScript 字符串中的选择器，legacy JS 转译及 polyfill 也没有消除这个 DOM API 兼容问题。
+Chromium 80 已稳定复现应用错误：正文挂载后进入 Nuxt 500 错误界面，正文标记消失，错误为 `.story-section > :is(h1, h2, h3, h4, h5, h6)` 不是有效选择器。实际调用点为`吸顶标题布局`（历史定位 `app/utils/content/sticky-headings.ts`）与`编辑滚动同步`（历史定位 `app/composables/useMarkdownEditorScrollSync.ts`）。Vite 的 CSS target 不处理 JavaScript 字符串中的选择器，legacy JS 转译及 polyfill 也没有消除这个 DOM API 兼容问题。
 
 Firefox 78 的基础检查通过：hydration、六级标题 `30 / 29 / 28 / 27 / 26 / 25`、分页器白字、懒加载 Dialog 的 `321px` 宽度、四角 `6.4px` 和 `0px` PT 内边距；Dialog 的进出动画均触发，最终可见状态和关闭后节点消失也通过。但 **ConfirmPopup 定位未通过**：原生 WebDriver 点击后，按钮矩形为 `left:348.5 / top:169 / right:470.5 / bottom:211`，浮层矩形为 `left:0 / top:2 / right:202 / bottom:99`，出现在页面左上角，没有贴着触发按钮。
 
@@ -72,7 +74,7 @@ Firefox 78 的基础检查通过：hydration、六级标题 `30 / 29 / 28 / 27 /
 
 ## 媒体与主题兼容改写
 
-- [轮播生命周期](../../app/utils/content/carousel.ts)直接驱动两侧渐变宽度，[动画](../../app/utils/content/carousel-motion.ts)保留 300ms CSS ease 曲线和多段 mask。相同目标不重启动画，反向切换从当前采样值继续；卸载取消动画。初次挂载及恢复状态直接应用，不依赖 `:has()` 或 `@property`。
+- `轮播生命周期`（历史定位 `app/utils/content/carousel.ts`）直接驱动两侧渐变宽度，`动画`（历史定位 `app/utils/content/carousel-motion.ts`）保留 300ms CSS ease 曲线和多段 mask。相同目标不重启动画，反向切换从当前采样值继续；卸载取消动画。初次挂载及恢复状态直接应用，不依赖 `:has()` 或 `@property`。
 - 图片尚未恢复尺寸时，旧引擎可能把请求的 scrollLeft 夹到 0。现在保留待恢复位置，在 load / resize 后重试，直到可以恢复或可测量容器中的图片均已完成 / 失败；隐藏预览继续保留快照，手动滚动及导航按钮可接管。减少动态效果时直接切换，缺少原生 smooth scrolling 时使用可中断的逐帧滚动。[WebKit 15.4 说明](https://webkit.org/blog/12445/new-webkit-features-in-safari-15-4/)记录了原生 smooth scrolling 的后续支持；本机回退合同测试不代替 Safari 13.1 实测。
 - [Preview 样式](../../app/components/MyContent/Markdown/Preview.vue)保留原来的渐变形状，移除已停用的 `.encrypted-image-loading` 样式。当前私有图片读取服务端可读 URL，与普通图片共用加载、淡入和失败状态。轮播使用相邻 margin 替代 flex gap；失败占位、空封面及 iframe 的 16:9 布局使用百分比 spacer。
 - 生产包中 Tailwind 默认 class 策略生成的 `.carousel-caption:is(.dark *)` 在 Chromium 80 不生效；静态转换不能把这一复杂选择器作为已兼容结果。改用 [Tailwind 官方自定义 dark variant](https://v3.tailwindcss.com/docs/dark-mode#customizing-the-dark-variant)，输出 `.dark` 普通祖先选择器。源码中的标题、控件及附件状态 `:is()` 同时改为普通列表，没有新增 CSS 转换插件或依赖 patch。
@@ -106,7 +108,7 @@ pnpm exec playwright test --config tests/css-legacy.config.ts --grep-invert 'edi
 
 用户分别授权新增运行时和构建依赖后，固定接入 `@formatjs/intl-segmenter@12.2.15`、`@rollup/plugin-babel@7.1.0`、`@babel/core@7.29.7` 与 `@babel/plugin-transform-unicode-sets-regex@7.29.7`。后两项原已作为间接依赖存在；现有包版本没有升级，锁文件仅增加新入口及其依赖闭包。
 
-[诊断兼容入口](../../app/utils/content/editor/markdownlint.ts)先加载 FormatJS `polyfill.js`，再导出 markdownlint，确保后者在模块求值时可以创建 Segmenter；原生实现存在时保留原生 API。[入口回归](../../app/utils/content/editor/lint-legacy.test.ts)移除平台 Segmenter 后加载实际诊断模块，验证中文、组合字符和家庭 emoji 的字素分段，以及真实 MD018 诊断。
+`诊断兼容入口`（历史定位 `app/utils/content/editor/markdownlint.ts`）先加载 FormatJS `polyfill.js`，再导出 markdownlint，确保后者在模块求值时可以创建 Segmenter；原生实现存在时保留原生 API。`入口回归`（历史定位 `app/utils/content/editor/lint-legacy.test.ts`）移除平台 Segmenter 后加载实际诊断模块，验证中文、组合字符和家庭 emoji 的字素分段，以及真实 MD018 诊断。
 
 仅补齐 Segmenter 后，生产构建 `dbd4403041f748239b7f14611e7a20ab` 仍为 10 / 12：旧编辑器另报 `Invalid flags supplied to RegExp constructor 'v'`。`string-width@8.2.1` 使用静态 `/v` 正则及 `RGI_Emoji`；[Oxc 文档](https://oxc.rs/docs/guide/usage/transformer/lowering)说明正则 lowering 会转为构造器，不提供完整语义回退。后续 legacy 转换无法再把动态 `RegExp(..., 'v')` 当作静态字面量编译。
 
@@ -191,9 +193,9 @@ Web Locks 兼容仍是独立门槛；取消样式加权不会补齐 Firefox 78 �
 
 **后续方向已调整：** 用户指出后续将按后续共享云端草稿改造（另案设计，不属于本 PR）重构。该设计明确由服务端租约成为唯一编辑权依据，替换 Web Locks，停止浏览器正文持久化，不建立每标签草稿分支。因此不再单独推进下面的临时 IndexedDB 原型；以下保留为此前针对现有本地存储协议的评估。云草稿仍是未实现的提案，本次未改草稿代码、删除本地数据或放开只读保护；Firefox 78 的完整编辑要求须在云草稿接入后重新验收。
 
-用户已选择保留 Firefox 78 的完整编辑要求，先评估跨标签互斥兼容方案。生产构建 `68660e66bcad437d94af2bbf2f646a16` 的 Firefox 78 已加载真实 CodeMirror，客户端错误列表为空，但 `contenteditable="false"`，页面显示『当前浏览器不支持跨标签页安全同步』。这是 [useStoryEditSession](../../app/composables/useStoryEditSession.ts) 对缺少 `navigator.locks` 的主动保护。[Mozilla Firefox 96 开发说明](https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Releases/96)记录 Web Locks 默认启用；[WebKit Safari 15.4 说明](https://webkit.org/blog/12445/new-webkit-features-in-safari-15-4/#web-apis)记录相应支持，因此 Safari 13.1 也必须列入此兼容评估，不能仅修 Firefox。
+用户已选择保留 Firefox 78 的完整编辑要求，先评估跨标签互斥兼容方案。生产构建 `68660e66bcad437d94af2bbf2f646a16` 的 Firefox 78 已加载真实 CodeMirror，客户端错误列表为空，但 `contenteditable="false"`，页面显示『当前浏览器不支持跨标签页安全同步』。这是 `useStoryEditSession`（历史定位 `app/composables/useStoryEditSession.ts`） 对缺少 `navigator.locks` 的主动保护。[Mozilla Firefox 96 开发说明](https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Releases/96)记录 Web Locks 默认启用；[WebKit Safari 15.4 说明](https://webkit.org/blog/12445/new-webkit-features-in-safari-15-4/#web-apis)记录相应支持，因此 Safari 13.1 也必须列入此兼容评估，不能仅修 Firefox。
 
-当前合同是『前一持有者保存草稿后才释放，接手者读取最新草稿后才可编辑』。保存或引用重放进行中会延迟释放，存储失败也不会正常交出编辑权。草稿的写入、删除和旧 schema 升级由 [contentDraft](../../app/stores/contentDraft.ts) 同步操作 localStorage；`pagehide` 和卸载会立即调用 `persist_now()`。这些合同都必须保留，不能只把只读条件放开。
+当前合同是『前一持有者保存草稿后才释放，接手者读取最新草稿后才可编辑』。保存或引用重放进行中会延迟释放，存储失败也不会正常交出编辑权。草稿的写入、删除和旧 schema 升级由 `contentDraft`（历史定位 `app/stores/contentDraft.ts`） 同步操作 localStorage；`pagehide` 和卸载会立即调用 `persist_now()`。这些合同都必须保留，不能只把只读条件放开。
 
 | 候选 | 评估 |
 | --- | --- |

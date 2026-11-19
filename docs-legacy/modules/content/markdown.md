@@ -93,7 +93,7 @@ Markdown 诊断的兼容入口在依赖初始化前加载 FormatJS 标准 `Intl.
 
 - 语法和元数据：[`content-markdown.ts`](../../../server/shared/content-markdown.ts)、[`content-markdown-syntax.ts`](../../../server/shared/content-markdown-syntax.ts)。
 - 引用：[`content-reference-definitions.ts`](../../../server/shared/content-reference-definitions.ts)、[`content-reference-replay.ts`](../../../server/shared/content-reference-replay.ts)。
-- 渲染：[`app/utils/content/markdown/`](../../../app/utils/content/markdown/)，预览编排：[`useStoryPreview.ts`](../../../app/composables/useStoryPreview.ts)、[`useStoryPreviewBody.ts`](../../../app/composables/useStoryPreviewBody.ts)。
+- 渲染：[`app/features/content/markdown/render/`](../../../app/features/content/markdown/render)，预览编排：[`preview.ts`](../../../app/features/content/markdown/preview.ts)、[`preview-body.ts`](../../../app/features/content/markdown/preview-body.ts)。
 - 自动测试覆盖语法、引用定义、原始 HTML 边界、文字／卡片分支、权限表示、引用改写、标题吸顶及全屏双向滚动。浏览器需验证其他布局、caption、图片加载和连续输入时的媒体复用。
 
-Setext 标题、扩展表格、容器边界与引用补丁的跨层样例见 [`language.test.ts`](../../../app/utils/content/editor/language.test.ts)。浏览器回归使用真实编辑器语言和深浅色主题，验证着色与编辑后失效／恢复；编辑器语法树仍不替代服务端校验或最终 HTML 净化。
+Setext 标题、扩展表格、容器边界与引用补丁的跨层样例见 [`language.test.ts`](../../../app/features/content/markdown/editor/language.test.ts)。浏览器回归使用真实编辑器语言和深浅色主题，验证着色与编辑后失效／恢复；编辑器语法树仍不替代服务端校验或最终 HTML 净化。

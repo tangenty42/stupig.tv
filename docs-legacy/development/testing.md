@@ -1,50 +1,20 @@
 # 测试与验证
 
-测试优先证明用户可观察的行为和数据合同。按风险选择验证；文案、格式和简单接线无需为了数量增加单测。已有源码断言应在行为覆盖建立后删除，而不是继续约束变量名、标签写法或文件排布。
+> 当前操作见 [SID#1.2.DESIGN](../../docs/1_workflows/2_test/DESIGN.md)及其[操作补充](../../docs/1_workflows/2_test/AGENT-DESIGN.md)。本文保留领域验证细节、SSR／身份合同、历史参考及旧章节锚点；既有验证边界与决定见 [SID#1.2.AGENT](../../docs/1_workflows/2_test/AGENT.md)。
 
 ## 命令与环境
 
-| 命令 | 环境与范围 |
-| --- | --- |
-| `pnpm test:unit` | Node；app 与 server 分组，客户端标志仅用于 app 测试 |
-| `pnpm test:tools` | Node；迁移、打包和 CLI 测试串行运行，避免抢占构建及子进程资源 |
-| `pnpm test:component` | Nuxt + happy-dom；真实挂载 Vue 组件及依赖组件生命周期的 composable |
-| `pnpm test` | 依次执行以上三组 |
-| `pnpm test:e2e` | Playwright Chromium；实际 Nuxt、API、MySQL 和同步传输 |
-| `pnpm test:e2e:legacy` | Chromium 80 / Firefox 78 和现代 Chromium；隔离生产构建下的页面与交互 |
-| `pnpm test:css:legacy` | Chromium 80 / Firefox 78；暗色背景工具类与 CSS 压缩兼容，不启动应用或数据库 |
-| `pnpm exec playwright test --config tests/css-production.config.ts` | 完整 production 前端构建；保留 legacy、CSS 目标、压缩和分块，复用隔离业务配置 |
-| `pnpm check` | 生成检查、lint、三组类型检查和单元／工具／组件测试 |
-| `pnpm typecheck` | Nuxt 应用、scripts、tests 三个类型项目 |
-| `pnpm lint` | 代码、测试和文档规范 |
-| `pnpm exec nuxt typecheck` | 应用类型 |
-| `pnpm exec tsc --project scripts/tsconfig.json --noEmit` | 工具类型 |
-| `pnpm exec tsc --project tests/tsconfig.json --noEmit` | 浏览器测试与测试边界类型 |
-
-纯逻辑和服务测试继续与模块同目录，命名 `*.test.ts`。挂载测试使用 `*.nuxt.test.ts`，由独立组件配置运行；不把 Nuxt runtime 加进每个纯单测。浏览器工作流放在 `tests/e2e/*.spec.ts`，一个场景一个文件——Playwright 的分片以文件为单位分配，把多个场景塞进同一个文件会让 `--shard` 失衡甚至空转。共享基础夹具可以复用，场景中的身份、版本、失败条件应在测试中清楚可见。
+命令选择与测试文件命名见[测试工作流](../../docs/1_workflows/2_test/DESIGN.md)；各分组环境、别名和定向运行见[编写与定向运行](../../docs/1_workflows/2_test/AGENT-DESIGN.md#编写与定向运行)。
 
 ## 应该断言什么
 
-- 单元测试检查返回值、状态转换、错误、事务写入和外部操作；模拟数据库、网络、时钟等基础设施边界。
-- 组件测试通过真实 SFC 编译和挂载，检查 DOM、模型事件、输入、点击与生命周期。替换浏览器不支持的 Canvas 边界时，明确剩余验证范围。
-- 浏览器测试操作真实页面，按条件等待而不是固定 sleep；失败保留 trace 和截图。
-- E2E 的 `content_query()` 对只读 GET 使用 Playwright 原生 `maxRetries: 1`，仅重试一次 `ECONNRESET`；HTTP 错误仍直接失败。写操作不自动网络重试，避免把未知执行结果重放为重复修改。真实本机 socket-reset 回归覆盖成功重试、重试上限、HTTP 500 和 mutation 不重试。
-- 登录辅助函数等待弹窗可见且退出 Vue 入场阶段，再正常点击用户名框并输入凭据；位置稳定不代表透明度动画已结束，`fill()` 也不会等待入场后的焦点设置。回归使用位置不变的慢透明度动画检查输入时机，并保留失焦后的字段值与真实认证响应断言。
-- 迁移 digest、部署入口和产物依赖确实以源码或文件为合同，可以保留相应断言。一般 UI 不应依赖源码切片、VM 执行、私有变量名或模板字符串。
-- 安全、并发和数据丢失回归需要证明能检出原先的错误；不要求每个普通 guard 都进行临时破坏操作。
-- 不因测试失败而弱化业务约束。替换旧测试时保留有价值的场景，合并重复的内部实现断言。
+断言、替身和真实入口的选择见[编写与定向运行](../../docs/1_workflows/2_test/AGENT-DESIGN.md#编写与定向运行)；登录等待、只读请求重试及失败注入见[E2E 隔离与失败排查](../../docs/1_workflows/2_test/AGENT-DESIGN.md#e2e-隔离与失败排查)。
 
 ## 浏览器测试的隔离
 
-CI 的 `unit` 运行与本地相同的 `pnpm check`。唯一必需状态 `check` 始终上报，等待分类及包括 `browser-css` 在内的全部应用检查，拒绝失败、取消和代码变更中意外跳过的结果；只允许已成功分类的纯文档变更或已验证 main 复用跳过重型测试。代码树证明位于该总门槛的成功 PR 步骤内，不再通过额外 job 上报。
+资源隔离、分片、供应商替身、清理与产物位置见[E2E 隔离与失败排查](../../docs/1_workflows/2_test/AGENT-DESIGN.md#e2e-隔离与失败排查)；CI 门槛和 main 结果复用见[MQTT 镜像与 CI 汇总](../../docs/1_workflows/2_test/AGENT-DESIGN.md#mqtt-镜像与-ci-汇总)。
 
-首次执行 `pnpm exec playwright install chromium`。运行前需要本地开发 MySQL、Redis、支持 TCP 发布及 WebSocket 订阅的 MQTT broker，以及 `MYSQL_DEV_ROOT_PASSWORD`。CI 在独立服务中提供它们，不需要真实云端密钥；应用浏览器用例按 `--shard` 拆成三个 job，并与独立的 `browser-css` job 并行，Playwright 浏览器包按版本进 Actions 缓存。只改 `docs/**` 或 Markdown 的 PR 由 `changes` job 识别并跳过应用测试——PR 的门槛只能放在 job 条件上，加在 `on.pull_request.paths` 会让必需检查永远停在 Pending。纯文档提交推送到 `main` 时，push 路径过滤不启动 Check，也不触发依赖它的 Deploy；与代码混合的提交仍执行正常检查流程。
-
-非纯文档提交在 `main` 上仍启动 Check，以便部署等待同一提交的验证结果。若合并 PR 的完整检查、三个浏览器分片和 `browser-css` 均成功，且 PR 实际测试的 Git tree 与合并结果一致，则复用全部结果，跳过 unit、迁移、浏览器和 MQTT 的重型执行，`check` 仍上报复用后的汇总结果；找不到完整成功记录、代码树不同、验证规则自身变更或 GitHub 查询失败时，`main` 会完整重跑。GitHub 的路径过滤只检查前 3,000 个文件；超大推送应拆分，避免代码文件落在过滤范围之外，详见 [GitHub 工作流触发说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。
-
-测试启动器创建随机命名的 `stupig_e2e_*` 数据库，执行完整迁移并创建开发测试账号；复制应用源码到临时目录，构建后在本分片的端口启动独立 Nuxt（未分片为 3142，`--shard=i/n` 使用 `3142 + i - 1`，规则见 `scripts/testing/e2e-target.ts`）。已有端口被占用时拒绝运行，不接管未知服务。结束时停止自己的进程树、删除本轮数据库并清理临时运行凭据。
-
-OSS、CAPTCHA 和短信在测试专用 Nuxt 配置中替换供应商边界。浏览器保留真实 HTTPS 上传授权校验，测试将分片请求转发到本地字节接收器；真实 API、事务、发布和取消确认照常执行。短信夹具只在隔离开发环境运行，固定测试码为 `123456`，模拟发送后校验、错误码和过期拒绝；发送冷却及配额仍由真实服务和数据库执行，不发送真实短信。头像通过实际选图、Canvas 裁剪、上传和资料保存，本地交付路由返回内存 OSS 中实际保存的字节。
+下列领域场景细节保留作原测试说明；本轮文档迁移没有重新执行这些场景。
 
 浏览器用例覆盖：
 
@@ -54,23 +24,19 @@ OSS、CAPTCHA 和短信在测试专用 Nuxt 配置中替换供应商边界。浏
 - 档案：创建和编辑持久化、普通附件上传、在途上传取消并收到服务端确认、两个隔离浏览器上下文间的正文同步（排除 BroadcastChannel 旁路）。
 - 引用：独立浏览器上下文中的标题和附件目录改名、main 与草稿重放、新建草稿、删除影响确认及悬空 warning、同名重建，以及附件／全局标题各自的 200 批次窗口。窗口测试在随机测试库用历史仓库准备批次，再经实际 API 或编辑器触发变更、裁剪和保存；验证 floor 边界与 250 行批次完整保留。
 
-该流程不证明真实 OSS、ESA 缓存交付、短信供应商、CAPTCHA 供应商或原生文件权限正常。默认夹具只面向 Chromium，禁用 legacy 构建；服务器复用已安装的 SDK，不验证独立部署镜像依赖收集。MQTT 主题按本轮标识隔离；浏览器连接使用已验证的本地 broker 主机地址，需确保其 WebSocket 端口可达。日志和 Playwright 产物位于被 Git 忽略的 `.dev/`；CI 只上传服务器日志、trace、截图和报告，不上传临时运行配置。真实云端与操作系统行为继续按下面矩阵验收。
-
-生产 CSS 验收使用独立的 `tests/css-production.config.ts`。它复用同一个隔离启动器，但仅在构建子进程设置 `NODE_ENV=production`，保留 legacy；业务配置、测试服务及数据库仍使用开发隔离边界。`BROWSERSLIST_ENV=production` 显式传递，JS legacy 与 CSS 引擎目标由 package.json 的 production Browserslist 经 `config/browser-targets.ts` 接线，CSS minifier 和 code splitting 在 Nuxt 中显式配置。
+CSS／历史浏览器的 profile、运行前提和隔离边界见[CSS 与历史浏览器](../../docs/1_workflows/2_test/AGENT-DESIGN.md#css-与历史浏览器)。以下保留兼容实现与领域断言细节：
 
 Markdown 诊断入口先加载 FormatJS 的标准 `Intl.Segmenter` polyfill，再求值 markdownlint 依赖。生产构建通过 `config/browser-transforms.ts` 的官方 Rollup Babel 插件，在 Oxc 之前编译静态 `/v` 正则的 Unicode 集合语义；Oxc 单独降为 `RegExp(..., 'v')` 不能补齐旧引擎能力。`scripts/verify/browser-regexp.test.ts` 构建真实 modern / legacy 双产物，在拒绝 `v` flag 的构造器边界检查 emoji 与组合字符；`lint-legacy.test.ts` 在缺少 Segmenter 时加载真实诊断入口。这些回归不能替代历史浏览器中的完整编辑验收。
 
-启动器从实际 Vite `configResolved` 记录目标、minifier、分块及插件，检查最终 CSS 和 legacy JS 资产；报告保存在本轮 `.dev/e2e/<run>/css-build.json`。该 profile 运行 SSR（禁用页面 JS）与 hydration、分页器、延迟路由 / 懒加载组件 CSS、Dialog / ConfirmPopup 动画、六级吸顶标题与全屏编辑滚动，以及媒体渐变中间帧、加载 / 失败、权限表示、深浅色、窄容器和重渲染恢复。测试专用页面仅属于 E2E Nuxt layer，额外 utility class 仅加入夹具构建的 Tailwind content，不写入产品配置。CI 的独立 `browser-css` job 与三个应用分片并行执行此 profile，并在失败时保留 `.dev/css-production/`。它验证现代 Chromium 上的生产产物，不代替最低版本引擎或发布缓存验收。
+生产 CSS profile 运行 SSR（禁用页面 JS）与 hydration、分页器、延迟路由 / 懒加载组件 CSS、Dialog / ConfirmPopup 动画、六级吸顶标题与全屏编辑滚动，以及媒体渐变中间帧、加载 / 失败、权限表示、深浅色、窄容器和重渲染恢复。测试专用页面仅属于 E2E Nuxt layer，额外 utility class 仅加入夹具构建的 Tailwind content，不写入产品配置。
 
-CSS 官方 API 的独立浏览器夹具可用 `pnpm exec playwright test --config tests/css.config.ts` 运行，不启动应用或数据库。它挂载真实 PrimeVue / CodeMirror，并对 Tailwind selector 策略、Teleport、行内尺寸、主题更新及静态 CSS 压缩结果做对照；CI 在 `browser-css` job 的生产验收后执行此入口。普通 E2E 不收集 `css-*.spec.ts` 及三个生产布局场景（吸顶标题、全屏滚动对齐、iframe/carousel），避免跨 profile 重复执行；完整共享草稿场景只归业务分片，生产 profile 保留布局场景已有的登录、编辑与保存流程。三套 profile 的实际 CLI 文件选择由 browser-profiles.test.ts 检查互不重叠。该入口不验证 Nuxt SSR/hydration、完整生产构建或真实旧引擎，具体结果与边界见[验证记录](../reviews/css-official-apis-validation-2026-10-29.md)。
+历史工具类的原 `application-local` 候选已合入正式 `application` 夹具，不再维护重复实验模式。CSS API 的原始验证结果见[验证记录](../reviews/css-official-apis-validation-2026-10-29.md)。
 
-历史工具类的独立回归使用 `pnpm test:css:legacy`，同样不启动应用或数据库。它在真实 Chromium 80 / Firefox 78 中检查实际应用配置的普通及局部 `!` 暗色背景类，覆盖 PostCSS 原始和 Lightning CSS 压缩后的四种引擎 / 输出组合。实际配置关闭全局 important，保留普通 dark variant；组件覆盖由 preset、PT 和局部 `!` 验证。原 `application-local` 候选已合入正式 `application` 夹具，不再维护重复实验模式。
+确认浮层验收页复用应用 `useMyConfirm()` 和公开 PT state / transition DOM 补偿，原生点击后检查实际锚点坐标。
 
-Windows 上已安装的历史引擎使用 `pnpm test:e2e:legacy` 复验，保留相同隔离生产构建，使用 Chromium 80 / Firefox 78 及匹配 WebDriver，并在同一构建运行现代 Chromium 生产对照。历史场景通过原生点击和输入覆盖确认浮层、真实登录 / Markdown 编辑 / 全屏预览 / 主题与用户菜单，并复用与现代浏览器相同的媒体观测。确认浮层验收页复用应用 `useMyConfirm()` 和公开 PT state / transition DOM 补偿，原生点击后检查实际锚点坐标。二进制位于 `.dev/tools/legacy-browsers/`，不属于仓库依赖；普通 E2E 不收集旧引擎专用场景。安装来源、实际结果与未覆盖平台见[旧引擎记录](../reviews/css-legacy-engines-2026-10-29.md)。
+窄屏验收检查真实文档 scrollWidth；缺少 Web Locks 而只读的编辑页必须判失败，不能强制开启编辑或删除该断言。
 
-历史 profile 通过仅回环 HTTPS 代理访问隔离应用，避免旧引擎拒收 HTTP localhost 的 Secure cookie。Windows 证书仅驻留内存，信任例外只属于临时 WebDriver 会话，不安装系统证书、不降低应用 cookie 安全属性。现代 production profile 保持原有入口；该测试代理不进入产品构建。
-
-历史驱动对响应式表单和 CodeMirror 逐字符发送原生按键；提交前检查实际字段值，正文保留原有长文档。旧引擎专用项目使用独立的用例 / 等待时间预算，现代首屏遮罩时限仍保留。窄屏验收检查真实文档 scrollWidth；缺少 Web Locks 而只读的编辑页必须判失败，不能强制开启编辑或删除该断言。
+历史浏览器安装来源、实际结果与未覆盖平台仍见[旧引擎记录](../reviews/css-legacy-engines-2026-10-29.md)。
 
 ## SSR、身份与时间
 
@@ -84,44 +50,18 @@ Windows 上已安装的历史引擎使用 `pnpm test:e2e:legacy` 复验，保留
 
 ## 迁移演练
 
-以下命令创建、使用并清理随机命名的隔离 QA 数据库，需要开发 MySQL root 凭据。它们不对业务数据库执行迁移，但会在开发数据库服务器上创建资源。
-
-```powershell
-$env:NODE_ENV = 'development'
-pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/migration-runtime.ts
-pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.ts
-```
-
-- `migration-runtime.ts` 覆盖维护门禁、事务检查点、失去连接、双执行者、部分 SQL 恢复、单账本升级、完整链重放和生产打包入口。
-- `content-migration.ts` 默认使用真实 MySQL 与 Sharp，远程对象边界在内存中模拟。`--oss` 使用真实开发 OSS；`--legacy` 进一步验证旧开发 S3，均会创建测试对象并执行精确清理。
-- 云端参数只在需要真实存储演练时使用。不要把这些脚本指向生产；程序也要求 development 和开发目标桶。
-- 生产数据副本演练与生产维护切换另见 [Content 切换](../operations/content-cutover.md)。空库或合成数据成功不代替真实数据兼容验收。
-
-CI 的 [Check 工作流](../../.github/workflows/check.yml) 包含 lint、生成检查、应用／工具／浏览器测试类型检查、三组 Vitest、MySQL 8.4 空库完整链和隔离演练，以及独立的 Chromium 工作流测试。Content 云存储边界为内存，不会自动验证真实 OSS、ESA 或短信。
+命令、各脚本覆盖范围、QA 库与真实对象写入边界见[专项数据库与迁移演练](../../docs/1_workflows/2_test/AGENT-DESIGN.md#专项数据库与迁移演练)。生产副本预演与旧数据维护切换仍见 [Content 切换](../operations/content-cutover.md)；空库或合成数据成功不代替真实数据兼容验收。
 
 ## 浏览器验收矩阵
 
-临时草稿 broker 限制为 2 CPU／768MiB，使用随机测试发布凭据；清理包括其匿名卷，Docker 不响应时限时报告精确容器身份，不无限等待。完整生产编译与历史浏览器验证可运行 `pnpm exec playwright test --config tests/cloud-drafts-production.config.ts`：复用现有 legacy 夹具、生产 SSR/CSS/JS 编译，执行草稿／引用场景。须先按既有 legacy 手册准备本地浏览器二进制，不在验收时自动安装。此 profile 使用同样的随机数据库与供应商替身。
+当前真实浏览器、云端与系统验收清单见[真实云端与系统验收](../../docs/1_workflows/2_test/AGENT-DESIGN.md#真实云端与系统验收)；草稿生产 profile 与有界负载入口分别见[CSS 与历史浏览器](../../docs/1_workflows/2_test/AGENT-DESIGN.md#css-与历史浏览器)、[专项数据库与迁移演练](../../docs/1_workflows/2_test/AGENT-DESIGN.md#专项数据库与迁移演练)。
 
-共享草稿的隔离协议／通知／有界负载验证使用 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/cloud-drafts.ts --mqtt --capacity`。仅接受本地开发 MySQL，创建随机 `stupig_cloud_draft_qa_<随机值>`，完整迁移并在 finally 删除；`--mqtt` 使用临时 EMQX 容器、随机回环端口和仅认证用途的 relay，结束时清理自己的容器与凭据。`--capacity` 记录深目录快照、两个写者／四个后台 SQL 占位和全局标题引用更新的延迟；其中两张图片走真实任务账本和可注入云端边界，成品夹具在计时前生成，处理回执固定延迟 5ms，禁止应用下载整图。该夹具验证数据库与任务并行，不测真实 OSS 转换速度或本地编码性能。单独运行，避免把同时构建造成的主机争用误当作目标规模基线。不会测试真实 OSS／短信，也不迁移业务库。
+草稿负载夹具的具体测量边界保留如下：
+
+`--capacity` 记录深目录快照、两个写者／四个后台 SQL 占位和全局标题引用更新的延迟；其中两张图片走真实任务账本和可注入云端边界，成品夹具在计时前生成，处理回执固定延迟 5ms，禁止应用下载整图。该夹具验证数据库与任务并行，不测真实 OSS 转换速度或本地编码性能。
 
 `content-cloud-draft`、`content-draft-history`、`content-draft-tabs`、`content-draft-lost-response`、`content-draft-expiry` 浏览器场景分别验证云端自动保存／main 不变、快照核对、隐藏交接、真实提交后响应丢失、释放不可达时到期接管。跨浏览器使用独立 context；同浏览器 headless 标签页通常均保持 visible，测试明确驱动 document visibility 边界，不能把 focus 当作租约释放。网络失败用实际 route 阻断或提交后丢包，不用本地 offline 事件代替。
 
-每次只使用本轮明确创建或获准操作的数据，记录入口、身份、动作和结果。删除测试对象前核对其精确 key／版本，避免把清理变成前缀擦除。
-
-| 领域 | 关键场景 |
-| --- | --- |
-| 编辑器 | 全屏／非全屏、窄屏、输入与预览稳定性、诊断、粘贴／拖入 |
-| 上传 | 多选与目录、`.good` 继承、重名 resolve、暂停继续、取消、替换与 row 交接 |
-| 文件权限 | 原生句柄撤权后重选、刷新恢复、过期／失效会话；需要系统交互的步骤由操作者完成 |
-| 图片 | 静态转换、GIF/SVG 原样、加载遮罩、损坏占位、覆盖／另存为／删减版、触摸与滚轮 |
-| 授权 | 无登录、普通用户、机密权限用户；普通下载与删减版下载分别验证 |
-| 云端读取 | 合法 GET/HEAD/Range、完整下载大小与 SHA-256、缺失／篡改 grant、缓存 HIT 后撤权 |
-| 实时同步 | 两个标签页、另一个浏览器、登录退出、网络恢复、通知最终一致性 |
-| 生命周期 | 发布后预热、替换／删除后对象退役与 ESA 刷新、runner 停止和恢复 |
-
-开发隧道的空请求 403 仅证明通道拒绝路径。一次 `HEAD` 成功、服务进程 running 或缓存 HIT，都不能代替完整下载和读取撤销测试。
-
 ## 验收记录写法
 
-长期文档描述如何验证以及已知边界；一次性测试文件数、临时对象名、进程 PID 和逐分钟排障记录不进入功能手册。PR 的 `Verification` 或任务报告记录本次实际执行的检查，并区分已执行、未执行和仍需人工协作的部分。
+记录要求见[验收记录](../../docs/1_workflows/2_test/AGENT-DESIGN.md#验收记录)。一次性测试文件数、临时对象名、进程 PID 和逐分钟排障记录不进入功能手册。

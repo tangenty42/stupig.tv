@@ -127,7 +127,7 @@ WHERE status NOT IN ('completed', 'cancelled')
 
 旧另存图片等显式 `.avif` 逻辑文件名转为 `.webp`，保留目录与末尾 `.good`，同名冲突使用数字后缀；上传时保留的 `.png`／`.jpg` 等原始逻辑名称继续保留，与未来上传一致，实际下载名使用 WebP 后缀。迁移新增的 `content_webp_migration_objects` 保留源身份、目标所有权和采用回执；对象写入后事务失败可复用已验证结果，不重复编码。失败停在维护态，完成后才能启动新应用。新迁移将 `avif_key`、`jpeg_key`、`parent_avif_key` 及删减字段改为 `display_key`、`fallback_key`、`source_display_key`、`redacted_display_key`、`redacted_fallback_key`；LQIP 字段改为 `lqip`／`redacted_lqip`，尝试账本同步使用角色名；已结束的历史任务回执仍是历史事实。旧私有展示对象和历史版本暂留，未永久删除，不把代码回退当作数据回退。
 
-只读预检及执行参数沿用[迁移运维](../../operations/migrations.md)：源码环境先以 `pnpm migrate:dev --preflight` 分类待办链，再以 `pnpm migrate:dev --dry-run` 运行当前迁移的只读业务 plan；确认后使用 `pnpm migrate:dev --maintenance`；生产使用同版本维护镜像／备份和既有维护发布流程。不能让旧应用连接已改字段的新库。迁移的真实 MySQL 验证入口为 `pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/webp-migration.ts`，仅创建随机隔离测试库，OSS 使用内存替身。
+重演须使用仍包含 `20261101133000_content_webp.ts` 且冻结摘要匹配的历史版本，可从提交 `722c1cd` 取得脚本和验证入口。先用该版本的 `pnpm migrate:dev --preflight` 分类待办，再用 `--dry-run` 运行只读业务计划，确认后用 `--maintenance` 执行。生产使用匹配的历史维护镜像和备份。该版本的 `scripts/verify/webp-migration.ts` 使用隔离 MySQL 和内存 OSS 替身。现行专项只验证新基线的 WebP 表与列等结构，覆盖范围见[专项数据库与迁移演练](../../../docs/1_workflows/2_test/AGENT-DESIGN.md#专项数据库与迁移演练)。
 
 `content_webp_migration_objects` 的[退出合同](../../operations/migrations.md#webp-回执表64的退出合同)规定生产完成及验收后至少保留 30 日，归档读回、责任交接后才通过独立维护迁移删除；不自动清表，不随回执删除旧对象或释放 pin。下一条旧 Content 退役迁移只删除五张已废弃且为空的旧表，保留本次 WebP 恢复明细。
 
@@ -300,7 +300,7 @@ JPEG 对照的两端都读取同一份最终 Sharp AVIF；LQIP 编码对照读�
 
 - 图片领域：[`image-job.service.ts`](../../../server/services/content/image-job.service.ts)、[`image-original-object.ts`](../../../server/services/content/image-original-object.ts)、[`redacted-variant.ts`](../../../server/services/content/redacted-variant.ts)。
 - 本地转换基准：[`image-performance.ts`](../../../scripts/verify/image-performance.ts)；真实 CLI 回归检查报告、资源参数及失败后的计时恢复，不以耗时数值作为通过门槛。
-- 画布：[`ImageEditor.vue`](../../../app/components/MyContent/Attachment/ImageEditor.vue)、[`useImageEditSession.ts`](../../../app/composables/useImageEditSession.ts)、[`useImageEditorViewport.ts`](../../../app/composables/useImageEditorViewport.ts)、[`image-edit.ts`](../../../app/utils/content/image-edit.ts)。
-- 展示：[`image-presentation.ts`](../../../server/services/content/image-presentation.ts)、[`lqip.ts`](../../../app/utils/content/lqip.ts)。
+- 画布：[`ImageEditor.vue`](../../../app/components/MyContent/Attachment/ImageEditor.vue)、[`session.ts`](../../../app/features/content/image-editor/session.ts)、[`viewport.ts`](../../../app/features/content/image-editor/viewport.ts)、[`image-edit.ts`](../../../app/features/content/image-editor/image-edit.ts)。
+- 展示：[`image-presentation.ts`](../../../server/services/content/image-presentation.ts)、[`lqip.ts`](../../../app/features/content/lqip.ts)。
 
 自动测试覆盖角色完整性、发布围栏、原图归档、独立副本、删减版和纯编辑历史。画布像素、触摸、滚轮、裁剪手柄和浏览器解码需另做真实浏览器验证；Node 测试不代替该部分。

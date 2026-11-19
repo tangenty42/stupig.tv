@@ -1,10 +1,12 @@
 # 命令与脚本清单
 
+> 当前操作分别见[开发](../../docs/1_workflows/1_develop/AGENT-DESIGN.md)、[测试](../../docs/1_workflows/2_test/AGENT-DESIGN.md)、[交付](../../docs/1_workflows/3_deliver/AGENT-DESIGN.md)与[维护](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md)补充说明。本文保留脚本职责调查、整理建议和历史入口计数，不能把当时的数量当作当前清单。
+
 事实源：[package.json](../../package.json)、[scripts](../../scripts/)、[Check](../../.github/workflows/check.yml)、[Deploy](../../.github/workflows/deploy.yml)、[Dockerfile](../../Dockerfile)。本页说明用途与调用关系，具体操作步骤由对应模块手册维护。
 
 2026-11-01 精简：package.json 从 **38 个入口减少到 33 个**，其中 2 个是安装钩子；先前精简到 34 个后，本轮再移除旧 S3 盘点入口。`check` 是本地与 CI unit job 的共同质量入口，`typecheck` 统一应用、工具和浏览器测试的类型检查。文件数量不等于需要手动记住的命令数量。
 
-ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校验入口，移除重复别名与未使用的静态生成命令。旧存储盘点已删除。2026-11-02 新增 OSS 专项盘点，并按用户选择将有环境目标的源码运维入口统一为 `:dev`／`:prod`；当前共 40 个入口，含 2 个安装钩子。开发重置仅提供 `content:reset:dev`；样本导出默认使用所选环境的地址，容器须显式指定，脱敏边界见下表。
+ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校验入口，移除重复别名与未使用的静态生成命令。旧存储盘点已删除。2026-11-02 新增 OSS 专项盘点，并按用户选择将有环境目标的源码运维入口统一为 `:dev`／`:prod`；当前入口以 package.json 为准，安装钩子也列在下表。开发重置仅提供 `content:reset:dev`；样本导出默认使用所选环境的地址，容器须显式指定，脱敏边界见下表。
 
 ## package.json 全部入口
 
@@ -12,8 +14,9 @@ ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校�
 
 | 命令 | 当前用途、边界 | 整理建议 |
 | --- | --- | --- |
-| `dev` | 启动 Docker 依赖，再启动 Nuxt、授权代理和 frpc；退出只清理本次拥有的应用/通道进程 | 保留为日常默认入口 |
+| `dev` | 启动 Docker 依赖，等待数据库就绪并迁移无表空库，再启动 Nuxt、授权代理和 frpc；退出只清理本次拥有的应用/通道进程 | 已有表的库只检查迁移状态；保留为日常默认入口 |
 | `dev:app` | 只启动 Nuxt，不启动 Docker 或授权通道 | 保留为局部调试入口 |
+| `dev:stop` | 停止开发 Compose 依赖，保留数据卷 | 不停止由开发终端管理的 Nuxt、授权代理或 frpc |
 | `dev:tunnel` | 给已有应用启动授权代理和 frpc；`--prepare` 仅生成配置，`--verify` 准备并检查 frpc 版本／配置 | 共用 dev/frp.ts 的 CLI；不启动第二个应用 |
 | `build` | 使用 `.env.prod` 构建 Nuxt 服务端产物；Docker 构建会调用 | 保留 |
 | `preview` | 本机以 `.env.prod` 预览已构建产物；不是生产服务器启动入口 | 保留为交付排查入口 |
@@ -33,7 +36,7 @@ ESA 与 scripts 目录整理已完成；本轮合并开发隧道的准备／校�
 | `content:preload:check:dev` / `content:preload:check:prod` | 查 ESA 额度、分层缓存、配置与预热账本；`--policy` 只输出建议 RAM 策略，不提交预热任务 | 后续将 policy 分支改为只加载 ESA 配置，避免要求无关 DB/应用参数 |
 | `storage:inventory:dev` / `storage:inventory:prod` | 只读专项盘点版本、删除标记及 multipart，支持断点／预算和显式纯元数据模式 | 生产另打包 `storage-inventory.mjs`，无需 pnpm；不是清理入口 |
 | `db:dump:dev` / `db:dump:prod` | 从对应来源环境导出开发用 SQL，仅替换手机号、bcrypt 和 IPv4，可 `--gzip` | 后缀表示来源环境；默认连接配置地址，仅显式 `MYSQL_CONTAINER` 才改走指定容器，不自动回退 |
-| `content:reset:dev` | 开发 Content 重置，默认盘点；`--apply` 执行删除，支持清理记录续跑 | 固定 dev 参数，保留环境/库/桶保护，不提供 prod 入口 |
+| `content:reset:dev` | 开发 Content 重置，默认按数据库记录盘点，`--apply` 执行清理 | 数据库重建后按[开发样本与重置](../../docs/1_workflows/4_maintain/AGENT-DESIGN.md#开发样本与重置)做前缀盘点及清理，必要时使用清理记录续跑 |
 | `lint` | 全仓库 ESLint 检查 | 保留 |
 | `test` | 顺序执行单元、工具和挂载组件测试 | 筛选文件时使用下列分组入口 |
 | `test:unit` | app/server 纯逻辑测试 | 可指定文件和筛选参数 |
@@ -81,7 +84,7 @@ CI unit job 直接运行 `pnpm check`。`pnpm typecheck` 依次执行 Nuxt、scr
 | [`migration/build.ts`](../../scripts/migration/build.ts) | 冻结 TS bundle/manifest 与 maintenance 产物构建 | 保留；可吸收 migration/maintenance-build.ts 的 CLI 包装 |
 | [`migration/native.ts`](../../scripts/migration/native.ts) | Sharp 等原生依赖打包、身份和完整性清单 | 保留；生产镜像内图片迁移需要 |
 | [`verify/migration-runtime.ts`](../../scripts/verify/migration-runtime.ts) | 独立数据库中验证执行、恢复、冻结、容器产物等合同；Check 调用 | 保留为集成验证，不包装成日常应用命令 |
-| [`verify/content-migration.ts`](../../scripts/verify/content-migration.ts) | 独立数据库验证 Content 转换，默认内存 OSS，显式参数可走真实开发对象存储；Check 调用默认模式 | 保留；与普通单测、生产迁移的职责不同 |
+| `verify/content-migration.ts` | 独立数据库验证 Content 转换，默认内存 OSS，显式参数可走真实开发对象存储；Check 调用默认模式。2026-11-12 新基线后脚本连同旧 TS 迁移删除 | 历史记录；现行隔离演练改用 `verify/migration-runtime.ts` 与 `verify/cloud-drafts.ts` |
 | [`verify/css-cascade-feasibility.ts`](../../scripts/verify/css-cascade-feasibility.ts) | 通过现有依赖诊断 CodeMirror / PrimeVue 的样式入口；`pnpm exec tsx scripts/verify/css-cascade-feasibility.ts`，不加载应用配置或接入转换；输出与限制见[可行性评估](../reviews/css-layer-public-api-feasibility-2026-10-29.md) | 保留为独立探针；成功退出不代表动态适配或旧浏览器兼容验收通过 |
 | [`esa/cli.ts`](../../scripts/esa/cli.ts) | 发布命令入口、目标输出、本机锁与脱敏记录 | 保留，两环境共用 |
 | [`esa/config.ts`](../../scripts/esa/config.ts) | 专用 YAML/env 校验、变量映射、脱敏 plan | 保留 |
@@ -108,7 +111,7 @@ CI unit job 直接运行 `pnpm check`。`pnpm typecheck` 依次执行 Nuxt、scr
 ### 已完成：CI 与开发检查入口
 
 1. 移除 `generate`、裸 `env:build`、`dev:auth:prepare`、`dev:auth:verify`、`lint:fix` 与 `test:all` 六个入口；对应替代分别是现有 build、显式环境模板、隧道参数、lint 参数，以及明确选择需要的验证范围。
-2. 新增 `typecheck` 与 `check`，共 34 个入口。`test:all` 不包含生产 CSS、数据库集成或真实 MQTT，故不继续用该名字表达全量验证。
+2. 新增 `typecheck` 与 `check`，当时共 34 个入口。`test:all` 不包含生产 CSS、数据库集成或真实 MQTT，故不继续用该名字表达全量验证。
 3. `dev:tunnel` 直接调用 dev/frp.ts，已删除等价薄包装。
 
 ### 已完成：修正运维环境命名
@@ -146,7 +149,7 @@ dev/tunnel.mjs 薄包装已删除。后续可让 migration/maintenance-build.ts 
 - 同一领域共用实现和配置加载器，不建立新的“大而全脚本 runner”；后台任务 runner 和一次性运维 CLI 是不同生命周期。
 - 带写入的运维入口在实际执行前显示环境/目标；查询、预演不得先启动 worker 或执行业务变更。`--help` / policy 只加载必要配置，不依赖无关应用凭据。
 - stdout 用于结构化结果或导出内容，stderr 用于进度和脱敏错误；拒绝未知参数。所有工具统一主入口识别与退出清理，避免依赖 Windows 路径字符串形式。
-- 样本导出需额外改进：显式选择源库和可选 Docker 容器，不自动优先选固定的 `1Panel-mysql`；输出文件显式指定，补真实入口的跨平台验证。当前正则替换不等于完整隐私脱敏，也不能作为恢复备份。
+- 样本导出已按 `:dev`／`:prod` 选择源库，仅显式设置 `MYSQL_CONTAINER` 时使用指定容器。后续可补显式输出文件参数及真实入口的跨平台验证；当前通过 stdout 输出，正则替换不等于完整隐私脱敏，也不能作为恢复备份。
 - 变动入口时同步 package、工作流、Docker/Compose、文档、子进程路径与测试；只检查“文件存在”不足以证明执行接线正确。ESA 新测试已从实际 package recipe 启动隔离夹具。
 
 ## 本次核对范围

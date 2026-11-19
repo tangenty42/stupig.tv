@@ -84,14 +84,14 @@ store 串行处理确认快照和未上传输入的引用重放；结果只在�
 
 ## 源码与验证
 
-- 草稿：[`contentDraft.ts`](../../../app/stores/contentDraft.ts)。
-- 页面生命周期：[`useStoryEditSession.ts`](../../../app/composables/useStoryEditSession.ts)。
-- 重放协调：[`draft-reference-bridge.ts`](../../../app/utils/content/draft-reference-bridge.ts)。
-- 编辑器只读及补丁：[`useStoryEditor.ts`](../../../app/composables/useStoryEditor.ts)。
+- 草稿：[`draft.store.ts`](../../../app/features/content/draft.store.ts)。
+- 页面生命周期：[`editing.ts`](../../../app/features/content/editing.ts)。
+- 引用重放与旧回调控制由草稿 store 承接，原 draft-reference-bridge 已退役，依据见 [架构实施记录](../../../docs/0_overall/1_architecture/AGENT.md#content-工具职责整理)。
+- 编辑器只读及补丁：[`editor.ts`](../../../app/features/content/markdown/editor.ts)。
 - 服务端历史：[`reference-history.service.ts`](../../../server/services/content/reference-history.service.ts)。
 - 历史存储与裁剪：[`reference-journal.repository.ts`](../../../server/services/content/reference-journal.repository.ts)。
 - 统一重放：[`content-reference-replay.ts`](../../../server/shared/content-reference-replay.ts)。
-- MySQL 隔离验证：[`reference-history.ts`](../../../scripts/verify/reference-history.ts)。
+- 历史存量引用转换用含 `scripts/verify/reference-history.ts` 的旧版本在隔离 MySQL 验证。现行草稿和迁移专项的覆盖见[专项数据库与迁移演练](../../../docs/1_workflows/2_test/AGENT-DESIGN.md#专项数据库与迁移演练)。
 - 草稿事务与私有通知：[`cloud-drafts.ts`](../../../scripts/verify/cloud-drafts.ts)、[`cloud-draft-mqtt.ts`](../../../scripts/verify/cloud-draft-mqtt.ts)。
 - 有界容量验证：[`cloud-draft-capacity.ts`](../../../scripts/verify/cloud-draft-capacity.ts)，随草稿 QA 使用随机库运行。
 

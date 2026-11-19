@@ -275,7 +275,7 @@ agent 文档文件名仍待人类确定。`IMPLEMENTATION.md` 和 `WORK.md` 仅�
 
 本次机制起草不变更现有工具和指令。过渡期继续按[项目规则](../.github/copilot-instructions.md)与[文档风格规则](../.github/instructions/code-style.instructions.md)执行 lint、链接及来源一致性检查。后续接入保护时，要处理当前自动修复入口，不能只在规范中声明只读。
 
-重写或移动旧材料前核对历史，保留作者的 POV、排障故事、个人表达与配图。已有[保护标记](../.github/instructions/code-style.instructions.md#protected-content-markers)及其授权要求继续适用，不因文档迁移失效。
+重写或移动旧材料前核对历史，保留作者的 POV、排障故事、个人表达与配图。已有[保护标记](../docs/0_overall/AGENT-DESIGN.md#作者内容与保护标记)及其授权要求继续适用，不因文档迁移失效。
 
 ## 过渡与待定事项
 

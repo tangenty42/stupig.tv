@@ -1,5 +1,7 @@
 # 共享云端草稿实现方案
 
+历史源码导航按本报告基线处理。可核对到基线提交的入口链接固定快照，其余保留原路径和行号。现行目录及后续重构记录见 [SID#0.1.AGENT](../../docs/0_overall/1_architecture/AGENT.md)。
+
 日期：2026-10-30。2026-10-31 状态核对：**实现已随 [PR #48](https://github.com/tangenty42/stupig.tv/pull/48) 合并；本地隔离验收及开发库迁移已有记录**。原阶段说明保留为验收依据，实际选择和证据见第 8 节；其中生产未操作的说明指该轮范围，本次整理未重新核验线上状态。
 
 目标是在现有引用改造和 Pinia 整理的基础上，接入一份共享云端 draft、服务端独占编辑和自动保存。先完成服务端事务与交接协议，再替换编辑页，最后通过并发、权限和容量验证切换。无需先解决全部架构审计项，但不能把会话失效、引用同步或通知隐私留到上线以后。
@@ -94,10 +96,10 @@ flowchart TD
 
 | 代码入口 | 拟议改动 |
 | --- | --- |
-| [contentDraft.ts](../../app/stores/contentDraft.ts) | 保存当前编辑文本、云端确认快照、待确认命令、租约状态、引用核对及只读恢复区；管理状态转换和单一命令队列 |
-| [useStoryEditSession.ts](../../app/composables/useStoryEditSession.ts) | 保留 facade，捕获 API/认证上下文，接可见性、销毁、路由、查询与编辑器；调用 store actions，不另存一份业务状态 |
+| `contentDraft.ts`（历史定位 `app/stores/contentDraft.ts`） | 保存当前编辑文本、云端确认快照、待确认命令、租约状态、引用核对及只读恢复区；管理状态转换和单一命令队列 |
+| `useStoryEditSession.ts`（历史定位 `app/composables/useStoryEditSession.ts`） | 保留 facade，捕获 API/认证上下文，接可见性、销毁、路由、查询与编辑器；调用 store actions，不另存一份业务状态 |
 | [useSyncedData.ts](../../app/composables/useSyncedData.ts)、[query.ts](../../app/utils/sync/query.ts) | 沿用请求完成后计 M；使用页面独立实例，不共享租约命令结果；不改变其他消费者语义 |
-| [useStoryEditor.ts](../../app/composables/useStoryEditor.ts)、[引用 bridge](../../app/utils/content/draft-reference-bridge.ts) | 保留 CodeMirror 及快照补丁；统一遵守 store 的写入许可，迟到上传不得插入文本 |
+| `useStoryEditor.ts`（历史定位 `app/composables/useStoryEditor.ts`）、`引用 bridge`（历史定位 `app/utils/content/draft-reference-bridge.ts`） | 保留 CodeMirror 及快照补丁；统一遵守 store 的写入许可，迟到上传不得插入文本 |
 | [useApi.ts](../../app/composables/useApi.ts)、[useTrpcClient.ts](../../app/composables/useTrpcClient.ts) | 接草稿方法和总请求超时，保留统一 401 清理；取消仅表示客户端停止等待 |
 | [Content router](../../server/trpc/routers/content.ts)、[schemas.ts](../../server/trpc/schemas.ts)、`server/shared/types/content-draft.ts`（拟新增） | 薄入口、公共 DTO、长度与结构校验；草稿权限覆盖列表、正文、占用及所有命令 |
 | `server/services/content/draft.service.ts`、`draft.repository.ts`（拟新增） | 服务组织事务、授权和命令；repository 使用传入连接读写草稿/租约/回执，不自行提交 |

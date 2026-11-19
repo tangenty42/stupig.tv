@@ -20,7 +20,7 @@
 
 ## 源码与验证
 
-- 播放器渲染和来源限制：[`images.ts`](../../app/utils/content/markdown/images.ts)、[`sanitize.ts`](../../app/utils/content/markdown/sanitize.ts)。
+- 播放器渲染和来源限制：[`images.ts`](../../app/features/content/markdown/render/images.ts)、[`sanitize.ts`](../../app/features/content/markdown/render/sanitize.ts)。
 - 静态资源：[`useStaticUrl.ts`](../../app/composables/useStaticUrl.ts)、[`static-storage.ts`](../../server/lib/static-storage.ts)。
 
 自动测试验证播放器地址、标题和嵌入来源限制；实际播放仍取决于外部服务。
