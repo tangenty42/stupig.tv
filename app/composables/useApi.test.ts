@@ -4,8 +4,9 @@ import { settings } from '@shared/settings'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { computed, ref, shallowRef, watch } from 'vue'
-import { useContentDraftStore } from '~/stores/contentDraft'
+import { useContentDraftStore } from '~/features/content/draft.store'
 import { useApi } from './useApi'
+import { TrpcApiError } from './useTrpcClient'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -34,6 +35,16 @@ function transport(content: object) {
   vi.stubGlobal('useTrpcClient', () => ({ client: { content }, call: <T>(request: Promise<T>) => request, upload: vi.fn() }))
   return useApi().content
 }
+
+it('localizes a disconnected draft request and preserves definite HTTP errors', async () => {
+  const disconnected = new TrpcApiError('Failed to fetch')
+  const removed = new TrpcApiError('云端草稿已删除', 404)
+  const mutate = vi.fn().mockRejectedValueOnce(disconnected).mockRejectedValueOnce(removed)
+  const content = transport({ getDraft: { mutate } })
+
+  await expect(content.get_draft({ story_id: 7 })).rejects.toMatchObject({ message: '连接中断，已暂停编辑', cause: disconnected })
+  await expect(content.get_draft({ story_id: 7 })).rejects.toBe(removed)
+})
 
 it('times out and aborts reference replay even when the transport does not settle', async () => {
   const response = deferred<ContentReferenceRewriteResult>()

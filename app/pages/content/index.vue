@@ -3,7 +3,7 @@
     <MyHeightSection tag="section" class="section-card-collapse">
       <div class="flex flex-wrap items-center justify-between gap-4">
         <h1 class="flex flex-wrap items-baseline gap-x-4">
-          <span v-if="selected_view === 'published'" class="font-normal text-[60%]">{{ stories?.length ?? 0 }} 份の</span>
+          <span v-if="shown_view === 'published' && stories" class="font-normal text-[60%]">{{ stories.length }} 份の</span>
           <span>蠢猪档案！</span>
         </h1>
         <div v-if="can_manage_content" class="flex flex-wrap items-center gap-3">
@@ -24,156 +24,65 @@
       </div>
     </MyHeightSection>
 
-    <MyHeightSection tag="section" class="section-card-collapse mt-12">
-      <template v-if="selected_view === 'published'">
-        <div v-if="all_labels.length" class="mb-4 flex flex-wrap items-center gap-1.5">
-          <MyBadge
-            v-for="label in all_labels"
-            :key="label"
-            type="info"
-            :outlined="! active_labels.has(label)"
-            button
-            @click="toggle_label(label)"
-          >
-            {{ label }}
-          </MyBadge>
-          <MyBadge
-            v-if="active_labels.size"
-            button
-            @click="active_labels.clear()"
-          >
-            清除
-          </MyBadge>
-          <MyBadge
-            button
-            class="ml-auto"
-            @click="sort_by_rating = ! sort_by_rating"
-          >
-            {{ sort_by_rating ? '按评分排序' : '按时间顺序排序' }}
-          </MyBadge>
-        </div>
-
-        <div v-if="loading && ! stories" class="space-y-3">
-          <Skeleton v-for="i in 3" :key="i" height="3.5rem" />
-        </div>
-
-        <div v-else-if="visible_stories.length">
-          <div class="flex flex-col gap-4 sm:hidden">
-            <MyContentStoryCard
-              v-for="story in visible_stories"
-              :key="story.id"
-              :story="story"
-              :active_labels="active_labels"
-            />
-          </div>
-          <!-- Two independent flex columns filled alternately, so the waterfall
-             reads row-major (1|2, 3|4, …) instead of CSS columns' 1|4, 2|5. -->
-          <div class="hidden items-start gap-4 sm:grid sm:grid-cols-2">
-            <div
-              v-for="(column, index) in story_columns"
-              :key="index"
-              class="flex min-w-0 flex-col gap-4"
-            >
-              <MyContentStoryCard
-                v-for="story in column"
-                :key="story.id"
-                :story="story"
-                :active_labels="active_labels"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div v-else class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-          {{ stories?.length ? '没有符合筛选条件的档案~' : '还没有档案~' }}
-        </div>
-      </template>
-      <MyContentStoryDraftList v-else />
+    <MyHeightSection tag="section" class="section-card-collapse mt-12 transition-opacity duration-200" :class="{ 'opacity-60 delay-150': switching }" :aria-busy="switching">
+      <!-- The draft list awaits its initial request; this boundary keeps the current list on screen until it
+           resolves, so switching never flashes a skeleton or an empty section. -->
+      <Suspense suspensible @pending="switching = true" @resolve="show_selected_view">
+        <MyContentStoryPublishedList
+          v-if="selected_view === 'published'"
+          v-model:sort-by-rating="sort_by_rating"
+          :stories="stories"
+          :loading="loading"
+          :active-labels="active_labels"
+          @retry="retry_stories"
+          @toggle-label="toggle_label"
+          @clear-labels="active_labels.clear()"
+        />
+        <MyContentStoryDraftList v-else />
+      </Suspense>
     </MyHeightSection>
 
-    <MyDivider v-if="selected_view === 'published'" class="mt-24">
+    <MyDivider v-if="shown_view === 'published' && stories" class="mt-24">
       事件日历
     </MyDivider>
 
-    <MyHeightSection v-if="selected_view === 'published'" tag="section" class="section-card-collapse mt-6">
-      <MyContentStoryCalendar :stories="stories ?? []" />
+    <MyHeightSection v-if="shown_view === 'published' && stories" tag="section" class="section-card-collapse mt-6">
+      <MyContentStoryCalendar :stories="stories" />
     </MyHeightSection>
   </div>
 </template>
 
 <script setup lang="ts">
-import type { ContentStorySummary } from '@shared/types/content'
 import { has_permission } from '@shared/permissions'
-import { story_pinned, story_rating_rank } from '@shared/types/content'
-import { sync_resource } from '@shared/types/sync'
+import { useContentStories } from '~/features/content/stories'
 
-const { content } = useApi()
 const { user } = useAuth()
 const route = useRoute()
 const router = useRouter()
 
-const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full') && has_permission(user.value, 'content_private', 'read'))
+const can_manage_content = computed(() => has_permission(user.value, 'content_access', 'full'))
 const view_options = [{ label: '已发布', value: 'published', icon: 'lucide:book-open' }, { label: '未发布草稿', value: 'drafts', icon: 'lucide:pencil' }]
 const selected_view = computed({
   get: () => can_manage_content.value && route.query.view === 'drafts' ? 'drafts' : 'published',
   set: (value: string) => { void router.replace({ query: { ... route.query, view: value === 'drafts' ? 'drafts' : undefined } }) },
 })
 
-const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
-const loading = useState('content_stories_loading', () => false)
-
-await useSyncedData<ContentStorySummary[]>(
-  sync_resource('content_stories', 'all'),
-  () => content.list_stories(),
-  stories,
-  loading,
-)
+// The count, divider and calendar follow the list actually on screen, not the pending choice.
+const shown_view = ref(selected_view.value)
+const switching = ref(false)
+function show_selected_view() {
+  switching.value = false
+  shown_view.value = selected_view.value
+}
 
 const active_labels = reactive(new Set<string>())
 const sort_by_rating = ref(false)
-
-function visible_labels(story: ContentStorySummary) {
-  return story.labels.filter(label => ! label.startsWith('#'))
-}
-
-const all_labels = computed(() => {
-  const labels = new Set<string>()
-  for (const story of stories.value ?? []) {
-    for (const label of visible_labels(story))
-      labels.add(label)
-  }
-  return [... labels].sort((a, b) => a.localeCompare(b, 'zh-CN'))
-})
-
-const visible_stories = computed(() => {
-  let list = stories.value ?? []
-  if (active_labels.size) {
-    list = list.filter(
-      story =>
-        visible_labels(story).some(label => active_labels.has(label)),
-    )
-  }
-  const compare = sort_by_rating.value
-    ? (a: ContentStorySummary, b: ContentStorySummary) =>
-        story_rating_rank(b.labels) - story_rating_rank(a.labels)
-        || b.event_dates.join(',').localeCompare(a.event_dates.join(','))
-    : (a: ContentStorySummary, b: ContentStorySummary) =>
-        b.event_dates.join(',').localeCompare(a.event_dates.join(','))
-  return list.toSorted(
-    (a, b) =>
-      Number(story_pinned(b.labels)) - Number(story_pinned(a.labels))
-      || compare(a, b),
-  )
-})
 
 function toggle_label(label: string) {
   if (! active_labels.delete(label))
     active_labels.add(label)
 }
 
-const story_columns = computed(() => {
-  const columns: ContentStorySummary[][] = [[], []]
-  visible_stories.value.forEach((story, index) => columns[index % 2]!.push(story))
-  return columns
-})
+const { stories, loading, ready } = useContentStories()
+const { refresh: retry_stories } = await ready
 </script>

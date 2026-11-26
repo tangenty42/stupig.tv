@@ -29,6 +29,10 @@ export interface ContentUploadSession {
   revision?: number
   scope_id?: number
   status: string
+  /** Present only when the stored image-edit intent overwrites its source. */
+  image_overwrite?: true
+  /** Present only when the image editor saves a separate attachment. */
+  image_save_as?: true
   image_status?: string
   image_error?: string
   path: string

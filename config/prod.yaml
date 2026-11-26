@@ -2,7 +2,7 @@
 
 esaFunction:
   name: stupig-content-auth-bypass-prod
-  callbackUrl: https://www.stupig.tv/api/content/authorize
+  callbackUrl: https://www.stupig.tv/api/hooks/esa/authorize
 
 oss:
   buckets:

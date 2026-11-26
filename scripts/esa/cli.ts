@@ -3,7 +3,7 @@ import { mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 import { create_api } from './api'
-import { commit_source, create_commit_description } from './commit'
+import { commit_source, CommitFailure, create_commit_description } from './commit'
 import { load_publish_config, publish_plan, PublishError, require_publish_credentials } from './config'
 import { preflight, publish, variable_status } from './deploy'
 
@@ -54,7 +54,7 @@ async function main() {
     console.log('Control-plane verification passed; authorized downloads still require application smoke testing.')
   }
   catch (error) {
-    await checkpoint({ failed: true })
+    await checkpoint({ failed: true, ... (error instanceof CommitFailure ? { commitDiagnostics: error.diagnostics } : {}) })
     console.error(`Publish stopped at ${String(receipt.stage)}. Receipt: ${receipt_path}`)
     throw error
   }

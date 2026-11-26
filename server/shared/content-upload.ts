@@ -1,7 +1,7 @@
 import { settings } from '@shared/settings'
 import { z } from 'zod'
-import { attachment_mime_type, decrypted_attachment_name } from './content-markdown'
-import { error_policy_schema, workspace_target_schema } from './content-workspace'
+import { attachment_mime_type, attachment_name_without_private_suffix } from './content-markdown'
+import { error_policy_schema, privacy_digest_schema, workspace_target_schema } from './content-workspace'
 
 export const image_save_mode_schema = z.enum(['copy', 'overwrite', 'redacted'])
 export type ImageSaveMode = z.infer<typeof image_save_mode_schema>
@@ -20,21 +20,24 @@ export const upload_intent_schema = z.strictObject({
   source: workspace_target_schema.optional(),
   replacement: workspace_target_schema.optional(),
   redacted_policy: z.enum(['keep', 'discard']).optional(),
-  image: z.strictObject({ mode: z.enum(['upload', 'copy', 'overwrite', 'redacted']), source: image_source_schema.nullable(), original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255), input_basis: z.enum(['display', 'original']).optional(), redacted_policy: z.enum(['keep', 'discard']).optional() }).optional(),
+  image: z.strictObject({ mode: z.enum(['upload', 'copy', 'overwrite', 'redacted']), source: image_source_schema.nullable(), original_name: z.string().min(1).max(255), original_mime: z.string().min(1).max(255), input_basis: z.enum(['display', 'original']).optional(), redacted_policy: z.enum(['keep', 'discard']).optional(), redaction: z.literal(true).optional() }).optional(),
 })
 export const upload_batch_schema = z.strictObject({
   request_id: z.uuid(), scope_id: z.number().int().positive(),
   on_error: error_policy_schema.default(() => error_policy_schema.parse({})),
+  privacy_digest: privacy_digest_schema.optional(),
   entries: z.array(z.strictObject({
     path: z.string().max(4096), size: z.number().int().nonnegative(),
     purpose: z.enum(['create', 'replace', 'redact']).default('create'), access: z.enum(['public', 'private']).default('public'),
     source: workspace_target_schema.optional(), replacement: workspace_target_schema.optional(),
     image_mode: image_save_mode_schema.optional(),
     image_input_basis: z.enum(['display', 'original']).optional(),
+    save_as_redaction: z.literal(true).optional(),
     original_name: z.string().min(1).max(255).optional(),
     content_type: z.string().max(255).optional(),
     selection_root: z.string().min(1).max(4096).optional(),
   }).refine(entry => ! entry.selection_root || (entry.purpose === 'create' && entry.path.startsWith(`${entry.selection_root}/`)), '所选目录与文件路径不一致')
+    .refine(entry => ! entry.save_as_redaction || entry.image_mode === 'copy', '只有图片副本可另存为删减版')
     .refine(entry => entry.image_mode
       ? !! entry.source && ! entry.replacement && ! entry.selection_root && entry.purpose === ({ copy: 'create', overwrite: 'replace', redacted: 'redact' } as const)[entry.image_mode]
       : entry.purpose === 'create' ? ! entry.source && ! entry.replacement : !! entry.source && (entry.purpose === 'redact' || ! entry.replacement), '上传操作的源目标不一致'))
@@ -45,7 +48,7 @@ export type UploadBatch = z.infer<typeof upload_batch_schema>
 /** The selected file, never a replacement's retained logical extension, owns its type. */
 export function upload_content_mime(entry: Pick<UploadBatch['entries'][number], 'original_name' | 'path' | 'content_type'>) {
   const declared = entry.content_type?.split(';')[0]?.trim().toLowerCase()
-  return mime_type_schema.safeParse(declared).success && declared !== 'application/octet-stream' ? declared! : attachment_mime_type(decrypted_attachment_name(entry.original_name ?? entry.path))
+  return mime_type_schema.safeParse(declared).success && declared !== 'application/octet-stream' ? declared! : attachment_mime_type(attachment_name_without_private_suffix(entry.original_name ?? entry.path))
 }
 export const upload_begin_schema = z.strictObject({ request_id: z.uuid(), intent: upload_intent_schema })
 export const upload_session_schema = z.strictObject({ session_id: z.string().regex(/^[\da-f]{32}$/) })

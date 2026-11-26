@@ -1,7 +1,7 @@
-import type { Page } from '@playwright/test'
+import type { Page, Request } from '@playwright/test'
 import { expect } from '@playwright/test'
 import { settings } from '@shared/settings'
-import { login, ready, set_page_visibility, test } from '../support/e2e-browser'
+import { login, ready, set_page_visibility, submit_password_login, test } from '../support/e2e-browser'
 
 async function query<T>(page: Page, path: string) {
   const response = await page.request.get(`/api/trpc/${path}`)
@@ -36,8 +36,13 @@ test('account changes and revocation reach another browser through real MQTT', a
     received = false
     await mutate(page, 'admin.setPermissions', { id: user.id, permissions: [{ field: 'admin_access', level: 'readonly' }] })
     await expect.poll(() => received).toBe(true)
-    await expect(await control_panel(reader)).toBeVisible({ timeout: 10_000 })
+    const console_link = await control_panel(reader)
+    await expect(console_link).toBeVisible({ timeout: 10_000 })
+    await console_link.click()
+    await expect(reader.getByRole('list', { name: '用户卡片' })).toBeVisible()
     await mutate(page, 'admin.setPermissions', { id: user.id, permissions: [] })
+    await expect(reader).toHaveURL(new URL('/', reader.url()).href)
+    await expect(reader.getByRole('list', { name: '用户卡片' })).toHaveCount(0)
     await expect(reader.getByRole('link', { name: '控制台', exact: true })).toHaveCount(0)
     await mutate(page, 'admin.forceLogout', { id: user.id })
     await expect(reader.getByRole('button', { name: '登录 / 注册', exact: true })).toBeVisible()
@@ -45,6 +50,36 @@ test('account changes and revocation reach another browser through real MQTT', a
   }
   finally {
     await reader_context.close()
+  }
+})
+
+test('a ban signs out both devices and blocks sign-in until an administrator lifts it', async ({ page, browser }) => {
+  await login(page)
+  const baseURL = new URL(page.url()).origin
+  const [first, second] = await Promise.all([browser.newContext({ baseURL }), browser.newContext({ baseURL })])
+  try {
+    const devices = await Promise.all([first.newPage(), second.newPage()])
+    for (const device of devices)
+      await login(device, 'user')
+    const user = await query<{ id: number }>(devices[0]!, 'profile.getMe')
+    await mutate(page, 'admin.setBanned', { id: user.id, banned: true })
+    try {
+      for (const device of devices) {
+        await expect(device.getByRole('button', { name: '登录 / 注册', exact: true })).toBeVisible()
+        expect((await device.request.get('/api/trpc/profile.getMe')).status()).toBe(401)
+      }
+      const response = await submit_password_login(devices[0]!, 'user')
+      expect(response.ok()).toBe(false)
+      await expect(devices[0]!.getByText('账号已被禁用', { exact: true })).toBeVisible()
+    }
+    finally {
+      await mutate(page, 'admin.setBanned', { id: user.id, banned: false })
+    }
+    await login(devices[0]!, 'user')
+    expect((await query<{ id: number }>(devices[0]!, 'profile.getMe')).id).toBe(user.id)
+  }
+  finally {
+    await Promise.all([first.close(), second.close()])
   }
 })
 
@@ -83,10 +118,15 @@ test('lost account notifications converge by visible polling and visibility reco
     // Observe the app's own read after its initial subscription is acknowledged.
     let reads = 0
     const read_connections: number[] = []
+    const pending_reads = new Set<Request>()
     reader.on('request', (request) => {
-      if (request.url().includes('profile.getMe'))
+      if (request.url().includes('profile.getMe')) {
         read_connections.push(connected)
+        pending_reads.add(request)
+      }
     })
+    reader.on('requestfinished', request => pending_reads.delete(request))
+    reader.on('requestfailed', request => pending_reads.delete(request))
     reader.on('response', (response) => {
       if (response.url().includes('profile.getMe'))
         reads ++
@@ -109,7 +149,11 @@ test('lost account notifications converge by visible polling and visibility reco
     await set_page_visibility(reader, 'hidden')
     // Drain visible reads, including a queued invalidation follow-up and tRPC's
     // deferred batch dispatch, before measuring hidden periodic polling.
-    await reader.waitForLoadState('networkidle')
+    await expect.poll(async () => {
+      const seen = read_connections.length
+      await reader.clock.runFor(1000)
+      return pending_reads.size === 0 && read_connections.length === seen
+    }).toBe(true)
     await mutate(page, 'admin.setPermissions', { id: user.id, permissions: [] })
     const hidden_requests = read_connections.length
     await reader.clock.fastForward((settings.app.auth.syncPollIntervalSeconds + 1) * 1000)

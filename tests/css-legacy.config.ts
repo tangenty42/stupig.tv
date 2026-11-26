@@ -5,7 +5,7 @@ import production from './css-production.config'
 
 for (const binary of ['chromium/chrome-win/chrome.exe', 'chromedriver/chromedriver.exe', 'firefox/core/firefox.exe', 'geckodriver/geckodriver.exe']) {
   if (! existsSync(resolve('.dev/tools/legacy-browsers', binary)))
-    throw new Error(`Install the historical browser fixture before building: ${binary}; see docs/reviews/css-legacy-engines-2026-10-29.md`)
+    throw new Error(`Install the historical browser fixture before building: ${binary}; see docs/1_workflows/2_test/AGENT-DESIGN.md`)
 }
 
 export default defineConfig(production, {

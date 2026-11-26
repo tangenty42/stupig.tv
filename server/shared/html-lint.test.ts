@@ -32,6 +32,37 @@ describe('build_html_diagnostics', () => {
     expect(messages('<center>\n\nx\n')).toEqual(['缺少闭合标签 </center>'])
   })
 
+  it('checks actual carousel delimiters while leaving the immediate code fence alone', () => {
+    const source = ['<carousel>', '```html', '</carousel>', '<div>', '```', '<carousel>', '正文', '</carousel>'].join('\n')
+    expect(messages(`${source}\n</carousel>`)).toEqual([])
+    expect(messages(source)).toEqual(['缺少闭合标签 </carousel>'])
+  })
+
+  it('ignores carousel code tags even inside a private wrapper', () => {
+    const before = ['<good>', '<carousel>', '```html', '</carousel>', '<div>', '```', '</carousel>', '</good>'].join('\n')
+    expect(messages(before)).toEqual([])
+    const source = `${before}\n\n<em>`
+    const [diagnostic] = build_html_diagnostics(source)
+    expect(diagnostic?.message).toBe('缺少闭合标签 </em>')
+    expect(source.slice(diagnostic!.from, diagnostic!.to)).toBe('em')
+  })
+
+  it('checks inline carousel closures at original offsets after attributes and code', () => {
+    const source = '😀 前文 <carousel title="a > b">`</carousel>` **正文**'
+    expect(messages(`${source}</carousel> 后文`)).toEqual([])
+    expect(messages('<div><carousel title="a > b">`</carousel>`</carousel></div>')).toEqual([])
+    const [diagnostic] = build_html_diagnostics(source)
+    expect(diagnostic?.message).toBe('缺少闭合标签 </carousel>')
+    expect(diagnostic?.from).toBe(source.indexOf('carousel'))
+    expect(source.slice(diagnostic!.from, diagnostic!.to)).toBe('carousel')
+    expect(messages(`${source}</span>`)).toEqual(['闭合标签 </span> 与 <carousel> 不匹配，应为 </carousel>'])
+  })
+
+  it('ignores code tags in a fence directly after an attributed carousel tag', () => {
+    const source = ['<carousel title="a > b">', '```html', '</carousel>', '<div>', '```', '</carousel>'].join('\n')
+    expect(messages(source)).toEqual([])
+  })
+
   describe('private (good) elements', () => {
     // `<good>` is a plain custom element, so private tags lint like any
     // other element with no special handling.

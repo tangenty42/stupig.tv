@@ -7,7 +7,6 @@ const migrations: DeploymentPreflight = {
   version: 1, fingerprint: hash,
   database: { host: 'mysql', port: 3306, name: 'stupig', server_uuid: '11111111-1111-1111-1111-111111111111' },
   catalog: [{ filename: '20261031010000_next.sql', checksum: hash }],
-  legacy: [],
   ledger: [],
   pending: [{ filename: '20261031010000_next.sql', checksum: hash, status: 'pending', phase: 'apply', execution: 'automatic' }],
   requires_maintenance: false, sql_recovery_required: [],
@@ -42,6 +41,7 @@ describe('release approval and rollback', () => {
     const after = { ... migrations, ledger: [row], pending: [] }
     expect(safe_rollback(migrations, after)).toBe(true)
     expect(safe_rollback({ ... migrations, pending: [{ ... migrations.pending[0]!, execution: 'maintenance' }] }, after)).toBe(false)
+    expect(safe_rollback({ ... migrations, pending: [{ ... migrations.pending[0]!, action: 'record' }] }, after)).toBe(false)
     expect(safe_rollback(migrations, { ... after, ledger: [{ ... row, status: 'failed', finished: false }] })).toBe(false)
     expect(safe_rollback(migrations, { ... after, ledger: [{ ... row, filename: 'unexpected.sql' }] })).toBe(false)
     expect(safe_rollback(after, { ... after, ledger: [] })).toBe(false)

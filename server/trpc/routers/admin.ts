@@ -1,3 +1,4 @@
+import { admin_filter_fields } from '@server/services/admin-filter'
 import {
   ban_user,
   force_logout_user,
@@ -11,24 +12,24 @@ import { get_background_status } from '@server/services/background/status.servic
 import { get_storage_audit_findings } from '@server/services/storage-audit/service'
 import { permission_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
-import { ADMIN_FILTER_FIELDS } from '@shared/types/user'
+import { ADMIN_COMMANDS, ADMIN_FILTER_KEYWORDS } from '@shared/admin-command'
 
 const admin_read_procedure = permission_procedure('admin_access', 'readonly')
 const admin_full_procedure = permission_procedure('admin_access', 'full')
 
 export const admin_router = router({
   getBackgroundStatus: admin_read_procedure.query(() => get_background_status()),
-  getStorageAuditFindings: admin_full_procedure.input(api_schema.admin.storage_audit_findings).query(({ input }) => get_storage_audit_findings(input)),
+  getStorageAuditFindings: admin_read_procedure.input(api_schema.admin.storage_audit_findings).query(({ input }) => get_storage_audit_findings(input)),
   getSelf: admin_read_procedure.query(({ ctx }) => ({
     id: ctx.auth_user.id,
     username: ctx.auth_user.username,
     is_admin: ctx.auth_user.is_admin,
   })),
 
-  getKeywords: admin_read_procedure.query(() => ({
-    fields: ADMIN_FILTER_FIELDS,
-    keywords: ['AND', 'OR', 'NOT', 'LIKE', 'IS', 'NULL', 'IN', 'BETWEEN', 'ORDER', 'BY', 'ASC', 'DESC'],
-    commands: ['BAN', 'UNBAN', 'KICK', 'ALL'],
+  getKeywords: admin_read_procedure.query(({ ctx }) => ({
+    fields: admin_filter_fields(ctx.auth_user),
+    keywords: ADMIN_FILTER_KEYWORDS,
+    commands: ADMIN_COMMANDS,
   })),
 
   listUsers: admin_read_procedure
@@ -37,9 +38,9 @@ export const admin_router = router({
 
   setBanned: admin_full_procedure
     .input(api_schema.admin.set_banned)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       if (input.banned) {
-        await ban_user(input.id)
+        await ban_user(ctx.auth_user.id, input.id)
       }
       else {
         await unban_user(input.id)

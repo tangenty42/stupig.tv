@@ -65,4 +65,21 @@ function on_composition_end() {
   // a composition without one.
   emit_filtered(input_component.value?.$el.value ?? props.modelValue)
 }
+
+// A default value set from outside (e.g. a pasted file name) bypasses the
+// input event, so clean it here just as a typed character would be cleaned.
+// The DOM value is repaired directly: the parent may not echo the model back.
+function sanitize_external(value: string) {
+  if (ime_composing.value)
+    return
+  const filtered = sanitize(value)
+  if (filtered !== value) {
+    const el = input_component.value?.$el
+    if (el)
+      el.value = filtered
+    emit('update:modelValue', filtered)
+  }
+}
+watch(() => props.modelValue, sanitize_external, { flush: 'post' })
+onMounted(() => sanitize_external(props.modelValue))
 </script>

@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import type { MarkdownSearch } from '~/composables/useMarkdownSearch'
+import type { MarkdownSearch } from '~/features/content/markdown/search'
 
 const props = defineProps<{
   search: MarkdownSearch

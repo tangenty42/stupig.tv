@@ -45,12 +45,22 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs())
 
 describe('otp debug environment boundary', () => {
+  it.each(['development', 'production'])('keeps test numbers away from the SMS provider in %s', async (NODE_ENV) => {
+    vi.stubEnv('NODE_ENV', NODE_ENV)
+    const phone = '10000000000'
+    const send = send_otp_sms({ ... send_input, phone })
+    const check = check_otp_sms({ ... check_input, phone })
+    await Promise.all([expect(send).rejects.toMatchObject({ statusCode: 400 }), expect(check).rejects.toMatchObject({ statusCode: 400 })])
+    expect(mocks.send).not.toHaveBeenCalled()
+    expect(mocks.check).not.toHaveBeenCalled()
+  })
+
   it('skips sending and checking only in development with debug enabled', async () => {
     vi.stubEnv('NODE_ENV', 'development')
     mocks.config.app.otp.debug = true
 
-    await send_otp_sms(send_input)
-    await check_otp_sms(check_input)
+    await send_otp_sms({ ... send_input, phone: '10000000000' })
+    await check_otp_sms({ ... check_input, phone: '10000000000' })
 
     expect(mocks.send).not.toHaveBeenCalled()
     expect(mocks.check).not.toHaveBeenCalled()

@@ -1,6 +1,7 @@
-import type { Query, QueryFailure } from '~/utils/sync/query'
+import type { Query, QueryFailure, QueryRefreshPolicy, QuerySubscriber } from '~/utils/sync/query'
 import { call_query_subscriber, QueryClient } from '~/utils/sync/query'
 import { is_synced_state } from './useSyncedState'
+import { TrpcApiError } from './useTrpcClient'
 
 type SyncedResource = string | null | Ref<string | null>
 type SyncedResources = SyncedResource | readonly SyncedResource[] | Ref<readonly SyncedResource[]>
@@ -11,27 +12,44 @@ interface UseSyncedDataOptions<T = unknown> {
   /** Allow the initial fetch during SSR; requires immediate. Default: true. */
   server?: boolean
   /** Share client requests/cache by query key, not across SSR requests. Default: true. */
-  universal?: boolean
-  /** Fetch even without a query key; requires universal: false. Default: false. */
+  share?: boolean
+  /** Fetch even without a query key; requires share: false. Default: false. */
   fetch_without_resource?: boolean
-  /** Ignore superseded independent refreshes. Disposal and invalidation always discard stale results. Default: true. */
-  ignore_stale_responses?: boolean
+  /** Join the in-flight request or start a new one and discard superseded responses. Shared subscribers must agree. Default: join. */
+  refresh_policy?: QueryRefreshPolicy
   /** Report an inactive/null key through on_error (or toast), not by throwing. Default: false. */
   throw_resource_null_error?: boolean
   /** Handle fetch failures instead of the default toast; 401 is suppressed. */
   on_error?: (error: unknown) => void
+  /** Keep the default deduplicated toast alongside on_error. Default: false. */
+  default_error_toast?: boolean
   /** Quiet time in milliseconds after request completion before polling; visible tabs only. Disabled by default. */
   polling_interval?: number
+  /** Retry transient read failures with bounded backoff when ordinary polling is unset. Default: true. */
+  retry_on_error?: boolean
   /** Called after data is applied, including shared cached data; deferred during hydration for synced state. */
   on_data?: (value: T | null) => void
-  /** Override query identity with a literal or ref, not event subscriptions. Defaults to the normalized resource set; null disables unless fetch_without_resource. */
+  /** Identify the data with a literal or ref; a change replaces the query, while resource-only changes just move subscriptions. Defaults to the normalized resource set; null disables unless fetch_without_resource. */
   query_key?: SyncedResource
 }
 
 const query_clients = new WeakMap<object, QueryClient>()
 
+function retryable_fetch_error(error: unknown) {
+  if (error instanceof Error && error.name === 'AbortError')
+    return false
+  const status = get_error_status(error)
+  if (status !== undefined)
+    return status === 408 || (status >= 500 && status < 600)
+  return error instanceof TrpcApiError || (error instanceof Error && error.name === 'TimeoutError')
+}
+
 export function invalidate_unsignalled_queries(app: object) {
   query_clients.get(app)?.invalidate_without_subscription()
+}
+
+export async function invalidate_shared_queries(app: object, key_prefix: string) {
+  await query_clients.get(app)?.invalidate_shared(key_prefix)
 }
 
 export async function useSyncedData<T>(
@@ -73,9 +91,8 @@ export async function useSyncedData<T>(
   const options: Readonly<UseSyncedDataOptions<T>> = {
     immediate: true,
     server: true,
-    universal: true,
+    share: true,
     fetch_without_resource: false,
-    ignore_stale_responses: true,
     throw_resource_null_error: false,
   }
   if (isRef(_3)) {
@@ -103,13 +120,12 @@ export async function useSyncedData<T>(
 
   const immediate = options.immediate as boolean
   const server = options.server as boolean
-  const universal = options.universal as boolean
+  const share = options.share as boolean
   const fetch_without_resource = options.fetch_without_resource as boolean
-  const ignore_stale_responses = options.ignore_stale_responses as boolean
   const throw_resource_null_error = options.throw_resource_null_error as boolean
   const polling_interval = options.polling_interval as number | undefined
-  if (fetch_without_resource && universal) {
-    throw new Error('fetch_without_resource requires universal: false')
+  if (fetch_without_resource && share) {
+    throw new Error('fetch_without_resource requires share: false')
   }
   const nuxt_app = useNuxtApp()
   const has_data_ref = isRef(_3)
@@ -132,7 +148,7 @@ export async function useSyncedData<T>(
     if (options.on_error) {
       call_query_subscriber(() => options.on_error?.(failure.error))
     }
-    else if (! failure.notified) {
+    if ((! options.on_error || options.default_error_toast) && ! failure.notified) {
       failure.notified = true
       call_query_subscriber(() => toast_error(failure.error))
     }
@@ -192,16 +208,19 @@ export async function useSyncedData<T>(
   const { subscribe } = useDataSync()
   let client = query_clients.get(nuxt_app)
   if (! client) {
+    const polling_clock = import.meta.client ? useReactiveDateNow() : null
     client = new QueryClient({
       subscribe: (resource, invalidate) => subscribe(resource, () => invalidate()),
       now: () => Date.now(),
       visible: () => import.meta.client && document.visibilityState === 'visible',
+      retryable_error: retryable_fetch_error,
+      random: Math.random,
       start_polling: (tick) => {
-        if (import.meta.server) {
+        if (! polling_clock) {
           return () => {}
         }
         const scope = effectScope(true)
-        scope.run(() => watch(useReactiveDateNow(), tick))
+        scope.run(() => watch(polling_clock, tick))
         return () => scope.stop()
       },
     })
@@ -210,11 +229,13 @@ export async function useSyncedData<T>(
     nuxt_app.vueApp?.onUnmount(() => owned_client.dispose())
   }
   let query: Query<T> | null = null
+  let subscriber: QuerySubscriber<T> | null = null
+  let active_key: string | null = null
   let unsubscribe: (() => void) | null = null
 
   function handle_error(failure: QueryFailure) {
     const err = failure.error
-    if (err instanceof Error && get_error_status(err) === 401) {
+    if (err instanceof Error && (err.name === 'AbortError' || get_error_status(err) === 401)) {
       return
     }
     if (! nuxt_app.isHydrating) {
@@ -262,11 +283,13 @@ export async function useSyncedData<T>(
     unsubscribe?.()
     unsubscribe = null
     query = null
+    subscriber = null
     if (disposed) {
       return
     }
     const resources = resolve_resources()
     const key = resolve_key(resources)
+    active_key = key
     if (! key && ! fetch_without_resource) {
       update_loading(false)
       if (throw_resource_null_error) {
@@ -274,9 +297,9 @@ export async function useSyncedData<T>(
       }
       return
     }
-    query = client!.acquire<T>(universal && import.meta.client ? key : null)
+    query = client!.acquire<T>(share && import.meta.client ? key : null, options.refresh_policy)
     const had_data = query.has_data()
-    unsubscribe = query.add({
+    subscriber = {
       fetcher,
       data: update_data,
       loading: update_loading,
@@ -284,10 +307,11 @@ export async function useSyncedData<T>(
       invalidate: clear_deferred_updates,
       resources,
       polling_interval,
-      ignore_stale_responses,
-    })
+      retry_on_error: import.meta.client && options.retry_on_error !== false,
+    }
+    unsubscribe = query.add(subscriber)
     if (immediate && ! had_data) {
-      const task = query.refresh()
+      const task = query.refresh('join')
       if (! stage_hydration_updates) {
         await task
       }
@@ -299,6 +323,12 @@ export async function useSyncedData<T>(
         const resources = resolve_resources()
         return JSON.stringify([resources, resolve_key(resources)])
       }, () => {
+        const resources = resolve_resources()
+        // Same key means the same data; only the notification sources changed.
+        if (query && subscriber && resolve_key(resources) === active_key) {
+          query.set_resources(subscriber, resources)
+          return
+        }
         void start_subscription()
       }, { flush: 'sync' })
     : () => {}
@@ -309,6 +339,7 @@ export async function useSyncedData<T>(
       unsubscribe?.()
       unsubscribe = null
       query = null
+      subscriber = null
       has_deferred_data = false
       has_deferred_error = false
       for (const remove_hook of remove_hooks) {

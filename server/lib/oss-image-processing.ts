@@ -89,6 +89,13 @@ async function processed(client: ImageClient, source: OssImageObject, operation:
   return Buffer.concat(chunks)
 }
 
+/** Multi-frame sources (animated WebP/APNG, HEIF/AVIF sequences). Plain uploads keep them as ordinary files. */
+export class AnimatedImageSourceError extends ApiError {
+  public constructor() {
+    super(400, '暂不支持该图片格式、动图或多页图片')
+  }
+}
+
 async function image_info(client: ImageClient, object: OssImageObject, signal: AbortSignal) {
   const body = await processed(client, object, 'image/info', 32 * 1024, signal)
   try {
@@ -140,8 +147,10 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
         await unchanged(storage, input)
       })
       const source = await observe_upload('image_source_info', () => image_info(client, input, bounded()))
-      if (! ['png', 'jpeg', 'webp', 'heif', 'avif'].includes(source.format) || source.frames !== 1)
+      if (! ['png', 'jpeg', 'webp', 'heif', 'avif'].includes(source.format))
         throw new ApiError(400, '暂不支持该图片格式、动图或多页图片')
+      if (source.frames !== 1)
+        throw new AnimatedImageSourceError()
       if (require_png && source.format !== 'png')
         throw new ApiError(400, '图片编辑输出必须为无损 PNG')
       const size_error = image_upload_error(input.size, source)
@@ -178,7 +187,8 @@ export function create_oss_image_processor(config = runtime_config().aliyun.oss)
         await guard()
         return object
       }
-      const display = await observe_upload('image_display', () => persist(input, `${prefix}.${content_image_formats.display.extension}`, `image/auto-orient,1/format,webp/quality,Q_${profile.webpQuality}`, 'webp'))
+      const orientation = source.orientation === 1 ? 0 : 1
+      const display = await observe_upload('image_display', () => persist(input, `${prefix}.${content_image_formats.display.extension}`, `image/auto-orient,${orientation}/format,webp/quality,Q_${profile.webpQuality}`, 'webp'))
       const fallback = await observe_upload('image_fallback', () => persist(display, `${prefix}.${content_image_formats.fallback.extension}`, `image/format,jpg/quality,Q_${profile.jpegQuality}`, 'jpeg'))
       const lqip = await observe_upload('image_lqip', async () => {
         await guard()

@@ -27,15 +27,13 @@ export interface WorkspaceRow extends RowDataPacket, RedactedVariantRow {
   object_key: string | null
   version: string
   is_private: number
-  storage_provider: string
-  encryption_key: string | null
   file_size: number
   mime_type: string | null
   oss_version_id: string | null
 }
 export async function workspace_rows(connection: Connection, scope: number) {
   const [rows] = await connection.execute<WorkspaceRow[]>('SELECT * FROM content_story_attachments WHERE story_id = ? ORDER BY id', [scope])
-  if (rows.some(row => row.parent_id === null || row.name_key === null || (! row.is_folder && (row.storage_provider !== 'aliyun' || row.encryption_key !== null))))
+  if (rows.some(row => row.parent_id === null || row.name_key === null))
     throw new ApiError(503, '此档案尚未完成附件迁移')
   return rows
 }
@@ -129,6 +127,11 @@ export async function workspace_transaction<T extends { refresh?: WorkspaceChang
       // A compacted receipt remains rejected even if the database clock moves back.
       if (Object.keys(outcome).length === 0)
         throw new ApiError(409, '请求内容已变化或请求已过期，请重新确认当前状态')
+      if ('error' in outcome) {
+        const data = outcome.error.public_data
+        if (data.code === 'PRIVACY_CONFIRMATION' && data.details.changes.length !== data.details.total)
+          throw new ApiError(409, '旧回执未包含全部机密状态变化，请重新发起操作')
+      }
     }
     else {
       await connection.query('SAVEPOINT workspace_effects')
@@ -136,7 +139,7 @@ export async function workspace_transaction<T extends { refresh?: WorkspaceChang
         outcome = { value: await action(connection) }
       }
       catch (error) {
-        if (! (error instanceof ApiError) || error.public_data?.code !== 'BATCH_REJECTED')
+        if (! (error instanceof ApiError) || (error.public_data?.code !== 'BATCH_REJECTED' && error.public_data?.code !== 'PRIVACY_CONFIRMATION'))
           throw error
         await connection.query('ROLLBACK TO SAVEPOINT workspace_effects')
         outcome = { error: { message: error.message, public_data: error.public_data } }

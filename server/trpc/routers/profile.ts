@@ -1,4 +1,6 @@
-import { require_auth_user, resolve_operate_target } from '@server/services/auth-guards.service'
+import { ApiError } from '@server/errors/ApiError'
+import { clear_password_setup_proof, has_password_setup_proof } from '@server/lib/session'
+import { resolve_operate_target } from '@server/services/auth-guards.service'
 import {
   change_profile_password,
   change_profile_password_by_otp,
@@ -7,12 +9,13 @@ import {
   force_logout_session,
   get_profile,
   reset_profile_password,
+  set_initial_profile_password,
   set_profile_phone,
   update_profile,
   upload_profile_avatar,
 } from '@server/services/profile.service'
 import { get_login_sessions } from '@server/services/session.service'
-import { permission_procedure, protected_procedure, public_procedure, router } from '@server/trpc/init'
+import { optional_auth_user, permission_procedure, protected_procedure, public_procedure, router } from '@server/trpc/init'
 import { api_schema } from '@server/trpc/schemas'
 
 const admin_edit_procedure = permission_procedure('admin_access', 'full')
@@ -20,16 +23,7 @@ const admin_edit_procedure = permission_procedure('admin_access', 'full')
 export const profile_router = router({
   get: public_procedure
     .input(api_schema.profile.get)
-    .query(async ({ ctx, input }) => {
-      let viewer = null
-      try {
-        viewer = await require_auth_user(ctx.event)
-      }
-      catch {
-        viewer = null
-      }
-      return get_profile(viewer, input.id)
-    }),
+    .query(async ({ ctx, input }) => get_profile(await optional_auth_user(ctx.event), input.id)),
 
   getMe: protected_procedure.query(({ ctx }) => get_profile(ctx.auth_user, ctx.auth_user.id)),
 
@@ -43,7 +37,7 @@ export const profile_router = router({
   getSessions: public_procedure
     .input(api_schema.profile.get_sessions)
     .query(async ({ ctx, input }) => {
-      const { auth_user, target_id } = await resolve_operate_target(ctx.event, input?.operate_for)
+      const { auth_user, target_id } = await resolve_operate_target(ctx.event, input?.operate_for, 'readonly')
       return get_login_sessions(
         target_id,
         target_id === auth_user.id ? auth_user.session_id : null,
@@ -53,13 +47,23 @@ export const profile_router = router({
   forceLogoutSession: public_procedure
     .input(api_schema.profile.force_logout_session)
     .mutation(async ({ ctx, input }) => {
-      const { target_id } = await resolve_operate_target(ctx.event, input.operate_for)
-      await force_logout_session(target_id, input.id)
+      const { auth_user, target_id } = await resolve_operate_target(ctx.event, input.operate_for)
+      await force_logout_session(target_id, input.id, auth_user.session_id)
     }),
 
   resetPasswordFor: admin_edit_procedure
     .input(api_schema.profile.reset_password_for)
     .mutation(({ input }) => reset_profile_password(input.operate_for, input.new_password)),
+
+  setInitialPassword: protected_procedure
+    .input(api_schema.profile.set_initial_password)
+    .mutation(async ({ ctx, input }) => {
+      if (! has_password_setup_proof(ctx.event, ctx.auth_user.phone)) {
+        throw new ApiError(403, '请用手机号验证码重新登录后设置密码')
+      }
+      await set_initial_profile_password(ctx.auth_user, input.new_password)
+      clear_password_setup_proof(ctx.event)
+    }),
 
   changePassword: protected_procedure
     .input(api_schema.profile.change_password)
@@ -89,12 +93,7 @@ export const profile_router = router({
         Number.isInteger(operate_for) && operate_for! > 0 ? operate_for : null,
       )
 
-      await upload_profile_avatar(target_id, input, () => {
-        const config = useRuntimeConfig(ctx.event)
-        return {
-          max_size_mb: config.public.max_avatar_size_mb as number,
-        }
-      })
+      await upload_profile_avatar(target_id, input)
     }),
 
   deleteAvatar: public_procedure

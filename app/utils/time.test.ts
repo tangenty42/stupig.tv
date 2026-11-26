@@ -11,6 +11,7 @@ import {
   duration_build_string,
   duration_format,
   duration_read,
+  milliseconds_format,
   time_format,
 } from './time'
 
@@ -145,6 +146,16 @@ describe('duration_format', () => {
 
   it('uses precise seconds when just-now text is omitted', () => {
     expect(duration_format(1_000, { expand: false, timezone: MOCK_TIMEZONE })).toBe(' 1 秒')
+  })
+})
+
+describe('milliseconds_format', () => {
+  it('reads timings uniformly in milliseconds', () => {
+    expect(milliseconds_format(0)).toBe('0 毫秒')
+    expect(milliseconds_format(339.6)).toBe('340 毫秒')
+    expect(milliseconds_format(1_000)).toBe('1,000 毫秒')
+    expect(milliseconds_format(65_000)).toBe('65,000 毫秒')
+    expect(milliseconds_format((3 * 24 + 2) * 3_600_000)).toBe('266,400,000 毫秒')
   })
 })
 

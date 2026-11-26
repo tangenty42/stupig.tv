@@ -2,9 +2,8 @@
 import { Buffer } from 'node:buffer'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 
-const TTL_SECONDS = 300
+const TTL_SECONDS = 3600
 const CLOCK_SKEW_SECONDS = 30
-const DEBUG_BUILD = 'content-bypass-debug-v1'
 
 /**
  * `env` shape for the variables published by `pnpm esa:deploy:*`; a variable
@@ -12,24 +11,6 @@ const DEBUG_BUILD = 'content-bypass-debug-v1'
  * below treats that as fail-closed, never as an empty usable value.
  * @typedef {import('./content-auth.d.mts').EsaFunctionVariables} EsaFunctionVariables
  */
-
-/** @param {Request} request @param {string} stage @param {boolean | null} allowed @param {number | null} status */
-function trace_bypass(request, stage, allowed = null, status = null) {
-  // Only our synthetic QA paths; never log query strings, names or credentials.
-  const path = new URL(request.url).pathname
-  if (! /^\/content\/att\/qa-esa-bypass\/[a-f\d-]{36}\/(?:headers|probe)\.bin$/.test(path))
-    return
-  try {
-    // eslint-disable-next-line no-console -- ESA uses alert for live logs; TODO remove this QA tracing after diagnosis.
-    if (typeof console.alert === 'function') {
-      // eslint-disable-next-line no-console -- ESA uses alert for live logs; TODO remove this QA tracing after diagnosis.
-      console.alert(JSON.stringify({ build: DEBUG_BUILD, stage, method: request.method, path, allowed, status }))
-    }
-  }
-  catch {
-    // Diagnostic logging must not change an authentication decision.
-  }
-}
 
 /** @param {string | null} actual @param {string} expected */
 function equal_signature(actual, expected) {
@@ -146,7 +127,6 @@ function edge_bypass_response(allowed, status) {
 export function create_content_bypass(privateKey, ttlSeconds = TTL_SECONDS, respond = edge_bypass_response, authorize) {
   /** @param {Request} request */
   return async function bypass(request) {
-    trace_bypass(request, 'entered')
     const result = authorize_content_request(privateKey, ttlSeconds, request)
     // Native rules must see exactly the parameter names/encoding produced by
     // our signer; reject alternate encodings rather than rely on parser parity.
@@ -157,11 +137,7 @@ export function create_content_bypass(privateKey, ttlSeconds = TTL_SECONDS, resp
       }
       catch { status = 503 }
     }
-    const allowed = status === 200
-    trace_bypass(request, 'decision', allowed, status)
-    const response = respond(allowed, status)
-    trace_bypass(request, 'returned', allowed, status)
-    return response
+    return respond(status === 200, status)
   }
 }
 

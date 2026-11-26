@@ -8,12 +8,67 @@ import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { load_config } from '@config/loader'
-import bcrypt from 'bcryptjs'
+import { hash_password } from '@server/lib/password'
 import mysql from 'mysql2/promise'
 import { load_environment } from '../../config/lib/environment.mjs'
+import { otp_login_account, password_setup_account } from '../../tests/support/e2e-accounts'
 import { run_migrations } from '../migration/local'
 import { start_cloud_draft_broker } from './cloud-draft-broker'
 import { e2e_target } from './e2e-target'
+
+interface BrowserFixture {
+  directory: string
+  database?: string
+  admin: Pick<mysql.Connection, 'query' | 'end'>
+  stop_broker?: () => Promise<void>
+  stop_application?: () => Promise<void>
+  logs: string[]
+}
+
+async function stop_process_tree(child: ReturnType<typeof spawn>) {
+  if (child.exitCode !== null || child.signalCode !== null)
+    return
+  try {
+    if (process.platform === 'win32' && child.pid)
+      await promisify(execFile)('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000 })
+    else if (child.pid)
+      process.kill(- child.pid, 'SIGTERM')
+    if (child.exitCode === null && child.signalCode === null)
+      await Promise.race([new Promise(resolve => child.once('exit', resolve)), delay(5000, undefined, { ref: false })])
+  }
+  finally {
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill('SIGKILL')
+  }
+}
+
+export async function cleanup_browser_fixture({ directory, database, admin, stop_broker, stop_application, logs }: BrowserFixture, ... failures: unknown[]) {
+  // Finish each step in order, even when an earlier resource is unreachable.
+  const attempt = async (step: () => unknown) => {
+    try {
+      await step()
+    }
+    catch (error) { failures.push(error) }
+  }
+  await attempt(() => stop_broker?.())
+  if (stop_application) {
+    await attempt(stop_application)
+    await attempt(() => writeFile(resolve(directory, 'server.log'), logs.join('')))
+  }
+  await attempt(() => rm(resolve(directory, 'runtime.json'), { force: true }))
+  if (database) {
+    await attempt(async () => {
+      if (! /^stupig_e2e_[a-f\d]{32}$/.test(database))
+        throw new Error('Unsafe E2E cleanup identity')
+      await admin.query(`DROP DATABASE \`${database}\``)
+    })
+  }
+  await attempt(() => admin.end())
+  if (failures.length === 1)
+    throw failures[0]
+  if (failures.length > 1)
+    throw new AggregateError(failures, `E2E fixture ${directory}: ${failures.map(error => error instanceof Error ? error.message : String(error)).join('\n')}`)
+}
 
 export default async function setup(playwright: FullConfig) {
   const root = process.cwd()
@@ -78,35 +133,16 @@ export default async function setup(playwright: FullConfig) {
   let child: ReturnType<typeof spawn> | undefined
   let draft_broker: Awaited<ReturnType<typeof start_cloud_draft_broker>> | undefined
   const logs: string[] = []
-  const cleanup = async () => {
-    await draft_broker?.stop()
-    draft_broker = undefined
-    if (child && child.exitCode === null && child.signalCode === null) {
-      if (process.platform === 'win32' && child.pid)
-        await promisify(execFile)('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
-      else if (child.pid)
-        process.kill(- child.pid, 'SIGTERM')
-      await Promise.race([new Promise(resolve => child!.once('exit', resolve)), delay(5000)])
-      if (child.exitCode === null)
-        child.kill('SIGKILL')
-    }
-    if (child)
-      await writeFile(resolve(directory, 'server.log'), logs.join(''))
-    await rm(resolve(directory, 'runtime.json'), { force: true })
-    if (created) {
-      if (! /^stupig_e2e_[a-f\d]{32}$/.test(database))
-        throw new Error('Unsafe E2E cleanup identity')
-      await admin.query(`DROP DATABASE \`${database}\``)
-      created = false
-    }
-    await admin.end()
-  }
+  const cleanup = (... failures: unknown[]) => cleanup_browser_fixture({
+    directory, database: created ? database : undefined, admin, stop_broker: draft_broker?.stop,
+    stop_application: child && stop_process_tree.bind(null, child), logs,
+  }, ... failures)
   try {
     await admin.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
     created = true
     await run_migrations({ maintenance: true, database_config: config.db })
     draft_broker = await start_cloud_draft_broker(directory, { username: config.mqtt.username, password: config.mqtt.password }, async (input) => {
-      const response = await fetch(`${base_url}/api/content-draft-sync/authenticate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(5000) })
+      const response = await fetch(`${base_url}/api/hooks/emqx/authenticate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(5000) })
       if (! response.ok)
         return { result: 'deny' }
       return response.json()
@@ -115,8 +151,9 @@ export default async function setup(playwright: FullConfig) {
     config.mqtt.port = draft_broker.tcp_port
     config.mqtt.web.wsUrl = draft_broker.public_url
     config.mqtt.web.draftWsUrl = draft_broker.private_url
-    const hash = await bcrypt.hash('AaAaAaAa888', 4)
-    await admin.query(`INSERT INTO \`${database}\`.users (username, phone, password_hash, is_admin) VALUES (?, ?, ?, 1), (?, ?, ?, 0)`, ['admin', '19999999999', hash, 'user', '19000000000', hash])
+    const hash = await hash_password('AaAaAaAa888')
+    await admin.query(`INSERT INTO \`${database}\`.users (username, phone, password_hash, is_admin) VALUES (?, ?, ?, 1), (?, ?, ?, 0), (?, ?, NULL, 0), (?, ?, NULL, 0)`,
+      ['admin', '10000000000', hash, 'user', '10000000001', hash, otp_login_account.username, otp_login_account.phone, password_setup_account.username, password_setup_account.phone])
     await mkdir(resolve(directory, 'config'), { recursive: true })
     // Use a source snapshot inside the fixture root. Nuxt's file discovery is
     // root-relative; pages outside it can otherwise include colocated tests.
@@ -226,12 +263,12 @@ export default defineNuxtConfig({
         throw new Error(`Isolated Nuxt exited before readiness; see ${resolve(directory, 'server.log')}`)
       let response: Response | undefined
       try {
-        response = await fetch(`${base_url}/healthz`, { signal: AbortSignal.timeout(3000) })
+        response = await fetch(`${base_url}/api/hooks/healthz`, { signal: AbortSignal.timeout(3000) })
       }
       catch {}
       if (response?.ok) {
         console.log('E2E: isolated built application ready; real OSS/SMS are replaced at the boundary.')
-        return cleanup
+        return () => cleanup()
       }
       await delay(500)
     }
@@ -239,7 +276,6 @@ export default defineNuxtConfig({
     throw new Error(`Isolated Nuxt readiness timed out; see ${unix(resolve(directory, 'server.log'))}`)
   }
   catch (error) {
-    await cleanup()
-    throw error
+    await cleanup(error)
   }
 }

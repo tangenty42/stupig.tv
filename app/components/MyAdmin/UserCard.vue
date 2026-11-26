@@ -5,126 +5,127 @@
     @click="emit('toggle-select', user.id)"
   >
     <template #content>
-      <div class="flex items-start gap-5">
-        <div class="shrink-0">
-          <OverlayBadge :severity="user.is_online ? 'success' : 'secondary'" class="avatar-online-badge">
-            <MyAvatar
-              :user="{ id: user.id, username: user.username, avatar_file: user.avatar_file, avatar_version: user.avatar_version }"
-              size="large"
-              previewable
-            />
-          </OverlayBadge>
-        </div>
+      <MyHeightTransition>
+        <div class="flex items-start gap-5">
+          <div class="shrink-0">
+            <OverlayBadge :severity="user.is_online ? 'success' : 'secondary'" class="avatar-online-badge">
+              <MyAvatar
+                :user="{ id: user.id, username: user.username, avatar_file: user.avatar_file, avatar_version: user.avatar_version }"
+                size="large"
+                previewable
+              />
+            </OverlayBadge>
+          </div>
 
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <div class="min-w-0 flex-1">
             <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              {{ user.username }}
+              <span>{{ user.username }}<MyIcon v-if="user.is_verified" name="lucide:badge-check" class="ms-2 text-emerald-500" /></span>
             </div>
-            <MyIcon v-if="user.is_verified" name="lucide:badge-check" class="shrink-0 text-emerald-500" />
-          </div>
 
-          <div class="mt-0.5 text-xs text-slate-500">
-            {{ user.phone ? `手机号 ${user.phone}` : '未绑定手机号' }}
-          </div>
+            <div class="mt-0.5 text-xs text-slate-500">
+              {{ user.phone ? `手机号 ${user.phone}` : '未绑定手机号' }}
+            </div>
 
-          <div class="mt-0.5 text-xs text-slate-500">
-            UID #{{ user.id }}
-          </div>
+            <div class="mt-0.5 text-xs text-slate-500">
+              UID #{{ user.id }}
+            </div>
 
-          <div class="mt-3 flex flex-wrap items-center gap-2">
-            <MyBadge v-if="user.is_verified" outlined type="success">
-              <span><MyIcon name="lucide:badge-check" class="me-1" />认证</span>
-            </MyBadge>
-            <MyBadge v-if="user.is_admin" outlined type="warning">
-              <span><MyIcon name="lucide:shield-check" class="me-1" />管理员</span>
-            </MyBadge>
-            <MyBadge v-if="user.is_banned" outlined type="error">
-              <span><MyIcon name="lucide:ban" class="me-1" />已封禁</span>
-            </MyBadge>
-            <MyPermissionBadge v-for="grant in user.permissions" :key="grant.field" :grant="grant" />
-          </div>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <MyBadge v-if="user.is_verified" outlined type="success">
+                <span><MyIcon name="lucide:badge-check" class="me-1" />认证</span>
+              </MyBadge>
+              <MyBadge v-if="user.is_admin" outlined type="warning">
+                <span><MyIcon name="lucide:shield-check" class="me-1" />管理员</span>
+              </MyBadge>
+              <MyBadge v-if="user.is_banned" outlined type="error">
+                <span><MyIcon name="lucide:ban" class="me-1" />已封禁</span>
+              </MyBadge>
+              <MyPermissionBadge v-for="grant in user.permissions" :key="grant.field" :grant="grant" />
+            </div>
 
-          <div class="mt-3 text-xs text-slate-400">
-            注册于：{{ duration_build_string([user.created_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) }}
-          </div>
-          <div class="mt-1 text-xs text-slate-400">
-            最近登录：{{ user.last_login_at ? duration_build_string([user.last_login_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) : '-' }}
-          </div>
-          <div class="mt-1 text-xs text-slate-400">
-            最近在线：{{ user.last_online_at ? duration_build_string([user.last_online_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) : '-' }}
+            <div class="mt-3 text-xs text-slate-400">
+              注册于：{{ duration_build_string([user.created_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) }}
+            </div>
+            <div class="mt-1 text-xs text-slate-400">
+              最近登录：{{ user.last_login_at ? duration_build_string([user.last_login_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) : '-' }}
+            </div>
+            <div class="mt-1 text-xs text-slate-400">
+              最近在线：{{ user.last_online_at ? duration_build_string([user.last_online_at, date_now], ['{formated}前', '刚刚'], { timezone: time_context.timezone }) : '-' }}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div v-if="can_manage" class="mt-4 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-slate-100 pt-4 dark:border-slate-800">
-        <NuxtLink target="_blank" :to="profile_link" @click.stop>
-          <Button size="small" text label="编辑">
+        <div v-if="can_manage" class="mt-4 flex flex-wrap gap-x-2 gap-y-0.5 border-t border-slate-100 pt-4 dark:border-slate-800">
+          <NuxtLink target="_blank" :to="profile_link" @click.stop>
+            <Button size="small" text label="编辑资料">
+              <template #icon>
+                <MyIcon name="lucide:square-pen" />
+              </template>
+            </Button>
+          </NuxtLink>
+
+          <Button
+            size="small"
+            :severity="user.is_banned ? 'success' : 'danger'"
+            text
+            :loading="disable_pending"
+            :disabled="is_self_ban"
+            :title="is_self_ban ? '不能封禁自己' : undefined"
+            :label="user.is_banned ? '解封' : '封禁'"
+            @click.stop="toggle_disabled"
+          >
             <template #icon>
-              <MyIcon name="lucide:square-pen" />
+              <MyIcon :name="user.is_banned ? 'lucide:circle-check' : 'lucide:ban'" />
             </template>
           </Button>
-        </NuxtLink>
 
-        <Button
-          size="small"
-          :severity="user.is_banned ? 'success' : 'danger'"
-          text
-          :loading="disable_pending"
-          :label="user.is_banned ? '解封' : '封禁'"
-          @click.stop="toggle_disabled"
-        >
-          <template #icon>
-            <MyIcon :name="user.is_banned ? 'lucide:circle-check' : 'lucide:ban'" />
-          </template>
-        </Button>
+          <Button size="small" severity="secondary" text :loading="logout_pending" label="强制下线" @click.stop="force_logout">
+            <template #icon>
+              <MyIcon name="lucide:log-out" />
+            </template>
+          </Button>
 
-        <Button size="small" severity="secondary" text :loading="logout_pending" label="强制下线" @click.stop="force_logout">
-          <template #icon>
-            <MyIcon name="lucide:log-out" />
-          </template>
-        </Button>
+          <Button
+            size="small"
+            :severity="user.is_verified ? 'secondary' : 'success'"
+            text
+            :label="user.is_verified ? '修改认证' : '授予认证'"
+            @click.stop="toggle_verified"
+          >
+            <template #icon>
+              <MyIcon :name="user.is_verified ? 'lucide:pencil' : 'lucide:badge-check'" />
+            </template>
+          </Button>
 
-        <Button
-          size="small"
-          :severity="user.is_verified ? 'secondary' : 'success'"
-          text
-          :label="user.is_verified ? '修改认证' : '授予认证'"
-          @click.stop="toggle_verified"
-        >
-          <template #icon>
-            <MyIcon :name="user.is_verified ? 'lucide:pencil' : 'lucide:badge-check'" />
-          </template>
-        </Button>
+          <Button
+            size="small"
+            :severity="user.is_admin ? 'secondary' : 'warn'"
+            text
+            :disabled="is_self_admin_demote"
+            :title="is_self_admin_demote ? '不能撤销自己的管理员身份' : undefined"
+            :label="user.is_admin ? '撤销管理员身份' : '设为管理员'"
+            @click.stop="toggle_admin"
+          >
+            <template #icon>
+              <MyIcon :name="user.is_admin ? 'lucide:shield-off' : 'lucide:shield-check'" />
+            </template>
+          </Button>
 
-        <Button
-          size="small"
-          :severity="user.is_admin ? 'secondary' : 'warn'"
-          text
-          :disabled="is_self_admin_demote"
-          :title="is_self_admin_demote ? '不能移除自己的管理员身份' : undefined"
-          :label="user.is_admin ? '移除管理员' : '设为管理员'"
-          @click.stop="toggle_admin"
-        >
-          <template #icon>
-            <MyIcon :name="user.is_admin ? 'lucide:shield-off' : 'lucide:shield-check'" />
-          </template>
-        </Button>
-
-        <Button
-          size="small"
-          severity="secondary"
-          text
-          label="权限"
-          :disabled="user.is_admin"
-          :title="user.is_admin ? '管理员拥有全部权限' : undefined"
-          @click.stop="edit_permissions"
-        >
-          <template #icon>
-            <MyIcon name="lucide:key-round" />
-          </template>
-        </Button>
-      </div>
+          <Button
+            size="small"
+            severity="secondary"
+            text
+            label="修改权限"
+            :disabled="user.is_admin"
+            :title="user.is_admin ? '管理员拥有全部权限' : undefined"
+            @click.stop="edit_permissions"
+          >
+            <template #icon>
+              <MyIcon name="lucide:key-round" />
+            </template>
+          </Button>
+        </div>
+      </MyHeightTransition>
     </template>
   </Card>
 </template>
@@ -156,6 +157,7 @@ const { user: auth_user } = useAuth()
 const profile_link = computed(() => `/u/${props.user.id}`)
 
 const is_self_admin_demote = computed(() => props.user.is_admin && props.user.id === auth_user.value?.id)
+const is_self_ban = computed(() => ! props.user.is_banned && props.user.id === auth_user.value?.id)
 
 const time_context = useDisplayTimeContext()
 const date_now = useReactiveDateNow()
@@ -183,7 +185,7 @@ function edit_permissions() {
 
 <style scoped>
   .admin-user-card {
-    @apply mb-4 break-inside-avoid rounded-sm border border-slate-200 bg-white/80 shadow-sm transition-shadow hover:shadow-md dark:border-slate-700 dark:bg-slate-900/50;
+    @apply mb-4 break-inside-avoid rounded-sm border border-slate-200 bg-white/80 shadow-sm transition-[border-color,box-shadow] hover:shadow-md dark:border-slate-700 dark:bg-slate-900/50 motion-reduce:transition-none;
   }
 
   .avatar-online-badge {

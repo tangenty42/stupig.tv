@@ -20,7 +20,7 @@ export async function require_draft_actor(connection: Pick<Connection, 'execute'
   if (! user || user.is_banned || ! session || Number(session.user_id) !== presented.id || session.is_logged_out || ! (Number(session.expires_ms) > now) || ! token || Number(token.session_id) !== presented.session_id || ! (Number(token.expires_ms) > now))
     throw new ApiError(401, '当前登录会话已失效')
   const actor = { ... presented, is_admin: Boolean(user.is_admin), permissions: normalize_permission_grants(user.permissions) }
-  if (! has_permission(actor, 'content_manage', 'full') || ! has_permission(actor, 'content_private', 'read'))
-    throw new ApiError(403, '编辑云端草稿需要档案管理和机密读取权限')
+  if (! has_permission(actor, 'content_access', 'full'))
+    throw new ApiError(403, '编辑云端草稿需要『蠢猪档案·完全』权限')
   return actor
 }

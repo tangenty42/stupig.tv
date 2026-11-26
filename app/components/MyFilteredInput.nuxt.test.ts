@@ -45,6 +45,29 @@ it('preserves the caret when forbidden characters are removed', async () => {
   expect(input.element.selectionStart).toBe(1)
 })
 
+it('sanitizes a default value set from outside, like typing into the field', async () => {
+  const wrapper = await mount_field('初始')
+  await wrapper.setProps({ modelValue: 'a/b:c*d' })
+  await nextTick()
+  expect(wrapper.get('input').element.value).toBe('a_b_c_d')
+  expect(wrapper.emitted('update:modelValue')?.at(- 1)).toEqual(['a_b_c_d'])
+})
+
+it('sanitizes the initial model value on mount', async () => {
+  const wrapper = await mount_field('x/y?z')
+  await nextTick()
+  expect(wrapper.get('input').element.value).toBe('x_y_z')
+  expect(wrapper.emitted('update:modelValue')?.at(- 1)).toEqual(['x_y_z'])
+})
+
+it('filters illegal characters out of the locked suffix as well', async () => {
+  const wrapper = await mountSuspended(MyFileNameInput, {
+    props: { modelValue: '封面', suffix: '.png: ' },
+  })
+  wrappers.push(wrapper)
+  expect(wrapper.get('[aria-label="固定后缀"]').text()).toBe('.png__')
+})
+
 it('renders a locked suffix separately and forwards input attributes and model events', async () => {
   const wrapper = await mountSuspended(MyFileNameInput, {
     props: { modelValue: 'photo', suffix: '.webp', disabled: true },

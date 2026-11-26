@@ -8,13 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 按仓库约定在边界处 mock（mysql2 / config / log），不碰任何真实数据库。
 const state = vi.hoisted(() => ({
   queries: [] as string[],
-  /** 业务 SQL，不含迁移元数据。applied 仅模拟升级前的旧表。 */
+  /** 业务 SQL，不含迁移元数据。 */
   executed: [] as string[],
-  applied: [] as { filename: string, checksum: string }[],
   runs: new Map<string, { filename: string, checksum: string, status: string, phase: string, checkpoint: null, attempts: number, finished_at: string | null }>(),
-  table_exists: false,
   runtime_exists: false,
-  /** 业务表（非 schema_migrations）数量：非零模拟"存量未接管"的库 */
+  /** 业务表（非迁移账本）数量：非零模拟"存量未接管"的库 */
   business_tables: 0,
   fail_on: null as string | null,
   warns: [] as string[],
@@ -22,7 +20,7 @@ const state = vi.hoisted(() => ({
 }))
 
 function is_bookkeeping(sql: string) {
-  return sql.includes('schema_migrations') || sql.includes('migration_runs') || sql.includes('information_schema') || sql.includes('LOCK')
+  return sql.includes('migration_runs') || sql.includes('information_schema') || sql.includes('LOCK')
 }
 
 function completed() {
@@ -38,10 +36,8 @@ async function query(sql: string, values: unknown[] = []) {
   if (sql.includes('information_schema.TABLES')) {
     if (sql.includes('COUNT(*)'))
       return [[{ n: state.business_tables }], []]
-    return [(values[0] === 'migration_runs' ? state.runtime_exists : state.table_exists) ? [{ exists: 1 }] : [], []]
+    return [(values[0] === 'migration_runs' ? state.runtime_exists : false) ? [{ exists: 1 }] : [], []]
   }
-  if (sql.includes('FROM schema_migrations'))
-    return [state.applied, []]
   if (sql.includes('FROM migration_runs'))
     return [[... state.runs.values()], []]
   if (sql.includes('CREATE TABLE IF NOT EXISTS `migration_runs`'))
@@ -102,9 +98,7 @@ let dir: string
 beforeEach(async () => {
   state.queries = []
   state.executed = []
-  state.applied = []
   state.runs = new Map()
-  state.table_exists = false
   state.runtime_exists = false
   state.business_tables = 0
   state.fail_on = null
@@ -131,8 +125,8 @@ describe('run_migrations', () => {
 
   it('已记录的迁移不重复执行（幂等）', async () => {
     await write_migration('20260901_a.sql', 'SELECT 1;')
-    state.table_exists = true
-    state.applied = [{ filename: '20260901_a.sql', checksum: checksum_of('SELECT 1;') }]
+    state.runtime_exists = true
+    state.runs.set('20260901_a.sql', { filename: '20260901_a.sql', checksum: checksum_of('SELECT 1;'), status: 'completed', phase: 'apply', checkpoint: null, attempts: 1, finished_at: '2026-09-01' })
 
     await run_migrations({ dir })
     expect(state.executed).toEqual([])
@@ -157,21 +151,18 @@ describe('run_migrations', () => {
     expect(state.queries.some(sql => sql.includes('INSERT INTO'))).toBe(false)
   })
 
-  it('--baseline 只记录不执行 SQL', async () => {
+  it('--baseline 已废弃，不允许使用', async () => {
     await write_migration('20260901_a.sql', 'SELECT 1;')
-    await run_migrations({ dir, baseline: true })
-
-    expect(state.executed).toEqual([])
-    expect(completed()).toHaveLength(1)
+    await expect(run_migrations({ dir, baseline: true })).rejects.toThrowError(/已废弃|baseline_removed/)
   })
 
   it('已应用的迁移文件被改动时拒绝执行，且一条都不应用', async () => {
     await write_migration('20260901_a.sql', 'SELECT 1; -- 改了')
     await write_migration('20260902_b.sql', 'SELECT 2;')
-    state.table_exists = true
-    state.applied = [{ filename: '20260901_a.sql', checksum: '0'.repeat(64) }]
+    state.runtime_exists = true
+    state.runs.set('20260901_a.sql', { filename: '20260901_a.sql', checksum: '0'.repeat(64), status: 'completed', phase: 'apply', checkpoint: null, attempts: 1, finished_at: '2026-09-01' })
 
-    await expect(run_migrations({ dir })).rejects.toThrowError(/改动/)
+    await expect(run_migrations({ dir })).rejects.toThrowError(/改动|inconsistent/)
     expect(state.executed).toEqual([])
   })
 
@@ -183,43 +174,7 @@ describe('run_migrations', () => {
     expect(state.queries.some(sql => sql.includes('SET time_zone'))).toBe(true)
   })
 
-  it('--baseline 与 --status 同用时报错（语义冲突）', async () => {
-    await expect(run_migrations({ dir, baseline: true, check_only: true })).rejects.toThrowError(/不能与/)
-  })
-
-  it('存量库（有业务表但无迁移记录）自动 baseline：登记而不执行 SQL', async () => {
-    await write_migration('20260901_a.sql', 'SELECT 1;')
-    state.business_tables = 7
-
-    await run_migrations({ dir })
-
-    expect(state.executed).toEqual([])
-    expect(completed()).toHaveLength(1)
-    expect(state.warns.some(msg => msg.includes('no migration records'))).toBe(true)
-  })
-
-  it('已有迁移记录时照常执行新迁移，绝不自动 baseline', async () => {
-    await write_migration('20260901_a.sql', 'SELECT 1;')
-    await write_migration('20260902_b.sql', 'SELECT 2;')
-    state.table_exists = true
-    state.business_tables = 7
-    state.applied = [{ filename: '20260901_a.sql', checksum: checksum_of('SELECT 1;') }]
-
-    await run_migrations({ dir })
-
-    expect(state.executed).toEqual(['SELECT 2;'])
-    expect(state.warns).toEqual([])
-  })
-
-  it('--status 报告存量库将被自动 baseline（仍全程只读）', async () => {
-    await write_migration('20260901_a.sql', 'SELECT 1;')
-    state.business_tables = 7
-
-    await run_migrations({ dir, check_only: true })
-
-    expect(state.executed).toEqual([])
-    expect(state.queries.some(sql => sql.includes('CREATE TABLE'))).toBe(false)
-    expect(state.queries.some(sql => sql.includes('INSERT INTO'))).toBe(false)
-    expect(state.infos.some(entry => entry.msg === 'migrations pending' && entry.fields?.auto_baseline === true)).toBe(true)
+  it('--baseline 已废弃', async () => {
+    await expect(run_migrations({ dir, baseline: true })).rejects.toThrowError(/已废弃|baseline_removed/)
   })
 })

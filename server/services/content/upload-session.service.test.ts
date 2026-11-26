@@ -156,6 +156,28 @@ beforeEach(() => {
   } as UploadRow
 })
 
+it.each([undefined, 'upload', 'copy', 'overwrite', 'redacted'] as const)('projects image editor markers from stored intent in reads and lists (mode=%s)', async (mode) => {
+  row.intent.purpose = mode === 'copy' ? 'create' : mode === 'redacted' ? 'redact' : 'replace'
+  row.intent.source = { id: 2, version: 'v1' }
+  if (mode) {
+    row.intent.target_path = 'image.png'
+    row.intent.image = { mode, source: mode === 'upload' ? null : { id: 2, revision: 1, node_revision: 1, key: 'content/att/images/current', is_private: false },
+      original_name: 'image.png', original_mime: 'image/png' }
+  }
+  const states = [await service.get(id, 1), ... await service.list(10, 1)]
+  expect(states).toHaveLength(2)
+  for (const state of states) {
+    if (mode === 'overwrite')
+      expect(state).toHaveProperty('image_overwrite', true)
+    else
+      expect(state).not.toHaveProperty('image_overwrite')
+    if (mode === 'copy')
+      expect(state).toHaveProperty('image_save_as', true)
+    else
+      expect(state).not.toHaveProperty('image_save_as')
+  }
+})
+
 it('authorizes a scope-wide reservation projection without disclosing upload credentials or actor identities', async () => {
   execute.mockResolvedValueOnce([[{ id: 'foreign', target_parent_id: 2, target_path: 'docs/new.txt', source_attachment_id: 3,
     replacement_attachment_id: null, actor_id: 99, intent: { key: 'private-staging-key' }, expected_size: 123 }]])

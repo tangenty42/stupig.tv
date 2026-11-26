@@ -21,8 +21,12 @@
         class="content-item-icon"
       />
       <span class="content-item-title" :title="folder.path">{{ folder.name }}</span>
-      <span v-if="row_pending" class="ml-auto shrink-0 pl-2 text-xs text-slate-400 dark:text-slate-500">
-        <MyIcon name="lucide:loader-circle" class="animate-spin" />
+      <span v-if="row_pending || state.result_pending" class="ml-auto shrink-0 pl-2 text-xs text-slate-400 dark:text-slate-500">
+        <MyIcon v-if="row_pending" name="lucide:loader-circle" class="animate-spin" />
+        <template v-else>结果待确认</template>
+      </span>
+      <span v-if="state.unused_label" :class="unused_attachment_class" role="img" :aria-label="state.unused_label" :title="state.unused_label">
+        <MyIcon :name="unused_attachment_icon" />
       </span>
     </template>
 
@@ -39,18 +43,24 @@
             class="content-item-icon"
           />
           <span class="content-item-title" :title="file_row.file_name">{{ display_name }}</span>
-          <span v-if="row_pending || row_progress_text" class="ml-auto flex shrink-0 items-center pl-2 text-xs text-slate-400 dark:text-slate-500">
+          <span v-if="row_pending || row_progress_text || state.result_pending" class="ml-auto flex shrink-0 items-center pl-2 text-xs text-slate-400 dark:text-slate-500">
             <MyIcon v-if="row_pending && ! row_progress_text" name="lucide:loader-circle" class="animate-spin" />
             <template v-else-if="row_progress_text">{{ row_progress_text }}</template>
+            <template v-else-if="state.result_pending">结果待确认</template>
+          </span>
+          <span v-if="state.unused_label" :class="unused_attachment_class" role="img" :aria-label="state.unused_label" :title="state.unused_label">
+            <MyIcon :name="unused_attachment_icon" />
           </span>
         </div>
 
-        <div v-if="upload && upload.status !== 'error'" class="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" :title="upload_status_text">
-          {{ upload_status_text }}
+        <div
+          v-if="upload"
+          class="truncate text-xs"
+          :class="upload.status === 'error' ? 'mt-0.5 text-red-600 dark:text-red-400' : 'mt-1 text-slate-500 dark:text-slate-400'"
+          :title="upload_prefix + upload_status_text"
+        >
+          <span v-if="upload_prefix" class="text-primary">{{ upload_prefix }}</span>{{ upload_status_text }}
         </div>
-        <span v-else-if="upload" class="mt-0.5 block truncate text-xs text-red-600 dark:text-red-400" :title="`${row.source.preparation ? '准备失败' : '上传失败'}：${upload.message}`">
-          {{ row.source.preparation ? '准备失败' : '上传失败' }}：{{ upload.message }}
-        </span>
       </div>
     </template>
 
@@ -71,9 +81,10 @@
 </template>
 
 <script setup lang="ts">
-import type { AttachmentMenuItem, MyContentAttachmentRow } from '~/utils/content/attachment-list'
+import type { AttachmentMenuItem } from '~/features/content/attachments/list-interaction'
+import type { MyContentAttachmentRow } from '~/features/content/attachments/list-model'
 import { attachment_base_name, attachment_path_is_private } from '@shared/content-markdown'
-import { attachment_item_presentation, folder_item_presentation } from '~/utils/content/item-presentation'
+import { attachment_item_presentation, folder_item_presentation, unused_attachment_class, unused_attachment_icon } from '~/features/content/attachments/presentation'
 import { format_bytes } from '~/utils/size'
 
 type MenuOpenEvent = Pick<MouseEvent, 'pageX' | 'pageY' | 'stopPropagation' | 'preventDefault'>
@@ -95,13 +106,28 @@ const file_row = computed(() => data.value.kind === 'folder' ? null : data.value
 const progress_percent = computed(() => upload.value && ! ['error', 'queued'].includes(upload.value.status) ? upload.value.progress : null)
 const row_pending = computed(() => state.value.pending || (props.row.source.preparation ? props.row.source.preparation.phase === 'admitting' : upload.value?.status === 'queued' || upload.value?.status === 'uploading'))
 const row_progress_text = computed(() => upload.value?.status === 'paused' ? `${format_bytes(upload.value.file_size * upload.value.progress / 100)} / ${format_bytes(upload.value.file_size)}` : null)
-const upload_status_text = computed(() => upload.value?.label ?? '')
+const upload_prefix = computed(() => {
+  const { preparation, session } = props.row.source
+  const task = preparation ?? session
+  if (task?.image_save_as)
+    return '图片另存 '
+  if (task?.purpose !== 'replace')
+    return ''
+  return task.image_overwrite ? '图片替换 ' : '替换 '
+})
+const upload_status_text = computed(() => {
+  if (upload.value?.status !== 'error')
+    return upload.value?.label ?? ''
+  const label = props.row.source.preparation ? '准备失败' : '上传失败'
+  const message = upload.value.message?.trim()
+  return message ? `${label}：${message}` : label
+})
 const display_name = computed(() => folder.value ? folder.value.name : props.displayPath ? file_row.value?.file_name ?? '' : attachment_base_name(file_row.value?.file_name ?? ''))
-const presentation = computed(() => folder.value ? folder_item_presentation(! folder.value.collapsed, state.value.error, folder_private.value) : attachment_item_presentation(file_row.value!, upload.value?.status))
+const presentation = computed(() => folder.value ? folder_item_presentation(! folder.value.collapsed, state.value.error, folder_private.value) : attachment_item_presentation(file_row.value!, state.value.error ? 'error' : upload.value?.status))
 const rounding_class = computed(() => ({ top: 'rounded-t-sm', bottom: 'rounded-b-sm', none: 'rounded-none', both: 'rounded-sm' })[state.value.selection_edges])
 const row_classes = computed(() => folder.value
   ? ['folder-row', 'content-item', `content-item-${presentation.value.tone}`, rounding_class.value, { 'folder-row-drop': folder.value.drop_target, 'folder-row-drop-disabled': folder.value.drop_disabled, 'folder-row-menu-open': menu_open.value, 'folder-row-moving': state.value.move_pending, 'folder-row-pending': state.value.pending, 'folder-row-selected': state.value.selected }]
-  : ['file-row', rounding_class.value, { 'file-row-menu-open': menu_open.value, 'file-row-selected': state.value.selected, 'file-row-moving': state.value.move_pending }])
+  : ['file-row', rounding_class.value, { 'file-row-menu-open': menu_open.value, 'file-row-selected': state.value.selected, 'file-row-moving': state.value.move_pending, 'file-row-pending': !! upload.value }])
 const is_draggable = computed(() => ! props.readonly && state.value.draggable)
 function on_dblclick() {
   if (! folder.value)
@@ -299,7 +325,7 @@ function on_dragstart(event: DragEvent) {
 }
 
 .file-row-progress {
-  @apply absolute inset-y-0 left-0 bg-primary/10;
+  @apply absolute inset-y-0 left-0 bg-primary/20;
   transition: width 200ms ease;
 }
 
@@ -308,9 +334,21 @@ function on_dragstart(event: DragEvent) {
   @apply bg-slate-100 dark:bg-slate-800;
 }
 
+.file-row-pending,
+.file-row-pending:hover,
+.file-row-pending.file-row-menu-open {
+  @apply bg-primary/5 dark:bg-primary/5;
+}
+
 .file-row-selected,
 .file-row-selected:hover {
   @apply bg-primary/10;
+}
+
+.file-row-pending.file-row-selected,
+.file-row-pending.file-row-selected:hover,
+.file-row-pending.file-row-selected.file-row-menu-open {
+  @apply bg-primary/10 dark:bg-primary/10;
 }
 
 .file-row-moving {

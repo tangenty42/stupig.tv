@@ -61,7 +61,7 @@ export async function inspect_dev_esa(config: PublishConfig, api: Api, source: B
     const match = rows.find(item => item && typeof item === 'object' && item.CodeVersion === active)
     if (match) {
       const description = typeof match.CodeDescription === 'string' ? match.CodeDescription : ''
-      const fingerprint = /^dev-([\w-]{22})-[a-f\d-]{36}$/.exec(description)?.[1]
+      const fingerprint = /^dev-([\w-]{22})-(?:[\w-]{22}|[a-f\d-]{36})$/.exec(description)?.[1]
       if (fingerprint)
         return checked_version({ source: fingerprint === source_fingerprint(source) ? 'matches' : 'differs', configuration, evidence: 'metadata' })
       break

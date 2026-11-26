@@ -20,8 +20,7 @@ mqtt:
   username: ${MQTT_USERNAME:-}
   password: ${MQTT_PASSWORD:-}
   # 浏览器端 WebSocket 连接信息（会下发到客户端）。
-  # 完整 URL：生产经反代+SSL（wss://mqtt.example.com/mqtt，无需端口），
-  # 开发直连本机（ws://localhost:8083/mqtt）
+  # 浏览器使用完整 WSS 地址。开发环境由本站 HTTPS 入口分别转发公开和草稿连接。
   web:
     wsUrl: ${MQTT_WEB_URL}
     draftWsUrl: ${MQTT_DRAFT_WEB_URL:-}
@@ -42,7 +41,7 @@ aliyun:
   esa:
     authKey: ${ALIYUN_ESA_AUTH_KEY:-}
     # 必须与 ESA 函数中的 TTL_SECONDS 一致，不是边缘缓存 TTL。
-    urlTtlSeconds: 300
+    urlTtlSeconds: 3600
   esaPurge:
     accessKeyId: ${ALIYUN_ESA_ACCESS_KEY_ID:-}
     accessKeySecret: ${ALIYUN_ESA_ACCESS_KEY_SECRET:-}
@@ -61,7 +60,7 @@ aliyun:
     accessKeyId: ${ALIYUN_DYPNS_ACCESS_KEY_ID}
     accessKeySecret: ${ALIYUN_DYPNS_ACCESS_KEY_SECRET}
   sms:
-    signName: 速通互联验证服务
+    signName: 恒创联众
     templateCode: '100001'
     schemeName: 蠢猪小组官网
   captcha:
@@ -152,25 +151,13 @@ app:
     scanLimit: 20
     leaseSeconds: 120
     heartbeatSeconds: 20
-    # Frozen AVIF migration profile only; never used as a runtime fallback.
-    profileVersion: 1
-    profile:
-      maxInputBytes: 52428800
-      maxPixels: 24000000
-      avifQuality: 65
-      avifEffort: 4
-      jpegQuality: 85
-      jpegBackground: '#ffffff'
-      lqipMaxDimension: 24
-      lqipQuality: 40
-      timeoutSeconds: 60
     cloud:
       # Disabling admission rejects new images; it never enables local encoding.
       enabled: true
       profileVersion: 3
       profile:
         maxInputBytes: 20971520
-        maxPixels: 9437184
+        maxPixels: 24000000
         webpQuality: 100
         # Used by the frozen WebP maintenance encoder, not OSS IMG.
         webpEffort: 4

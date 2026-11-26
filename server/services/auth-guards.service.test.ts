@@ -263,4 +263,18 @@ describe('resolve_operate_target', () => {
   it('refuses a non-admin targeting another user', async () => {
     await expect(resolve_operate_target(create_event(), 99)).rejects.toEqual(new ApiError(403, '权限不足'))
   })
+
+  it('lets a console reader view another user but never operate on them', async () => {
+    use_record(create_record({ permissions: [{ field: 'admin_access', level: 'readonly' }] }))
+
+    await expect(resolve_operate_target(create_event(), 99, 'readonly')).resolves.toMatchObject({ target_id: 99 })
+    await expect(resolve_operate_target(create_event(), 99)).rejects.toEqual(new ApiError(403, '权限不足'))
+  })
+
+  it('ignores a stored full console grant on a non-admin', async () => {
+    use_record(create_record({ permissions: [{ field: 'admin_access', level: 'full' }] }))
+
+    await expect(resolve_operate_target(create_event(), 99)).rejects.toEqual(new ApiError(403, '权限不足'))
+    await expect(resolve_operate_target(create_event(), 99, 'readonly')).rejects.toEqual(new ApiError(403, '权限不足'))
+  })
 })

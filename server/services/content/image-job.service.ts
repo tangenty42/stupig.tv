@@ -5,7 +5,7 @@ import type { RedactedVariantRow } from './redacted-variant'
 import { createHash, randomUUID } from 'node:crypto'
 import { webp_processing_options_schema } from '@config/schema'
 import { ApiError } from '@server/errors/ApiError'
-import { copy_oss_image_original, create_oss_image_processor } from '@server/lib/oss-image-processing'
+import { AnimatedImageSourceError, copy_oss_image_original, create_oss_image_processor } from '@server/lib/oss-image-processing'
 import { observe_upload, record_upload_duration } from '@server/lib/upload-observation'
 import { content_image_formats } from '@shared/content-image-format'
 import { settings } from '@shared/settings'
@@ -20,6 +20,8 @@ import { has_redacted_variant, redacted_object_keys } from './redacted-variant'
 import { require_workspace_actor } from './workspace-auth.service'
 import { enqueue_workspace_change } from './workspace-sync.service'
 
+/** Job error code: a multi-frame plain upload whose original is published as an ordinary file. */
+export const animated_image_error_code = 'image_animated_plain'
 const uuid = () => randomUUID().replaceAll('-', '')
 // Native OSS roles have no application-computed SHA-256; old verified receipts retain theirs.
 const object_identity = image_object_identity.extend({ sha256: image_object_identity.shape.sha256.nullable() })
@@ -32,10 +34,14 @@ export const image_job_intent_schema = z.strictObject({
   processor: z.literal('oss'),
   input_basis: z.enum(['display', 'original']).optional(),
   redacted_policy: z.enum(['keep', 'discard']).optional(),
+  /** A public copy of a private source, saved as its 删减版. */
+  redaction: z.literal(true).optional(),
 }).superRefine((value, ctx) => {
   if ((value.mode === 'upload') !== (value.source === null)
     || (value.mode === 'redacted' && (! value.source?.is_private || value.is_private))
-    || (value.source && value.mode !== 'redacted' && value.is_private !== value.source.is_private)) {
+    || (value.redaction && (value.mode !== 'copy' || ! value.source?.is_private || value.is_private))
+    || (value.mode === 'overwrite' && value.is_private !== value.source?.is_private)
+    || (value.mode === 'copy' && value.source?.is_private && ! value.is_private && ! value.redaction)) {
     ctx.addIssue({ code: 'custom', message: '图片保存模式与来源权限不一致' })
   }
 })
@@ -114,7 +120,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
     if (intent.source && check_source) {
       const [rows] = await connection.execute<RowDataPacket[]>('SELECT * FROM content_story_attachments WHERE id = ? AND story_id = ? FOR UPDATE', [intent.source.id, intent.scope_id])
       const row = rows[0]
-      if (! row || row.storage_provider !== 'aliyun' || row.encryption_key !== null || row.display_key !== intent.source.key || Number(row.image_revision) !== intent.source.revision
+      if (! row || row.display_key !== intent.source.key || Number(row.image_revision) !== intent.source.revision
         || Number(row.node_revision) !== intent.source.node_revision || Boolean(row.is_private) !== intent.source.is_private) {
         throw conflict()
       }
@@ -253,12 +259,19 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
       catch (error) {
       // Late workers may neither publish nor change a replacement worker's state.
         const error_message = error instanceof ApiError ? error.message : '图片处理失败，请重试或联系管理员'
+        // Animated plain uploads are kept as ordinary files, like GIF. Edits and redactions still fail.
+        const plain = claim.intent.mode === 'upload' && error instanceof AnimatedImageSourceError
         await transaction(async (connection) => {
-          const [updated] = await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'failed', error_code = 'image_processing_failed', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`, [JSON.stringify({ error_message }), ... values])
+          const [updated] = plain
+            ? await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'cancelled', error_code = '${animated_image_error_code}', result = NULL, lease_until = NULL, executor_id = NULL WHERE ${fence}`, values)
+            : await connection.execute<ResultSetHeader>(`UPDATE content_image_jobs SET status = 'failed', error_code = 'image_processing_failed', result = CAST(? AS JSON), lease_until = NULL, executor_id = NULL WHERE ${fence}`, [JSON.stringify({ error_message }), ... values])
+          if (plain && ! updated.affectedRows)
+            throw conflict()
           if (updated.affectedRows)
             await changed(connection, id, claim.intent.scope_id)
         })
-        throw error
+        if (! plain)
+          throw error
       }
       finally {
         clearInterval(timer)
@@ -317,7 +330,7 @@ export function create_image_jobs(pool: Pick<Pool, 'getConnection'>, storage: Re
     const result = produced.parse(typeof job.result === 'string' ? JSON.parse(job.result) : job.result)
     const [rows] = await connection.execute<(RowDataPacket & RedactedVariantRow)[]>('SELECT * FROM content_story_attachments WHERE id = ? AND story_id = ? FOR UPDATE', [attachment_id, intent.scope_id])
     const row = rows[0]
-    if (! row || row.is_folder || row.storage_provider !== 'aliyun' || row.encryption_key !== null || Number(row.node_revision) !== node_revision || Boolean(row.is_private) !== (intent.mode === 'redacted' ? intent.source?.is_private : intent.is_private)
+    if (! row || row.is_folder || Number(row.node_revision) !== node_revision || Boolean(row.is_private) !== (intent.mode === 'redacted' ? intent.source?.is_private : intent.is_private)
       || (intent.mode === 'overwrite' || intent.mode === 'redacted' ? Number(row.id) !== intent.source?.id : row.object_key !== intent.input.key)) {
       throw conflict()
     }

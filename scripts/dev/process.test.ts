@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { supervise_child } from './process.mjs'
+import { supervise_child } from './process'
 
 afterEach(() => vi.useRealTimers())
 

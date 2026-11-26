@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachment_name_key, error_policy_schema, resolve_workspace_name, workspace_command_schema } from './content-workspace'
+import { attachment_name_key, attachment_privacy_effects, error_policy_schema, resolve_workspace_name, workspace_command_schema } from './content-workspace'
 import { settings } from './settings'
 
 it('accepts versioned privacy batches and rejects empty, oversized or obsolete single-target requests', () => {
@@ -9,6 +9,32 @@ it('accepts versioned privacy batches and rejects empty, oversized or obsolete s
   expect(workspace_command_schema.safeParse({ ... base, targets: [] }).success).toBe(false)
   expect(workspace_command_schema.safeParse({ ... base, targets: Array.from({ length: settings.app.content.workspace.batchLimit + 1 }).fill(targets[0]) }).success).toBe(false)
   expect(workspace_command_schema.safeParse({ ... base, target: targets[0] }).success).toBe(false)
+})
+
+describe('explicit privacy changes', () => {
+  it.each([false, true])('exempts only the selected existing item reaching private=%s', (private_value) => {
+    const before = [{ id: 'selected', path: private_value ? 'a.txt' : 'a.txt.good', is_folder: false, stored_private: ! private_value }]
+    const after = [{ id: 'selected', path: private_value ? 'a.txt.good' : 'a.txt', is_folder: false, stored_private: private_value }]
+    expect(attachment_privacy_effects(before, after, undefined, new Map([['selected', private_value]]))).toEqual([])
+    expect(attachment_privacy_effects(before, after, undefined, new Map([['other', private_value]]))).toHaveLength(1)
+    expect(attachment_privacy_effects(before, after, undefined, new Map([['selected', ! private_value]]))).toHaveLength(1)
+  })
+
+  it('still confirms a redaction relationship change on the selected item', () => {
+    const source = { id: 'source', path: 'a.txt.good', is_folder: false, stored_private: true }
+    const before = [{ id: 'selected', path: 'a.txt', is_folder: false, stored_private: false }, source]
+    const after = [{ id: 'selected', path: 'a_1.txt.good', is_folder: false, stored_private: true }, source]
+    expect(attachment_privacy_effects(before, after, undefined, new Map([['selected', true]]))).toEqual([
+      { path: 'a_1.txt.good', is_folder: false, from: { private: false, redaction: true }, to: { private: true, redaction: false } },
+    ])
+  })
+
+  it('does not treat a new item as an explicitly selected existing item', () => {
+    const after = [{ id: 'new', path: 'a.txt.good', is_folder: false }]
+    expect(attachment_privacy_effects([], after, undefined, new Map([['new', true]]))).toEqual([
+      { path: 'a.txt.good', is_folder: false, from: { private: false, redaction: false }, to: { private: true, redaction: false } },
+    ])
+  })
 })
 
 describe('workspace name resolution', () => {

@@ -34,7 +34,7 @@ export function create_preloader(pool: Pick<Pool, 'execute' | 'getConnection'>, 
   async function is_live(connection: Pick<Pool, 'execute'>, job: Job) {
     const key = job.object_key
     const [rows] = await connection.execute<RowDataPacket[]>(`SELECT a.id FROM content_story_attachments a INNER JOIN content_stories s ON s.id = a.story_id
-      WHERE a.id = ? AND a.story_id = ? AND a.is_folder = 0 AND a.storage_provider = 'aliyun' AND a.encryption_key IS NULL
+      WHERE a.id = ? AND a.story_id = ? AND a.is_folder = 0
       AND (a.object_key = ? OR a.display_key = ? OR a.fallback_key = ? OR a.redacted_display_key = ? OR a.redacted_fallback_key = ?)
       AND NOT EXISTS (SELECT 1 FROM content_object_retirements r WHERE r.object_key = ?)`,
     [job.attachment_id, job.scope_id, key, key, key, key, key, key])
@@ -182,9 +182,15 @@ export function create_preloader(pool: Pick<Pool, 'execute' | 'getConnection'>, 
   return { sweep }
 }
 
+/** Why the preload sweep cannot run; queued preloads then stay queued. */
+export function preload_blocker() {
+  const { aliyun } = runtime_config()
+  return ! aliyun.esa || ! aliyun.esaPurge?.siteId || ! aliyun.esaPurge.accessKeyId || ! aliyun.esaPurge.accessKeySecret ? 'unconfigured' as const : null
+}
+
 export async function sweep_preloads(signal?: AbortSignal) {
   const { app, aliyun } = runtime_config()
-  if (! aliyun.esa || ! aliyun.esaPurge?.siteId || ! aliyun.esaPurge.accessKeyId || ! aliyun.esaPurge.accessKeySecret)
+  if (preload_blocker() || ! aliyun.esa || ! aliyun.esaPurge?.siteId)
     return
   // Disabling new submissions must not abandon polling or retirement barriers.
   await create_preloader(db, create_esa_preload(aliyun.esaPurge), { site: aliyun.esaPurge.siteId, base: aliyun.esa.baseUrl }, app.contentPreload).sweep(signal)

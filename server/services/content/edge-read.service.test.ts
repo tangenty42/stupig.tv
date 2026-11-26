@@ -30,7 +30,7 @@ beforeEach(() => {
   state.permissions = []
   state.rows.clear()
   state.rows.set(11, { id: 11, story_id: 1, read_revision: 1, object_key: 'content/att/file', file_name: 'file.txt', version: 'etag',
-    storage_bucket: 'private', storage_provider: 'aliyun', oss_version_id: 'v1', is_private: 0, encryption_key: null })
+    storage_bucket: 'private', oss_version_id: 'v1', is_private: 0 })
   state.execute.mockImplementation(async (sql: string, args: unknown[]) => {
     if (sql.includes('FROM user_login_session_tokens'))
       return [state.session && state.generation === Number(args[1]) ? [{ id: 7, is_admin: Number(state.admin), permissions: state.permissions }] : []]
@@ -48,7 +48,7 @@ describe('online ESA authorization before cached bytes', () => {
       return new Response(null, { status: proof ? 204 : 403, headers: proof ? { 'X-Content-Authorization': proof } : {} })
     })
     const serve = vi.fn((allowed: boolean, status: number) => ({ allowed, status }))
-    const gate = create_content_bypass(state.config.authKey, 300, serve, create_content_authorizer(state.config.authKey, 'https://auth.test/api/content/authorize', 1000, remote))
+    const gate = create_content_bypass(state.config.authKey, 300, serve, create_content_authorizer(state.config.authKey, 'https://auth.test/api/hooks/esa/authorize', 1000, remote))
     for (const method of ['GET', 'HEAD'])
       expect(await gate(new Request(url, { method, headers: { Range: 'bytes=1-4', Cookie: 'must-not-forward', Authorization: 'must-not-forward' } }))).toEqual({ allowed: true, status: 200 })
     row().is_private = 1
@@ -109,7 +109,7 @@ describe('online ESA authorization before cached bytes', () => {
     Object.assign(row(), { original_key: 'content/att/copy-original', display_key: 'content/att/copy.webp', fallback_key: 'content/att/copy.jpg',
       image_metadata: { original: { name: 'copy.webp' }, source_id: null, archive_source_id: null, archive_source_key: null } })
     state.rows.set(22, { ... row(), id: 22, original_key: 'content/att/source-original' })
-    const urls = [await signed(), await signed('original')]
+    const urls = [await signed('auto', admin), await signed('original', admin)]
     state.rows.get(22)!.is_private = 1
     state.rows.get(22)!.read_revision = 2
     for (const url of urls)
@@ -124,7 +124,7 @@ describe('online ESA authorization before cached bytes', () => {
     const url = await signed('auto', admin)
     state.admin = false
     expect(await authorize_edge_read(request(url))).toBeNull()
-    state.permissions = [{ field: 'content_private', level: 'read' }]
+    state.permissions = [{ field: 'content_access', level: 'private_read' }]
     expect(await authorize_edge_read(request(url))).toBeTruthy()
     state.session = false
     expect(await authorize_edge_read(request(url))).toBeNull()
@@ -178,7 +178,7 @@ describe('online ESA authorization before cached bytes', () => {
     expect(proof).not.toBe(content_authorization_proof(state.config.authKey, randomUUID(), input.url, input.method))
     expect(proof).not.toBe(content_authorization_proof(state.config.authKey, input.nonce, input.url, 'HEAD'))
     const remote = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204, headers: { 'X-Content-Authorization': proof! } }))
-    const gate = create_content_authorizer(state.config.authKey, 'https://auth.test/api/content/authorize', 1000, remote)
+    const gate = create_content_authorizer(state.config.authKey, 'https://auth.test/api/hooks/esa/authorize', 1000, remote)
     expect(await gate(new Request(input.url))).toBe(503)
     remote.mockResolvedValueOnce(new Response(null, { status: 200 }))
     expect(await gate(new Request(input.url))).toBe(503)
@@ -189,7 +189,7 @@ describe('online ESA authorization before cached bytes', () => {
     const remote = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => new Promise((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new Error('timeout')), { once: true })
     }))
-    expect(await create_content_authorizer(state.config.authKey, 'https://auth.test/api/content/authorize', 10, remote)(new Request(url))).toBe(503)
+    expect(await create_content_authorizer(state.config.authKey, 'https://auth.test/api/hooks/esa/authorize', 10, remote)(new Request(url))).toBe(503)
     expect(remote).toHaveBeenCalledOnce()
     remote.mockClear()
     for (const endpoint of ['', 'http://auth.test', 'https://esa.test/api', 'https://user:pass@auth.test/api'])
@@ -217,7 +217,7 @@ describe('online ESA authorization before cached bytes', () => {
         proof = new URL(input.url).searchParams.get('auth_key')!.split('-')[4]!
       return new Response(null, { status: 204, headers: kind === 'missing' ? {} : { 'X-Content-Authorization': proof } })
     })
-    const gate = create_content_authorizer(state.config.authKey, 'https://auth.test/api/content/authorize', 1000, remote)
+    const gate = create_content_authorizer(state.config.authKey, 'https://auth.test/api/hooks/esa/authorize', 1000, remote)
 
     expect(await gate(new Request(url))).toBe(503)
     expect(remote).toHaveBeenCalledOnce()

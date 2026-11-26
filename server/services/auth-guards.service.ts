@@ -178,14 +178,18 @@ export async function require_admin_user(event: H3Event) {
   return user
 }
 
-export async function resolve_operate_target(event: H3Event, operate_for?: number | null) {
+/**
+ * 省略 operate_for 或等于自己时操作自己；否则按 level 校验『控制台』权限：
+ * 修改用默认的 full（管理员特有），只读查看传 readonly。
+ */
+export async function resolve_operate_target(event: H3Event, operate_for?: number | null, level: 'readonly' | 'full' = 'full') {
   const auth_user = await require_auth_user(event)
 
   if (operate_for === undefined || operate_for === null || operate_for === auth_user.id) {
     return { auth_user, target_id: auth_user.id }
   }
 
-  if (! has_permission(auth_user, 'admin_access', 'full')) {
+  if (! has_permission(auth_user, 'admin_access', level)) {
     throw new ApiError(403, '权限不足')
   }
 

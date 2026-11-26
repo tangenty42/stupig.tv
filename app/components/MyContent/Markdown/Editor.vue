@@ -5,11 +5,13 @@
     <!-- Inline var (not scoped CSS): the teleported overlay sits at body level
          and must not pick up the app header height for preview pinning. -->
     <div
+      ref="editor_surface"
       :class="fullscreen ? 'editor-fullscreen fixed inset-0 z-[60] flex flex-col gap-2 bg-white p-3 dark:bg-slate-900' : 'flex flex-col gap-2'"
       :style="fullscreen ? { '--app-header-height': '0px' } : undefined"
       @dragover.capture="on_overlay_dragover"
       @drop.capture="on_overlay_drop"
     >
+      <MyContentAttachmentMarkdownChoice :visible="markdown_pending" @choose="confirm_markdown" @cancel="cancel_markdown" />
       <!-- Preload the lucide icons used as completion-type icons so the
          injected `iconify` spans in the autocomplete list render. -->
       <div class="hidden" aria-hidden="true">
@@ -96,7 +98,7 @@
               v-if="! editor_ready"
               class="flex min-h-80 max-h-[60vh] items-center justify-center text-sm text-slate-400 dark:text-slate-500"
             >
-              代码编辑器加载中...
+              代码编辑器加载中……
             </div>
             <div
               ref="editor_host"
@@ -145,7 +147,7 @@
           :style="fullscreen ? { flex: `${1 - split_ratio} 1 0%` } : undefined"
         >
           <div ref="preview_pane" :class="fullscreen ? 'h-full overflow-y-auto px-3 pb-3' : undefined">
-            <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" :folders="folders" :stories="stories" :public-view="preview_audience === 'public'" empty-text="暂无可预览内容" @folder-open="emit('folder-open', $event)" />
+            <MyContentMarkdownPreview :markdown="model" :story-id="storyId" :attachments="attachments" :folders="folders" :stories="stories" :public-view="preview_audience === 'public'" can-read-private empty-text="暂无可预览内容" />
           </div>
         </div>
       </div>
@@ -155,24 +157,33 @@
 
 <script setup lang="ts">
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
-import type { AttachmentUploadPick } from '~/utils/content/attachment'
-import type { LintListItem } from '~/utils/content/editor/lint'
-import { attachment_picks_from_data_transfer } from '~/utils/content/attachment'
-import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/utils/content/attachment-drag'
-import { completion_icon_names } from '~/utils/content/editor/completions'
+import type { CompletionSourceFailure } from '~/features/content/markdown/editor/completions'
+import type { LintListItem } from '~/features/content/markdown/editor/lint'
+import type { AttachmentUploadPick } from '~/features/content/uploads/picks'
+import { content_attachment_drag_file_names, resolve_markdown_selection } from '~/features/content/attachments/drag'
+import { content_attachment_drag_type, content_folder_drag_type, get_content_attachment_drag_data, get_content_folder_drag_data } from '~/features/content/attachments/drag-transfer'
+import { useAttachmentMarkdown } from '~/features/content/attachments/markdown-action'
+import { useStoryEditor } from '~/features/content/markdown/editor'
+import { completion_icon_names } from '~/features/content/markdown/editor/completions'
+import { useStoryEditorViewState } from '~/features/content/markdown/view-state'
+import { attachment_picks_from_data_transfer } from '~/features/content/uploads/browser-picks'
 
 const props = withDefaults(defineProps<{
   storyId?: number | null
   attachments?: ContentStoryAttachment[]
+  attachmentsFailure?: CompletionSourceFailure
   placeholder?: string
   readonly?: boolean
   allowWrite?: () => boolean
+  historyKey?: number
   /** Account + immutable cloud draft id; only presentation state is stored. */
   viewStateKey?: string | null
   /** Known stories for `@story` completion, dead-reference linting and preview cards. */
   stories?: ContentStorySummary[]
+  storiesFailure?: CompletionSourceFailure
   /** Folder paths in scope, offered alongside the attachments in the destination completion. */
   folders?: string[]
+  referencedPaths?: ReadonlySet<string> | null
 }>(), {
   storyId: null,
   attachments: () => [],
@@ -188,8 +199,6 @@ const emit = defineEmits<{
   /** Clipboard files; kept apart from drops so the parent can ask for a name. */
   'files-pasted': [files: AttachmentUploadPick[], position: number | null]
   'attachment-drop-outside': [event: DragEvent]
-  /** A folder card in the preview was activated. */
-  'folder-open': [folder: string]
 }>()
 
 const model = defineModel<string>({ default: '' })
@@ -224,11 +233,80 @@ const display_mode = computed({
 })
 const split_ratio = ref(0.5)
 const attachments_width = ref(256)
+const editor_surface = useTemplateRef<HTMLElement>('editor_surface')
 const text_pane = ref<HTMLElement>()
 const preview_pane = ref<HTMLElement>()
+let switching_fullscreen = false
+let fullscreen_transition: ViewTransition | undefined
+let disposed = false
+const fullscreen_animations: Animation[] = []
 
-function toggle_fullscreen() {
-  fullscreen.value = ! fullscreen.value
+async function toggle_fullscreen() {
+  if (switching_fullscreen)
+    return
+  const next = ! fullscreen.value
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    fullscreen.value = next
+    return
+  }
+
+  switching_fullscreen = true
+  try {
+    if (typeof document.startViewTransition === 'function') {
+      // Capture both layouts around the Teleport move so CodeMirror stays mounted.
+      fullscreen_transition = document.startViewTransition(async () => {
+        if (! disposed) {
+          fullscreen.value = next
+          await nextTick()
+        }
+      })
+      void fullscreen_transition.ready.catch(() => {})
+      await fullscreen_transition.finished
+    }
+    else {
+      await fade_fullscreen(next)
+    }
+  }
+  catch {
+    if (! disposed)
+      fullscreen.value = next
+  }
+  finally {
+    fullscreen_transition = undefined
+    fullscreen_animations.splice(0).forEach(animation => animation.cancel())
+    switching_fullscreen = false
+  }
+}
+
+async function fade_fullscreen(next: boolean) {
+  const page = document.getElementById('__nuxt')
+  const surface = editor_surface.value
+  if (! page?.animate || ! surface?.animate) {
+    fullscreen.value = next
+    return
+  }
+
+  // Keep the inline page hidden while the fullscreen editor docks back into it.
+  const underlay = next ? undefined : page.animate([{ opacity: 0 }, { opacity: 0 }], { fill: 'both' })
+  if (underlay)
+    fullscreen_animations.push(underlay)
+  const leaving = (next ? page : surface).animate({ opacity: [1, 0] }, { duration: 180, easing: 'ease-in', fill: 'both' })
+  fullscreen_animations.push(leaving)
+  await leaving.finished
+  if (disposed)
+    return
+
+  fullscreen.value = next
+  await nextTick()
+  if (disposed)
+    return
+  const entering = (next ? surface : page).animate({ opacity: [0, 1] }, { duration: 300, easing: 'ease-out', fill: 'both' })
+  fullscreen_animations.push(entering)
+  if (! next) {
+    leaving.cancel()
+    underlay?.cancel()
+  }
+  await entering.finished
 }
 
 function start_attachments_divider_drag(event: MouseEvent) {
@@ -287,7 +365,14 @@ editor = useStoryEditor({
   model, host: editor_host, preview_pane, fullscreen, mode: editor_mode,
   readonly: () => props.readonly,
   allow_write: () => props.allowWrite?.() !== false,
-  sources: { stories: () => props.stories, story_id: () => props.storyId, attachments: () => props.attachments, folders: () => props.folders },
+  history_key: () => props.historyKey,
+  sources: {
+    stories: () => props.stories, story_id: () => props.storyId,
+    attachments: () => props.attachments, folders: () => props.folders,
+    stories_failure: () => props.storiesFailure,
+    attachments_failure: () => props.attachmentsFailure,
+    referenced_paths: () => props.referencedPaths ?? null,
+  },
   on_lint: items => emit('lint', items),
   on_files_pasted: (files, position) => emit('files-pasted', files, position),
 })
@@ -300,36 +385,42 @@ watch(fullscreen, (active) => {
   document.documentElement.style.overflow = active ? 'hidden' : ''
 })
 onBeforeUnmount(() => {
+  disposed = true
+  fullscreen_transition?.skipTransition()
+  fullscreen_animations.splice(0).forEach(animation => animation.cancel())
   document.documentElement.style.overflow = ''
 })
 
-defineExpose({ editor_mode, insert_at_position, apply_reference_changes, validate })
+defineExpose({ editor_mode, insert_at_position, track_upload_insertion: editor.track_upload_insertion, apply_reference_changes, validate })
+
+const { markdown_pending, request_markdown, confirm_markdown, cancel_markdown } = useAttachmentMarkdown(() => props.attachments)
+watch([() => props.viewStateKey, () => props.readonly], cancel_markdown)
 
 async function on_drop(event: DragEvent) {
   drag_over.value = false
-  if (props.readonly)
+  if (props.readonly || props.allowWrite?.() === false)
     return
+  // DataTransfer is readable only during the drop event, not after awaits.
+  const attachment = get_content_attachment_drag_data(event.dataTransfer)
+  const folder = attachment ? null : get_content_folder_drag_data(event.dataTransfer)
+  const origin = attachment
+    ? { path: attachment.file_name, kind: 'file' as const, is_image: attachment.is_image }
+    : folder ? { path: folder.folder, kind: 'folder' as const } : null
+  if (origin) {
+    const position = editor.position_at_coords({ x: event.clientX, y: event.clientY })
+    if (position === null)
+      return
+    const paths = attachment ? content_attachment_drag_file_names(attachment) : folder?.file_names ?? [origin.path]
+    const selection = resolve_markdown_selection(paths, props.attachments, props.folders, origin)
+    const insert = editor.track_attachment_insertion(position)
+    request_markdown(selection, (_markdown, items) => insert(items))
+    return
+  }
+
   const picks = await attachment_picks_from_data_transfer(event.dataTransfer)
-  if (props.readonly)
-    return
-  if (picks.length) {
+  if (! props.readonly && props.allowWrite?.() !== false && picks.length) {
     const position = editor.position_at_coords({ x: event.clientX, y: event.clientY })
     emit('files-dropped', picks, position)
-    return
-  }
-
-  const position = editor.position_at_coords({ x: event.clientX, y: event.clientY })
-  const attachment = get_content_attachment_drag_data(event.dataTransfer)
-  if (attachment && position !== null) {
-    insert_at_position(attachment.markdown ?? content_attachment_markdown(attachment), position)
-    return
-  }
-
-  // A dragged folder inserts its link shorthand, the same form the folder card
-  // copy action produces: the preview renders it as a card.
-  const folder = get_content_folder_drag_data(event.dataTransfer)
-  if (folder && position !== null) {
-    insert_at_position(folder.markdown ?? content_folder_markdown(folder.folder), position)
   }
 }
 
@@ -474,6 +565,11 @@ function on_overlay_drop(event: DragEvent) {
   box-sizing: border-box;
   overflow: hidden;
   padding: 0;
+}
+
+:deep(.cm-completion-source-status) {
+  @apply whitespace-pre-line px-2 py-1.5;
+  max-width: min(32rem, calc(100vw - 2rem));
 }
 
 /* Separate clipping from scrolling: the tooltip clips the native scrollbar

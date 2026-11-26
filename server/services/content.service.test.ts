@@ -31,7 +31,7 @@ describe('strict Content cutover', () => {
     mocks.execute.mockImplementation(async (sql: string) => [sql.includes('FROM content_stories')
       ? [{ id: 1 }]
       : [{
-          id: 12, read_revision: 1, file_name, object_key: 'content/att/test', storage_provider: 'aliyun', encryption_key: null, is_private: 0,
+          id: 12, read_revision: 1, file_name, object_key: 'content/att/test', is_private: 0,
         }]])
     expect(await sign_attachment_download(1, file_name)).toEqual({ url: 'https://signed.example.test/temporary' })
     expect(mocks.sign).toHaveBeenCalledWith('content/att/test', expect.any(Number), 'GET', file_name.split('/').pop()!.replace(/\.[^.]+$/, extension => extension.toLowerCase()), 'attachment', expect.objectContaining({ id: 12, session: 0 }))
@@ -40,21 +40,12 @@ describe('strict Content cutover', () => {
     mocks.execute.mockImplementation(async (sql: string) => [sql.includes('FROM content_stories')
       ? [{ id: 1 }]
       : [{
-          id: 12, read_revision: 1, file_name: 'a.png.good', object_key: 'content/att/test', storage_provider: 'aliyun', encryption_key: null, is_private: 1,
+          id: 12, read_revision: 1, file_name: 'a.png.good', object_key: 'content/att/test', is_private: 1,
         }]])
     await expect(sign_attachment_download(1, 'a.png.good')).rejects.toMatchObject({ statusCode: 403 })
     expect(mocks.sign).not.toHaveBeenCalled()
     await sign_attachment_download(1, 'a.png.good', { id: 1, session_id: 9, token_generation_id: 1, is_admin: true } as AuthUser)
     expect(mocks.sign).toHaveBeenCalledWith('content/att/test', expect.any(Number), 'GET', 'a.png', 'attachment', expect.objectContaining({ id: 12, session: 9 }))
-  })
-  it.each([{ storage_provider: 'legacy', encryption_key: null }, { storage_provider: 'aliyun', encryption_key: 'old-key' }])('refuses unmigrated storage without issuing any old signature', async (legacy) => {
-    mocks.execute.mockImplementation(async (sql: string) => [sql.includes('FROM content_stories')
-      ? [{ id: 1 }]
-      : [{
-          file_name: 'old.png', object_key: 'content/att/test', is_private: 0, ... legacy,
-        }]])
-    await expect(sign_attachment_download(1, 'old.png')).rejects.toMatchObject({ statusCode: 503 })
-    expect(mocks.sign).not.toHaveBeenCalled()
   })
   it('does not sign an unknown story or attachment', async () => {
     mocks.execute.mockResolvedValue([[]])

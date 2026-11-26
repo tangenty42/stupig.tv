@@ -4,7 +4,7 @@ import bypass_deployment, { authorize_content_request, content_authorization_pro
 import { create_esa } from './esa'
 
 vi.mock('@config/loader', () => ({ runtime_config: () => ({ aliyun: { esa: null } }) }))
-const function_env = vi.hoisted(() => ({ ALIYUN_ESA_AUTH_KEY: undefined as string | undefined, CONTENT_AUTH_URL: 'https://auth.example.test/api/content/authorize' }))
+const function_env = vi.hoisted(() => ({ ALIYUN_ESA_AUTH_KEY: undefined as string | undefined, CONTENT_AUTH_URL: 'https://auth.example.test/api/hooks/esa/authorize' }))
 vi.mock('alibaba:workers', () => ({ env: function_env }))
 const config = { baseUrl: 'https://esa.example.test', authKey: 'test-key#'.repeat(8), urlTtlSeconds: 300 }
 beforeEach(() => vi.useRealTimers())
@@ -182,40 +182,16 @@ describe('eSA signed Content reads', () => {
     }
   })
 
-  it('logs QA entry and decisions without disclosing signatures or credentials', async () => {
+  it('returns the authorization decision for former QA probes without emitting trace logs', async () => {
     const alert = vi.fn()
     vi.stubGlobal('console', { ... console, alert })
-    const path = 'content/att/qa-esa-bypass/11111111-1111-1111-1111-111111111111/headers.bin'
-    const url = create_esa(config).signed_read_url(path, 300, 'GET', 'private-name.bin')
-    const handler = create_content_bypass(config.authKey, 300, (allowed, status) => ({ allowed, status }))
-    try {
-      expect(await handler(new Request(url))).toEqual({ allowed: true, status: 200 })
-      expect(await handler(new Request(new URL(path, config.baseUrl)))).toEqual({ allowed: false, status: 403 })
-      const events = alert.mock.calls.map(([line]) => JSON.parse(line))
-      expect(events.map(event => event.stage)).toEqual(['entered', 'decision', 'returned', 'entered', 'decision', 'returned'])
-      expect(events[1]).toEqual({ build: 'content-bypass-debug-v1', stage: 'decision', method: 'GET', path: `/${path}`, allowed: true, status: 200 })
-      expect(events[4]).toMatchObject({ allowed: false, status: 403 })
-      const output = JSON.stringify(events)
-      for (const secret of [config.authKey, new URL(url).searchParams.get('auth_key')!, 'private-name.bin', 'auth_key'])
-        expect(output).not.toContain(secret)
-      alert.mockClear()
-      await handler(new Request(create_esa(config).signed_read_url('content/att/business-file', 300)))
-      expect(alert).not.toHaveBeenCalled()
-    }
-    finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('preserves decisions when the ESA log sink throws', async () => {
-    vi.stubGlobal('console', { ... console, alert: () => {
-      throw new Error('logging unavailable')
-    } })
     try {
       const handler = create_content_bypass(config.authKey, 300, (allowed, status) => ({ allowed, status }))
-      const url = create_esa(config).signed_read_url('content/att/qa-esa-bypass/11111111-1111-1111-1111-111111111111/probe.bin', 300)
-      expect(await handler(new Request(url))).toEqual({ allowed: true, status: 200 })
-      expect(await handler(new Request(url.split('?')[0]!))).toEqual({ allowed: false, status: 403 })
+      const path = 'content/att/qa-esa-bypass/11111111-1111-1111-1111-111111111111/headers.bin'
+      const signed = create_esa(config).signed_read_url(path, 300)
+      expect(await handler(new Request(signed))).toEqual({ allowed: true, status: 200 })
+      expect(await handler(new Request(new URL(path, config.baseUrl)))).toEqual({ allowed: false, status: 403 })
+      expect(alert).not.toHaveBeenCalled()
     }
     finally {
       vi.unstubAllGlobals()

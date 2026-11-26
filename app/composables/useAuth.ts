@@ -86,10 +86,13 @@ export function useAuth() {
 
     broadcast_logout()
 
-    info('再见！Ciao~')
-    dead()
-
-    reloadNuxtApp()
+    if (import.meta.client) {
+      info('再见！Ciao~')
+      dead()
+      // Logout invalidates the local identity. A recent reload must not keep
+      // the old page alive with its toasts muted.
+      reloadNuxtApp({ force: true })
+    }
   }
 
   function handle_remote_logout() {
@@ -99,7 +102,7 @@ export function useAuth() {
 
     user.value = null
 
-    reloadNuxtApp()
+    reloadNuxtApp({ force: true })
   }
 
   return {

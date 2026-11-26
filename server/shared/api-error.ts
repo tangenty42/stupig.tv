@@ -1,9 +1,13 @@
 import * as z from 'zod'
-import { workspace_issue_schema } from './content-workspace'
+import { privacy_change_schema, privacy_digest_schema, workspace_issue_schema } from './content-workspace'
+import { settings } from './settings'
 
 /** Only explicitly declared public error data may cross the transport boundary. */
 export const public_api_error_schema = z.discriminatedUnion('code', [z.strictObject({
   code: z.literal('UPLOAD_SESSION_EXPIRED'),
+  details: z.undefined().optional(),
+}), z.strictObject({
+  code: z.literal('ADMIN_TARGET_REJECTED'),
   details: z.undefined().optional(),
 }), z.strictObject({
   code: z.literal('REF_TARGET_REPLACED'),
@@ -18,7 +22,12 @@ export const public_api_error_schema = z.discriminatedUnion('code', [z.strictObj
   }),
 }), z.strictObject({
   code: z.literal('BATCH_REJECTED'),
-  details: z.strictObject({ items: z.array(workspace_issue_schema).min(1).max(500), valid_count: z.number().int().nonnegative(), valid_targets: z.array(z.string()).optional() }),
+  // Older receipts may still include group_targets; new responses only need items and valid_count.
+  details: z.strictObject({ items: z.array(workspace_issue_schema).min(1).max(500), valid_count: z.number().int().nonnegative(), group_targets: z.array(z.string()).max(settings.app.content.workspace.batchLimit).optional() }),
+}), z.strictObject({
+  code: z.literal('PRIVACY_CONFIRMATION'),
+  details: z.strictObject({ changes: z.array(privacy_change_schema).min(1), total: z.number().int().positive(), digest: privacy_digest_schema })
+    .refine(({ changes, total }) => changes.length === total),
 })])
 
 export type PublicApiError = z.infer<typeof public_api_error_schema>

@@ -1,8 +1,10 @@
 import type { AppRouter } from '@server/trpc/router'
 import type { PermissionGrant } from '@shared/permissions'
 import type { ContentStoryBody } from '@shared/types/content'
+import type { StorageAuditFindingsQuery } from '@shared/types/storage-audit'
 import type { inferRouterInputs } from '@trpc/server'
 import { settings } from '@shared/settings'
+import { TrpcApiError } from './useTrpcClient'
 
 type RouterInputs = inferRouterInputs<AppRouter>
 type AuthInputs = RouterInputs['auth']
@@ -107,6 +109,10 @@ export function useApi() {
       await trpc_call(trpc.profile.changePasswordByOtp.mutate(payload))
     },
 
+    async set_initial_password(payload: ProfileInputs['setInitialPassword']) {
+      await trpc_call(trpc.profile.setInitialPassword.mutate(payload))
+    },
+
     async change_phone(payload: ProfileInputs['changePhone']) {
       await trpc_call(trpc.profile.changePhone.mutate(payload))
     },
@@ -131,8 +137,8 @@ export function useApi() {
     async get_background_status() {
       return trpc_call(trpc.admin.getBackgroundStatus.query())
     },
-    async get_storage_audit_findings(after_id = 0, limit = 50) {
-      return trpc_call(trpc.admin.getStorageAuditFindings.query({ after_id, limit }))
+    async get_storage_audit_findings(options: StorageAuditFindingsQuery) {
+      return trpc_call(trpc.admin.getStorageAuditFindings.query(options))
     },
     async list_users(options: {
       page: number
@@ -161,11 +167,6 @@ export function useApi() {
     async set_permissions(id: number, permissions: PermissionGrant[]) {
       await trpc_call(trpc.admin.setPermissions.mutate({ id, permissions }))
     },
-
-    async get_keywords() {
-      const result = await trpc_call(trpc.admin.getKeywords.query())
-      return { ... result, fields: [... result.fields] }
-    },
   }
 
   async function draft_call<T>(request: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -176,11 +177,16 @@ export function useApi() {
         trpc_call(request(controller.signal)),
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
-            controller.abort()
             reject(new Error('连接超时，已暂停编辑'))
+            controller.abort()
           }, settings.app.content.draft.requestTimeoutMs)
         }),
       ])
+    }
+    catch (error) {
+      if (error instanceof TrpcApiError && error.status === undefined)
+        throw new Error('连接中断，已暂停编辑', { cause: error })
+      throw error
     }
     finally { clearTimeout(timer) }
   }
@@ -188,9 +194,12 @@ export function useApi() {
   const content = {
     create_draft: (request_id: string) => draft_call(signal => trpc.content.createDraft.mutate({ request_id }, { signal })),
     get_draft: (input: RouterInputs['content']['getDraft']) => draft_call(signal => trpc.content.getDraft.mutate(input, { signal })),
-    list_drafts: (after = '', limit = 30) => draft_call(signal => trpc.content.listDrafts.query({ after, limit }, { signal })),
+    list_drafts: () => draft_call(signal => trpc.content.listDrafts.query(undefined, { signal })),
     acquire_draft: (input: RouterInputs['content']['acquireDraft']) => draft_call(signal => trpc.content.acquireDraft.mutate(input, { signal })),
     command_draft: (input: RouterInputs['content']['commandDraft']) => draft_call(signal => trpc.content.commandDraft.mutate(input, { signal })),
+    async draft_sync_credentials() {
+      return trpc_call(trpc.content.draftSyncCredentials.query())
+    },
     async execute_workspace_command(payload: Parameters<typeof trpc.content.executeWorkspaceCommand.mutate>[0]) {
       return trpc_call(trpc.content.executeWorkspaceCommand.mutate(payload))
     },

@@ -22,7 +22,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   state.story_exists = true
   state.sources.clear()
-  state.row = { id: 11, read_revision: 1, object_key: 'content/att/key', storage_bucket: 'public', storage_provider: 'aliyun', oss_version_id: 'v1', version: 'etag', file_name: 'docs/报告 (1).PDF', is_private: 0, encryption_key: null }
+  state.row = { id: 11, read_revision: 1, object_key: 'content/att/key', storage_bucket: 'public', oss_version_id: 'v1', version: 'etag', file_name: 'docs/报告 (1).PDF', is_private: 0 }
   state.sign.mockReturnValue('https://esa.test/temporary')
 })
 describe('unified attachment reads', () => {
@@ -50,7 +50,19 @@ describe('unified attachment reads', () => {
     const old = version()
     state.row.redacted_display_key = state.row.redacted_fallback_key = null
     state.row.redacted_revision = 2
-    await expect(attachment_redirect(11, old, null, 'GET', 'redacted_display')).rejects.toMatchObject({ statusCode: 403 })
+    await expect(attachment_redirect(11, old, null, 'GET', 'redacted_display')).rejects.toMatchObject({ statusCode: 404 })
+  })
+  it('serves a public image original only to 机密可读 or 完全', async () => {
+    Object.assign(state.row, { file_name: 'photo.png', display_key: 'photo.webp', fallback_key: 'photo.jpg', original_key: 'raw', image_revision: 1 })
+    const user = (permissions: AuthUser['permissions']) => ({ id: 8, session_id: 9, token_generation_id: 1, is_admin: false, permissions }) as AuthUser
+    await expect(attachment_redirect(11, version(), null, 'GET', 'original')).rejects.toMatchObject({ statusCode: 403 })
+    await expect(attachment_redirect(11, version(), user([]), 'GET', 'original')).rejects.toMatchObject({ statusCode: 403 })
+    for (const level of ['private_read', 'full'] as const) {
+      await attachment_redirect(11, version(), user([{ field: 'content_access', level }]), 'GET', 'original')
+      expect(state.sign.mock.lastCall?.[0]).toBe('raw')
+    }
+    await attachment_redirect(11, version(), null, 'GET', 'display')
+    expect(state.sign.mock.lastCall?.[0]).toBe('photo.webp')
   })
   it.each([true, false])('shares archive authorization with the redaction editor (variant exists: %s)', async (has_redacted) => {
     Object.assign(state.row, { story_id: 1, file_name: 'photo.png.good', is_private: 1, display_key: 'normal.webp', fallback_key: 'normal.jpg',
@@ -81,7 +93,7 @@ describe('unified attachment reads', () => {
     Object.assign(state.row, { story_id: 1, file_name: 'photo_副本.webp', display_key: 'copy.webp', fallback_key: 'copy.jpg', original_key: 'copy-original',
       image_metadata: { original: { name: 'photo_副本.webp', mime: 'image/webp' }, archive_source_id: null, archive_source_key: null, source_id: null } })
     // No source rows exist. Only the copy itself may authorize these reads.
-    await attachment_redirect(11, version(), null, 'GET', 'original')
+    await attachment_redirect(11, version(), admin, 'GET', 'original')
     expect(state.sign).toHaveBeenLastCalledWith('copy-original', expect.any(Number), 'GET', 'photo_副本.webp', 'inline', expect.any(Object))
     expect((await image_editor_source(11, version(), admin)).original_url).toContain('role=original')
   })
@@ -99,7 +111,7 @@ describe('unified attachment reads', () => {
     expect(state.sign).toHaveBeenLastCalledWith('content/att/a.webp', expect.any(Number), 'GET', '报告 (1).webp', 'inline', expect.objectContaining({ id: 11, revision: expect.stringMatching(/^[a-f\d]{64}$/), session: expect.any(Number) }))
     await attachment_redirect(11, version(), null, 'GET', 'display')
     expect(state.sign).toHaveBeenLastCalledWith('content/att/a.webp', expect.any(Number), 'GET', '报告 (1).webp', 'inline', expect.objectContaining({ id: 11, revision: expect.stringMatching(/^[a-f\d]{64}$/), session: expect.any(Number) }))
-    await attachment_redirect(11, version(), null, 'HEAD', 'original')
+    await attachment_redirect(11, version(), admin, 'HEAD', 'original')
     expect(state.sign).toHaveBeenLastCalledWith('content/att/raw', expect.any(Number), 'HEAD', '未处理.png', 'inline', expect.objectContaining({ id: 11, revision: expect.stringMatching(/^[a-f\d]{64}$/), session: expect.any(Number) }))
   })
 
@@ -126,24 +138,29 @@ describe('unified attachment reads', () => {
     expect(await attachment_redirect(11, version(), null, method)).toBe('https://esa.test/temporary')
     expect(state.sign).toHaveBeenCalledWith('content/att/key', expect.any(Number), method, '报告 (1).pdf', 'inline', expect.objectContaining({ id: 11, revision: expect.stringMatching(/^[a-f\d]{64}$/), session: expect.any(Number) }))
   })
-  it.each([{ storage_provider: 'legacy' }, { encryption_key: 'old-key' }])('refuses legacy storage without signing: %j', async (legacy) => {
-    Object.assign(state.row, legacy)
-    await expect(attachment_redirect(11, version(), admin)).rejects.toMatchObject({ statusCode: 503 })
-    expect(state.sign).not.toHaveBeenCalled()
-  })
   it('checks current privacy even with a previously valid version', async () => {
     const old = version()
     state.row.is_private = 1
-    await expect(attachment_redirect(11, old, null)).rejects.toMatchObject({ statusCode: 403 })
-    await expect(attachment_redirect(11, old, admin)).rejects.toMatchObject({ statusCode: 409 })
+    await expect(attachment_redirect(11, old, null)).rejects.toMatchObject({ statusCode: 404 })
+    await expect(attachment_redirect(11, old, admin)).rejects.toMatchObject({ statusCode: 404 })
+    await expect(attachment_redirect(11, version(), null)).rejects.toMatchObject({ statusCode: 403 })
     expect(state.sign).not.toHaveBeenCalled()
     await attachment_redirect(11, version(), admin)
     expect(state.sign).toHaveBeenCalledOnce()
   })
+  it('answers a wrong version like a missing row, whatever the privacy', async () => {
+    for (const is_private of [0, 1]) {
+      state.row.is_private = is_private
+      await expect(attachment_redirect(11, 'guess', null)).rejects.toMatchObject({ statusCode: 404, message: '附件不存在或已变化，请刷新后重试' })
+    }
+    state.story_exists = false
+    await expect(attachment_redirect(11, 'guess', null)).rejects.toMatchObject({ statusCode: 404, message: '附件不存在或已变化，请刷新后重试' })
+    expect(state.sign).not.toHaveBeenCalled()
+  })
   it.each(['object_key', 'oss_version_id'])('fences a changed %s even with the same ETag', async (field) => {
     const old = version()
     state.row[field] = 'changed'
-    await expect(attachment_redirect(11, old, null)).rejects.toMatchObject({ statusCode: 409 })
+    await expect(attachment_redirect(11, old, null)).rejects.toMatchObject({ statusCode: 404 })
     expect(state.sign).not.toHaveBeenCalled()
   })
   it('never signs an orphaned attachment', async () => {

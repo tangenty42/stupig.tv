@@ -2,7 +2,9 @@ import type { Pool, RowDataPacket } from 'mysql2/promise'
 import { runtime_config } from '@config/loader'
 import { db } from '@server/lib/db'
 import { upload_observation_snapshot, upload_process_resources } from '@server/lib/upload-observation'
-import { local_background_status } from '@server/services/content/background.service'
+import { content_background_intervals, local_background_status } from '@server/services/content/background.service'
+import { object_retirement_blocker } from '@server/services/content/object-retirement.service'
+import { preload_blocker } from '@server/services/content/preload.service'
 
 // Fixed SQL only. Never return payloads, keys, signed URLs or cloud error messages.
 const ledgers = [
@@ -15,13 +17,13 @@ const ledgers = [
   { id: 'storage_audit', table: 'storage_audit_targets', phase: 'phase', error: 'last_error_code', pending: 'phase <> \'completed\'', due: 'next_run_at <= CURRENT_TIMESTAMP(3) AND (lease_until IS NULL OR lease_until <= CURRENT_TIMESTAMP(3))', lease: 'lease_until > CURRENT_TIMESTAMP(3)', where: '1 = 1' },
 ]
 
-export async function read_background_ledgers(pool: Pick<Pool, 'execute'>) {
+export async function read_background_ledgers(pool: Pick<Pool, 'execute'>, intervals: Readonly<Record<string, number>>) {
   const result = await Promise.all(ledgers.map(async (spec) => {
     const [rows] = await pool.execute<RowDataPacket[]>(`SELECT ${spec.phase} AS phase, ${spec.error} AS error_code, COUNT(*) AS total,
       SUM(IF(${spec.pending}, 1, 0)) AS pending, SUM(IF(${spec.due}, 1, 0)) AS due,
       SUM(IF(${spec.lease}, 1, 0)) AS leased, MIN(IF(${spec.pending}, created_at, NULL)) AS oldest_pending_at
       FROM ${spec.table} WHERE ${spec.where} GROUP BY ${spec.phase}, ${spec.error}`)
-    return { id: spec.id, groups: rows.map(row => ({ phase: String(row.phase),
+    return { id: spec.id, interval_seconds: intervals[spec.id] ?? null, groups: rows.map(row => ({ phase: String(row.phase),
       error_code: typeof row.error_code === 'string' && /^[\w-]{1,80}$/.test(row.error_code) ? row.error_code : null,
       total: Number(row.total), pending: Number(row.pending), due: Number(row.due), leased: Number(row.leased),
       oldest_pending_at: row.oldest_pending_at ? new Date(row.oldest_pending_at).toISOString() : null })) }
@@ -40,6 +42,7 @@ export async function read_background_ledgers(pool: Pick<Pool, 'execute'>) {
 }
 
 export async function get_background_status() {
-  return { mode: runtime_config().app.backgroundRunner.mode, process: local_background_status(), database: await read_background_ledgers(db),
+  return { mode: runtime_config().app.backgroundRunner.mode, process: local_background_status(), database: await read_background_ledgers(db, content_background_intervals()),
+    blocked: { retirement: object_retirement_blocker(), preload: preload_blocker() } as Partial<Record<string, 'disabled' | 'unconfigured' | null>>,
     observations: upload_observation_snapshot(), resources: upload_process_resources() }
 }

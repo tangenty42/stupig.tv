@@ -1,42 +1,11 @@
+import type { ContentMarkdownSource as Source } from './content-markdown-source'
 import { html_no_markdown_tags, html_table_tags } from './content-html'
+import { content_markdown_source, content_markdown_token_body, content_markdown_fragment as fragment } from './content-markdown-source'
 import { create_content_markdown_parser, dedent_html_inner, split_html_wrappers } from './content-markdown-syntax'
 import { content_private_plugin } from './content-private'
 
 // Migration snapshots import content-reference-definitions.ts under its original
 // identity. Keep this evolving resolver outside that frozen dependency closure.
-
-interface Source {
-  text: string
-  offsets: number[]
-}
-
-/** Map parser normalization and wrapper indentation back to the original document. */
-function fragment(source: Source, text: string, start = 0): Source {
-  const offsets: number[] = []
-  let cursor = start
-  let indentation = true
-  for (const char of text.split('')) {
-    // getLines can expand the remaining width of a container's indentation
-    // tab into spaces. These synthetic spaces have no distinct source byte.
-    if (indentation && char === ' ' && source.text[cursor] !== ' ') {
-      offsets.push(source.offsets[cursor]!)
-      if (source.text[cursor] === '\t')
-        cursor ++
-      continue
-    }
-    cursor = source.text.indexOf(char, cursor)
-    if (cursor < 0)
-      throw new Error('Cannot locate Markdown reference source')
-    offsets.push(source.offsets[cursor]!)
-    cursor ++
-    if (char === '\n')
-      indentation = true
-    else if (char !== ' ' && char !== '\t')
-      indentation = false
-  }
-  offsets.push(source.offsets[cursor] ?? source.offsets.at(- 1)!)
-  return { text, offsets }
-}
 
 export interface ReferenceDefinition {
   from: number
@@ -49,18 +18,7 @@ export interface ReferenceDefinition {
 export function scan_reference_definitions(text: string, front_matter_end = 0) {
   if (! text.includes(']:') && ! text.includes('<'))
     return { definitions: [] as ReferenceDefinition[], ranges: [] as { from: number, to: number }[], resolve: (_label: string): ReferenceDefinition | undefined => undefined }
-  // CommonMark normalizes CRLF/CR and NUL before block parsing. Keep original
-  // UTF-16 offsets for editor patches, including documents containing emoji.
-  const offsets: number[] = []
-  let normalized = ''
-  for (let i = 0; i < text.length; i ++) {
-    offsets.push(i)
-    normalized += i < front_matter_end && ! /[\r\n]/.test(text[i]!) ? ' ' : text[i] === '\r' ? '\n' : text[i] === '\0' ? '\uFFFD' : text[i]
-    if (text[i] === '\r' && text[i + 1] === '\n')
-      i ++
-  }
-  offsets.push(text.length)
-  let source: Source = { text: normalized, offsets }
+  let source = content_markdown_source(text, front_matter_end)
   const definitions = new Map<string, ReferenceDefinition>()
   const used = new Set<string>()
   const ranges: { from: number, to: number }[] = []
@@ -142,7 +100,27 @@ export function scan_reference_definitions(text: string, front_matter_end = 0) {
     }
     finally { in_definition = previous }
   })
-  const parse = (current: Source) => {
+  const inline = (current: Source, children: ReturnType<typeof md.parse>) => {
+    let cursor = 0
+    for (const child of children) {
+      if (child.type === 'content_carousel_inline') {
+        const body = content_markdown_token_body(current, child, cursor)
+        parse(body.source)
+        cursor = body.end
+      }
+      else if (child.children && child.content) {
+        const at = current.text.indexOf(child.content, cursor)
+        if (at >= 0)
+          inline(fragment(current, child.content, at), child.children)
+      }
+      else if (child.type === 'html_inline') {
+        const at = current.text.indexOf(child.content, cursor)
+        if (at >= 0)
+          cursor = at + child.content.length
+      }
+    }
+  }
+  function parse(current: Source) {
     source = current
     const tokens = md.parse(current.text, env)
     const starts = [0]
@@ -151,11 +129,18 @@ export function scan_reference_definitions(text: string, front_matter_end = 0) {
         starts.push(i + 1)
     }
     for (const token of tokens) {
+      if (token.type === 'content_carousel_block' && token.map) {
+        parse(content_markdown_token_body(current, token, starts[token.map[0]]).source)
+        continue
+      }
       if (token.type === 'content_private_block' && token.map) {
         // The renderer owns <good> blocks across blank lines. Treating them
         // as ordinary HTML would exclude their first fragment from rewrites.
-        const start = current.text.indexOf(token.markup, starts[token.map[0]])
-        parse(fragment(current, token.content, start + token.markup.indexOf('>') + 1))
+        parse(content_markdown_token_body(current, token, starts[token.map[0]]).source)
+        continue
+      }
+      if (token.type === 'inline' && token.map) {
+        inline(fragment(current, token.content, starts[token.map[0]]), token.children ?? [])
         continue
       }
       if (token.type !== 'html_block' || ! token.map)

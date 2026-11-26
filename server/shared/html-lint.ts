@@ -6,7 +6,9 @@
 // Shared between the editor (live lint) and the server (save validation) so
 // both agree on what counts as broken HTML.
 import { htmlLanguage } from '@codemirror/lang-html'
-import { markdownLanguage } from '@codemirror/lang-markdown'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { content_carousel_marks } from './content-carousel-language'
+import { content_carousel_content_ranges } from './content-markdown-syntax'
 
 export interface HtmlLintDiagnostic {
   /** Absolute offset in the document. */
@@ -38,12 +40,38 @@ function html_region_has_unclosed(region_text: string) {
   return unclosed
 }
 
+const markdown_parser = markdown({ base: markdownLanguage, extensions: [content_carousel_marks] }).language.parser
+// An enclosing raw HTML block can absorb even a well-formed carousel. Keep
+// the offsets used by HTML diagnostics but remove tag syntax in its code.
+function mask_carousel_code(source: string) {
+  if (! /<carousel[\s>]/i.test(source))
+    return source
+  let masked: string[] | undefined
+  for (const { content, offsets } of content_carousel_content_ranges(source)) {
+    if (! content.includes('<'))
+      continue
+    const chars = masked ??= source.split('')
+    markdown_parser.parse(content).iterate({ enter: (node) => {
+      if (! ['CodeBlock', 'FencedCode', 'InlineCode'].includes(node.name))
+        return
+      for (let at = content.indexOf('<', node.from); at !== - 1 && at < node.to; at = content.indexOf('<', at + 1)) {
+        const offset = offsets[at]!
+        if (source[offset] === '<')
+          chars[offset] = ' '
+      }
+      return false
+    } })
+  }
+  return masked?.join('') ?? source
+}
+
 export function build_html_diagnostics(doc_text: string): HtmlLintDiagnostic[] {
   const diagnostics: HtmlLintDiagnostic[] = []
-  const tree = markdownLanguage.parser.parse(doc_text)
+  const source = mask_carousel_code(doc_text)
+  const tree = markdown_parser.parse(source)
   const html_nodes: { from: number, to: number }[] = []
   tree.iterate({ enter: (n) => {
-    if (n.type.name === 'HTMLBlock' || n.type.name === 'HTMLTag') {
+    if (n.type.name === 'HTMLBlock' || n.type.name === 'HTMLTag' || n.type.name === 'CarouselMark') {
       html_nodes.push({ from: n.from, to: n.to })
     }
   } })
@@ -58,7 +86,7 @@ export function build_html_diagnostics(doc_text: string): HtmlLintDiagnostic[] {
   let current: { from: number, to: number }[] = []
   for (let i = 0; i < html_nodes.length; i ++) {
     current.push(html_nodes[i]!)
-    const region_text = current.map(n => doc_text.slice(n.from, n.to)).join('\n')
+    const region_text = current.map(n => source.slice(n.from, n.to)).join('\n')
     if (! html_region_has_unclosed(region_text) || i === html_nodes.length - 1) {
       regions.push(current)
       current = []
@@ -77,7 +105,7 @@ export function build_html_diagnostics(doc_text: string): HtmlLintDiagnostic[] {
         map.push(- 1)
       }
       for (let p = node.from; p < node.to; p ++) {
-        parts.push(doc_text[p]!)
+        parts.push(source[p]!)
         map.push(p)
       }
     }

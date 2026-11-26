@@ -1,7 +1,7 @@
 import type { Connection, ResultSetHeader } from 'mysql2/promise'
 import type { UploadRow } from './upload-session.repository'
 import { ApiError } from '@server/errors/ApiError'
-import { attachment_inherits_private, attachment_mime_type, attachment_name_conflict_message, decrypted_attachment_name, link_file_name_byte_length } from '@shared/content-markdown'
+import { attachment_inherits_private, attachment_mime_type, attachment_name_conflict_message, attachment_name_without_private_suffix, link_file_name_byte_length } from '@shared/content-markdown'
 import { attachment_name_key } from '@shared/content-workspace'
 import { settings } from '@shared/settings'
 import { attachment_owned_object_keys } from './attachment-objects'
@@ -27,7 +27,7 @@ export async function publish_uploaded_attachment(connection: Connection, sessio
   const name = parent.file_name ? `${parent.file_name}/${final_name}` : final_name
   if (attachment_inherits_private(name) !== attachment_inherits_private(session.intent.target_path))
     throw new ApiError(409, '上传目标目录的机密状态已变化，请重新受理上传')
-  const mime = session.intent.mime_type ?? attachment_mime_type(decrypted_attachment_name(final_name))
+  const mime = session.intent.mime_type ?? attachment_mime_type(attachment_name_without_private_suffix(final_name))
   const source = session.intent.source && rows.find(row => Number(row.id) === session.intent.source!.id)
   if (session.intent.source && (! source || node_version(rows, source) !== session.intent.source.version))
     throw new ApiError(409, '原附件已变化，请重新受理上传')

@@ -1,0 +1,154 @@
+// The editor's combined lint: story front-matter/schema checks
+// (parse_story_markdown), raw HTML grammar checks (build_html_diagnostics)
+// and markdownlint, merged into one diagnostic list.
+import type { Diagnostic } from '@codemirror/lint'
+import type { Text } from '@codemirror/state'
+import type { EditorView } from '@codemirror/view'
+import type { ContentMarkdownConfig } from '@shared/content-markdown'
+import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
+import type { Configuration as MarkdownlintConfiguration } from 'markdownlint'
+import { forceLinting, linter } from '@codemirror/lint'
+import { StateEffect } from '@codemirror/state'
+import { parse_story_markdown } from '@shared/content-markdown'
+import { build_html_diagnostics } from '@shared/html-lint'
+import { iframe_link_diagnostics, outer_refs_source } from './iframe-lint'
+import { lint as markdownlint } from './markdownlint'
+
+export interface LintListItem {
+  from: number
+  line: number
+  severity: Diagnostic['severity']
+  message: string
+  source: string | null
+}
+
+export interface StoryLintLimits {
+  titleMaxLength: number
+  labelMaxBytes: number
+  descMaxBytes: number
+  coverMaxBytes: number
+  markdownMaxBytes: number
+}
+
+export function story_lint_config(limits: StoryLintLimits, stories: ContentStorySummary[], story_id: number | null, attachments: ContentStoryAttachment[] = [], folders: string[] = []): ContentMarkdownConfig {
+  return {
+    title_max_length: limits.titleMaxLength,
+    label_max_bytes: limits.labelMaxBytes,
+    desc_max_bytes: limits.descMaxBytes,
+    cover_max_bytes: limits.coverMaxBytes,
+    markdown_max_bytes: limits.markdownMaxBytes,
+    attachment_paths: [... attachments.map(item => item.file_name), ... folders],
+    private_attachment_paths: attachments.filter(item => item.is_private).map(item => item.file_name),
+    existing_titles: stories
+      .filter(story => story.id !== story_id)
+      .map(story => ({ id: story.id, title: story.title })),
+  }
+}
+
+const markdownlint_config: MarkdownlintConfiguration = {
+  default: 'error',
+  MD012: false,
+  MD013: false,
+  MD025: false,
+  MD026: false,
+  MD028: false,
+  MD033: false,
+  MD040: false,
+  MD045: false,
+  MD060: false,
+}
+const front_matter_pattern = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/
+
+export function build_diagnostics(doc_text: string, doc: Text, content_markdown_config: ContentMarkdownConfig) {
+  const diagnostics: Diagnostic[] = []
+
+  for (const issue of parse_story_markdown(doc_text, content_markdown_config).issues) {
+    const line = doc.line(Math.min(issue.line, doc.lines))
+    const fix = issue.fix
+    diagnostics.push({
+      from: fix?.from ?? line!.from,
+      to: fix?.to ?? line.to,
+      severity: issue.severity,
+      message: issue.message,
+      source: issue.source === 'at-story' || issue.source === 'content-ref' ? outer_refs_source : issue.source,
+      actions: fix
+        ? [{
+            name: '修复引用',
+            apply(view, from, to) {
+              view.dispatch({ changes: { from, to, insert: fix.insert } })
+            },
+          }]
+        : undefined,
+    })
+  }
+
+  diagnostics.push(... iframe_link_diagnostics(doc_text, doc), ... build_html_diagnostics(doc_text))
+
+  try {
+    const results = markdownlint({
+      strings: { story: doc_text },
+      config: markdownlint_config,
+      frontMatter: front_matter_pattern,
+    })
+    for (const item of results.story ?? []) {
+      const line = doc.line(Math.min(item.lineNumber, doc.lines))
+      const range = item.errorRange as [number, number] | null
+      const from = range ? Math.min(line.from + range[0] - 1, line.to) : line.from
+      const to = range ? Math.min(from + range[1], line.to) : line.to
+      diagnostics.push({
+        from,
+        to: Math.max(to, from),
+        severity: 'warning',
+        message: item.errorDetail ? `${item.ruleDescription} (${item.errorDetail})` : item.ruleDescription,
+        source: item.ruleNames[0] ?? 'markdownlint',
+      })
+    }
+  }
+  catch {
+    // markdownlint failures must never break editing
+  }
+
+  return diagnostics
+}
+
+export function diagnostics_to_items(diagnostics: Diagnostic[], doc: Text): LintListItem[] {
+  return diagnostics.map(diagnostic => ({
+    from: diagnostic.from,
+    line: doc.lineAt(diagnostic.from).number,
+    severity: diagnostic.severity,
+    message: diagnostic.message,
+    source: diagnostic.source ?? null,
+  }))
+}
+
+// Dispatched on an otherwise-no-op transaction when the known story list
+// changes so the lint plugin re-schedules a run (its `force()` is a no-op
+// while idle).
+const stories_changed_effect = StateEffect.define<null>()
+
+/**
+ * The debounced lint extension. `get_config` is read on every run so the
+ * diagnostics track the latest story list and limits; `on_issues` receives
+ * the flattened list for the component's issue panel.
+ */
+export function create_markdown_lint(get_config: () => ContentMarkdownConfig, on_issues: (items: LintListItem[]) => void) {
+  return linter((editor_view) => {
+    const diagnostics = build_diagnostics(editor_view.state.doc.toString(), editor_view.state.doc, get_config())
+    on_issues(diagnostics_to_items(diagnostics, editor_view.state.doc))
+    return diagnostics
+  }, {
+    delay: 400,
+    needsRefresh: update => update.transactions.some(tr => tr.effects.some(effect => effect.is(stories_changed_effect))),
+  })
+}
+
+/**
+ * Re-run duplicate-title / dead-reference lints when the story list changes
+ * (e.g. after a sync refresh). `forceLinting` alone is a no-op while the
+ * linter is idle, so first mark the linter dirty via `needsRefresh` (a
+ * doc-change-free transaction), then force it.
+ */
+export function refresh_markdown_lint(view: EditorView) {
+  view.dispatch({ effects: stories_changed_effect.of(null) })
+  forceLinting(view)
+}

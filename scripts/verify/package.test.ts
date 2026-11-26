@@ -149,7 +149,7 @@ describe('package.json 脚本', () => {
     // `PORT=${APP_PORT} node ...`。cmd.exe 只认 %VAR%，而 pnpm 脚本的环境里本来
     // 就没有 .env，所以 ${APP_PORT} 永远原样传下去：Nuxt 拿到字面量、Number() 得到
     // NaN，get-port-please 把它丢掉后回落到 3000 —— 端口静默变成 3000 而不是 .env
-    // 里的 3042。dev 端口现在由 nuxt.config 的 devServer 读 APP_PORT（见该处注释），
+    // 里的 3042。开发启动器现在读取 APP_PORT，并把端口直接作为 Nuxt 参数传入，
     // 生产端口由 compose 注入的 PORT 决定，脚本不再参与。
     const offenders = Object.entries(pkg.scripts)
       .filter(([, script]) => /\$\{/.test(script))

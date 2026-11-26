@@ -1,7 +1,7 @@
 <template>
-  <MyHeightSection tag="section" class="section-card-collapse">
+  <MyHeightSection tag="section" class="story-header section-card-collapse">
     <div class="flex min-w-0 flex-col gap-3">
-      <div v-if="back || (editable && storyId) || $slots.actions" class="flex flex-wrap items-end gap-3">
+      <div v-if="back || (editable && storyId) || $slots.actions" class="mx-auto flex w-full max-w-5xl flex-wrap items-end gap-3 px-4">
         <Button v-if="back" class="aspect-square" outlined aria-label="返回" @click="router.back()">
           <template #icon>
             <MyIcon name="lucide:arrow-left" />
@@ -28,35 +28,37 @@
 
       <div
         v-if="! props.invalid"
-        class="watermark story-header-band mt-2 flex min-w-0 flex-col items-center gap-3 bg-slate-100 py-8 dark:bg-slate-800/50"
-        :style="watermark_style"
+        class="watermark story-header-band mt-2 bg-slate-100 py-8 dark:bg-slate-800/50"
       >
-        <h1 class="min-w-0 break-words">
-          {{ title }}
-        </h1>
+        <MyContentStoryWatermark :labels="labels" />
+        <div class="mx-auto flex w-full max-w-5xl flex-col items-center gap-3 px-4">
+          <h1 class="min-w-0 break-words">
+            {{ title }}
+          </h1>
 
-        <p v-if="date" class="text-xs text-slate-400 dark:text-slate-500">
-          {{ date }}
-        </p>
+          <p v-if="date" class="text-xs text-slate-400 dark:text-slate-500">
+            {{ date }}
+          </p>
 
-        <button
-          v-if="cover"
-          type="button"
-          class="story-cover-button mt-4 w-fit cursor-zoom-in hover:brightness-90"
-          :aria-label="`预览：${cover_alt_text}`"
-          @click="preview_visible = true"
-        >
-          <MyContentStoryCover :src="cover_src" :alt="cover_alt_text" :image="coverImage" constrained />
-        </button>
+          <button
+            v-if="cover"
+            type="button"
+            class="story-cover-button mt-4 w-fit cursor-zoom-in hover:brightness-90 dark:hover:brightness-125"
+            :aria-label="`预览：${cover_alt_text}`"
+            @click="preview_visible = true"
+          >
+            <MyContentStoryCover :src="cover_src" :alt="cover_alt_text" :image="coverImage" constrained />
+          </button>
 
-        <p v-if="desc" class="min-w-0 break-words text-sm text-center text-slate-500 dark:text-slate-400">
-          {{ desc }}
-        </p>
+          <p v-if="desc" class="min-w-0 break-words text-sm text-center text-slate-500 dark:text-slate-400">
+            {{ desc }}
+          </p>
 
-        <div v-if="visible_labels.length || date" class="w-full flex flex-wrap justify-center items-center gap-x-1.5 gap-y-1">
-          <MyBadge v-for="label in visible_labels" :key="label" outlined type="info">
-            {{ label }}
-          </MyBadge>
+          <div v-if="visible_labels.length || date" class="w-full flex flex-wrap justify-center items-center gap-x-1.5 gap-y-1">
+            <MyBadge v-for="label in visible_labels" :key="label" outlined type="info">
+              {{ label }}
+            </MyBadge>
+          </div>
         </div>
       </div>
     </div>
@@ -74,8 +76,8 @@
 
 <script setup lang="ts">
 import type { ContentStoryAttachment } from '@shared/types/content'
-import { story_rating_rank } from '@shared/types/content'
-import { cover_alt, story_front_cover_url } from '~/utils/content/attachment'
+import { cover_alt, story_front_cover_url } from '~/features/content/story-cover'
+import { visible_story_labels } from '~/features/content/story-presentation'
 
 const props = withDefaults(defineProps<{
   invalid?: boolean
@@ -110,9 +112,7 @@ const props = withDefaults(defineProps<{
 
 const router = useRouter()
 
-const visible_labels = computed(() => props.labels.filter(label => ! label.startsWith('#')))
-// Rank r maps to imgs/ratings/(6-r).svg; unrated (难评) stories show no badge.
-const rating_rank = computed(() => story_rating_rank(props.labels))
+const visible_labels = computed(() => visible_story_labels(props.labels))
 const static_url = useStaticUrl()
 const cover_src = computed(() => (props.cover ? story_front_cover_url(static_url, props.cover, props.coverUrl) : undefined))
 
@@ -122,20 +122,17 @@ const cover_alt_text = computed(() => cover_alt(props.cover, props.coverLabel, p
 
 const preview_visible = ref(false)
 const preview_images = computed(() => (cover_src.value ? [cover_src.value] : []))
-
-// Feeds the band's diagonal watermark tiles; unset for unrated stories.
-const watermark_style = computed(() => rating_rank.value
-  ? { '--watermark-url': `url("${static_url(`imgs/ratings/${6 - rating_rank.value}.svg`)}")` }
-  : {})
 </script>
 
 <style scoped>
-.story-header-band {
+/* The height transition clips its children while a late cover resizes.
+   Give that clip the same width as the painted rating band. */
+.story-header {
   margin-inline: calc(50% - var(--app-half-viewport, 50vw));
-  padding-inline: calc(var(--app-half-viewport, 50vw) - 50%);
 }
 
 html .story-cover-button {
+  max-width: 100%;
   transition: filter 300ms ease;
 }
 

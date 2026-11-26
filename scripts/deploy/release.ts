@@ -31,7 +31,7 @@ export function release_plan(migrations: DeploymentPreflight, identity: ReleaseI
 
 export type ReleasePlan = ReturnType<typeof release_plan>
 
-/** Only the reviewed online steps may change the ledger during a normal rollback. */
+/** Only reviewed online steps may change the ledger. Older images do not recognize a new baseline receipt. */
 export function safe_rollback(before: DeploymentPreflight, after: DeploymentPreflight) {
   if (JSON.stringify(before.database) !== JSON.stringify(after.database)
     || JSON.stringify(before.catalog) !== JSON.stringify(after.catalog)
@@ -42,7 +42,7 @@ export function safe_rollback(before: DeploymentPreflight, after: DeploymentPref
   if (before.ledger.some(row => row.status !== 'completed' || ! row.finished || current.get(row.filename)?.checksum !== row.checksum))
     return false
   const old = new Set(before.ledger.map(row => row.filename))
-  return after.ledger.filter(row => ! old.has(row.filename)).every(row => before.pending.some(file => file.filename === row.filename && file.checksum === row.checksum && file.execution === 'automatic'))
+  return after.ledger.filter(row => ! old.has(row.filename)).every(row => before.pending.some(file => file.filename === row.filename && file.checksum === row.checksum && file.execution === 'automatic' && ! file.action))
 }
 
 export function decision_environment(plan: ReleasePlan) {
@@ -135,7 +135,7 @@ export async function release_cli(args: string[], directory = '/release') {
   if (plan.requires_maintenance)
     console.log('Maintenance approval covers stopping writers, verified database backup, these migrations and service recovery; external workers/cron must be stopped separately.')
   for (const file of plan.migrations.pending)
-    console.log(`${file.filename}: ${file.execution} (${file.status})`)
+    console.log(`${file.filename}: ${file.execution} (${file.action ?? file.status})`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

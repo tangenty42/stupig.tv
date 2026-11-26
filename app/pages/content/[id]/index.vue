@@ -8,20 +8,22 @@
       </MyDivider>
 
       <MyHeightSection tag="section" class="section-card-collapse mt-6">
-        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="workspace_attachments" :folders="workspace_folders" :stories="stories ?? []" folder-openable @folder-open="open_attachment_folder" />
+        <MyContentMarkdownPreview :markdown="story.markdown" :story-id="story.id" :attachments="workspace_attachments" :folders="workspace_folders" :stories="stories ?? []" :can-read-private="story.private_readable && can_read_private" folder-openable @folder-open="open_attachment_folder" />
       </MyHeightSection>
 
-      <MyDivider class="mt-12">
-        事件日历
-      </MyDivider>
+      <template v-if="story.event_dates.length">
+        <MyDivider class="mt-12">
+          事件日历
+        </MyDivider>
 
-      <MyHeightSection tag="section" class="section-card-collapse mt-6">
-        <MyContentStoryCalendar
-          :stories="stories ?? []"
-          :highlight_id="story.id"
-          :initial_month="story.event_dates[0]?.slice(0, 7) ?? null"
-        />
-      </MyHeightSection>
+        <MyHeightSection tag="section" class="section-card-collapse mt-6">
+          <MyContentStoryCalendar
+            :stories="stories ?? []"
+            :highlight_id="story.id"
+            :initial_month="story.event_dates[0]?.slice(0, 7) ?? null"
+          />
+        </MyHeightSection>
+      </template>
 
       <MyDivider class="mt-12">
         附件
@@ -32,6 +34,10 @@
       </MyHeightSection>
     </template>
 
+    <div v-else-if="story_loading" class="section-card-collapse flex justify-center py-12 text-slate-500 dark:text-slate-400" role="status" aria-label="正在加载档案">
+      <MyIcon name="lucide:loader-circle" size="3rem" class="animate-spin" />
+    </div>
+    <MyContentListLoadError v-else-if="story_error" class="section-card-collapse py-12" @retry="retry_story" />
     <div v-else class="section-card-collapse py-12 text-center text-slate-500 dark:text-slate-400">
       档案不存在或已被删除
     </div>
@@ -39,53 +45,49 @@
 </template>
 
 <script setup lang="ts">
-import type { ContentStoryBody, ContentStorySummary } from '@shared/types/content'
 import { attachment_ancestor_folders } from '@shared/content-markdown'
 import { content_name_key } from '@shared/content-reference'
 import { has_permission } from '@shared/permissions'
-import { sync_resource } from '@shared/types/sync'
-import { story_front_cover_url } from '~/utils/content/attachment'
-import { format_event_range } from '~/utils/content/event'
-import { read_content_resource } from '~/utils/content/read-resource'
+import { useAttachmentPanel } from '~/features/content/attachments/panel'
+import { content_browser_navigation } from '~/features/content/browser-navigation'
+import { format_event_range } from '~/features/content/event'
+import { useContentStories, useContentStory } from '~/features/content/stories'
+import { story_front_cover_url } from '~/features/content/story-cover'
 
 const route = useRoute()
-const { content } = useApi()
 const { user } = useAuth()
 const time_context = useDisplayTimeContext()
 
-const story_id = computed(() => Number(route.params.id))
-const attachment_panel = await useAttachmentPanel(story_id.value, () => '', true)
+const route_story_id = computed(() => String(route.params.id))
+const story_id = computed(() => Number(route_story_id.value))
+const story_detail = useContentStory(route_story_id)
+const { story, loading: story_loading, error: story_error } = story_detail
+const attachment_panel = useAttachmentPanel({
+  scope: story_id.value,
+  markdown: () => '',
+  reference_source: () => {
+    const current = story.value
+    if (! current || (current.has_private && (! current.private_readable || ! has_permission(user.value, 'content_access', 'private_read'))))
+      return null
+    return { markdown: current.markdown, cover: current.cover }
+  },
+  readonly: true,
+  interaction: content_browser_navigation,
+})
+const [{ refresh: retry_story }] = await Promise.all([story_detail.ready, attachment_panel.ready])
 const attachment_workspace = attachment_panel.catalog
 const workspace_attachments = computed(() => attachment_workspace.data.value?.attachments ?? [])
 const workspace_folders = computed(() => attachment_workspace.data.value?.folders ?? [])
-const can_manage_content = computed(() => has_permission(user.value, 'content_manage', 'full') && has_permission(user.value, 'content_private', 'read'))
-
-const story = useSyncedState<ContentStoryBody | null>(`content_story_view_${String(route.params.id)}`, () => null)
-const loading = useState(`content_story_view_loading_${String(route.params.id)}`, () => false)
+const can_read_private = computed(() => has_permission(user.value, 'content_access', 'private_read'))
+const can_manage_content = computed(() => has_permission(user.value, 'content_access', 'full'))
 
 useHead({
   title: computed(() => story.value ? `蠢猪档案 - ${story.value.title}` : undefined),
 })
 
-await useSyncedData<ContentStoryBody | null>(
-  computed(() => {
-    const id = story_id.value
-    return Number.isInteger(id) && id > 0 ? sync_resource('content_story', id) : null
-  }),
-  () => read_content_resource(() => content.get_story_body(story_id.value)),
-  story,
-  loading,
-)
-
-const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
-const stories_loading = useState('content_stories_loading', () => false)
-
-await useSyncedData<ContentStorySummary[]>(
-  sync_resource('content_stories', 'all'),
-  () => content.list_stories(),
-  stories,
-  stories_loading,
-)
+const story_query = useContentStories()
+await story_query.ready
+const { stories } = story_query
 
 const attachment_section = ref<{ el: HTMLElement | null } | null>(null)
 function open_attachment_folder(folder: string) {

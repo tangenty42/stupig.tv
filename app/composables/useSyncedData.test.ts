@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { effectScope, isRef, ref, watch } from 'vue'
+import { computed, effectScope, isRef, ref, watch } from 'vue'
+import { get_error_status } from './useApi'
 import { useSyncedState } from './useSyncedState'
+import { TrpcApiError } from './useTrpcClient'
 
 describe('useSyncedData hydration updates', () => {
   it('refreshes upload membership on mutation and reconnect sync', async () => {
@@ -120,7 +122,7 @@ describe('useSyncedData hydration updates', () => {
     await useSyncedData([], fetcher)
     expect(fetcher).not.toHaveBeenCalled()
     await useSyncedData([], fetcher, { query_key: 'standalone' })
-    await useSyncedData(null, fetcher, { universal: false, fetch_without_resource: true })
+    await useSyncedData(null, fetcher, { share: false, fetch_without_resource: true })
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(subscribe).not.toHaveBeenCalled()
   })
@@ -156,6 +158,7 @@ describe('useSyncedData hydration updates', () => {
     vi.stubGlobal('isRef', isRef)
     vi.stubGlobal('ref', ref)
     vi.stubGlobal('watch', watch)
+    vi.stubGlobal('useReactiveDateNow', () => ref(0))
     vi.stubGlobal('onUnmounted', () => {})
     vi.stubGlobal('get_error_status', () => undefined)
     vi.stubGlobal('useState', (_key: string, init: () => unknown) => {
@@ -322,7 +325,7 @@ describe('useSyncedData hydration updates', () => {
     expect(nuxt_app.hook).not.toHaveBeenCalled()
   })
 
-  it('keeps the newest non-universal refresh when responses arrive out of order', async () => {
+  it.each([true, false])('keeps the newest refresh with the latest policy (shared: %s)', async (share) => {
     vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
@@ -336,7 +339,8 @@ describe('useSyncedData hydration updates', () => {
     })
     const { refresh } = await useSyncedData(ref('users:1'), fetcher, data, loading, {
       immediate: false,
-      universal: false,
+      share,
+      refresh_policy: 'latest',
     })
 
     const first = refresh()
@@ -361,7 +365,7 @@ describe('useSyncedData hydration updates', () => {
     const pending: Array<(value: string) => void> = []
     const { refresh } = await useSyncedData(resource, () => new Promise<string>((resolve) => {
       pending.push(resolve)
-    }), data, { immediate: false, universal: false })
+    }), data, { immediate: false, share: false })
 
     const old_request = refresh()
     resource.value = 'users:2'
@@ -392,7 +396,7 @@ describe('useSyncedData hydration updates', () => {
     const data = useSyncedState('users:stale-hydration', () => 'ssr snapshot')
     const on_data = vi.fn()
     await useSyncedData(resource, async () => 'old page', data, {
-      universal: false,
+      share: false,
       on_data,
     })
     await new Promise<void>(resolve => setTimeout(resolve, 0))
@@ -417,7 +421,7 @@ describe('useSyncedData hydration updates', () => {
     const pending: Array<{ resolve: (value: string) => void, reject: (error: Error) => void }> = []
     const { refresh } = await useSyncedData(ref('users:1'), () => new Promise<string>((resolve, reject) => {
       pending.push({ resolve, reject })
-    }), data, loading, { immediate: false, universal: false, on_error })
+    }), data, loading, { immediate: false, refresh_policy: 'latest', on_error })
 
     const first = refresh()
     const second = refresh()
@@ -504,6 +508,86 @@ describe('useSyncedData hydration updates', () => {
     expect(second_error).toHaveBeenCalledOnce()
   })
 
+  it('leaves data and error feedback alone when a refresh is cancelled', async () => {
+    const toast = vi.fn()
+    const on_error = vi.fn()
+    const nuxt_app = { isHydrating: false, hook: vi.fn() }
+    vi.stubGlobal('useNuxtApp', () => nuxt_app)
+    vi.stubGlobal('useMyToast', () => ({ error: toast }))
+    vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
+    const { useSyncedData } = await import('./useSyncedData')
+    const fetcher = vi.fn<() => Promise<string>>()
+      .mockResolvedValueOnce('last result')
+      .mockRejectedValueOnce(new DOMException('用户打断了施法', 'AbortError'))
+      .mockResolvedValueOnce('next result')
+    const data = ref<string | null>(null)
+    const loading = ref(false)
+    const { refresh } = await useSyncedData('cancelled:read', fetcher, data, loading, { on_error, default_error_toast: true })
+
+    await refresh()
+    expect(data.value).toBe('last result')
+    expect(loading.value).toBe(false)
+    expect(on_error).not.toHaveBeenCalled()
+    expect(toast).not.toHaveBeenCalled()
+
+    await refresh()
+    expect(data.value).toBe('next result')
+  })
+
+  it.each([
+    { label: 'a normalized network failure without a status', error: new TrpcApiError('Failed to fetch', undefined, undefined, { cause: new TypeError('Failed to fetch') }), retries: true },
+    { label: 'a transport timeout', error: new DOMException('Timed out', 'TimeoutError'), retries: true },
+    { label: 'a 408 response', error: new TrpcApiError('Request timeout', 408), retries: true },
+    { label: 'a 503 response', error: new TrpcApiError('Service unavailable', 503), retries: true },
+    { label: 'a 401 response', error: new TrpcApiError('Unauthorized', 401), retries: false },
+    { label: 'a 403 response', error: new TrpcApiError('Forbidden', 403), retries: false },
+    { label: 'a 404 response', error: new TrpcApiError('Not found', 404), retries: false },
+    { label: 'a 429 response', error: new TrpcApiError('Too many requests', 429), retries: false },
+    { label: 'an intentional abort', error: new DOMException('Aborted', 'AbortError'), retries: false },
+    { label: 'an unclassified error', error: new Error('Unclassified failure'), retries: false },
+  ])('checks the default retry behavior for $label', async ({ error, retries }) => {
+    const app = { isHydrating: false, hook: vi.fn() }
+    const now = ref(100_000)
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now.value)
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    const use_clock = vi.fn(() => now)
+    let unmount: (() => void) | undefined
+    vi.stubGlobal('useNuxtApp', () => app)
+    vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
+    vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
+    vi.stubGlobal('useReactiveDateNow', use_clock)
+    vi.stubGlobal('document', { visibilityState: 'visible' })
+    vi.stubGlobal('get_error_status', get_error_status)
+    vi.stubGlobal('onUnmounted', (callback: () => void) => {
+      unmount = callback
+    })
+    const { useSyncedData } = await import('./useSyncedData')
+    const data = ref<string | null>(null)
+    const fetcher = vi.fn<() => Promise<string>>().mockRejectedValueOnce(error).mockResolvedValue('recovered')
+
+    try {
+      const ready = useSyncedData('retry:classification', fetcher, data)
+      expect(use_clock).toHaveBeenCalledOnce()
+      await ready
+      expect(fetcher).toHaveBeenCalledOnce()
+      expect(data.value).toBeNull()
+
+      now.value += 60_000
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(fetcher).toHaveBeenCalledTimes(retries ? 2 : 1)
+      expect(data.value).toBe(retries ? 'recovered' : null)
+
+      now.value += 60_000
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(fetcher).toHaveBeenCalledTimes(retries ? 2 : 1)
+    }
+    finally {
+      unmount?.()
+      random.mockRestore()
+      clock.mockRestore()
+    }
+  })
+
   it('discards hydration buffers and removes hooks and subscriptions on disposal', async () => {
     const hooks = new Map<string, () => void>()
     const remove_hook = vi.fn()
@@ -572,25 +656,27 @@ describe('useSyncedData hydration updates', () => {
     expect(data.value).toBe('new identity')
   })
 
-  it('allows older responses when stale-response protection is disabled', async () => {
-    vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
+  it('joins the initial fetch for a new subscriber to a shared latest-policy query', async () => {
+    const nuxt_app = { isHydrating: false, hook: vi.fn() }
+    vi.stubGlobal('useNuxtApp', () => nuxt_app)
     vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
     vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
 
     const { useSyncedData } = await import('./useSyncedData')
-    const data = ref<string | null>(null)
-    const pending: Array<(value: string) => void> = []
-    const { refresh } = await useSyncedData(ref('users:1'), () => new Promise<string>((resolve) => {
-      pending.push(resolve)
-    }), data, { immediate: false, universal: false, ignore_stale_responses: false })
+    const first_data = ref<string | null>(null)
+    const second_data = ref<string | null>(null)
+    let resolve_request!: (value: string) => void
+    const fetcher = vi.fn(() => new Promise<string>((resolve) => {
+      resolve_request = resolve
+    }))
+    const first = useSyncedData('users:1', fetcher, first_data, { refresh_policy: 'latest' })
+    const second = useSyncedData('users:1', fetcher, second_data, { refresh_policy: 'latest' })
 
-    const first = refresh()
-    const second = refresh()
-    pending[1]!('newer')
-    await second
-    pending[0]!('older')
-    await first
-    expect(data.value).toBe('older')
+    expect(fetcher).toHaveBeenCalledOnce()
+    resolve_request('users')
+    await Promise.all([first, second])
+    expect(first_data.value).toBe('users')
+    expect(second_data.value).toBe('users')
   })
 
   it('fetches and refreshes an unkeyed resource without subscribing to sync events', async () => {
@@ -606,7 +692,7 @@ describe('useSyncedData hydration updates', () => {
       .mockResolvedValueOnce('refreshed')
 
     const { refresh } = await useSyncedData(ref(null), fetcher, data, {
-      universal: false,
+      share: false,
       fetch_without_resource: true,
     })
 
@@ -614,6 +700,60 @@ describe('useSyncedData hydration updates', () => {
     await refresh()
     expect(data.value).toBe('refreshed')
     expect(subscribe).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('moves subscriptions without refetching when only resources change (share: %s)', async (share) => {
+    vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
+    vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
+    const listeners = new Map<string, () => Promise<void>>()
+    vi.stubGlobal('useDataSync', () => ({
+      subscribe: (resource: string, invalidate: () => Promise<void>) => {
+        listeners.set(resource, invalidate)
+        return () => listeners.delete(resource)
+      },
+    }))
+    const { useSyncedData } = await import('./useSyncedData')
+    const channel = ref<string | null>(null)
+    const data = ref<string | null>(null)
+    const fetcher = vi.fn(async () => {
+      channel.value = 'drafts:hmac'
+      return 'list'
+    })
+    await useSyncedData(channel, fetcher, data, {
+      share, fetch_without_resource: ! share, query_key: `drafts:${share}`,
+    })
+
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect([... listeners.keys()]).toEqual(['drafts:hmac'])
+    expect(data.value).toBe('list')
+    await listeners.get('drafts:hmac')!()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([true, false])('replaces the query and drops the previous response when the query key changes (share: %s)', async (share) => {
+    vi.stubGlobal('useNuxtApp', () => ({ isHydrating: false, hook: vi.fn() }))
+    vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
+    vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
+    const { useSyncedData } = await import('./useSyncedData')
+    const page = ref(1)
+    const data = ref<string | null>(null)
+    const resolvers = new Map<number, (value: string) => void>()
+    const fetcher = vi.fn(() => {
+      const current = page.value
+      return new Promise<string>(resolve => resolvers.set(current, resolve))
+    })
+    const ready = useSyncedData(null, fetcher, data, {
+      share, fetch_without_resource: ! share, query_key: computed(() => `page:${share}:${page.value}`),
+    })
+
+    page.value = 2
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    resolvers.get(2)!('page 2')
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    resolvers.get(1)!('page 1')
+    await ready
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(data.value).toBe('page 2')
   })
 
   it('keeps the server snapshot until hydration resolves for an unkeyed resource', async () => {
@@ -637,7 +777,7 @@ describe('useSyncedData hydration updates', () => {
     }))
 
     await useSyncedData(ref(null), fetcher, data, {
-      universal: false,
+      share: false,
       fetch_without_resource: true,
       on_data,
     })

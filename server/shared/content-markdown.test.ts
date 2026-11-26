@@ -3,30 +3,34 @@ import { describe, expect, it } from 'vitest'
 import {
   attachment_base_name,
   attachment_download_name,
+  attachment_has_private_suffix,
   attachment_inherits_private,
   attachment_name_segment_violation,
+  attachment_name_without_private_suffix,
   attachment_path_conflicts,
   attachment_path_is_private,
   attachment_path_violation,
+  attachment_privacy,
+  attachment_redaction_path,
   compare_attachment_names,
-  decrypted_attachment_name,
   extract_attachment_names,
   extract_story_reference_titles,
-  folder_file_count,
   folder_images,
+  folder_item_count,
   is_attachment_folder,
-  is_encrypted_attachment,
   link_file_name_byte_length,
   lowercased_attachment_extension,
   normalized_attachment_extension,
   parse_story_markdown,
   redactable_attachment_mime,
+  referenced_attachment_keys,
   rename_attachment_references,
   rename_story_references,
   sanitize_attachment_file_name,
   sanitize_attachment_path,
   sanitize_attachment_segment,
   split_attachment_editable_name,
+  story_markdown_template,
 } from './content-markdown'
 
 const config: ContentMarkdownConfig = {
@@ -44,6 +48,37 @@ const config: ContentMarkdownConfig = {
 function story_doc(body: string, title = '测试档案') {
   return `---\ntitle: ${title}\ntime: 2026/8/8\n---\n\n${body}`
 }
+
+describe('optional story event dates', () => {
+  it('publishes front matter without time as an undated event', () => {
+    const result = parse_story_markdown('---\ntitle: 无日期档案\n---\n正文', config)
+    expect(result.issues).toEqual([])
+    expect(result.meta).toMatchObject({ title: '无日期档案', event_precision: 'day', event_entries: [] })
+  })
+
+  it.each(['', '   ', 'unknown', '2026/2/30', '2026/8 ~ 2026/8/8', '2026/8/9 ~ 2026/8/8'])('rejects an explicitly invalid time field (%s)', (time) => {
+    const result = parse_story_markdown(`---\ntitle: 无日期档案\ntime: ${time}\n---`, config)
+    expect(result.meta).toBeNull()
+    expect(result.issues).toContainEqual(expect.objectContaining({ severity: 'error', source: 'front-matter' }))
+  })
+
+  it.each([
+    ['2026/8/8', 'day', ['2026-08-08']],
+    ['2026/8', 'month', ['2026-08']],
+    ['2026/8/8 ~ 2026/8/10', 'day', ['2026-08-08', '2026-08-09', '2026-08-10']],
+    ['2026/8 ~ 2026/9', 'month', ['2026-08', '2026-09']],
+  ] as const)('keeps existing dated content valid (%s)', (time, event_precision, event_entries) => {
+    const result = parse_story_markdown(`---\ntitle: 已有日期档案\ntime: ${time}\n---`, config)
+    expect(result.issues).toEqual([])
+    expect(result.meta).toMatchObject({ event_precision, event_entries })
+  })
+
+  it('creates a valid new-story template without pre-filling time', () => {
+    const markdown = story_markdown_template()
+    expect(markdown).not.toMatch(/^time:/m)
+    expect(parse_story_markdown(markdown, config).meta).toMatchObject({ event_precision: 'day', event_entries: [] })
+  })
+})
 
 describe('compare_attachment_names', () => {
   function sorted(names: string[]) {
@@ -94,6 +129,28 @@ describe('compare_attachment_names', () => {
     expect(compare_attachment_names('a/x.png', 'a/x.png')).toBe(0)
     expect(Math.sign(compare_attachment_names('1.png', '2.png')))
       .toBe(- Math.sign(compare_attachment_names('2.png', '1.png')))
+  })
+
+  it('orders a numbered sibling after its bare stem, like a file manager', () => {
+    // ICU ranks `_` below `.`, so comparing whole names would put `1_1.png`
+    // before `1.png`; comparing the stem first keeps 1 before its 1_1 copy.
+    expect(sorted(['10.png', '2_1.png', '2.png', '1_2.png', '1_1.png', '1.png']))
+      .toEqual(['1.png', '1_1.png', '1_2.png', '2.png', '2_1.png', '10.png'])
+    expect(compare_attachment_names('1_1.png', '1.png')).toBeGreaterThan(0)
+  })
+
+  it('breaks a stem tie by extension, keeping different formats together', () => {
+    expect(sorted(['1.png', '1.jpg', '1_1.png'])).toEqual(['1.jpg', '1.png', '1_1.png'])
+  })
+
+  it('treats a leading dot as a dotfile, not an extension', () => {
+    expect(sorted(['a.txt', '.env', 'a.png', '.hidden']))
+      .toEqual(['.env', '.hidden', 'a.png', 'a.txt'])
+  })
+
+  it('keeps multi-dot names ordered by their full stem', () => {
+    expect(sorted(['a.b.c.png', 'a.b.png', 'a.b_1.png']))
+      .toEqual(['a.b.png', 'a.b_1.png', 'a.b.c.png'])
   })
 })
 
@@ -207,19 +264,22 @@ describe('attachment folder helpers', () => {
     })
   })
 
-  describe('folder_file_count', () => {
-    it('counts every file below the folder, recursion included', () => {
-      // 1.png, 2.png, 10.png, notes.txt and sub/9.png.
-      expect(folder_file_count(scope, 'cards')).toBe(5)
+  describe('folder_item_count', () => {
+    it('counts immediate files and each inferred or explicit subfolder once', () => {
+      const files = [... scope, ... with_images(['cards/sub/1.png', 'cards/sub/nested/2.png', 'cards/more/deep/1.png'])]
+      expect(folder_item_count(files, 'cards', ['cards', 'cards/sub', 'cards/sub/nested', 'cards/empty', 'cards/empty/child']))
+        .toBe(7)
     })
 
-    it('counts a nested folder on its own', () => {
-      expect(folder_file_count(scope, 'cards/sub')).toBe(1)
+    it('uses the same case, Unicode and trailing slash matching as folder references', () => {
+      const files = with_images(['DOCS/Cafe\u0301/sub/a.png', 'Docs/café/sub/b.png', 'Docs/café/readme.md', 'Docs/café-archive/nope.txt'])
+      expect(folder_item_count(files, 'docs/café//', ['docs/CAFÉ/Sub', 'Docs/Cafe\u0301/empty/deep'])).toBe(3)
     })
 
-    it('is zero for a path with nothing under it', () => {
-      expect(folder_file_count(scope, 'nope')).toBe(0)
-      expect(folder_file_count(scope, '')).toBe(0)
+    it('is zero for an empty folder or a path without a folder', () => {
+      expect(folder_item_count([], 'cards/empty', ['cards', 'cards/empty'])).toBe(0)
+      expect(folder_item_count(scope, 'nope')).toBe(0)
+      expect(folder_item_count(scope, '')).toBe(0)
     })
   })
 })
@@ -266,6 +326,59 @@ describe('extract_attachment_names', () => {
 
   it('ignores unterminated and unbalanced destinations', () => {
     expect(extract_attachment_names('[](att://a.jpg and [](att://b(c)')).toEqual([])
+  })
+})
+
+describe('referenced_attachment_keys', () => {
+  const files = ['docs/cover.png', 'docs/sub/report.txt', 'docs-old/other.png', 'album/a.png', 'album/sub/b.png', 'album/note.txt', 'hidden.png', 'unused.png']
+    .map(file_name => ({ file_name, is_image: file_name.endsWith('.png') }))
+
+  it('counts a cover and live folder cards recursively without counting code, unused definitions or neighboring folders', () => {
+    const markdown = '---\ncover: ![封面](att://DOCS/cover.png)\n---\n\n[][folder]\n\n`[](att://hidden.png)`\n\n[folder]: att://DOCS/\n[unused]: att://unused.png'
+    const keys = referenced_attachment_keys(markdown, files, ['docs/empty'])
+    expect([... keys].sort()).toEqual(['docs', 'docs/cover.png', 'docs/empty', 'docs/sub', 'docs/sub/report.txt'])
+    expect([... referenced_attachment_keys('---\ncover: docs/cover.png\n---\n', files, [])].sort()).toEqual(['docs', 'docs/cover.png'])
+  })
+
+  it.each(['[docs](att://docs)', '[docs][folder]\n\n[folder]: att://docs'])('counts only the folder for a matching visible label (%s)', (markdown) => {
+    expect([... referenced_attachment_keys(markdown, files, ['docs/empty'])]).toEqual(['docs'])
+  })
+
+  it.each(['![](att://album)', '![pictures][album]\n\n[album]: att://album', '![](att://album/empty)'])('ignores a directory used as an image destination (%s)', (markdown) => {
+    expect(referenced_attachment_keys(markdown, files, ['album/empty'])).toEqual(new Set())
+  })
+
+  it('counts the exact attachment and parent directories for an explicit image reference', () => {
+    const markdown = '![picture][image]\n\n[image]: att://album/sub/b.png'
+    expect([... referenced_attachment_keys(markdown, files, [])].sort()).toEqual(['album', 'album/sub', 'album/sub/b.png'])
+  })
+
+  it('uses the published cover rather than the source header and only marks an exact direct reference', () => {
+    const markdown = '---\ncover: docs/cover.png\n---\n\n[](att://docs/sub/report.txt?download=1)'
+    expect([... referenced_attachment_keys(markdown, files, [], 'docs-old/other.png')].sort())
+      .toEqual(['docs', 'docs-old', 'docs-old/other.png', 'docs/sub', 'docs/sub/report.txt'])
+  })
+
+  it('counts the paired redaction wherever the full version is used', () => {
+    const attachments = [
+      { file_name: 'docs.good/É.png', is_image: true },
+      { file_name: 'docs.good/é.png.GOOD', is_image: true, has_redacted: true },
+      { file_name: 'archive/é.png', is_image: true },
+    ]
+    const ref = '![][photo]\n\n[photo]: att://DOCS.good/E%CC%81.png.good?x=1'
+    const expected = ['docs.good', 'docs.good/é.png', 'docs.good/é.png.good']
+    expect([... referenced_attachment_keys(ref, attachments, [])].sort()).toEqual(expected)
+    expect([... referenced_attachment_keys('', attachments, [], 'docs.good/é.png.good')].sort()).toEqual(expected)
+  })
+
+  it('keeps a redaction-only reference one-way and requires a real pairing', () => {
+    const pair = [
+      { file_name: 'photo.png', is_image: true },
+      { file_name: 'photo.png.good', is_image: true, has_redacted: true },
+    ]
+    expect([... referenced_attachment_keys('![](att://photo.png)', pair, [])]).toEqual(['photo.png'])
+    expect([... referenced_attachment_keys('![](att://photo.png.good)', pair.slice(1), [])]).toEqual(['photo.png.good'])
+    expect([... referenced_attachment_keys('![](att://photo.png.good)', pair.map(item => ({ ... item, has_redacted: false })), [])]).toEqual(['photo.png.good'])
   })
 })
 
@@ -328,21 +441,21 @@ describe('rename_story_references', () => {
   })
 })
 
-describe('encrypted attachment naming', () => {
-  it('reads the .good suffix as the encryption marker', () => {
-    expect(is_encrypted_attachment('photo.png.good')).toBe(true)
-    expect(is_encrypted_attachment('photo.png')).toBe(false)
+describe('private attachment naming', () => {
+  it('reads the .good suffix as the privacy marker', () => {
+    expect(attachment_has_private_suffix('photo.png.good')).toBe(true)
+    expect(attachment_has_private_suffix('photo.png')).toBe(false)
   })
 
-  it('recovers the pre-encryption name, including the folder prefix', () => {
-    expect(decrypted_attachment_name('cards/photo.png.good')).toBe('cards/photo.png')
-    // A plaintext name is already its own answer.
-    expect(decrypted_attachment_name('cards/photo.png')).toBe('cards/photo.png')
+  it('strips the private suffix while preserving the folder prefix', () => {
+    expect(attachment_name_without_private_suffix('cards/photo.png.good')).toBe('cards/photo.png')
+    // An unmarked name is preserved.
+    expect(attachment_name_without_private_suffix('cards/photo.png')).toBe('cards/photo.png')
   })
 
   it('keeps a .good file whose stem already looks like one intact', () => {
     // Only the suffix comes off, so a name that itself ends in `good` survives.
-    expect(decrypted_attachment_name('a.good.good')).toBe('a.good')
+    expect(attachment_name_without_private_suffix('a.good.good')).toBe('a.good')
   })
 })
 
@@ -398,7 +511,7 @@ describe('extension normalization', () => {
 
 describe('normalized_attachment_extension', () => {
   // The marker is the last dot, so lowercasing the final suffix alone would
-  // leave the plaintext extension behind it untouched.
+  // leave the file extension behind it untouched.
   it('reaches the extension underneath a .good marker', () => {
     expect(normalized_attachment_extension('secret.PNG.good')).toBe('secret.png.good')
     // Already-normalized names are returned unchanged, marker and all.
@@ -493,6 +606,16 @@ describe('path privacy declarations', () => {
     expect(attachment_inherits_private(path)).toBe(inherited)
   })
 
+  it('makes a 删减版 public, even inside a private folder', () => {
+    const items = ['a.good', 'a.good/b.jpg.good', 'a.good/B.JPG', 'a.good/c.jpg', 'd.jpg.good', 'd.jpg', 'e.good', 'e.good.good', 'f.good', 'f']
+      .map(path => ({ path, is_folder: path === 'a.good' || path === 'f.good' }))
+    const privacy = attachment_privacy(items)
+    expect(items.filter(item => privacy(item.path, item.is_folder)).map(item => item.path))
+      .toEqual(['a.good', 'a.good/b.jpg.good', 'a.good/c.jpg', 'd.jpg.good', 'e.good', 'e.good.good', 'f.good'])
+    expect(attachment_redaction_path('x/y.png.good')).toBe('x/y.png')
+    expect(attachment_redaction_path('x/y.good.good')).toBeNull()
+  })
+
   it('retains the ACL when sanitizing or truncating either kind of name', () => {
     expect(sanitize_attachment_file_name('photo?.PNG.GOOD', 40)).toBe('photo_.png.good')
     expect(sanitize_attachment_segment(`${'a'.repeat(40)}.good`, 20)).toBe(`${'a'.repeat(15)}.good`)
@@ -508,12 +631,12 @@ describe('split_attachment_editable_name', () => {
       .toEqual({ editable: 'photo', locked: '.png.good' })
   })
 
-  it('locks only the marker when the plaintext name has no extension', () => {
+  it('locks only the marker when the file has no extension', () => {
     expect(split_attachment_editable_name('plain_file.good'))
       .toEqual({ editable: 'plain_file', locked: '.good' })
   })
 
-  it('locks the extension of a plaintext file', () => {
+  it('locks the extension of a file without a private marker', () => {
     expect(split_attachment_editable_name('photo.png'))
       .toEqual({ editable: 'photo', locked: '.png' })
   })

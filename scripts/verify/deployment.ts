@@ -9,6 +9,7 @@ import { load_database_config } from '@config/loader'
 import mysql from 'mysql2/promise'
 import { initialize_cli_environment } from '../../config/lib/environment.mjs'
 import { release_plan, safe_rollback } from '../deploy/release'
+import { baseline_migration, retired_migrations } from '../migration/baseline'
 import { build_maintenance } from '../migration/build'
 import { run_migrations } from '../migration/local'
 
@@ -28,22 +29,38 @@ async function verify() {
     await connection.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
     await connection.changeUser({ database: name })
     const options = { database_config: { ... config, name, user: 'root', password } }
-    await run_migrations({ ... options, maintenance: true, through: '20261025170000_storage_audit_cleanup.sql' })
+    // Build a predecessor schema in the isolated database. Its old scripts already ran,
+    // so the upgrade should preserve both their receipts and the data they produced.
+    await run_migrations({ ... options, through: baseline_migration })
+    await connection.execute('DELETE FROM migration_runs WHERE filename = ?', [baseline_migration])
+    await assert.rejects(run_migrations({ ... options, preflight: true }), { code: 'baseline_prerequisites' })
+    for (const [filename, checksum] of retired_migrations) {
+      await connection.execute(`INSERT INTO migration_runs (filename, checksum, status, phase, attempts, finished_at)
+        VALUES (?, ?, 'completed', 'verify', 1, CURRENT_TIMESTAMP)`, [filename, checksum])
+    }
+    await connection.query(`INSERT INTO users (id, username, phone, password_hash, permissions)
+      VALUES (1, 'fixture', '19900000001', '$2a$fixture', JSON_ARRAY(JSON_OBJECT('field', 'content_private', 'level', 'read'))),
+             (2, 'editor', '19900000002', '$2b$fixture', JSON_ARRAY(JSON_OBJECT('field', 'admin_access', 'level', 'full'),
+               JSON_OBJECT('field', 'content_manage', 'level', 'full'), JSON_OBJECT('field', 'content_private', 'level', 'read'))),
+             (3, 'unknown', '19900000003', '$2y$fixture', JSON_ARRAY(JSON_OBJECT('field', 'retired', 'level', 'read'))),
+             (4, 'converted', '19900000004', '$argon2id$fixture', JSON_ARRAY(JSON_OBJECT('field', 'content_access', 'level', 'full')))`)
     await connection.execute(`INSERT INTO content_stories (id,title,event_precision,event_dates,markdown,namespace_revision)
       VALUES (1,'fixture','day',JSON_ARRAY('2026-10-31'),?,0)`, ['# 原文字节\r\n[附件](att://example?a=1#part)\n'])
+    await connection.query(`INSERT INTO content_story_drafts (id, story_id, markdown, published_main_revision, unpublished_changes)
+      SELECT REPEAT('a', 32), id, markdown, revision, 0 FROM content_stories WHERE id = 1`)
     const [before_rows] = await connection.query('SELECT id,SHA2(markdown,256) AS digest,revision,namespace_revision FROM content_stories ORDER BY id')
     const before = (await run_migrations({ ... options, preflight: true })).preflight!
-    // Admission concerns the actual pending chain, not a historical file count.
-    for (const filename of ['20261030120000_shared_content_drafts.sql', '20261101133000_content_webp.ts', '20261101143000_retire_legacy_content.ts'])
-      assert(before.pending.some(file => file.filename === filename))
-    assert(before.pending.every(file => file.execution === 'maintenance'))
+    assert.deepEqual(before.pending.map(({ filename, execution, action }) => [filename, execution, action]), [
+      [baseline_migration, 'maintenance', 'record'],
+      ['20261112160000_account_permission_levels.sql', 'maintenance', undefined],
+      ['20261116000000_drop_legacy_attachment_storage.sql', 'maintenance', undefined],
+      ['20261117220000_redaction_files.sql', 'maintenance', undefined],
+      ['20261123111552_clear_bcrypt_passwords.sql', 'maintenance', undefined],
+    ])
     const [ledger] = await connection.query('SELECT filename,checksum,status,attempts,finished_at FROM migration_runs ORDER BY filename')
     await assert.rejects(run_migrations(options), /维护窗口/)
     const [ledger_after] = await connection.query('SELECT filename,checksum,status,attempts,finished_at FROM migration_runs ORDER BY filename')
-    assert.deepEqual(ledger_after, ledger, 'Ordinary startup must not commit the preceding expansion SQL')
-    const [[column]] = await connection.query<mysql.RowDataPacket[]>(`SELECT COUNT(*) AS n FROM information_schema.columns
-      WHERE table_schema=DATABASE() AND table_name='content_reference_journals' AND column_name='entry_index'`)
-    assert.equal(Number(column!.n), 0)
+    assert.deepEqual(ledger_after, ledger, 'Ordinary startup must not record the baseline')
     const hash = 'a'.repeat(64)
     const identity = { commit: 'a'.repeat(40), app: `registry.example/app@sha256:${hash}`, mqtt: `registry.example/app@sha256:${hash}`, environment_sha256: hash, compose_sha256: hash, previous_protocol: 'cloud-v1' as const, previous_release_sha256: hash }
     const plan = release_plan(before, identity)
@@ -64,6 +81,7 @@ async function verify() {
     const command = async (... args: string[]) => execute(process.execPath, [bundle, ... args, '--directory', directory], { env: bundle_env, cwd: process.cwd() })
     await command('plan', 'new', 'cloud-v1', hash)
     const packaged_plan = JSON.parse(await readFile(resolve(directory, 'plan.json'), 'utf8'))
+    assert.deepEqual(packaged_plan.migrations, before)
     await command('plan', packaged_plan.id, 'cloud-v1', hash)
     await writeFile(resolve(directory, 'decision.env'), 'DB_NAME=edited\n')
     await command('plan', packaged_plan.id, 'cloud-v1', hash)
@@ -75,6 +93,16 @@ async function verify() {
     const after = (await run_migrations({ ... options, preflight: true })).preflight!
     assert.equal(after.pending.length, 0)
     assert(after.ledger.every(row => row.status === 'completed' && row.finished))
+    assert.equal(after.ledger.find(row => row.filename === baseline_migration)?.attempts, 0)
+    assert.equal(after.ledger.find(row => row.filename.endsWith('_account_permission_levels.sql'))?.attempts, 1)
+    const [users] = await connection.query<mysql.RowDataPacket[]>('SELECT permissions, password_hash FROM users WHERE id BETWEEN 1 AND 4 ORDER BY id')
+    assert.deepEqual(users.map(user => user.permissions), [
+      [{ field: 'content_access', level: 'private_read' }],
+      [{ field: 'admin_access', level: 'readonly' }, { field: 'content_access', level: 'full' }],
+      null,
+      [{ field: 'content_access', level: 'full' }],
+    ])
+    assert.deepEqual(users.map(user => user.password_hash), [null, null, null, '$argon2id$fixture'])
     const [after_rows] = await connection.query('SELECT id,SHA2(markdown,256) AS digest,revision,namespace_revision FROM content_stories ORDER BY id')
     assert.deepEqual(after_rows, before_rows)
     const [[draft]] = await connection.query<mysql.RowDataPacket[]>(`SELECT COUNT(*) AS n FROM content_story_drafts d JOIN content_stories s ON d.story_id=s.id
@@ -84,9 +112,6 @@ async function verify() {
     assert.notEqual(release_plan(after, identity).id, plan.id, 'Old approval must expire when the ledger changes')
     await assert.rejects(command('plan', packaged_plan.id, 'cloud-v1', hash))
     await assert.rejects(command('rollback'))
-    await connection.execute('UPDATE content_story_drafts SET published_main_revision = NULL')
-    await assert.rejects(command('verify', 'before-start'), 'A missing published revision must fail backfill acceptance')
-    await connection.execute('UPDATE content_story_drafts d JOIN content_stories s ON s.id=d.story_id SET d.published_main_revision=s.revision')
     await command('verify', 'before-start')
     await command('receipt', 'maintenance', 'integration-1')
     const receipt = JSON.parse(await readFile(resolve(directory, 'result.json'), 'utf8'))

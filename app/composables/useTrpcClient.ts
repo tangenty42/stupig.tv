@@ -3,7 +3,7 @@ import type { ApplicationError } from '@shared/content-reference-error'
 import type { inferRouterOutputs } from '@trpc/server'
 import { parse_application_error } from '@shared/content-reference-error'
 import { settings } from '@shared/settings'
-import { createTRPCClient, httpBatchLink, httpLink, splitLink } from '@trpc/client'
+import { createTRPCClient, httpBatchLink, httpLink, splitLink, TRPCClientError } from '@trpc/client'
 
 type RouterOutputs = inferRouterOutputs<AppRouter>
 interface UploadOutputByPath {
@@ -27,7 +27,7 @@ interface TrpcResponse<T> {
 
 const DEFAULT_API_ERROR_MESSAGE = '《我们仍未知道那天所发生の网络错误の名字》'
 
-let unauthorized_handled = false
+const unauthorized_tasks = new WeakMap<object, Promise<void>>()
 let last_request_at = 0
 let presence_started = false
 let ping_pending = false
@@ -37,8 +37,8 @@ export class TrpcApiError extends Error {
   code?: ApplicationError['code']
   details?: ApplicationError['details']
 
-  constructor(message: string, status?: number, application_error?: ApplicationError) {
-    super(message)
+  constructor(message: string, status?: number, application_error?: ApplicationError, options?: ErrorOptions) {
+    super(message, options)
     this.name = 'ApiError'
     this.status = status
     const safe = parse_application_error(application_error)
@@ -67,6 +67,7 @@ export function get_last_trpc_request_at() {
 }
 
 export function useTrpcClient() {
+  const nuxt_app = useNuxtApp()
   const { logout, user } = useAuth()
   const trpc_path = `${settings.app.api.base.replace(/\/$/, '')}/trpc`
   const trpc_url = import.meta.server
@@ -110,24 +111,44 @@ export function useTrpcClient() {
     links: [splitLink({
       // A release must start immediately during pagehide, before timers freeze.
       // Large final snapshots still rely on normal requests and lease expiry.
-      condition: operation => /^content\.(?:createDraft|listDrafts|getDraft|acquireDraft|commandDraft)$/.test(operation.path),
+      condition: operation => /^content\.(?:createDraft|listDrafts|getDraft|acquireDraft|commandDraft|draftSyncCredentials)$/.test(operation.path),
       true: httpLink(transport_options),
       false: httpBatchLink(transport_options),
     })],
   })
 
-  async function normalize_error(error: unknown): Promise<never> {
-    const status = get_trpc_error_status(error)
-    const message = error instanceof Error ? error.message : DEFAULT_API_ERROR_MESSAGE
-
-    if (status === 401 && ! unauthorized_handled) {
-      unauthorized_handled = true
-      await logout()
+  function handle_unauthorized() {
+    const active = unauthorized_tasks.get(nuxt_app)
+    if (active) {
+      return active
     }
 
+    const task = Promise.resolve()
+      .then(() => logout())
+      .finally(() => unauthorized_tasks.delete(nuxt_app))
+    unauthorized_tasks.set(nuxt_app, task)
+    return task
+  }
+
+  async function normalize_error(error: unknown): Promise<never> {
+    const status = get_trpc_error_status(error)
+    const missing_server_error = error instanceof TRPCClientError && ! error.shape
+    const cause = missing_server_error ? error.cause : error
+    if (status === undefined && cause instanceof Error && cause.name === 'AbortError') {
+      const cancelled = new Error('用户打断了施法', { cause: error })
+      cancelled.name = 'AbortError'
+      throw cancelled
+    }
+
+    if (status === 401) {
+      await handle_unauthorized()
+    }
+
+    const transport_failed = status === undefined && (missing_server_error || error instanceof TypeError)
+    const message = ! transport_failed && error instanceof Error && error.message ? error.message : DEFAULT_API_ERROR_MESSAGE
     const data = error as { data?: { applicationError?: unknown }, code?: unknown, details?: unknown }
     const application_error = parse_application_error(data?.data?.applicationError ?? { code: data?.code, details: data?.details })
-    throw new TrpcApiError(message, status, application_error)
+    throw new TrpcApiError(message, status, application_error, { cause: error })
   }
 
   async function call<T>(request: Promise<T>) {
@@ -204,11 +225,11 @@ export function useTrpcClient() {
         })
         xhr.addEventListener('abort', () => {
           cleanup()
-          reject(new TrpcApiError('上传已取消'))
+          reject(new DOMException('上传已取消', 'AbortError'))
         })
 
         if (signal?.aborted) {
-          reject(new TrpcApiError('上传已取消'))
+          reject(new DOMException('上传已取消', 'AbortError'))
           return
         }
 

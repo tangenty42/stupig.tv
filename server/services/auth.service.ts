@@ -1,5 +1,6 @@
 import type { DeviceContext } from '@server/services/session.service'
 import type { AuthLoginWithPasswordInput, AuthLoginWithPhoneInput, AuthOtpCooldownInput, AuthRegisterInput, AuthSendOtpInput, AuthUser } from '@server/types/auth'
+import type { AuthResult } from '@shared/types/auth'
 import type { H3Event } from 'h3'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 
@@ -8,7 +9,8 @@ import { ApiError } from '@server/errors/ApiError'
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
 import { error_fields, log_error } from '@server/lib/log'
-import { clear_auth_token_cookie, make_token_hash, set_auth_token_cookie, sign_auth_token } from '@server/lib/session'
+import { hash_password, verify_password } from '@server/lib/password'
+import { clear_auth_token_cookie, clear_password_setup_proof, make_token_hash, set_auth_token_cookie, set_password_setup_proof, sign_auth_token } from '@server/lib/session'
 import { check_otp_sms, send_otp_sms } from '@server/lib/sms'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { otp_cooldown_channels } from '@server/lib/sync-channel'
@@ -16,7 +18,6 @@ import { require_auth_user } from '@server/services/auth-guards.service'
 import { create_login_session, logout_session } from '@server/services/session.service'
 import { normalize_permission_grants } from '@shared/permissions'
 import { phone_schema } from '@shared/schemas'
-import bcrypt from 'bcryptjs'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 
@@ -30,7 +31,7 @@ interface UserIdRow extends RowDataPacket {
 
 interface UserLoginRow extends RowDataPacket {
   id: number
-  password_hash: string
+  password_hash: string | null
   is_banned: number
 }
 
@@ -66,7 +67,8 @@ interface SendOtpRequest extends CaptchaInput {
   purpose: AuthSendOtpInput['purpose']
 }
 
-export async function register_user(event: H3Event, payload: AuthRegisterInput, device: DeviceContext, identity_token: string) {
+export async function register_user(event: H3Event, payload: AuthRegisterInput & CaptchaInput, device: DeviceContext, identity_token: string) {
+  await verify_captcha(payload)
   await check_otp_sms({ phone: payload.phone, code: payload.otp })
 
   const [existing] = await db.execute<UserIdRow[]>(
@@ -77,7 +79,7 @@ export async function register_user(event: H3Event, payload: AuthRegisterInput, 
     throw new ApiError(409, '用户名或手机号已存在')
   }
 
-  const password_hash = await bcrypt.hash(payload.password, config.app.auth.bcryptRounds)
+  const password_hash = await hash_password(payload.password)
 
   const [result] = await db.execute<ResultSetHeader>(
     'INSERT INTO users (username, phone, password_hash) VALUES (?, ?, ?)',
@@ -91,9 +93,11 @@ export async function register_user(event: H3Event, payload: AuthRegisterInput, 
 export async function login_with_password(event: H3Event, payload: AuthLoginWithPasswordInput & CaptchaInput, device: DeviceContext, identity_token: string) {
   await verify_captcha(payload)
 
+  const identifier = payload.username_or_phone
+  // A legacy username can compare equal to a phone under the database collation.
   const [rows] = await db.execute<UserLoginRow[]>(
-    'SELECT id, password_hash, is_banned FROM users WHERE username = ? OR phone = ? LIMIT 1',
-    [payload.username_or_phone, payload.username_or_phone],
+    'SELECT id, password_hash, is_banned FROM users WHERE username = ? OR phone = ? ORDER BY (phone = ?) DESC LIMIT 1',
+    [identifier, identifier, identifier],
   )
   const user = rows[0]
   if (! user) {
@@ -104,7 +108,11 @@ export async function login_with_password(event: H3Event, payload: AuthLoginWith
     throw new ApiError(401, '账号已被禁用')
   }
 
-  const valid = await bcrypt.compare(payload.password, user.password_hash)
+  if (user.password_hash === null) {
+    throw new ApiError(400, '尚未设置密码，请使用手机号验证码登录')
+  }
+
+  const valid = await verify_password(payload.password, user.password_hash)
   if (! valid) {
     throw new ApiError(401, '用户名或密码错误')
   }
@@ -112,11 +120,12 @@ export async function login_with_password(event: H3Event, payload: AuthLoginWith
   return build_auth_result(event, user.id, device, identity_token)
 }
 
-export async function login_with_phone(event: H3Event, payload: AuthLoginWithPhoneInput, device: DeviceContext, identity_token: string) {
+export async function login_with_phone(event: H3Event, payload: AuthLoginWithPhoneInput & CaptchaInput, device: DeviceContext, identity_token: string) {
+  await verify_captcha(payload)
   await check_otp_sms({ phone: payload.phone, code: payload.otp })
 
   const [rows] = await db.execute<UserLoginRow[]>(
-    'SELECT id, is_banned FROM users WHERE phone = ? LIMIT 1',
+    'SELECT id, password_hash, is_banned FROM users WHERE phone = ? LIMIT 1',
     [payload.phone],
   )
   const user = rows[0]
@@ -128,13 +137,13 @@ export async function login_with_phone(event: H3Event, payload: AuthLoginWithPho
     throw new ApiError(401, '账号已被禁用')
   }
 
-  return build_auth_result(event, user.id, device, identity_token)
+  return build_auth_result(event, user.id, device, identity_token, user.password_hash === null ? payload.phone : undefined)
 }
 
 // The token is delivered as an httpOnly cookie and deliberately not returned:
 // keeping it out of the response body is what makes the httpOnly attribute
 // meaningful, since a body copy would be readable by any script on the page.
-async function build_auth_result(event: H3Event, user_id: number, device: DeviceContext, identity_token: string) {
+async function build_auth_result(event: H3Event, user_id: number, device: DeviceContext, identity_token: string, password_setup_phone?: string): Promise<AuthResult> {
   const { token, exp } = sign_auth_token(user_id)
   await create_login_session(user_id, { hash: await make_token_hash(token), exp }, identity_token, device)
 
@@ -151,8 +160,12 @@ async function build_auth_result(event: H3Event, user_id: number, device: Device
   }
 
   set_auth_token_cookie(event, token)
+  if (password_setup_phone) {
+    set_password_setup_proof(event, token, password_setup_phone)
+  }
 
   return {
+    ... (password_setup_phone ? { needs_password_setup: true } : {}),
     user: {
       id: user.id,
       username: user.username,
@@ -283,6 +296,7 @@ export async function logout_user(event: H3Event, auth_user: AuthUser) {
   await logout_session(auth_user.session_id)
   // The client cannot clear an httpOnly cookie itself, so the server must.
   clear_auth_token_cookie(event)
+  clear_password_setup_proof(event)
   publish_refresh({ resource: sync_resource('profile_sessions', auth_user.id) })
   publish_refresh({ resource: sync_resource('auth_user', auth_user.id) })
 }

@@ -14,6 +14,7 @@ type BroadcastMessage
 
 type SyncListener = (event?: DataSyncEvent) => void | Promise<void>
 type SyncStatus = 'closed' | 'connecting' | 'open'
+interface PrivateSyncCredentials { username: string, password: string }
 
 const transports = new WeakMap<object, ReturnType<typeof create_data_sync_transport>>()
 
@@ -26,6 +27,7 @@ export function useDataSync() {
     const private_sync = create_data_sync_transport(config.draftWsUrl || new URL('mqtt-drafts', config.wsUrl).toString(), true)
     transport = {
       ... public_sync,
+      reconnecting: computed(() => public_sync.reconnecting.value || private_sync.reconnecting.value),
       start(options) {
         public_sync.start(options)
         private_sync.start(options)
@@ -52,6 +54,9 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
   let started = false
   let suspended = false
   let reconnect_timer: ReturnType<typeof setTimeout> | null = null
+  let next_reconnect_delay_ms = settings.app.client.sync.reconnectDelayMs
+  const reconnecting = ref(false)
+  let fetch_private_credentials: () => Promise<PrivateSyncCredentials> = () => Promise.reject(new Error('Private sync credentials are not configured'))
   let cancel_gather: (() => void) | null = null
 
   function get_listeners() {
@@ -213,20 +218,13 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     return current_client_id
   }
 
+  function needs_connection() {
+    return import.meta.client && ! disposed && ! suspended && started && ! document.hidden
+      && (! private_mode || listeners.size > 0 || collected_resources.size > 0)
+  }
+
   async function open_mqtt() {
-    if (import.meta.server || disposed || suspended || ! started) {
-      return
-    }
-
-    if (private_mode && ! listeners.size && ! collected_resources.size)
-      return
-    if (document.hidden) {
-      return
-    }
-
-    if (private_mode && ! listeners.size && ! collected_resources.size)
-      return
-    if (mqtt_client || status.value === 'connecting') {
+    if (! needs_connection() || mqtt_client || status.value === 'connecting' || reconnect_timer) {
       return
     }
 
@@ -246,13 +244,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
           return
         }
 
-        const credentials = private_mode
-          ? await fetch('/api/content-draft-sync/credentials', { credentials: 'include', cache: 'no-store' }).then(async (response) => {
-              if (! response.ok)
-                throw new Error('Private sync authorization rejected')
-              return await response.json() as { username: string, password: string }
-            })
-          : {}
+        const credentials = private_mode ? await fetch_private_credentials() : {}
         if (generation !== connection_generation || disposed || document.hidden)
           return
         const client = mqtt.connect(broker_url, {
@@ -305,7 +297,6 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
             return
           }
           console.error('[MQTT] connection failed', error)
-          close_mqtt()
           schedule_reconnect()
         })
 
@@ -313,13 +304,14 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
           if (client !== mqtt_client) {
             return
           }
-          close_mqtt()
           schedule_reconnect()
         })
       }
       catch (error) {
+        if (generation !== connection_generation) {
+          return
+        }
         console.error('[MQTT] failed to open connection', error)
-        status.value = 'closed'
         schedule_reconnect()
       }
     }
@@ -332,7 +324,6 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     const failed = () => {
       if (client !== mqtt_client)
         return
-      close_mqtt()
       schedule_reconnect()
     }
     try {
@@ -362,9 +353,16 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     }
 
     const all_resources = Array.from(new Set([... listeners.keys(), ... collected_resources]))
+    if (! all_resources.length) {
+      reset_reconnect_backoff()
+      return
+    }
     // Read after SUBACK closes the initial-fetch/subscription gap, including
     // resumed sessions whose publisher lost a notification before delivery.
-    subscribe_resources(all_resources, notify_all_listeners_refresh)
+    subscribe_resources(all_resources, () => {
+      reset_reconnect_backoff()
+      notify_all_listeners_refresh()
+    })
   }
 
   function update_mqtt_subscriptions(added: string[], removed: string[]) {
@@ -396,7 +394,12 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     }
   }
 
-  function close_mqtt() {
+  function reset_reconnect_backoff() {
+    next_reconnect_delay_ms = settings.app.client.sync.reconnectDelayMs
+    reconnecting.value = false
+  }
+
+  function close_mqtt(will_retry = false) {
     if (import.meta.server) {
       return
     }
@@ -420,20 +423,29 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     }
 
     status.value = 'closed'
+    if (! will_retry) {
+      reset_reconnect_backoff()
+    }
   }
 
   function schedule_reconnect() {
-    if (import.meta.server || disposed || ! started || reconnect_timer) {
+    if (reconnect_timer) {
       return
     }
-    if (document.hidden) {
+    const will_retry = needs_connection()
+    close_mqtt(will_retry)
+    if (! will_retry) {
       return
     }
 
+    const max_delay = settings.app.client.sync.reconnectMaxDelayMs
+    const delay = Math.min(next_reconnect_delay_ms, max_delay)
+    next_reconnect_delay_ms = Math.min(delay * 2, max_delay)
     reconnect_timer = setTimeout(() => {
       reconnect_timer = null
       void open_mqtt()
-    }, settings.app.client.sync.reconnectDelayMs)
+    }, Math.round(delay * (0.8 + Math.random() * 0.2)))
+    reconnecting.value = true
   }
 
   function reset_connection() {
@@ -679,11 +691,15 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     user: Ref<unknown>
     handle_remote_logout: () => void
     identity_changed: () => void
+    /** Supplied by the plugin so the transport never depends on the API client. */
+    fetch_private_credentials?: () => Promise<PrivateSyncCredentials>
   }) {
     if (import.meta.client && ! started && ! disposed) {
       started = true
       handle_remote_logout = options.handle_remote_logout
       identity_changed = options.identity_changed
+      if (options.fetch_private_credentials)
+        fetch_private_credentials = options.fetch_private_credentials
       let initial_gather_done = false
 
       start_cross_tab_transport()
@@ -749,6 +765,7 @@ export function create_data_sync_transport(broker_url: string, private_mode = fa
     broadcast_login,
     broadcast_logout,
     status: readonly(status),
+    reconnecting: readonly(reconnecting),
     subscribe(
       resource: string,
       listener: SyncListener,

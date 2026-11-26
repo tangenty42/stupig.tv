@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import sharp from 'sharp'
 import { beforeEach, expect, it, vi } from 'vitest'
-import { copy_oss_image_original, create_oss_image_processor } from './oss-image-processing'
+import { AnimatedImageSourceError, copy_oss_image_original, create_oss_image_processor } from './oss-image-processing'
 
 const cloud = vi.hoisted(() => ({ getStream: vi.fn(), processObjectSave: vi.fn(), getBucketACL: vi.fn(), head: vi.fn(), copy: vi.fn(), clients: [] as Record<string, unknown>[] }))
 vi.mock('ali-oss', () => ({ default: class {
@@ -16,7 +16,7 @@ vi.mock('ali-oss', () => ({ default: class {
   constructor(config: Record<string, unknown>) { cloud.clients.push(config) }
 } }))
 const config = { bucket: 'private-test', region: 'oss-cn-shenzhen', endpoint: 'https://oss-cn-shenzhen.aliyuncs.com', publicBaseUrl: 'https://edge.test', accessKeyId: 'test', accessKeySecret: 'test', timeoutMs: 20000, copyPartSizeMb: 64, uploadRoleArn: null }
-const profile: OssImageProcessingOptions = { maxInputBytes: 20971520, maxPixels: 9437184, webpQuality: 100, webpEffort: 4, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 60 }
+const profile: OssImageProcessingOptions = { maxInputBytes: 20971520, maxPixels: 24000000, webpQuality: 100, webpEffort: 4, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 40, timeoutSeconds: 60 }
 beforeEach(() => {
   vi.resetAllMocks()
   cloud.clients.length = 0
@@ -43,7 +43,9 @@ async function fixture() {
     get_object_stream: vi.fn(async () => { throw new Error('Unexpected full image read') }),
   }
   const transform = async (source: string, operation: string) => {
-    const image = sharp(objects.get(source)!.bytes).rotate()
+    const image = sharp(objects.get(source)!.bytes)
+    if (operation.includes('auto-orient,1'))
+      image.autoOrient()
     return operation.includes('format,webp')
       ? image.webp({ quality: 100, effort: 0 }).toBuffer()
       : operation.includes('resize')
@@ -87,7 +89,7 @@ it('persists WebP/JPEG in OSS and only reads bounded info JSON plus the small LQ
   const result = await f.run()
   expect(result).toMatchObject({ width: 32, height: 16, display: { key: `${f.request.prefix}.webp`, sha256: null }, fallback: { key: `${f.request.prefix}.jpg`, sha256: null } })
   expect(cloud.processObjectSave.mock.calls).toEqual([
-    [f.request.input.key, result.display.key, 'image/auto-orient,1/format,webp/quality,Q_100', config.bucket],
+    [f.request.input.key, result.display.key, 'image/auto-orient,0/format,webp/quality,Q_100', config.bucket],
     [result.display.key, result.fallback.key, 'image/format,jpg/quality,Q_85', config.bucket],
   ])
   expect(cloud.getStream.mock.calls.map(call => [call[0], call[1].process])).toEqual([
@@ -100,6 +102,28 @@ it('persists WebP/JPEG in OSS and only reads bounded info JSON plus the small LQ
     expect(f.storage.set_object_access).toHaveBeenCalledWith(object.key, 'private')
   expect(cloud.clients[0]).toMatchObject({ secure: true, authorizationV4: true, retryMax: 0, timeout: 20000 })
   expect(await sharp(result.lqip).metadata()).toMatchObject({ format: 'jpeg', width: 24, height: 12 })
+})
+
+it('accepts the inclusive 24-million-pixel boundary reported by OSS', async () => {
+  const f = await fixture()
+  // Dimensions come from OSS; keep the boundary fixture's encoded images small.
+  for (const key of [f.request.input.key, `${f.request.prefix}.webp`, `${f.request.prefix}.jpg`])
+    f.overrides.set(key, { ImageWidth: '6000', ImageHeight: '4000' })
+  await expect(f.run()).resolves.toMatchObject({ width: 6000, height: 4000 })
+  expect(cloud.processObjectSave).toHaveBeenCalledTimes(2)
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
+})
+
+it.each([
+  { limit: 'upload', height: 4001, max_pixels: 24006000, message: '24,000,000' },
+  { limit: 'profile', height: 4000, max_pixels: 23999999, message: '图片尺寸超过处理像素上限' },
+])('rejects pixels beyond the $limit budget before conversion', async ({ height, max_pixels, message }) => {
+  const f = await fixture()
+  f.request.profile = { ... profile, maxPixels: max_pixels }
+  f.overrides.set(f.request.input.key, { ImageWidth: '6000', ImageHeight: String(height) })
+  await expect(f.run()).rejects.toThrow(message)
+  expect(cloud.processObjectSave).not.toHaveBeenCalled()
+  expect(f.storage.get_object_stream).not.toHaveBeenCalled()
 })
 
 it('bounds OSS round trips for conversion plus archive while retaining both write preflights and the final checks', async () => {
@@ -126,10 +150,17 @@ it.each(['public-input', 'public-output', 'replaced-input'])('rejects unsafe %s 
 
 it.each(['Format', 'FrameCount', 'ImageWidth', 'FileSize'])('rejects unsafe source %s metadata before conversion', async (field) => {
   const f = await fixture()
-  f.overrides.set(f.request.input.key, { [field]: ({ Format: 'svg', FrameCount: '2', ImageWidth: '4097', FileSize: '1' })[field]! })
+  f.overrides.set(f.request.input.key, { [field]: ({ Format: 'svg', FrameCount: '2', ImageWidth: '8193', FileSize: '1' })[field]! })
   await expect(f.run()).rejects.toThrow()
   expect(cloud.processObjectSave).not.toHaveBeenCalled()
   expect(f.storage.get_object_stream).not.toHaveBeenCalled()
+})
+
+it.each(['webp', 'png', 'avif', 'heif'])('marks a multi-frame %s source for the plain-file fallback', async (format) => {
+  const f = await fixture()
+  f.overrides.set(f.request.input.key, { Format: format, FrameCount: '3' })
+  await expect(f.run()).rejects.toBeInstanceOf(AnimatedImageSourceError)
+  expect(cloud.processObjectSave).not.toHaveBeenCalled()
 })
 
 it.each([0, 1, 2, 3, 4, 5, 6, 7, 8])('accepts JPEG EXIF orientation %s with the expected display dimensions', async (orientation) => {
@@ -141,6 +172,7 @@ it.each([0, 1, 2, 3, 4, 5, 6, 7, 8])('accepts JPEG EXIF orientation %s with the 
   const result = await f.run()
   expect(result).toMatchObject(orientation >= 5 ? { width: 16, height: 32 } : { width: 32, height: 16 })
   expect(cloud.processObjectSave).toHaveBeenCalledTimes(2)
+  expect(cloud.processObjectSave.mock.calls[0]![2]).toBe(`image/auto-orient,${orientation > 1 ? 1 : 0}/format,webp/quality,Q_100`)
   expect(f.storage.get_object_stream).not.toHaveBeenCalled()
 })
 

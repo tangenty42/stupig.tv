@@ -34,6 +34,7 @@ describe('data sync transport', () => {
   let browser_document: EventTarget & { hidden: boolean, visibilityState: string }
   let clients: Client[]
   let transports: ReturnType<typeof create_data_sync_transport>[]
+  let fetch_private_credentials: ReturnType<typeof vi.fn<() => Promise<{ username: string, password: string }>>>
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -48,7 +49,10 @@ describe('data sync transport', () => {
     vi.stubGlobal('ref', ref)
     vi.stubGlobal('readonly', readonly)
     vi.stubGlobal('watch', watch)
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ username: 'draft-reader', password: 'test-only' }) })))
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('The transport must not call fetch directly')
+    }))
+    fetch_private_credentials = vi.fn(async () => ({ username: 'draft-reader', password: 'test-only' }))
     mocks.connect.mockReset().mockImplementation(() => {
       const client = new Client()
       clients.push(client)
@@ -61,6 +65,7 @@ describe('data sync transport', () => {
       transport.dispose()
     }
     vi.useRealTimers()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
@@ -72,7 +77,7 @@ describe('data sync transport', () => {
     const user = ref<unknown>(null)
     const identity_changed = vi.fn()
     const handle_remote_logout = vi.fn()
-    transport.start({ user, identity_changed, handle_remote_logout })
+    transport.start({ user, identity_changed, handle_remote_logout, fetch_private_credentials })
     await vi.advanceTimersByTimeAsync(settings.app.client.sync.resourceGatherDelayMs)
     const client = clients.at(- 1)!
     client.connected = true
@@ -92,16 +97,17 @@ describe('data sync transport', () => {
   it.each(['local', 'remote'])('only requests private credentials while a %s draft subscription needs them', async (owner) => {
     const transport = create_data_sync_transport('ws://broker', true)
     transports.push(transport)
-    transport.start({ user: ref(null), identity_changed: vi.fn(), handle_remote_logout: vi.fn() })
+    transport.start({ user: ref(null), identity_changed: vi.fn(), handle_remote_logout: vi.fn(), fetch_private_credentials })
     await vi.advanceTimersByTimeAsync(settings.app.client.sync.resourceGatherDelayMs)
-    expect(fetch).not.toHaveBeenCalled()
+    expect(fetch_private_credentials).not.toHaveBeenCalled()
     expect(clients).toHaveLength(0)
     const channel = Channel.instances.at(- 1)!
     const drop = owner === 'local' ? transport.subscribe('content_draft:needed', vi.fn()) : () => channel.receive({ type: 'release_resources', tab_id: 'other' })
     if (owner === 'remote')
       channel.receive({ type: 'report_resources', tab_id: 'other', resources: ['content_draft:needed'] })
     await vi.advanceTimersByTimeAsync(0)
-    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch_private_credentials).toHaveBeenCalledOnce()
+    expect(mocks.connect).toHaveBeenLastCalledWith('ws://broker', expect.objectContaining({ username: 'draft-reader', password: 'test-only' }))
     const client = clients.at(- 1)!
     client.connected = true
     client.emit('connect', { sessionPresent: false })
@@ -109,8 +115,25 @@ describe('data sync transport', () => {
     drop()
     expect(client.end).toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(10 * settings.app.client.sync.reconnectDelayMs)
-    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch_private_credentials).toHaveBeenCalledOnce()
     expect(clients).toHaveLength(1)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('does not connect the private broker when credentials are refused, and retries later', async () => {
+    fetch_private_credentials.mockRejectedValueOnce(new Error('unauthorized'))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const transport = create_data_sync_transport('ws://broker', true)
+    transports.push(transport)
+    transport.subscribe('content_draft:needed', vi.fn())
+    transport.start({ user: ref(null), identity_changed: vi.fn(), handle_remote_logout: vi.fn(), fetch_private_credentials })
+    await vi.advanceTimersByTimeAsync(settings.app.client.sync.resourceGatherDelayMs)
+    expect(fetch_private_credentials).toHaveBeenCalledOnce()
+    expect(clients).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(10 * settings.app.client.sync.reconnectDelayMs)
+    expect(fetch_private_credentials.mock.calls.length).toBeGreaterThan(1)
+    expect(clients).toHaveLength(1)
+    log.mockRestore()
   })
 
   it.each([false, true])('rechecks after SUBACK even when the broker resumes an old session, private=%s', async (private_mode) => {
@@ -333,6 +356,39 @@ describe('data sync transport', () => {
     await vi.advanceTimersByTimeAsync(settings.app.client.sync.reconnectDelayMs * 2)
     expect(mocks.connect).toHaveBeenCalledTimes(2)
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('backs off with jitter and a ceiling until the broker acknowledges the subscriptions', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const { transport, client } = await start(false, ['profile:1'])
+    acknowledge(client)
+    client.emit('close')
+    expect(transport.reconnecting.value).toBe(true)
+
+    const { reconnectDelayMs, reconnectMaxDelayMs } = settings.app.client.sync
+    for (const [index, multiplier] of [1, 2, 4, 8, 16, 32, 64].entries()) {
+      transport.subscribe(`profile:${index + 2}`, vi.fn())
+      const delay = Math.round(Math.min(reconnectDelayMs * multiplier, reconnectMaxDelayMs) * 0.9)
+      await vi.advanceTimersByTimeAsync(delay - 1)
+      expect(clients).toHaveLength(index + 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(clients).toHaveLength(index + 2)
+
+      const retry = clients.at(- 1)!
+      retry.connected = true
+      retry.emit('connect')
+      expect(transport.reconnecting.value).toBe(true)
+      if (multiplier < 64) {
+        acknowledge(retry, null, 128)
+      }
+    }
+
+    const recovered = clients.at(- 1)!
+    acknowledge(recovered)
+    expect(transport.reconnecting.value).toBe(false)
+    recovered.emit('close')
+    await vi.advanceTimersByTimeAsync(reconnectDelayMs)
+    expect(clients).toHaveLength(9)
   })
 
   it('preserves SDK close cleanup and consumes late errors during asynchronous disposal', async () => {

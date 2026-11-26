@@ -27,6 +27,8 @@ export interface Profile {
   is_banned: boolean
   verified_note: string | null
   editable: boolean
+  /** 访问者可读手机号与登录记录：本人，或拥有『控制台』任一级别。 */
+  sensitive_readable: boolean
   permissions: PermissionGrant[]
 }
 

@@ -1,5 +1,6 @@
 <template>
-  <NuxtLink :to="story ? `/content/${story.id}` : draft!.story_id ? `/content/${draft!.story_id}/edit` : `/content/draft-${draft!.id}/edit`" class="story-card watermark" :style="watermark_style">
+  <NuxtLink :to="story ? `/content/${story.id}` : draft!.story_id ? `/content/${draft!.story_id}/edit` : `/content/draft-${draft!.id}/edit`" class="story-card watermark">
+    <MyContentStoryWatermark v-if="story" :labels="story.labels" />
     <span v-if="story?.cover" class="story-card-cover">
       <MyContentStoryCover
         :src="story_front_cover_url(static_url, story.cover, story.cover_url)"
@@ -17,7 +18,7 @@
           ><MyIcon name="lucide:pin" class="me-0.5" /><span>置顶</span></span>
         </span>
         <span v-if="story.desc" class="story-card-desc">{{ story.desc }}</span>
-        <div class="mt-2 w-full flex flex-wrap items-end gap-2">
+        <div v-if="labels.length || story.event_dates.length" class="mt-2 w-full flex flex-wrap items-end gap-2">
           <span v-if="labels.length" class="flex flex-wrap justify-center gap-1">
             <MyBadge
               v-for="label in labels"
@@ -28,7 +29,7 @@
               {{ label }}
             </MyBadge>
           </span>
-          <span class="story-card-date ml-auto">
+          <span v-if="story.event_dates.length" class="story-card-date ml-auto">
             {{ format_event_range(story.event_precision, story.event_dates, time_context.timezone) }}
           </span>
         </div>
@@ -49,9 +50,10 @@
 <script setup lang="ts">
 import type { ContentStorySummary } from '@shared/types/content'
 import type { ContentDraftSummary } from '@shared/types/content-draft'
-import { story_pinned, story_rating_rank } from '@shared/types/content'
-import { cover_alt, story_front_cover_url } from '~/utils/content/attachment'
-import { format_event_entry, format_event_range } from '~/utils/content/event'
+import { story_pinned } from '@shared/types/content'
+import { format_event_entry, format_event_range } from '~/features/content/event'
+import { cover_alt, story_front_cover_url } from '~/features/content/story-cover'
+import { visible_story_labels } from '~/features/content/story-presentation'
 
 const props = defineProps<{
   story?: ContentStorySummary
@@ -63,28 +65,22 @@ const static_url = useStaticUrl()
 const time_context = useDisplayTimeContext()
 
 const pinned = computed(() => story_pinned(props.story?.labels ?? []))
-const rating_rank = computed(() => story_rating_rank(props.story?.labels ?? []))
-const labels = computed(() => (props.story?.labels ?? []).filter(label => ! label.startsWith('#')))
-const watermark_style = computed(() =>
-  rating_rank.value
-    ? { '--watermark-url': `url("${static_url(`imgs/ratings/${6 - rating_rank.value}.svg`)}")` }
-    : {},
-)
+const labels = computed(() => visible_story_labels(props.story?.labels ?? []))
 </script>
 
 <style scoped>
 /* Mini StoryHeader look: centered title/date/desc/labels stack on the card
-   chrome; the tier SVG watermark comes from the shared .watermark class in
-   global.css (driven by the inline --watermark-url).
+   chrome; the tier SVG watermark is shared with StoryHeader.
 
    The card itself is unpadded and the text rows own the inset instead (same
    split as the MarkdownPreview reference cards), so a cover spans the card
    edge to edge without having to cancel a padding it does not know. */
 .story-card {
-  @apply flex w-full min-w-0 flex-col rounded-sm bg-slate-100 text-sm leading-5 transition-all duration-300 dark:bg-slate-800/50;
+  @apply flex w-full min-w-0 flex-col rounded-sm text-sm leading-5 transition-all duration-300;
+  background-color: var(--content-card-surface);
 }
 
-.story-card > *,
+.story-card > :not(.story-watermark-image),
 .story-card-body > * {
   @apply min-w-0 max-w-full;
 }
@@ -111,11 +107,7 @@ const watermark_style = computed(() =>
 /* Cover sits at the very top of the card and takes its width, so the card's
    rounded corners are the image's corners. */
 .story-card-cover {
-  @apply relative w-full shrink-0 overflow-hidden rounded-t-sm bg-slate-200 dark:bg-slate-700;
-}
-
-.story-card-cover img {
-  @apply m-0 block h-auto max-h-none w-full min-w-0;
+  @apply relative w-full shrink-0 overflow-hidden rounded-t-sm;
 }
 
 .story-card-desc {

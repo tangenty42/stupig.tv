@@ -16,25 +16,24 @@ beforeEach(() => {
 afterEach(() => rmSync(directory, { recursive: true, force: true }))
 
 describe('environment selection', () => {
-  it('locks each environment-qualified package command before its entry imports dependencies', () => {
-    const scripts = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).scripts as Record<string, string>
+  const scripts = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).scripts as Record<string, string>
+  const commands = Object.entries(scripts).filter(([, command]) => command.includes('scripts/env/preload.mjs'))
+
+  it.each(commands)('locks the environment for %s before its entry imports dependencies', (name, command) => {
     const script = join(directory, 'command-probe.mjs')
     writeFileSync(script, 'console.log(JSON.stringify({selected:process.env.SELECTED,node:process.env.NODE_ENV,args:process.argv.slice(2)}))')
-    const commands = Object.entries(scripts).filter(([, command]) => command.includes('scripts/env/preload.mjs'))
-    for (const [name, command] of commands) {
-      const selection = /:(dev|prod)$/.exec(name)?.[1]
-      expect(selection, name).toBeDefined()
-      const args = command.split(/\s+/)
-      const preload = args[args.indexOf('--import') + 1]!
-      const selector = args.filter(arg => arg.startsWith('--env='))
-      expect(selector, name).toEqual([`--env=${selection}`])
-      const result = spawnSync(process.execPath, ['--import', pathToFileURL(resolve(preload)).href, script, ... selector, '--status'], {
-        cwd: directory, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, NODE_ENV: selection === 'dev' ? 'production' : 'development' }, encoding: 'utf8',
-      })
-      expect(result.status, `${name}: ${result.stderr}`).toBe(0)
-      expect(JSON.parse(result.stdout)).toEqual({ selected: selection, node: selection === 'dev' ? 'development' : 'production', args: ['--status'] })
-      expect(() => prepare_cli_environment([... selector, `--env=${selection === 'dev' ? 'prod' : 'dev'}`], {}, directory)).toThrow(/--env/)
-    }
+    const selection = /:(dev|prod)$/.exec(name)?.[1]
+    expect(selection, name).toBeDefined()
+    const args = command.split(/\s+/)
+    const preload = args[args.indexOf('--import') + 1]!
+    const selector = args.filter(arg => arg.startsWith('--env='))
+    expect(selector, name).toEqual([`--env=${selection}`])
+    const result = spawnSync(process.execPath, ['--import', pathToFileURL(resolve(preload)).href, script, ... selector, '--status'], {
+      cwd: directory, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, NODE_ENV: selection === 'dev' ? 'production' : 'development' }, encoding: 'utf8',
+    })
+    expect(result.status, `${name}: ${result.stderr}`).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ selected: selection, node: selection === 'dev' ? 'development' : 'production', args: ['--status'] })
+    expect(() => prepare_cli_environment([... selector, `--env=${selection === 'dev' ? 'prod' : 'dev'}`], {}, directory)).toThrow(/--env/)
   })
 
   it.each([

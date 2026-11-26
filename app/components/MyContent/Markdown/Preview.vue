@@ -10,6 +10,7 @@
     ref="body_component"
     :html="render_result.html"
     @click="on_preview_click"
+    @auxclick="on_preview_auxclick"
     @keydown="on_preview_keydown"
   />
   <p v-else-if="emptyText" class="py-10 text-center text-sm text-slate-400 dark:text-slate-500">
@@ -28,14 +29,21 @@
 
 <script setup lang="ts">
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
-import { attachment_for_link, attachment_is_media, save_url_as } from '~/utils/content/attachment'
-import { story_compiled_icons } from '~/utils/content/markdown/compiled-icons'
+import { settings } from '@shared/settings'
+import { useAttachmentDownload } from '~/features/content/attachments/download'
+import { private_attachment_open_denied_message } from '~/features/content/attachments/presentation'
+import { attachment_is_media, attachment_is_restricted } from '~/features/content/attachments/rules'
+import { save_url_as } from '~/features/content/browser-navigation'
+import { useStoryPreview } from '~/features/content/markdown/preview'
+import { attachment_for_link } from '~/features/content/markdown/preview/attachment-links'
+import { story_compiled_icons } from '~/features/content/markdown/render/compiled-icons'
 
 const props = withDefaults(defineProps<{
   markdown: string
   storyId?: number | null
   attachments?: ContentStoryAttachment[]
   folders?: string[]
+  canReadPrivate?: boolean
   emptyText?: string
   /** Known stories so `[](@title)` references render as story cards. */
   stories?: ContentStorySummary[]
@@ -50,6 +58,7 @@ const props = withDefaults(defineProps<{
   storyId: null,
   attachments: () => [],
   folders: () => [],
+  canReadPrivate: false,
   emptyText: '',
   stories: () => [],
   folderOpenable: false,
@@ -67,8 +76,8 @@ const emit = defineEmits<{
 const compiled_icons = story_compiled_icons
 
 const static_url = useStaticUrl()
-const api = useApi()
-const { error: toast_error } = useMyToast()
+const attachment_download = useAttachmentDownload()
+const { error: toast_error, info: toast_info } = useMyToast()
 const preview_visible = ref(false)
 const preview_index = ref(0)
 const preview_images = ref<string[]>([])
@@ -77,8 +86,10 @@ const { body_markdown, render_result, preview_attachments } = useStoryPreview(()
   story_id: () => props.storyId,
   attachments: () => props.attachments,
   folders: () => props.folders,
+  can_read_private: () => props.canReadPrivate,
   stories: () => props.stories,
   static_url,
+  lqip_max_bytes: settings.app.content.image.lqipMaxBytes,
   folder_card_openable: () => props.folderOpenable,
   public_view: () => props.publicView,
 })
@@ -96,20 +107,24 @@ const story_body = computed(() => body_component.value?.el ?? null)
 
 /** All readable attachments use the same authenticated resolver. */
 const plain_attachments_by_url = computed(() => new Map(preview_attachments.value.filter(file => file.url).map(file => [static_url(file.url), file])))
-watch(() => props.publicView, () => {
+const denied_attachments_by_url = computed(() => new Map(
+  props.publicView || ! props.canReadPrivate
+    ? props.attachments.filter(file => file.url && attachment_is_restricted(file)).map(file => [static_url(file.url), file])
+    : [],
+))
+watch([() => props.publicView, () => props.canReadPrivate], () => {
   preview_visible.value = false
   preview_images.value = []
   preview_index.value = 0
 })
 
-/** Saves a plaintext attachment under its row name instead of opening the nameless object URL. */
+/** Saves an attachment under its row name instead of opening the nameless object URL. */
 async function download_plain(attachment: ContentStoryAttachment) {
   const story_id = props.storyId
   if (! story_id)
     return
   try {
-    const { url } = await api.content.sign_attachment_download(story_id, attachment.file_name)
-    save_url_as(url)
+    save_url_as(await attachment_download.sign(story_id, attachment.file_name))
   }
   catch {
     toast_error('附件下载失败')
@@ -132,13 +147,17 @@ function open_image_preview(image: HTMLImageElement) {
   preview_images.value = [... render_result.value.images]
   story_body.value?.querySelectorAll<HTMLImageElement>('img[data-preview-index]').forEach((item) => {
     const item_index = Number(item.dataset.previewIndex)
-    if (Number.isInteger(item_index) && item_index >= 0 && item_index < preview_images.value.length)
+    if (Number.isInteger(item_index) && item_index >= 0 && item_index < preview_images.value.length) {
       preview_images.value[item_index] = item.src
+    }
   })
   preview_visible.value = true
 }
 
 function on_preview_click(event: MouseEvent) {
+  const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href]') : null
+  if (block_denied_attachment_link(event, link))
+    return
   const image = preview_image_from_event(event)
   if (image) {
     open_image_preview(image)
@@ -146,18 +165,41 @@ function on_preview_click(event: MouseEvent) {
   }
   // A plain attachment link saves under its row name; media stay viewable and
   // keep their native tab navigation.
-  if (event.target instanceof HTMLElement) {
-    const link = event.target.closest<HTMLAnchorElement>('a[href]')
-    const attachment = link ? attachment_for_link(plain_attachments_by_url.value, link) : undefined
-    if (attachment && ! attachment_is_media(attachment)) {
-      event.preventDefault()
-      void download_plain(attachment)
-      return
-    }
+  const attachment = link ? attachment_for_link(plain_attachments_by_url.value, link) : undefined
+  if (attachment && ! attachment_is_media(attachment)) {
+    event.preventDefault()
+    void download_plain(attachment)
+    return
   }
   const folder = folder_from_event(event)
   if (folder) {
+    activate_folder(folder)
+  }
+}
+
+function on_preview_auxclick(event: MouseEvent) {
+  if (event.button === 1 && event.target instanceof Element)
+    block_denied_attachment_link(event, event.target.closest<HTMLAnchorElement>('a[href]'))
+}
+
+function block_denied_attachment_link(event: MouseEvent, link: HTMLAnchorElement | null) {
+  if (! link)
+    return false
+  const denied = denied_attachments_by_url.value
+  const same_origin = link.origin === link.ownerDocument.location?.origin
+  if (! attachment_for_link(denied, link) && ! (same_origin && denied.has(link.pathname + link.search)))
+    return false
+  event.preventDefault()
+  toast_info(private_attachment_open_denied_message)
+  return true
+}
+
+function activate_folder(folder: string) {
+  if (props.folderOpenable) {
     emit('folder-open', folder)
+  }
+  else {
+    toast_info('预览中无法打开附件列表~')
   }
 }
 
@@ -174,7 +216,7 @@ function on_preview_keydown(event: KeyboardEvent) {
   const folder = folder_from_event(event)
   if (folder) {
     event.preventDefault()
-    emit('folder-open', folder)
+    activate_folder(folder)
   }
 }
 </script>
@@ -182,6 +224,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 <style scoped>
 .story-body {
   @apply leading-7 text-slate-700 [overflow-wrap:anywhere] dark:text-slate-300;
+  word-spacing: 0.25em;
 }
 
 /* Headings pin below the fixed app header while their section scrolls under
@@ -287,62 +330,53 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 /* Abstract card chrome shared by plain links, file cards and story cards:
-   dashed border, tinted background, small line height so the card embeds
-   into the text line, and a hover state that darkens the whole card
-   (brightness, so a cover image dims with the card instead of separately)
-   and highlights the border and the trailing "out" icon in primary
-   (branded video/story cards hover to their own brand color instead, see
-   below). flex-nowrap + min-w-0 let every card truncate instead of
-   overflowing. */
+   opaque surface and small line height. flex-nowrap + min-w-0 let each
+   card truncate instead of overflowing. */
 .story-body :deep(.link-card) {
-  @apply my-1 inline-flex min-w-0 max-w-full flex-nowrap items-center gap-2 rounded-sm border border-dashed border-slate-300 bg-slate-50/60 px-2.5 py-1 align-middle text-sm leading-5 shadow-none transition-all duration-300 dark:border-slate-600 dark:bg-slate-800/40;
+  @apply my-1 inline-flex min-w-0 max-w-full flex-nowrap items-center gap-2 rounded-sm px-2.5 py-1 align-middle text-sm font-medium leading-5 no-underline transition-[filter] duration-300;
+  --card-icon-color: var(--content-accent-neutral);
+  --card-accent: var(--card-icon-color);
+  background-color: var(--content-card-surface);
 }
 
-.story-body :deep(.link-card:not(.story-card-dead):hover),
-.story-body :deep(.link-card:not(.story-card-dead):focus-visible) {
+.story-body :deep(a.link-card[href]),
+.story-body :deep(.link-card[data-folder-card]) {
+  border-bottom: 4px solid var(--card-accent);
+}
+
+.story-body :deep(a.link-card[href]:hover),
+.story-body :deep(a.link-card[href]:focus-visible),
+.story-body :deep(.link-card[data-folder-card]:hover),
+.story-body :deep(.link-card[data-folder-card]:focus-visible),
+.story-body :deep(img:not(.built-in-img):hover) {
   @apply brightness-90;
 }
 
-.story-body :deep(.link-card:not(.story-card-dead, .story-card, .file-card-encrypted):hover),
-.story-body :deep(.link-card:not(.story-card-dead, .story-card, .file-card-encrypted):focus-visible) {
-  @apply border-primary;
+.dark .story-body :deep(a.link-card[href]:hover),
+.dark .story-body :deep(a.link-card[href]:focus-visible),
+.dark .story-body :deep(.link-card[data-folder-card]:hover),
+.dark .story-body :deep(.link-card[data-folder-card]:focus-visible),
+.dark .story-body :deep(img:not(.built-in-img):hover) {
+  @apply brightness-125;
 }
 
-.story-body :deep(.link-card:not(.story-card-dead, .file-card-encrypted):hover) .link-card-open,
-.story-body :deep(.link-card:not(.story-card-dead, .file-card-encrypted):hover) .link-card-icon,
-.story-body :deep(.link-card:not(.story-card-dead, .file-card-encrypted):hover) .link-card-tag,
-.story-body :deep(.link-card:not(.story-card-dead, .file-card-encrypted):focus-visible) .link-card-open,
-.story-body :deep(.link-card:not(.story-card-dead, .file-card-encrypted):focus-visible) .link-card-icon,
-.story-body :deep(.link-card:not(.story-card-dead, .file-card-encrypted):focus-visible) .link-card-tag {
-  @apply text-primary;
-}
-
-.story-body :deep(.link-card-open) {
-  @apply shrink-0 text-slate-400 transition-colors duration-300 dark:text-slate-500;
-}
-
+.story-body :deep(.link-card-open),
 .story-body :deep(.link-card-icon),
 .story-body :deep(.link-card-tag) {
-  @apply shrink-0 font-medium text-slate-400 transition-colors duration-300 dark:text-slate-500;
+  @apply shrink-0;
+  color: var(--card-icon-color);
 }
 
-/* A folder card is clickable only where the host can open the folder, and the
-   data attribute marks exactly those. Without it the card is a plain label, so
-   it keeps its resting border and colour rather than inviting a click. */
 .story-body :deep(.folder-card[data-folder-card]) {
   @apply cursor-pointer;
 }
 
-.story-body :deep(.folder-card:not([data-folder-card]):hover) {
-  @apply border-slate-300 brightness-100 dark:border-slate-600;
-}
-
-/* Plain-link chips flow like inline code: the chip breaks across lines
-   mid-content instead of truncating, so it is a plain inline box and the
-   flex gap is replaced by inner margins. Everything is em-sized so the chip
-   scales with its context (smaller inside captions, bigger in headings). */
+/* Keep the outline in the line box so its border and padding reserve space.
+   The label can wrap inside the chip when it is wider than the paragraph. */
 .story-body :deep(.link-chip) {
-  @apply inline px-[0.625em] py-[0.25em] text-[0.875em] leading-[1.4];
+  @apply inline-block break-words px-[0.625em] py-[0.125em] align-baseline text-[0.875em];
+  line-height: normal;
+  overflow-wrap: anywhere;
 }
 
 .story-body :deep(.link-chip) .link-card-icon {
@@ -357,120 +391,113 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply whitespace-normal;
 }
 
+.story-body :deep(.link-chip code) {
+  @apply inline-block max-w-full;
+}
+
 .story-body :deep(.link-chip) .link-card-open {
   @apply ml-[0.4em];
 }
 
-/* Private (机密) content chrome, in the same dashed family as the link cards
-   but amber to read as "restricted". Only ever rendered for viewers holding
-   the content_private permission — everyone else's markdown arrives with the
-   private elements already stripped by the server. */
+.story-body :deep(.private-block),
+.story-body :deep(.private-inline) {
+  @apply rounded-sm;
+  background-color: var(--content-card-surface);
+}
+
 .story-body :deep(.private-block) {
-  @apply my-3 rounded-sm border border-dashed border-amber-400 bg-amber-50/40 dark:border-amber-600 dark:bg-amber-950/20;
-}
-
-.story-body :deep(.private-block-brand) {
-  @apply flex items-center gap-1.5 border-b border-dashed border-amber-400 px-2 py-1 text-xs font-medium leading-4 text-amber-600 dark:border-amber-600 dark:text-amber-400;
-}
-
-.story-body :deep(.private-block-body) {
-  @apply px-3 py-2;
-}
-
-.story-body :deep(.private-block-body > p) {
   @apply my-3;
 }
 
-/* The private chips are inline boxes too: they wrap mid-content like inline
-   code, with inner margins instead of a flex gap. em-sized like link-chip. */
-.story-body :deep(.private-inline),
-.story-body :deep(.private-inline-denied) {
-  @apply my-1 inline rounded-sm border border-dashed px-[0.625em] py-[0.25em] align-middle text-[0.875em] leading-[1.4];
-}
-
 .story-body :deep(.private-inline) {
-  @apply border-amber-400 bg-amber-50/40 dark:border-amber-600 dark:bg-amber-950/20;
+  @apply my-1 inline-block max-w-full align-middle;
 }
 
-.story-body :deep(.private-inline-icon),
-.story-body :deep(.private-inline-tag),
-.story-body :deep(.private-inline-denied .iconify) {
-  @apply mr-[0.25em];
+.story-body :deep(.private-content-body) {
+  @apply block px-2 py-1;
 }
 
-.story-body :deep(.private-inline-icon),
-.story-body :deep(.private-inline-tag) {
-  @apply font-medium text-amber-600 dark:text-amber-400;
+.story-body :deep(.private-block > .private-content-body > :first-child) {
+  margin-top: 0;
 }
 
-/* The placeholder an unauthorized viewer gets in place of a private element:
-   same dashed silhouette, grayed out, with no private content inside. The
-   server swaps the elements for this HTML before the markdown ever leaves. */
-.story-body :deep(.private-block-denied) {
-  @apply my-3 flex items-center gap-2 cursor-default rounded-sm border border-dashed border-slate-300 bg-slate-50/60 px-3 py-2 text-sm text-slate-400 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-500;
+.story-body :deep(.private-block > .private-content-body > :last-child) {
+  margin-bottom: 0;
+}
+
+/* Permission denials and render failures share the same solid card background.
+   The inline, block and media variants reserve space for the replaced content. */
+.story-body :deep(.content-placeholder) {
+  @apply cursor-default rounded-sm text-slate-500 dark:text-slate-400;
+  background-color: var(--content-card-surface);
+}
+
+/* Sized like a file card so a failed card keeps the card's footprint. */
+.story-body :deep(.content-placeholder-inline) {
+  @apply my-1 inline-flex min-h-14 min-w-48 max-w-full items-center gap-2 px-3 py-2 align-middle text-sm leading-5;
+}
+
+.story-body :deep(.content-placeholder-inline .iconify) {
+  @apply h-5 w-5 shrink-0;
+}
+
+.story-body :deep(.content-placeholder-block) {
+  @apply my-3 flex items-center gap-2 px-3 py-2 text-sm;
 }
 
 /* html_wrappers re-renders the placeholder's inner as a paragraph. */
-.story-body :deep(.private-block-denied > p) {
-  @apply m-0 flex items-center gap-2 cursor-default;
+.story-body :deep(.content-placeholder-block > p) {
+  @apply m-0 flex items-center gap-2;
 }
 
-.story-body :deep(.private-inline-denied) {
-  @apply border-slate-300 bg-slate-50/60 text-slate-400 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-500;
+.story-body :deep(.content-placeholder-media) {
+  @apply min-h-40 w-64 max-w-full flex-col items-center justify-center gap-2 px-6 py-10 text-sm;
 }
 
-/* Encrypted attachments an unauthorized viewer meets: the image placeholder
-   is a plain gray block; the denied file card keeps the file-card frame with
-   a lock icon, only its title turns muted like the image placeholder's text. */
-.story-body :deep(.encrypted-image-denied) {
-  @apply flex min-h-40 w-full cursor-default flex-col items-center justify-center gap-2 rounded-sm bg-slate-100 px-6 py-10 text-sm text-slate-400 dark:bg-slate-800 dark:text-slate-500;
+/* Failed-image placeholders share the frame's visibility and fade. */
+.story-body :deep(.content-placeholder-media:not(.image-unavailable)) {
+  @apply flex;
 }
 
-/* A caption below carries the bottom rounding, so the placeholder squares
-   its own bottom to meet it flush (same split as captioned frames). */
-.story-body :deep(.carousel-item-captioned .encrypted-image-denied) {
-  @apply rounded-b-none;
-}
-
-.story-body :deep(.encrypted-card-denied) {
-  @apply cursor-default;
-}
-
-.story-body :deep(.encrypted-card-denied .file-card-name) {
-  @apply font-sans font-normal text-slate-400 dark:text-slate-500;
-}
-
-.story-body :deep(.encrypted-image-denied .iconify) {
+.story-body :deep(.content-placeholder-media .iconify) {
   @apply text-3xl;
 }
 
-/* Permitted encrypted image: an amber cap above the normal picture/carousel
-   body — dashed border on top/sides, rounded top; the frame below loses its
-   top rounding (the same split as a caption's rounded bottom). */
-.story-body :deep(.encrypted-block) {
+.story-body :deep(.carousel-item-captioned .content-placeholder-media) {
+  @apply rounded-b-none;
+}
+
+.story-body :deep(.private-image-block) {
   @apply my-3 block;
 }
 
-.story-body :deep(.encrypted-block-brand) {
-  @apply flex items-center gap-1.5 rounded-t-sm border border-b-0 border-dashed border-amber-400 bg-amber-50/40 px-2 py-1 text-xs font-medium leading-4 text-amber-600 dark:border-amber-600 dark:bg-amber-950/20 dark:text-amber-400;
+/* The privacy label is shared by attachments and private Markdown. */
+.story-body :deep(.attachment-privacy-brand) {
+  @apply flex items-center gap-1.5 rounded-t-sm px-2 py-1 text-xs font-medium leading-4;
+  color: var(--content-accent-private);
+  background-color: var(--content-card-surface);
 }
 
-/* Inside the encrypted card the cap is full-width, so the shrink-wrapped
+.story-body :deep(.attachment-privacy-brand-redacted) {
+  color: var(--content-accent-redacted);
+}
+
+/* Inside the private image card the cap is full-width, so the shrink-wrapped
    frame (inline-block w-fit) must stretch too, or the card out-widens the
    image and the caption floats off to the side. */
-.story-body :deep(.encrypted-block-brand ~ .img-frame),
-.story-body :deep(.encrypted-block .img-frame) {
+.story-body :deep(.private-image-block-brand ~ .img-frame),
+.story-body :deep(.private-image-block .img-frame) {
   @apply block w-full rounded-t-none;
 }
 
-.story-body :deep(.encrypted-block .img-frame > img) {
+.story-body :deep(.private-image-block .img-frame > img) {
   @apply w-full;
 }
 
 /* Only the top rounding drops (the cap is above). display:block because the
    caption's width idiom (w-0 + min-w-full) is ignored on inline boxes —
    normally it is a direct flex child of the carousel item. */
-.story-body :deep(.encrypted-block .carousel-caption) {
+.story-body :deep(.private-image-block .carousel-caption) {
   @apply block rounded-t-none;
 }
 
@@ -483,11 +510,16 @@ function on_preview_keydown(event: KeyboardEvent) {
 /* File card: the roomier variant — larger padding, a leading file icon and
    a two-line name/size column. */
 .story-body :deep(.file-card) {
-  @apply gap-3 p-3;
+  @apply flex-col items-stretch gap-0 overflow-hidden p-0;
+}
+
+.story-body :deep(.file-card-body) {
+  @apply flex min-w-0 items-center gap-3 p-3;
 }
 
 .story-body :deep(.file-card-icon) {
-  @apply shrink-0 text-3xl text-slate-400 dark:text-slate-500;
+  @apply shrink-0 text-3xl;
+  color: var(--card-icon-color);
 }
 
 .story-body :deep(.file-card-content) {
@@ -502,65 +534,34 @@ function on_preview_keydown(event: KeyboardEvent) {
   @apply text-xs text-slate-500 dark:text-slate-400;
 }
 
-/* Encrypted attachment card (key shipped): the same amber family as the
-   private chrome. The denied variant stays gray — see .encrypted-card-denied. */
-.story-body :deep(.file-card-encrypted) {
-  @apply border-amber-400 bg-amber-50/40 dark:border-amber-600 dark:bg-amber-950/20;
+.story-body :deep(.file-card-private) {
+  --card-accent: var(--content-accent-private);
 }
 
-.story-body :deep(.file-card-encrypted:hover),
-.story-body :deep(.file-card-encrypted:focus-visible) {
-  @apply border-amber-500 dark:border-amber-500;
-}
-
-.story-body :deep(.file-card-encrypted .file-card-icon) {
-  @apply text-amber-600 dark:text-amber-400;
-}
-
-.story-body :deep(.file-card-encrypted-tag) {
-  @apply ml-1 font-medium text-amber-600 dark:text-amber-400;
+.story-body :deep(.file-card-redacted) {
+  --card-accent: var(--content-accent-redacted);
 }
 
 /* Story reference cards have a brand strip, optional cover, title and rating.
    Dead references render a muted placeholder cover with an icon.
-   The card is unpadded (.link-card's chrome is the 1px dashed border) and
-   clips its sections to its own rounding, so brand/cover/content stack as
-   plain flex sections — no negative-margin border compensation. */
+   The unpadded card clips the stacked brand, cover and content to its corners. */
 .story-body :deep(.story-card) {
-  /* The card itself draws no border: the brand strip and cover bleed to the
-     edges, and only the bottom content section carries the dashed frame on
-     its left/right/bottom. */
-  @apply my-3 w-64 max-w-full flex-col items-stretch gap-0 overflow-hidden border-0 bg-transparent p-0;
+  @apply my-3 w-64 max-w-full flex-col items-stretch gap-0 overflow-hidden p-0;
 }
 
-/* The bottom section owns the card's dashed frame (left/right/bottom) and
-   its bottom rounding; the top corners belong to the brand strip's clip.
-   The transition matches the card's 300ms hover timing (it lives on the
-   root's transition-all, which this border no longer rides). */
 .story-body :deep(.story-card-content) {
-  @apply flex min-w-0 flex-1 flex-col gap-0.5 rounded-b-sm border border-t-0 border-dashed border-slate-300 bg-slate-50/60 px-2.5 pb-2 pt-1 transition-colors duration-300 dark:border-slate-600 dark:bg-slate-800/40;
+  @apply flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 pb-2 pt-1;
 }
 
-/* The brand color lives once, on the card: the brand strip reads it, and on
-   hover the neutral border switches to it (the whole-card brightness hover
-   supplies the darkening, so no separate hover shade). The story card
-   tracks the theme's primary color (subdued to the 700 shade in dark mode;
-   .dark sits on <html>, an ancestor of this component, so the override
-   needs :global). */
+/* The brand strip tracks the theme's primary color. */
 .story-body :deep(.story-card) {
   @apply relative;
   --card-brand: theme('colors.primary');
+  --card-accent: var(--card-brand);
 }
 
 .dark .story-body :deep(.story-card) {
   --card-brand: theme('colors.primary-600');
-}
-
-/* On hover the content section's border reveals the card's brand color; dead
-   story cards are not links and stay static. */
-.story-body :deep(.story-card:not(.story-card-dead):hover) .story-card-content,
-.story-body :deep(.story-card:not(.story-card-dead):focus-visible) .story-card-content {
-  border-color: var(--card-brand);
 }
 
 /* Each card opens with a brand strip; the card's overflow-hidden rounds its
@@ -583,7 +584,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 .story-body :deep(.story-card-cover) {
-  @apply relative shrink-0 overflow-hidden bg-slate-200 dark:bg-slate-700;
+  @apply relative shrink-0 overflow-hidden;
 }
 
 /* Reset the global story-body img rules (max-h cap, min-w floor, zoom
@@ -591,18 +592,6 @@ function on_preview_keydown(event: KeyboardEvent) {
    instead of being cropped to a fixed frame. */
 .story-body :deep(.story-card-cover img) {
   @apply m-0 block h-auto max-h-none w-full min-w-0 cursor-pointer rounded-none;
-}
-
-/* The empty placeholder has no image to size it, so it keeps a 16:9 box. */
-.story-body :deep(.story-card-cover-empty) {
-  @apply flex items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
-}
-
-/* A zero-width flex spacer reserves 16:9 in engines without aspect-ratio. */
-.story-body :deep(.story-card-cover-empty)::before,
-.story-body :deep(.image-unavailable)::before {
-  content: '';
-  padding-top: 56.25%;
 }
 
 /* Rating badge: a large, translucent tier SVG on its own row at the
@@ -635,11 +624,6 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 .story-body :deep(.story-card-desc) {
   @apply mt-1 text-xs text-slate-500 dark:text-slate-400;
-}
-
-/* Dead references mute the placeholder title. */
-.story-body :deep(.story-card-dead .story-card-title) {
-  @apply font-normal text-slate-400 dark:text-slate-500;
 }
 
 /* Tall images whose width would collapse under the max-h-64 cap are forced
@@ -680,27 +664,17 @@ function on_preview_keydown(event: KeyboardEvent) {
 /* Reserve the same cropped box before the network image gains intrinsic
    dimensions. These limits match the image rules above; width/height HTML
    hints alone do not reserve this geometry in Chrome 80. */
-.story-body :deep(.carousel-item .img-frame[data-lqip]) {
+.story-body :deep(.carousel-item .img-frame[data-image-sized]:not(.content-cover)) {
   max-width: 100%;
   width: max(theme('spacing.32'), min(var(--content-image-width), calc(theme('spacing.64') * var(--content-image-ratio))));
 }
 
-.story-body :deep(.carousel-item .img-frame[data-lqip][aria-busy] > img) {
-  @apply absolute inset-0;
-}
-
-.story-body :deep(.carousel-item .img-frame[data-lqip][aria-busy])::after {
-  content: '';
-  display: block;
+.story-body :deep(.carousel-item .img-frame[data-image-sized][aria-busy]:not(.content-cover))::after {
   padding-top: clamp(theme('spacing.32'), calc(100% / var(--content-image-ratio)), theme('spacing.64'));
 }
 
-.story-body :deep(.carousel-item .img-frame[data-lqip][data-image-error]) {
+.story-body :deep(.carousel-item .img-frame[data-image-sized][data-image-error]:not(.content-cover)) {
   width: auto;
-}
-
-.story-body :deep(.image-unavailable) {
-  @apply w-64 max-w-full items-center justify-center bg-slate-200 text-3xl text-slate-400 dark:bg-slate-800 dark:text-slate-500;
 }
 
 .story-body :deep(.img-frame[data-image-error]) {
@@ -711,28 +685,29 @@ function on_preview_keydown(event: KeyboardEvent) {
    actually clipped (data-cropped). Clicks fall through to the image. The
    long fade (pt-16) keeps the hint text on a solid enough background. */
 .story-body :deep(.long-img-cover) {
-  @apply pointer-events-none absolute inset-x-0 bottom-0 z-[2] hidden items-end justify-center bg-gradient-to-t from-slate-950/90 via-slate-900/50 to-transparent px-2 pb-2 pt-16 text-center text-xs font-medium text-white;
+  @apply pointer-events-none absolute inset-x-0 bottom-0 z-[2] flex items-end justify-center bg-gradient-to-t from-slate-950/90 via-slate-900/50 to-transparent px-2 pb-2 pt-16 text-center text-xs font-medium text-white;
+  opacity: 0;
+  transition: opacity var(--image-state-duration) var(--image-state-easing);
 }
 
 .story-body :deep(.img-frame[data-cropped][data-image-loaded] .long-img-cover) {
-  @apply flex;
+  opacity: 1;
 }
 
-.story-body :deep(img:not(.built-in-img):hover) {
-  @apply brightness-90;
-}
-
-/* Card covers must not take the img hover dimming: the whole card already
-   darkens on hover, a second dimming would double-darken the cover. */
+/* Embedded covers and ratings take their hover brightness from the card. */
 .story-body :deep(.story-card-cover img:hover),
 .story-body :deep(.story-card-rating:hover) {
   @apply brightness-100;
 }
 
 .story-body :deep(.carousel-shell) {
-  @apply relative my-4;
+  @apply relative my-4 max-w-full;
   /* Single source for the edge-fade width; nav jumps read it in JS too. */
   --carousel-fade-width: 3rem;
+}
+
+.story-body :deep(.carousel-shell-inline) {
+  @apply my-1 inline-block align-middle;
 }
 
 /* Edge fades: while the strip can scroll in a direction, mask its content
@@ -742,6 +717,7 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 .story-body :deep(.image-carousel) {
   @apply m-0 flex items-end overflow-x-auto overflow-y-hidden pb-2;
+  scrollbar-color: var(--content-accent-neutral) transparent;
   /* Multi-stop ramp: the opacity eases in over the fade width instead of
      jumping along a single straight slope, so the fade reads smoother. */
   mask-image: linear-gradient(
@@ -757,9 +733,55 @@ function on_preview_keydown(event: KeyboardEvent) {
   );
 }
 
-/* Flex gap is unavailable in Chrome 80 and Safari 13.1. */
-.story-body :deep(.image-carousel > * + *) {
-  @apply ml-3;
+/* Keep the inherited color from restyling code blocks and other scrollers. */
+.story-body :deep(.image-carousel > *) {
+  scrollbar-color: auto;
+}
+
+@supports not (scrollbar-color: auto) {
+  .story-body :deep(.image-carousel::-webkit-scrollbar),
+  .story-body :deep(.image-carousel::-webkit-scrollbar-track) {
+    background: transparent;
+  }
+
+  .story-body :deep(.image-carousel::-webkit-scrollbar-thumb) {
+    @apply rounded-full;
+    background: var(--content-accent-neutral);
+  }
+}
+
+/* Flex ignores whitespace-only text nodes between items. Each authored
+   separator gets half an em so neighboring cards have room to breathe. */
+.story-body :deep(.carousel-space) {
+  @apply w-[0.5em] shrink-0 whitespace-pre;
+}
+
+.story-body :deep(.carousel-content-item) {
+  @apply min-w-0 max-w-full shrink-0;
+}
+
+.story-body :deep(.carousel-content-item > :first-child) {
+  margin-top: 0;
+}
+
+.story-body :deep(.carousel-content-item > :last-child) {
+  margin-bottom: 0;
+}
+
+/* A heading inside a strip belongs to its item, not the page header stack. */
+.story-body :deep(.image-carousel h1),
+.story-body :deep(.image-carousel h2),
+.story-body :deep(.image-carousel h3),
+.story-body :deep(.image-carousel h4),
+.story-body :deep(.image-carousel h5),
+.story-body :deep(.image-carousel h6) {
+  @apply static bg-transparent dark:bg-transparent;
+  margin-inline: 0;
+  padding-inline: 0;
+}
+
+.story-body :deep(.carousel-content-item > hr) {
+  @apply w-24;
 }
 
 .story-body :deep(.carousel-nav) {
@@ -772,22 +794,27 @@ function on_preview_keydown(event: KeyboardEvent) {
 
 /* Freshly wired shells apply their restored state transition-free for one
    frame, otherwise editor re-renders replay the fade/width animations. */
-.story-body :deep(.carousel-no-fx .carousel-nav) {
+.story-body :deep(.carousel-no-fx .carousel-nav),
+.story-body :deep(.carousel-no-fx .carousel-hint-text) {
   transition: none;
 }
 
-/* The hint label stays hidden unless the next button is both active and
-   still pre-first-scroll (data-hint); then the button widens into a pill. */
+/* Keep the label in the flex layout so the pill can shrink with it. */
 .story-body :deep(.carousel-hint-text) {
-  @apply hidden whitespace-nowrap;
+  @apply inline-flex max-w-0 shrink-0 flex-col overflow-hidden whitespace-nowrap text-left text-sm font-bold leading-tight opacity-0;
+  transition: max-width 300ms ease-out, margin-right 300ms ease-out, opacity 160ms ease-out;
 }
 
 .story-body :deep(.carousel-next[data-on='true'][data-hint='true']) {
-  @apply w-auto gap-1 px-2.5;
+  @apply h-11 pl-4 pr-2.5;
 }
 
 .story-body :deep(.carousel-next[data-on='true'][data-hint='true']) .carousel-hint-text {
-  @apply inline text-sm font-bold;
+  @apply mr-1 max-w-[5.5em] opacity-100;
+}
+
+.story-body :deep(.carousel-hint-detail) {
+  @apply text-[0.6875rem] font-normal leading-tight opacity-70;
 }
 
 .story-body :deep(.carousel-prev) {
@@ -795,7 +822,27 @@ function on_preview_keydown(event: KeyboardEvent) {
 }
 
 .story-body :deep(.carousel-next) {
-  @apply -right-2;
+  @apply -right-2 w-auto min-w-9 overflow-hidden duration-300 ease-out;
+  padding-inline: calc((2.25rem - 1em) / 2 - 1px);
+}
+
+.story-body :deep(.carousel-next > .iconify) {
+  @apply shrink-0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-body :deep(.carousel-next),
+  .story-body :deep(.carousel-hint-text) {
+    transition: none;
+  }
+}
+
+.story-body :deep(.carousel-shell-inline > .carousel-prev) {
+  @apply left-0;
+}
+
+.story-body :deep(.carousel-shell-inline > .carousel-next) {
+  @apply right-0;
 }
 
 /* Scroll-sync anchor for the strip's last line: a marker only, no box. */
@@ -809,27 +856,27 @@ function on_preview_keydown(event: KeyboardEvent) {
    own max-w-full resolves against that oversized box — overflowing the
    strip into a scroller even for a single image. */
 .story-body :deep(.carousel-item) {
-  @apply inline-flex max-w-full shrink-0 flex-col align-bottom;
+  @apply my-1 inline-flex max-w-full shrink-0 flex-col align-bottom;
+}
+
+.story-body :deep(.image-carousel .carousel-item) {
+  @apply my-0;
 }
 
 /* The strip owns spacing for every card type. In particular, the private
    image's old block margin must not lift its visible bottom above its peers. */
-.story-body :deep(.carousel-item > .encrypted-block) {
+.story-body :deep(.carousel-item > .private-image-block) {
   @apply m-0 flex max-w-full flex-col;
 }
 
-.story-body :deep(.image-carousel > .link-card) {
+.story-body :deep(.image-carousel > .link-card),
+.story-body :deep(.image-carousel > .content-placeholder),
+.story-body :deep(.image-carousel > .private-inline) {
   @apply my-0 shrink-0;
-  margin-left: 0;
-  margin-right: 0;
-}
-
-.story-body :deep(.image-carousel > .link-card:not(:first-child)) {
-  @apply ml-3;
 }
 
 .story-body :deep(.carousel-caption) {
-  @apply w-0 min-w-full whitespace-normal break-words font-medium text-xs leading-[1.2rem] rounded-b-sm bg-slate-200/80 px-2.5 py-1.5 text-slate-600 dark:bg-slate-800/60 dark:text-slate-300;
+  @apply w-0 min-w-full whitespace-normal break-words font-medium text-xs leading-[1.2rem] rounded-b-sm bg-slate-200 px-2.5 py-1.5 text-slate-600 dark:bg-slate-700 dark:text-slate-300;
 }
 
 .story-body :deep(.img-frame.iframe-frame) {
@@ -949,22 +996,6 @@ function on_preview_keydown(event: KeyboardEvent) {
    across lines instead of overflowing the card. */
 .story-body :deep(code) {
   @apply rounded-sm border border-slate-300 dark:border-slate-600 bg-slate-100 px-[0.3em] py-[0.1em] font-mono text-[1em] dark:bg-slate-800;
-}
-
-.story-body :deep(.chip-code-gap-l) {
-  @apply ml-1;
-}
-
-.story-body :deep(.chip-code-gap-r) {
-  @apply mr-1;
-}
-
-.story-body :deep(.chip-card-gap-l) {
-  @apply ml-1;
-}
-
-.story-body :deep(.chip-card-gap-r) {
-  @apply mr-1;
 }
 
 .story-body :deep(pre) {

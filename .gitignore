@@ -4,10 +4,12 @@
 .nuxt
 .nitro
 .dev
+config/https/*
 .esa
 .cache
 playwright-report
 test-results
+coverage
 dist
 
 # Node dependencies
@@ -44,3 +46,5 @@ config/local.yaml
 # Throwaway scripts and snapshots written while verifying a change (they are
 # meant to be deleted again, but must never be committed by accident).
 .tmp-*
+*.tmp.mjs
+/.copilot/session-state/

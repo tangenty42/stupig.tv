@@ -20,10 +20,8 @@ export interface ImageAccessRow {
   file_name: string
   version: string
   storage_bucket: StorageBucket
-  storage_provider?: 'legacy' | 'aliyun'
   oss_version_id?: string | null
   is_private: number
-  encryption_key: string | null
   original_key?: string | null
   display_key?: string | null
   fallback_key?: string | null
@@ -36,16 +34,19 @@ export interface ImageAccessRow {
 }
 export type ImageReadRole = 'auto' | 'display' | 'fallback' | 'original' | 'redacted_display' | 'redacted_fallback' | 'redacted'
 export function require_attachment_read(row: ImageAccessRow, viewer: AuthUser | null) {
-  if (row.storage_provider !== 'aliyun' || row.encryption_key !== null)
-    throw new ApiError(503, '附件尚未完成迁移')
-  if (row.is_private && ! has_permission(viewer, 'content_private', 'read'))
+  if (row.is_private && ! has_permission(viewer, 'content_access', 'private_read'))
     throw new ApiError(403, '你没有机密附件的读取权限')
+}
+/** Originals may keep EXIF such as GPS; only 机密可读 (implied by 完全) may read them. */
+export function require_original_read(viewer: AuthUser | null) {
+  if (! has_permission(viewer, 'content_access', 'private_read'))
+    throw new ApiError(403, '你没有原图的读取权限')
 }
 export function image_download_name(name: string, role: ContentImageRole) {
   return `${attachment_download_name(name).replace(/\.[^.]+$/, '')}.${content_image_formats[role].extension}`
 }
 export async function resolve_attachment_role(row: ImageAccessRow, role: ImageReadRole, viewer: AuthUser | null, authorize?: (row: ImageAccessRow) => Promise<void>) {
-  const redacted = (role === 'redacted' || role.startsWith('redacted_')) || (row.is_private && ! has_permission(viewer, 'content_private', 'read') && role !== 'original')
+  const redacted = (role === 'redacted' || role.startsWith('redacted_')) || (row.is_private && ! has_permission(viewer, 'content_access', 'private_read') && role !== 'original')
   if (redacted) {
     if (! has_redacted_variant(row))
       throw new ApiError(404, '删减版尚未创建或已删除')
@@ -57,12 +58,10 @@ export async function resolve_attachment_role(row: ImageAccessRow, role: ImageRe
     return { key: (fallback ? row.redacted_fallback_key : row.redacted_display_key)!, name: image_download_name(row.file_name, fallback ? 'fallback' : 'display') }
   }
   async function check(current: ImageAccessRow) {
-    if (authorize) {
-      if (current.storage_provider !== 'aliyun' || current.encryption_key !== null)
-        throw new ApiError(503, '附件尚未完成迁移')
+    if (authorize)
       await authorize(current)
-    }
-    else { require_attachment_read(current, viewer) }
+    else
+      require_attachment_read(current, viewer)
   }
   await check(row)
   if (role === 'original') {
@@ -88,6 +87,8 @@ export async function resolve_attachment_delivery(row: ImageAccessRow, role: Ima
     || ! Number.isSafeInteger(viewer.token_generation_id) || Number(viewer.token_generation_id) <= 0)) {
     throw new ApiError(403, '读取会话无效')
   }
+  if (role === 'original')
+    require_original_read(viewer)
   const dependencies = new Map<number, unknown>()
   const object = await resolve_attachment_role(row, role, viewer, async (current) => {
     require_attachment_read(current, viewer)
@@ -107,14 +108,13 @@ export async function attachment_redirect(id: number, version: string, viewer: A
     'SELECT a.* FROM content_story_attachments a INNER JOIN content_stories s ON s.id = a.story_id WHERE a.id = ? AND a.is_folder = 0', [id],
   )
   const row = rows[0]
-  if (! row?.object_key)
-    throw new ApiError(404, '附件不存在或已被删除')
-  if (row.storage_provider !== 'aliyun' || row.encryption_key !== null)
-    throw new ApiError(503, '附件尚未完成迁移')
-  if (row.is_private && ! has_permission(viewer, 'content_private', 'read') && ! has_redacted_variant(row))
+  // The version (which hashes the privacy state) is checked before privacy and
+  // shares the missing-row 404, so probing ids cannot tell deleted, private and
+  // public apart without a version only readers of the current state receive.
+  if (! row?.object_key || ! version || attachment_access_version(row) !== version)
+    throw new ApiError(404, '附件不存在或已变化，请刷新后重试')
+  if (row.is_private && ! has_permission(viewer, 'content_access', 'private_read') && ! has_redacted_variant(row))
     throw new ApiError(403, '你没有机密附件的读取权限')
-  if (! version || attachment_access_version(row) !== version)
-    throw new ApiError(409, '附件版本已变化，请刷新后重试')
   const selected = role === 'redacted' ? accept.includes(content_image_formats.display.mime) ? 'redacted_display' : 'redacted_fallback' : role === 'auto' && row.display_key && ! accept.includes(content_image_formats.display.mime) ? 'fallback' : role
   const object = await resolve_attachment_delivery(row, selected, viewer)
   return create_esa().signed_read_url(object.key, settings.app.content.read.urlTtlSeconds, method, object.name, 'inline', object.grant)
@@ -128,9 +128,10 @@ export async function image_editor_source(id: number, version: string, viewer: A
   require_attachment_read(row, viewer)
   if (attachment_access_version(row) !== version || ! row.display_key || ! row.fallback_key)
     throw new ApiError(409, '图片尚未处理就绪或版本已变化')
-  const base = `/api/content/attachments/${id}?version=${version}`
+  const base = `/api/links/attachments/${id}?version=${version}`
   const display_url = `${base}&role=${redacted && has_redacted_variant(row) ? 'redacted_display' : 'display'}`
   try {
+    require_original_read(viewer)
     await resolve_attachment_role(row, 'original', viewer)
     return { display_url, original_url: `${base}&role=original`, original_reason: '' }
   }

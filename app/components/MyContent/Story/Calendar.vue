@@ -111,7 +111,7 @@
 <script setup lang="ts">
 import type { ContentStorySummary } from '@shared/types/content'
 import type { Dayjs } from 'dayjs'
-import { format_event_entry } from '~/utils/content/event'
+import { format_event_entry } from '~/features/content/event'
 
 interface CalendarEvent {
   story: ContentStorySummary

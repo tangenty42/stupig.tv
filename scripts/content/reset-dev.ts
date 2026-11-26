@@ -70,13 +70,12 @@ export async function inventory_aliyun_content(client: Pick<OSS, 'listV2' | 'lis
   return objects
 }
 
-export function reset_attachment_objects(row: { object_key?: string | null, original_key?: string | null, display_key?: string | null, fallback_key?: string | null, redacted_display_key?: string | null, redacted_fallback_key?: string | null, storage_provider?: string, storage_bucket?: string }) {
-  const location: ResetObject['location'] = row.storage_provider === 'aliyun' ? 'aliyun' : row.storage_bucket as 'public' | 'private'
-  return [... new Set([row.object_key, row.original_key, row.display_key, row.fallback_key, row.redacted_display_key, row.redacted_fallback_key].filter((key): key is string => !! key))].map(key => ({ key, location }))
+export function reset_attachment_objects(row: { object_key?: string | null, original_key?: string | null, display_key?: string | null, fallback_key?: string | null, redacted_display_key?: string | null, redacted_fallback_key?: string | null }) {
+  return [... new Set([row.object_key, row.original_key, row.display_key, row.fallback_key, row.redacted_display_key, row.redacted_fallback_key].filter((key): key is string => !! key))].map(key => ({ key, location: 'aliyun' as const }))
 }
 
 export function reset_image_attempt_objects(row: { id: string, job_id: string, display_key: string, fallback_key: string }) {
-  return reset_attachment_objects({ ... row, original_key: image_original_key(row.job_id, row.id), storage_provider: 'aliyun' })
+  return reset_attachment_objects({ ... row, original_key: image_original_key(row.job_id, row.id) })
 }
 
 /** Explicit apply; write a resumable manifest before deleting development rows. */
@@ -96,11 +95,11 @@ export async function reset_development_content(apply: boolean, all_content_obje
       const [rows] = await connection.query<RowDataPacket[]>(`SELECT COUNT(*) AS count FROM \`${name}\``)
       counts[name] = Number(rows[0]!.count)
     }
-    const [attachments] = await connection.execute<(RowDataPacket & Parameters<typeof reset_attachment_objects>[0])[]>('SELECT object_key, original_key, display_key, fallback_key, redacted_display_key, redacted_fallback_key, storage_provider, storage_bucket FROM content_story_attachments WHERE object_key IS NOT NULL')
-    const [attempts] = await connection.execute<RowDataPacket[]>('SELECT a.target_key, a.upload_id, s.target_location FROM content_transfer_attempts a JOIN content_transfer_sessions s ON s.id = a.session_id')
+    const [attachments] = await connection.execute<(RowDataPacket & Parameters<typeof reset_attachment_objects>[0])[]>('SELECT object_key, original_key, display_key, fallback_key, redacted_display_key, redacted_fallback_key FROM content_story_attachments WHERE object_key IS NOT NULL')
+    const [attempts] = await connection.execute<RowDataPacket[]>('SELECT a.target_key, a.upload_id FROM content_transfer_attempts a JOIN content_transfer_sessions s ON s.id = a.session_id')
     const objects: ResetObject[] = [
       ... attachments.flatMap(reset_attachment_objects),
-      ... attempts.map(row => ({ key: String(row.target_key), location: row.target_location === 'aliyun' ? 'aliyun' as const : row.target_location === 'legacy_public' ? 'public' as const : 'private' as const, upload_id: row.upload_id ? String(row.upload_id) : undefined })),
+      ... attempts.map(row => ({ key: String(row.target_key), location: 'aliyun' as const, upload_id: row.upload_id ? String(row.upload_id) : undefined })),
     ]
     if (names.includes('content_image_attempts')) {
       const [image_attempts] = await connection.execute<(RowDataPacket & Parameters<typeof reset_image_attempt_objects>[0])[]>('SELECT id, job_id, display_key, fallback_key FROM content_image_attempts')
@@ -145,7 +144,8 @@ export async function reset_development_content(apply: boolean, all_content_obje
       await connection.execute('SELECT id FROM content_stories ORDER BY id FOR UPDATE')
       for (const name of names.filter(name => name !== 'content_title_namespace'))
         await connection.query(`DELETE FROM \`${name}\``)
-      await connection.execute('UPDATE content_title_namespace SET revision = revision + 1, revision_floor = revision + 1 WHERE id = 1')
+      // MySQL evaluates assignments left to right; the floor must equal the new revision.
+      await connection.execute('UPDATE content_title_namespace SET revision = revision + 1, revision_floor = revision WHERE id = 1')
       await connection.commit()
     }
     catch (error) {

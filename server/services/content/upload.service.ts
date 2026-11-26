@@ -21,10 +21,7 @@ export async function sign_attachment_download(story_id: number, file_name: stri
   const row = rows[0]
   if (! row)
     throw new ApiError(404, '附件不存在或已被删除')
-  // Retired storage and encrypted rows must be migrated before signing.
-  if (row.encryption_key !== null || row.storage_provider !== 'aliyun')
-    throw new ApiError(503, '附件尚未完成迁移')
-  if (row.is_private && role !== 'redacted_display' && ! has_permission(viewer, 'content_private', 'read'))
+  if (row.is_private && role !== 'redacted_display' && ! has_permission(viewer, 'content_access', 'private_read'))
     throw new ApiError(403, '你没有机密附件的读取权限')
 
   const object = await resolve_attachment_delivery(row, role === 'redacted_display' ? role : role === 'original' ? 'original' : row.display_key ? 'display' : 'auto', viewer)

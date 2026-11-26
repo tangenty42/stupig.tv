@@ -176,11 +176,21 @@ export function create_object_retirement(pool: Pick<Pool, 'execute' | 'getConnec
   return { sweep }
 }
 
+/** Why the retirement sweep cannot run; pending removals then stay queued. */
+export function object_retirement_blocker() {
+  const { aliyun, app } = runtime_config()
+  if (! app.contentRetirement.enabled)
+    return 'disabled' as const
+  if (! aliyun.oss || ! aliyun.esa || ! aliyun.esaPurge?.siteId || ! aliyun.esaPurge.accessKeyId || ! aliyun.esaPurge.accessKeySecret)
+    return 'unconfigured' as const
+  return null
+}
+
 export async function sweep_object_retirements(scope?: number, signal?: AbortSignal) {
   const { aliyun, app } = runtime_config()
   // Provisioning must not drop work, delete from an unbound destination, or
   // depend on the image-processing feature switch.
-  if (! app.contentRetirement.enabled || ! aliyun.oss || ! aliyun.esa || ! aliyun.esaPurge?.siteId || ! aliyun.esaPurge.accessKeyId || ! aliyun.esaPurge.accessKeySecret)
+  if (object_retirement_blocker() || ! aliyun.oss || ! aliyun.esa || ! aliyun.esaPurge?.siteId)
     return
   const service = create_object_retirement(db, create_aliyun_oss(aliyun.oss), create_esa_purge(aliyun.esaPurge), {
     bucket: aliyun.oss.bucket, endpoint: aliyun.oss.endpoint, site: aliyun.esaPurge.siteId, base: aliyun.esa.baseUrl,

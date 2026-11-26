@@ -78,7 +78,8 @@ test('whole-batch retention rejects an expired draft while the floor remains rep
     await route.continue({ postData: JSON.stringify(input) })
   })
   const editor = page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true })
-  await expect(editor).toBeEditable()
+  // A timed-out initial read retries on the next keepalive before the page can acquire editing rights.
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
   await editor.fill(markdown(story.title, 'draft [old](att://old.txt)'))
   const warning = page.getByRole('dialog', { name: '引用历史不可用' })
   await expect(warning).toBeVisible()

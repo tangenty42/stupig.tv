@@ -17,6 +17,7 @@ test('anonymous and ordinary users cannot enter restricted pages or edit another
       }
       const denied_status = identity === 'anonymous' ? 401 : 403
       expect((await page.request.get('/api/trpc/admin.getSelf')).status()).toBe(denied_status)
+      expect((await page.request.get('/api/trpc/admin.getStorageAuditFindings', { params: { input: '{}' } })).status()).toBe(denied_status)
       expect((await page.request.post('/api/trpc/profile.updateBirthday', {
         data: { operate_for: 1, birthday: '2000-01-01T00:00:00.000Z' },
       })).status()).toBe(denied_status)

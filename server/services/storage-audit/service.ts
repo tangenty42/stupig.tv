@@ -1,5 +1,5 @@
 import type { InventoryObject } from '@server/lib/oss-inventory'
-import type { StorageAuditKind } from '@shared/types/storage-audit'
+import type { StorageAuditFindingsPage, StorageAuditFindingsQuery, StorageAuditKind } from '@shared/types/storage-audit'
 import type { z } from 'zod'
 import type { AuditIssue, AuditPool } from './repository'
 import { runtime_config } from '@config/loader'
@@ -165,9 +165,9 @@ export async function sweep_storage_audit(signal?: AbortSignal) {
     (connection, key) => enqueue_object_retirement(connection, key, 0, 'storage_audit_orphan')).sweep(signal)
 }
 
-export async function get_storage_audit_findings(input: { after_id: number, limit: number }) {
+export async function get_storage_audit_findings(input: StorageAuditFindingsQuery): Promise<StorageAuditFindingsPage> {
   const config = runtime_config().aliyun.oss
   if (! config)
-    return []
-  return read_audit_findings(db, audit_destination(config.bucket, config.endpoint), input.after_id, input.limit)
+    return { rows: [], total: 0, page: 1 }
+  return read_audit_findings(db, audit_destination(config.bucket, config.endpoint), input)
 }

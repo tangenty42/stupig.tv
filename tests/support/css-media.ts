@@ -27,6 +27,7 @@ export async function check_css_media(browser: MediaBrowser) {
       next: shell.querySelector('.carousel-next').dataset.on,
       hint: shell.querySelector('.carousel-next').dataset.hint || null,
       gap: items[1].getBoundingClientRect().left - items[0].getBoundingClientRect().right,
+      fontSize: parseFloat(style.fontSize),
       overflow: carousel.getBoundingClientRect().right > root.getBoundingClientRect().right + 1,
       loaded: root.querySelectorAll('.img-frame[data-image-loaded]').length,
       captionColor: getComputedStyle(caption).color,
@@ -34,7 +35,7 @@ export async function check_css_media(browser: MediaBrowser) {
       iconWidth: parseFloat(icon.width),
       dark: document.documentElement.classList.contains('dark')
     }`)
-  await expect.poll(async () => (await state()).loaded).toBe(3)
+  await expect.poll(async () => (await state()).loaded).toBeGreaterThan(0)
   await expect.poll(async () => (await state()).fadeR).toBe(48)
   const initial = await state()
   expect(initial.max).toBeGreaterThan(0)
@@ -42,7 +43,7 @@ export async function check_css_media(browser: MediaBrowser) {
   expect(initial.mask).toContain('linear-gradient')
   expect(initial.iconMask).toContain('url(')
   expect(initial.iconWidth).toBeGreaterThan(0)
-  expect(initial.gap).toBeCloseTo(12, 0)
+  expect(initial.gap).toBeCloseTo(initial.fontSize / 2, 1)
   expect(initial.hint).toBe('true')
   expect(initial.overflow).toBe(false)
   await browser.capture?.('media-initial')
@@ -67,6 +68,7 @@ export async function check_css_media(browser: MediaBrowser) {
   }
   await expect.poll(async () => (await state()).next).toBe('false')
   await expect.poll(async () => (await state()).fadeR).toBe(0)
+  await expect.poll(async () => (await state()).loaded).toBe(3)
   const at_end = await state()
   await browser.click('[data-testid="media-edit"]')
   await expect.poll(async () => (await state()).left).toBeCloseTo(at_end.left, 0)
@@ -78,7 +80,8 @@ export async function check_css_media(browser: MediaBrowser) {
   await expect.poll(async () => (await state()).captionColor).not.toBe(initial.captionColor)
   await browser.click('[data-testid="media-narrow"]')
   await expect.poll(async () => (await state()).overflow).toBe(false)
-  expect((await state()).gap).toBeCloseTo(12, 0)
+  const narrow = await state()
+  expect(narrow.gap).toBeCloseTo(narrow.fontSize / 2, 1)
   await browser.click('[data-testid="media-load"]')
   const pending = () => browser.execute(`var image = document.querySelector('img[src*="name=loading"]'); var frame = image?.parentElement; return frame ? {busy:frame.getAttribute('aria-busy'),width:frame.getBoundingClientRect().width,height:frame.getBoundingClientRect().height,loaded:frame.hasAttribute('data-image-loaded'),mask:getComputedStyle(frame.querySelector('.image-loading-mask')).visibility,spin:getComputedStyle(frame.querySelector('.image-loading-mask .iconify')).animationName,img:getComputedStyle(image).opacity} : null`)
   await expect.poll(async () => (await pending())?.busy).toBe('true')
@@ -98,7 +101,7 @@ export async function check_css_media(browser: MediaBrowser) {
   expect(loaded.height).toBeCloseTo(loading.height, 0)
   await browser.capture?.('media-narrow-loaded')
   await browser.click('[data-testid="media-public"]')
-  await expect.poll(() => browser.execute('return document.querySelectorAll(".encrypted-image-denied").length')).toBe(5)
+  await expect.poll(() => browser.execute('return document.querySelectorAll(".content-placeholder-denied.content-placeholder-media").length')).toBe(5)
   expect(await browser.execute('return document.querySelectorAll(".story-body img, .story-body .image-loading-mask").length')).toBe(0)
   return { initial, at_end, loading, loaded, failed, samples, final: await state() }
 }

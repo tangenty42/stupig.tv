@@ -14,7 +14,13 @@ const iso_date_string = z.preprocess(
   z.string(),
 )
 
-export const phone_schema = z.string().regex(/^1[3-9]\d{9}$/, '手机号格式不正确')
+const phone_pattern = /^1[3-9]\d{9}$/
+export const dev_phone_pattern = /^10\d{9}$/
+
+export const phone_schema = z.string().refine(
+  phone => phone_pattern.test(phone) || (import.meta.dev === true && dev_phone_pattern.test(phone)),
+  '手机号格式不正确',
+)
 
 const sequence_sources = [
   'abcdefghijklmnopqrstuvwxyz',
@@ -69,9 +75,29 @@ const password_policy_schema = z.string()
     }
   })
 
+const new_password_form = z.object({
+  new_password: password_policy_schema,
+  confirm_new_password: z.string().min(1, '请确认新密码'),
+}).superRefine((data, ctx) => {
+  if (data.new_password !== data.confirm_new_password) {
+    ctx.addIssue({ code: 'custom', message: '两次输入的密码不一致', path: ['confirm_new_password'] })
+  }
+})
+
+const new_password_default = { new_password: '', confirm_new_password: '' }
+
+// 中文、英文、数字、横杠、下划线，外加全角字符：全角 ASCII 变体（U+FF01–FF60、U+FFE0–FFE6）
+// 与中文标点（U+3001–303F）。全角空格 U+3000 看不见，不放行。
+const username_pattern = /^[-\w\p{Script=Han}\u3001-\u303F\uFF01-\uFF60\uFFE0-\uFFE6]+$/u
+// 数据库比较将全角数字、〇和杭州数字视为相应数字，也可能忽略组合附标。
+// 这些字符不能让数字串成为非纯数字用户名，避免和手机号登录混淆。
+const username_non_digit_pattern = /[^\d\u3007\u3021-\u3029\uFF10-\uFF19\p{M}]/u
+
 export const form_schema = {
   register: z.object({
-    username: z.string().min(2, '用户名至少 2 位').max(32, '用户名最多 32 位'),
+    username: z.string().min(2, '用户名至少 2 位').max(32, '用户名最多 32 位')
+      .regex(username_pattern, '用户名只能包含中英文、数字、横杠、下划线和全角字符')
+      .regex(username_non_digit_pattern, '用户名不能是纯数字'),
     phone: phone_schema,
     password: password_policy_schema,
     confirm_password: z.string().min(1, '请确认密码'),
@@ -97,15 +123,8 @@ export const form_schema = {
     birthday: iso_date_string.nullable(),
   }),
 
-  profile_operate_password_reset: z.object({
-    new_password: password_policy_schema,
-    confirm_new_password: z.string().min(1, '请确认新密码'),
-  })
-    .superRefine((data, ctx) => {
-      if (data.new_password !== data.confirm_new_password) {
-        ctx.addIssue({ code: 'custom', message: '两次输入的密码不一致', path: ['confirm_new_password'] })
-      }
-    }),
+  profile_operate_password_reset: new_password_form,
+  profile_set_initial_password: new_password_form,
 
   profile_operate_phone_change: z.object({
     new_phone: phone_schema,
@@ -180,10 +199,8 @@ export const form_default = {
   profile_birthday_update: {
     birthday: null,
   },
-  profile_operate_password_reset: {
-    new_password: '',
-    confirm_new_password: '',
-  },
+  profile_operate_password_reset: new_password_default,
+  profile_set_initial_password: new_password_default,
   profile_operate_phone_change: {
     new_phone: '',
   },

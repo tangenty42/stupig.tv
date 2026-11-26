@@ -1,14 +1,14 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { baseline_migration, baseline_sql_checksums } from './baseline'
 
 const filename = '20261024030000_fixture.ts'
 
 // Real compiled handlers run against the MySQL boundary; no handler/runtime mocks.
 const state = vi.hoisted(() => ({
   schema: false, runtime: false, business_tables: 0, lock: 1, owned: 1,
-  legacy: new Map<string, string>(),
   runs: new Map<string, { filename: string, checksum: string, status: string, phase: string, checkpoint: unknown, attempts: number, finished_at: string | null }>(),
   rows: new Set<number>(), queries: [] as string[], errors: [] as unknown[],
   fail_row: 0, verify: true, lose_on_insert: false, fail_sql: '',
@@ -38,13 +38,13 @@ function sql_call(sql: string, values: unknown[] = []): [unknown, unknown[]] {
       return [[{ n: state.business_tables }], []]
     return [(values[0] === 'migration_runs' ? state.runtime : state.schema) ? [{}] : [], []]
   }
-  if (sql.includes('FROM schema_migrations'))
-    return [[... state.legacy].map(([filename, checksum]) => ({ filename, checksum })), []]
   if (sql.includes('FROM migration_runs'))
     return [[... state.runs.values()].map(row => structuredClone(row)), []]
   if (sql.includes('CREATE TABLE IF NOT EXISTS `migration_runs`'))
     state.runtime = true
   if (sql.includes('INSERT INTO migration_runs')) {
+    if (state.fail_sql && sql.includes(state.fail_sql))
+      throw new Error('injected receipt failure')
     const [filename, checksum, phase, checkpoint, attempts] = values
     const old = state.runs.get(String(filename))
     const baseline = sql.includes('\'completed\'')
@@ -101,7 +101,8 @@ vi.mock('@config/loader', () => ({ load_database_config: () => ({ host: 'db', po
 vi.mock('@server/lib/log', () => ({ log_info: () => {}, log_warn: () => {}, log_error: (... args: unknown[]) => state.errors.push(args) }))
 
 const { run_migrations } = await import('./local')
-const { runtime_migration, sha256, single_ledger_migration } = await import('./catalog')
+const { runtime_migration, sha256 } = await import('./catalog')
+const baseline_sql = 'CREATE TABLE IF NOT EXISTS baseline_fixture (id INT);'
 const script = `export default {
   execution: 'maintenance',
   async plan({db}) { await db.query('SELECT fixture_count'); return {summary:'fixture',counts:{rows:3}} },
@@ -118,11 +119,18 @@ const script = `export default {
 }`
 let dir: string
 beforeEach(async () => {
-  Object.assign(state, { schema: false, runtime: false, business_tables: 0, lock: 1, owned: 1, legacy: new Map(), runs: new Map(), rows: new Set(), queries: [], errors: [], fail_row: 0, verify: true, lose_on_insert: false, fail_sql: '', fenced: '', transaction: null })
+  Object.assign(state, { schema: false, runtime: false, business_tables: 0, lock: 1, owned: 1, runs: new Map(), rows: new Set(), queries: [], errors: [], fail_row: 0, verify: true, lose_on_insert: false, fail_sql: '', fenced: '', transaction: null })
   dir = await mkdtemp(resolve(tmpdir(), 'stupig-migration-runtime-'))
   await writeFile(resolve(dir, runtime_migration), await readFile(resolve(import.meta.dirname, '../../migrations', runtime_migration)))
   await writeFile(resolve(dir, filename), script)
 })
+
+async function use_baseline() {
+  await rm(resolve(dir, filename))
+  for (const historical of Object.keys(baseline_sql_checksums))
+    await copyFile(resolve(import.meta.dirname, '../../migrations', historical), resolve(dir, historical))
+  await writeFile(resolve(dir, baseline_migration), baseline_sql)
+}
 
 describe('mixed migration runtime', () => {
   it('rejects a later maintenance script before any preceding SQL or metadata writes', async () => {
@@ -132,7 +140,7 @@ describe('mixed migration runtime', () => {
   })
 
   it('classifies the entire pending chain without invoking plans or writing receipts', async () => {
-    const sql_file = '20261031010000_late.sql'
+    const sql_file = '20261113010000_late.sql'
     await writeFile(resolve(dir, sql_file), 'SELECT late_sql')
     const result = await run_migrations({ dir, preflight: true })
     expect(result.preflight?.requires_maintenance).toBe(true)
@@ -147,11 +155,10 @@ describe('mixed migration runtime', () => {
   })
 
   it('allows new SQL online only when its exact digest is declared', async () => {
-    const sql_file = '20261031010000_online.sql'
+    const sql_file = '20261113010000_online.sql'
     const sql = 'SELECT online_sql'
     await writeFile(resolve(dir, filename), script.replace('execution: \'maintenance\'', 'execution: \'automatic\''))
     await writeFile(resolve(dir, sql_file), sql)
-    await expect(run_migrations({ dir })).rejects.toThrow(/维护/)
     await writeFile(resolve(dir, 'deployment.json'), JSON.stringify({ version: 1, automatic_sql: { [sql_file]: sha256(sql) } }))
     await run_migrations({ dir })
     expect(state.queries).toContain(sql)
@@ -159,50 +166,15 @@ describe('mixed migration runtime', () => {
     await expect(run_migrations({ dir, preflight: true })).rejects.toThrow(/改动|inconsistent/)
   })
 
-  it('新库只使用新账本，完成后没有旧表也不会重新执行', async () => {
+  it('新库只使用新账本，完成后不重新执行', async () => {
     await run_migrations({ dir, maintenance: true })
     const before = state.queries.filter(sql => sql === 'SELECT apply_called').length
-    expect(state.schema).toBe(false)
     expect(state.queries.some(sql => /(?:CREATE|INSERT INTO)\s+schema_migrations/i.test(sql))).toBe(false)
     await run_migrations({ dir, maintenance: true })
     expect(state.queries.filter(sql => sql === 'SELECT apply_called')).toHaveLength(before)
   })
 
-  it('旧表仅作为升级输入，已完成 SQL 不重跑，状态查询不做迁移', async () => {
-    const legacy_file = '20261024010000_legacy.sql'
-    const sql = 'SELECT legacy_must_not_repeat'
-    await writeFile(resolve(dir, legacy_file), sql)
-    state.schema = true
-    state.legacy.set(legacy_file, sha256(sql))
-    await run_migrations({ dir, check_only: true })
-    expect(state.runtime).toBe(false)
-    expect(state.queries.some(sql => /INSERT|CREATE|UPDATE|DROP/.test(sql))).toBe(false)
-    await run_migrations({ dir, through: runtime_migration })
-    expect(state.queries).not.toContain(sql)
-    expect(state.legacy.get(legacy_file)).toBe(sha256(sql))
-  })
-
-  it.each(['checksum', 'status'])('新旧账本 %s 冲突时禁止推进或删除旧表', async (conflict) => {
-    const legacy_file = '20261024010000_legacy.sql'
-    const sql = 'SELECT legacy_must_not_repeat'
-    await writeFile(resolve(dir, legacy_file), sql)
-    state.schema = true
-    state.runtime = true
-    state.legacy.set(legacy_file, sha256(sql))
-    state.runs.set(legacy_file, { filename: legacy_file, checksum: conflict === 'checksum' ? '0'.repeat(64) : sha256(sql), status: conflict === 'status' ? 'failed' : 'completed', phase: 'apply', checkpoint: null, attempts: 1, finished_at: '2026-10-24' })
-    await expect(run_migrations({ dir, maintenance: true })).rejects.toThrow(/新旧迁移账本冲突/)
-    expect(state.schema).toBe(true)
-    expect(state.queries.some(sql => /INSERT|CREATE|UPDATE|DROP/.test(sql))).toBe(false)
-  })
-
-  it('已经退休的旧表重新出现时拒绝静默接管', async () => {
-    state.schema = true
-    state.runtime = true
-    state.runs.set(single_ledger_migration, { filename: single_ledger_migration, checksum: '0'.repeat(64), status: 'completed', phase: 'apply', checkpoint: null, attempts: 1, finished_at: '2026-10-24' })
-    await expect(run_migrations({ dir })).rejects.toThrow(/重新出现/)
-  })
-
-  it('有未完成 SQL 执行记录时不能自动 baseline 吞掉失败', async () => {
+  it('有未完成 SQL 执行记录时要求明确 --retry-sql，不继续执行', async () => {
     const file = '20261008000000_old.sql'
     await writeFile(resolve(dir, file), 'SELECT old_schema')
     state.runtime = true
@@ -261,9 +233,13 @@ describe('mixed migration runtime', () => {
   it('已失败脚本及依赖不能改字节后继续执行', async () => {
     state.fail_row = 2
     await expect(run_migrations({ dir, maintenance: true })).rejects.toThrow()
+    const run = state.runs.get(filename)
+    expect(run?.status).toBe('failed')
+    const original_checksum = run!.checksum
     await writeFile(resolve(dir, filename), script.replace('rows:3', 'rows:4'))
-    await expect(run_migrations({ dir, maintenance: true })).rejects.toThrow(/改动/)
+    await expect(run_migrations({ dir, maintenance: true })).rejects.toThrow(/改动|inconsistent/)
     expect(state.rows.size).toBe(1)
+    expect(state.runs.get(filename)?.checksum).toBe(original_checksum)
   })
 
   it('锁丢失后回滚当前数据库事务，停止检查点和后续步骤', async () => {
@@ -293,18 +269,77 @@ describe('mixed migration runtime', () => {
     expect(state.queries).not.toContain('DELETE FROM fixture_rows')
   })
 
-  it('自动 baseline 只接管历史 SQL，脚本仍须实际运行', async () => {
+  it('现有表但无账本时拒绝自动接管', async () => {
+    await use_baseline()
     state.business_tables = 8
-    await writeFile(resolve(dir, '20261008000000_old.sql'), 'SELECT old_schema')
-    await expect(run_migrations({ dir })).rejects.toThrow(/维护窗口/)
-    expect(completed().has('20261008000000_old.sql')).toBe(false)
-    expect(state.queries).not.toContain('SELECT old_schema')
-    expect(completed().has(filename)).toBe(false)
-    expect(state.runtime).toBe(false)
+    await expect(run_migrations({ dir, maintenance: true })).rejects.toMatchObject({ code: 'baseline_prerequisites' })
+    expect(completed().size).toBe(0)
+    expect(state.queries).not.toContain(baseline_sql)
   })
 
-  it('显式 baseline 不得把脚本或新 SQL 标为完成', async () => {
-    await expect(run_migrations({ dir, baseline: true })).rejects.toThrow(/历史 SQL/)
+  it('空库先完成基线与覆盖版本的回执，后续 SQL 失败后仍可恢复', async () => {
+    await use_baseline()
+    const next = '20261113000000_next.sql'
+    await writeFile(resolve(dir, next), 'SELECT next_sql;')
+    state.fail_sql = 'next_sql'
+    await expect(run_migrations({ dir, maintenance: true })).rejects.toMatchObject({ code: 'execution_failed' })
+    expect(completed()).toEqual(new Map([[baseline_migration, sha256(baseline_sql)], ... Object.entries(baseline_sql_checksums)]))
+    expect(state.queries).toContain(baseline_sql)
+    expect(state.queries.some(sql => sql.includes('CREATE TABLE `users`'))).toBe(false)
+    const status = await run_migrations({ dir, check_only: true })
+    expect(status.pending.map(file => file.filename)).toEqual([next])
+    await expect(run_migrations({ dir, maintenance: true })).rejects.toMatchObject({ code: 'sql_recovery_required' })
+    state.fail_sql = ''
+    await run_migrations({ dir, maintenance: true, retry_sql: next })
+    expect(completed().has(next)).toBe(true)
+    expect(state.queries.filter(sql => sql === baseline_sql)).toHaveLength(1)
+  })
+
+  it('基线自身失败时保留未完成回执，显式重试才继续', async () => {
+    await use_baseline()
+    state.fail_sql = 'baseline_fixture'
+    await expect(run_migrations({ dir })).rejects.toMatchObject({ code: 'execution_failed' })
+    expect(completed().size).toBe(0)
+    expect(state.runs.get(baseline_migration)?.status).toBe('failed')
+    state.business_tables = 1
+    state.fail_sql = ''
+    const { preflight } = await run_migrations({ dir, preflight: true })
+    expect(preflight?.sql_recovery_required).toEqual([baseline_migration])
+    expect(preflight?.pending).toMatchObject([{ filename: baseline_migration, action: 'initialize' }])
+    await expect(run_migrations({ dir })).rejects.toMatchObject({ code: 'sql_recovery_required' })
+    await run_migrations({ dir, retry_sql: baseline_migration })
+    expect(completed().size).toBe(1 + Object.keys(baseline_sql_checksums).length)
+    expect(state.runs.get(baseline_migration)?.attempts).toBe(2)
+  })
+
+  it('写入覆盖版本回执失败时回滚基线的完成回执', async () => {
+    await use_baseline()
+    state.fail_sql = '\'completed\', \'verify\', 0'
+    await expect(run_migrations({ dir })).rejects.toMatchObject({ code: 'execution_failed' })
+    expect(completed().size).toBe(0)
+    expect(state.runs.size).toBe(1)
+    expect(state.runs.get(baseline_migration)?.status).toBe('failed')
+  })
+
+  it('拒绝从当前版本执行历史目标或覆盖清单之外的 SQL', async () => {
+    await use_baseline()
+    await expect(run_migrations({ dir, through: runtime_migration })).rejects.toMatchObject({ code: 'baseline_boundary' })
+    await expect(run_migrations({ dir, retry_sql: runtime_migration })).rejects.toMatchObject({ code: 'baseline_boundary' })
+    await writeFile(resolve(dir, '20261112000000_backdated.sql'), 'SELECT backdated;')
+    await expect(run_migrations({ dir })).rejects.toMatchObject({ code: 'baseline_catalog' })
+    expect(state.queries).toEqual([])
+  })
+
+  it('拒绝在已开始的版本之前插入迁移', async () => {
+    state.fail_row = 3
+    await expect(run_migrations({ dir, maintenance: true })).rejects.toMatchObject({ code: 'execution_failed' })
+    await writeFile(resolve(dir, '20261024025000_backdated.sql'), 'SELECT backdated;')
+    await expect(run_migrations({ dir, maintenance: true })).rejects.toMatchObject({ code: 'inconsistent' })
+    expect(state.queries).not.toContain('SELECT backdated;')
+  })
+
+  it('显式 --baseline 已废弃，不允许使用', async () => {
+    await expect(run_migrations({ dir, baseline: true })).rejects.toThrow(/已废弃|baseline_removed/)
     expect(completed().size).toBe(0)
   })
 

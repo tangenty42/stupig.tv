@@ -10,6 +10,21 @@ import { connectAsync } from 'mqtt'
 const docker = process.platform === 'win32' ? 'C:/Program Files/Docker/Docker/resources/bin/docker.exe' : 'docker'
 const execute = promisify(execFile)
 
+export async function remove_cloud_draft_container(name: string, run: (args: string[]) => Promise<{ stdout: string }>) {
+  if (! /^stupig-draft-qa-[a-f0-9]{16}$/.test(name))
+    throw new Error('Invalid broker cleanup identity')
+  try {
+    await run(['rm', '-f', '-v', name])
+  }
+  catch (cause) {
+    // The CLI can time out after the daemon has already removed the container.
+    const absent = await run(['ps', '-a', '--filter', `name=^/${name}$`, '--format', '{{.Names}}'])
+      .then(result => result.stdout.trim() === '', () => false)
+    if (! absent)
+      throw new Error(`Disposable broker cleanup failed: ${name}`, { cause })
+  }
+}
+
 /** Disposable broker; an auth-only relay keeps the isolated app on loopback. */
 export async function start_cloud_draft_broker(directory: string, credentials: { username: string, password: string }, authorize: (input: { username?: string, password?: string }) => Promise<object>) {
   await mkdir(directory, { recursive: true })
@@ -44,21 +59,18 @@ export async function start_cloud_draft_broker(directory: string, credentials: {
     throw new Error('No relay port')
   let started = false
   const stop = async () => {
-    let cleanup_failed = false
-    if (started) {
-      if (! /^stupig-draft-qa-[a-f0-9]{16}$/.test(name))
-        throw new Error('Invalid broker cleanup identity')
-      await execute(docker, ['rm', '-f', '-v', name], { windowsHide: true, timeout: 15000 }).catch(() => {
-        cleanup_failed = true
-      })
-      started = false
+    try {
+      if (started) {
+        await remove_cloud_draft_container(name, args => execute(docker, args, { windowsHide: true, timeout: 15000 }))
+        started = false
+      }
     }
-    relay.closeAllConnections()
-    await new Promise<void>(accept => relay.close(() => accept()))
-    await unlink(bootstrap).catch(() => {})
-    await rmdir(private_directory).catch(() => {})
-    if (cleanup_failed)
-      throw new Error(`Disposable broker cleanup failed: ${name}`)
+    finally {
+      relay.closeAllConnections()
+      await new Promise<void>(accept => relay.close(() => accept()))
+      await unlink(bootstrap).catch(() => {})
+      await rmdir(private_directory).catch(() => {})
+    }
   }
   try {
     const env = {
@@ -86,20 +98,27 @@ export async function start_cloud_draft_broker(directory: string, credentials: {
     const ports = JSON.parse(inspect.stdout) as Record<string, { HostPort: string }[]>
     const port = (value: string) => Number(ports[value]![0]!.HostPort)
     const tcp_port = port('1883/tcp')
+    // Docker Desktop can accept the port mapping well before EMQX opens its listener.
+    // Bound startup by elapsed time so fast connection refusals don't exhaust the probes early.
+    const ready_deadline = Date.now() + 120_000
     let ready = false
-    for (let attempt = 0; attempt < 60; attempt ++) {
+    let probe_code: string | number | undefined
+    while (Date.now() < ready_deadline) {
       try {
         const probe = await connectAsync(`mqtt://127.0.0.1:${tcp_port}`, { ... credentials, connectTimeout: 1000, reconnectPeriod: 0, clean: true }, false)
         probe.end(true)
         ready = true
         break
       }
-      catch { await delay(500) }
+      catch (error) {
+        probe_code = (error as NodeJS.ErrnoException | undefined)?.code
+        await delay(500)
+      }
     }
     if (! ready) {
       const state = await execute(docker, ['inspect', '--format', '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}', name], { windowsHide: true }).then(result => result.stdout.trim()).catch(() => 'unavailable')
       const readable = await execute(docker, ['exec', name, 'test', '-r', '/tmp/draft-auth.json'], { windowsHide: true }).then(() => true, () => false)
-      throw new Error(`Disposable EMQX did not become ready: ${state}, bootstrap_readable=${readable}`)
+      throw new Error(`Disposable EMQX did not become ready: ${state}, bootstrap_readable=${readable}, probe=${probe_code ?? 'timeout'}`)
     }
     console.log('cloud-draft broker ready')
     return { tcp_port, public_url: `ws://127.0.0.1:${port('8083/tcp')}/mqtt`, private_url: `ws://127.0.0.1:${port('8086/tcp')}/mqtt`, stop }

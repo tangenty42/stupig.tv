@@ -180,6 +180,13 @@ export function duration_format(duration: Durationlike, options: DurationFormatO
   }
 }
 
+const milliseconds = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
+
+/** Technical timings always read in milliseconds, grouped like other numbers on the site. */
+export function milliseconds_format(ms: number) {
+  return `${milliseconds.format(Math.round(ms))} 毫秒`
+}
+
 export function datetime_read(date: DateLike, timezone: string) {
   const d = localize_date(date, false, timezone)
   return {

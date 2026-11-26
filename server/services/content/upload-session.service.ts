@@ -64,6 +64,8 @@ export function create_upload_sessions({ pool, storage, target, authorize, limit
     ... (row.status === 'completed' ? { attachment_id: upload_publication_schema.parse(row.result).attachment_id } : {}),
     path: String(row.target_path ?? row.intent.target_path), size: Number(row.expected_size),
     parent_id: row.intent.target_parent_id, source_id: row.intent.source?.id, replacement_id: row.intent.replacement?.id, purpose: row.intent.purpose,
+    ... (row.intent.image?.mode === 'overwrite' ? { image_overwrite: true as const } : {}),
+    ... (row.intent.image?.mode === 'copy' ? { image_save_as: true as const } : {}),
     expires_at: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at), revision: Number(row.revision),
     key: attempt?.target_key ?? null, upload_id: attempt?.upload_id ?? null, part_size: attempt ? Number(attempt.part_size) : null, parts,
     target, object_etag: row.result && 'etag' in row.result ? row.result.etag : null,
