@@ -217,6 +217,7 @@ test('the rated story banner stays full width from SSR through hydration and lat
     const height_before_cover = await band.evaluate(element => element.getBoundingClientRect().height)
     cover.resolve()
     await band.locator('.story-cover-button img').evaluate((image: HTMLImageElement) => image.decode())
+    await expect.poll(() => band.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThan(height_before_cover + 1)
     await band.evaluate(async (element) => {
       // ResizeObserver and the ensuing height transition start after layout.
       await new Promise(requestAnimationFrame)
@@ -225,7 +226,6 @@ test('the rated story banner stays full width from SSR through hydration and lat
       await Promise.all(animations.filter(animation => animation instanceof CSSTransition && animation.transitionProperty === 'height')
         .map(animation => animation.finished.catch(() => {})))
     })
-    expect(await band.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThan(height_before_cover + 1)
     expect(await finish.evaluate(stop => stop())).toBe('')
   }
   finally {

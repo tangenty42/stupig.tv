@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { Page, Request } from '@playwright/test'
 import { expect } from '@playwright/test'
 import { settings } from '@shared/settings'
 import { login, ready, set_page_visibility, submit_password_login, test } from '../support/e2e-browser'
@@ -118,10 +118,15 @@ test('lost account notifications converge by visible polling and visibility reco
     // Observe the app's own read after its initial subscription is acknowledged.
     let reads = 0
     const read_connections: number[] = []
+    const pending_reads = new Set<Request>()
     reader.on('request', (request) => {
-      if (request.url().includes('profile.getMe'))
+      if (request.url().includes('profile.getMe')) {
         read_connections.push(connected)
+        pending_reads.add(request)
+      }
     })
+    reader.on('requestfinished', request => pending_reads.delete(request))
+    reader.on('requestfailed', request => pending_reads.delete(request))
     reader.on('response', (response) => {
       if (response.url().includes('profile.getMe'))
         reads ++
@@ -144,7 +149,11 @@ test('lost account notifications converge by visible polling and visibility reco
     await set_page_visibility(reader, 'hidden')
     // Drain visible reads, including a queued invalidation follow-up and tRPC's
     // deferred batch dispatch, before measuring hidden periodic polling.
-    await reader.waitForLoadState('networkidle')
+    await expect.poll(async () => {
+      const seen = read_connections.length
+      await reader.clock.runFor(1000)
+      return pending_reads.size === 0 && read_connections.length === seen
+    }).toBe(true)
     await mutate(page, 'admin.setPermissions', { id: user.id, permissions: [] })
     const hidden_requests = read_connections.length
     await reader.clock.fastForward((settings.app.auth.syncPollIntervalSeconds + 1) * 1000)
