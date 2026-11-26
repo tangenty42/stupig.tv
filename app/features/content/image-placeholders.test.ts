@@ -71,6 +71,25 @@ it('cancels the pending reveal immediately on image failure', () => {
   cleanup()
 })
 
+it('uses milliseconds for the frame resize when production CSS expresses the duration in seconds', () => {
+  const { image, frame, root } = image_boundary()
+  const animate = vi.fn(() => ({ cancel: vi.fn() }))
+  Object.assign(frame, {
+    animate,
+    getBoundingClientRect: () => frame.dataset.imageError === undefined ? { width: 128, height: 128 } : { width: 256, height: 144 },
+  })
+  vi.stubGlobal('getComputedStyle', () => ({
+    getPropertyValue: (property: string) => property === '--image-state-duration' ? '.45s' : 'ease',
+  }))
+  const cleanup = observe_image_placeholders(root)
+  image.dispatchEvent(new Event('error'))
+  expect(animate).toHaveBeenCalledWith(
+    [{ width: '128px', height: '128px' }, { width: '256px', height: '144px' }],
+    { duration: 450, easing: 'ease' },
+  )
+  cleanup()
+})
+
 it('reveals immediately if the active breathing animation is cancelled', () => {
   const { root, frame, style, load, finish } = breathing_boundary()
   const cleanup = observe_image_placeholders(root)

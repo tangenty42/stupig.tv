@@ -5,6 +5,11 @@ function image_request_key(image: HTMLImageElement) {
   return JSON.stringify([image.getAttribute('src'), image.getAttribute('srcset'), image.src, image.currentSrc])
 }
 
+function css_time_ms(value: string) {
+  const time = value.trim()
+  return Number.parseFloat(time) * (time.endsWith('ms') ? 1 : 1000)
+}
+
 export type ImageLoadState = 'loading' | 'loaded' | 'error'
 
 /** `complete` is also true for an empty img; only classify an actual request. */
@@ -82,7 +87,7 @@ export function observe_image_placeholders(root: HTMLElement) {
       if (! from?.width || ! from.height)
         return
       const style = getComputedStyle(frame)
-      const duration = Number.parseFloat(style.getPropertyValue('--image-state-duration'))
+      const duration = css_time_ms(style.getPropertyValue('--image-state-duration'))
       if (! (duration > 0))
         return
       const to = frame.getBoundingClientRect()
@@ -96,8 +101,7 @@ export function observe_image_placeholders(root: HTMLElement) {
       if (index < 0)
         return false
       const durations = style.animationDuration.split(',')
-      const value = durations[index % durations.length]!.trim()
-      const duration = Number.parseFloat(value) * (value.endsWith('ms') ? 1 : 1000)
+      const duration = css_time_ms(durations[index % durations.length]!)
       const play_states = style.animationPlayState.split(',')
       if (! (duration > 0) || play_states[index % play_states.length]?.trim() === 'paused')
         return false

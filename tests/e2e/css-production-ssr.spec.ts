@@ -111,8 +111,10 @@ test('OTP send button stays flush with the input in both themes and cooldown sta
           await expect(button).toBeEnabled()
         await input.fill('123456')
         await expect(button).toHaveCSS('font-size', '14px')
-        const input_box = (await input.boundingBox())!
-        const button_box = (await button.boundingBox())!
+        const [input_box, button_box] = await group.evaluate(element => [
+          element.querySelector('input[autocomplete="one-time-code"]')!.getBoundingClientRect().toJSON(),
+          element.querySelector('button')!.getBoundingClientRect().toJSON(),
+        ])
         expect(button_box.x).toBeCloseTo(input_box.x + input_box.width, 1)
         expect(button_box.y).toBeCloseTo(input_box.y, 1)
         expect(button_box.height).toBeCloseTo(input_box.height, 1)
@@ -150,7 +152,7 @@ test('shared dialog and admin controls preserve local styles across themes', asy
   await expect(command).toHaveCSS('color', initial_dark ? 'rgb(226, 232, 240)' : 'rgb(30, 41, 59)')
   await page.getByRole('button', { name: '切换浅色 / 深色模式', exact: true }).click()
   await expect(command).toHaveCSS('color', initial_dark ? 'rgb(30, 41, 59)' : 'rgb(226, 232, 240)')
-  const execute = page.getByRole('button', { name: '执行', exact: true })
+  const execute = page.getByRole('button', { name: '执行筛选或命令', exact: true })
   await execute.hover()
   await expect(execute).toHaveCSS('color', initial_dark ? 'rgb(2, 132, 199)' : 'rgb(56, 189, 248)')
 })

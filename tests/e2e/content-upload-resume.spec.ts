@@ -53,7 +53,7 @@ test('rejects a mismatched resumed file and continues the original without retra
   expect(sessions.sessions[0]?.parts.map(part => part.part_number)).toEqual([1])
   await page.getByText(file.name, { exact: true }).click({ button: 'right' })
   const correct_picker = page.waitForEvent('filechooser')
-  await page.getByRole('menuitem', { name: '继续', exact: true }).click()
+  await page.getByRole('menuitem', { name: '重试', exact: true }).click()
   await (await correct_picker).setFiles(file)
   await expect.poll(async () => (await content_query<ContentAttachmentWorkspace>(page, 'getAttachmentWorkspace', { id: Number(story.id) })).attachments.some(item => item.file_name === file.name && item.file_size === file.buffer.length)).toBe(true)
   expect(sent).toEqual([1, 2, 2])

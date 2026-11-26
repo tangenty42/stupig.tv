@@ -45,7 +45,8 @@ test('account lifecycle: registration, birthday, avatar, password and logout', a
     await ready(page)
     await page.getByRole('button', { name: '编辑', exact: true }).click()
     await expect(dialog.locator('[aria-selected="true"]')).toHaveText('15')
-    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+    await expect(dialog).toBeHidden()
   })
 
   await test.step('avatar is cropped, uploaded and decoded after reload', async () => {
@@ -82,7 +83,7 @@ test('account lifecycle: registration, birthday, avatar, password and logout', a
     await expect(page.getByText('旧密码不正确', { exact: true })).toBeVisible()
     await form.locator('input[name="old_password"]').fill('E2eRegister!842')
     await form.getByRole('button', { name: '修改', exact: true }).click()
-    await expect(page.getByText('密码修改成功！', { exact: true })).toBeVisible()
+    await expect(page.getByText('密码已修改！', { exact: true })).toBeVisible()
   })
 
   await test.step('revoking a second device from login history leaves this device signed in', async () => {

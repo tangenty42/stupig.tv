@@ -23,12 +23,13 @@ test('deletion references remain readable in both themes and on narrow screens',
   await expect(dialog.getByRole('button', { name: '仍然删除', exact: true })).toBeEnabled()
   const reference = dialog.getByRole('link', { name: '蠢猪大闹食堂', exact: true })
   await expect(reference.locator('.iconify')).toHaveCount(1)
-  const initial_link = (await reference.boundingBox())!
+  const link_width = () => reference.evaluate(element => (element as HTMLElement).offsetWidth)
+  const initial_width = await link_width()
   await reference.hover()
   await expect(reference).toHaveCSS('text-decoration-line', 'none')
   await expect(reference).toHaveCSS('border-bottom-width', '1px')
   await expect(reference).toHaveCSS('box-shadow', / 0px 2px 0px 0px$/)
-  expect((await reference.boundingBox())!.width).toBe(initial_link.width)
+  expect(await link_width()).toBe(initial_width)
   await page.mouse.move(0, 0)
   for (const width of [960, 390]) {
     await page.setViewportSize({ width, height: 850 })

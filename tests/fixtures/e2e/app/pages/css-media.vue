@@ -22,7 +22,7 @@
       切换公开视图
     </button>
     <div data-testid="media-preview" :style="{ width: narrow ? '288px' : '640px', maxWidth: '100%' }">
-      <MyContentMarkdownPreview v-if="visible" :markdown="markdown" :attachments="attachments" :public-view="public_view" />
+      <MyContentMarkdownPreview v-if="visible" :markdown="markdown" :attachments="attachments" can-read-private :public-view="public_view" />
     </div>
   </section>
 </template>
@@ -45,9 +45,11 @@ const attachments: ContentStoryAttachment[] = ['one', 'two', 'three', 'loading',
 }))
 const markdown = computed(() => `# Media compatibility
 
-![First](att://one.png)
-![Second](att://two.png)
-![Third](att://three.png)
+<carousel>
+  ![First](att://one.png)
+  ![Second](att://two.png)
+  ![Third](att://three.png)
+</carousel>
 
 Revision ${revision.value}
 ${loading.value ? '\n![Loading](att://loading.png)\n\n![Failed](att://failed.png)' : ''}`)

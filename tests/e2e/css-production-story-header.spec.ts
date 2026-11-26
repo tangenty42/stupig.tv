@@ -59,11 +59,15 @@ test('a direct list cover waits for decoding and paints blended pixels through i
     await expect(frame).toHaveAttribute('aria-busy', 'true')
     expect(await pixel()).toEqual(opaque)
     await frame.evaluate((element) => {
+      const layer = element.querySelector('.image-lqip')!
+      const breathing = layer.getAnimations({ subtree: true }).find(animation => animation instanceof CSSAnimation && animation.animationName === 'image-placeholder-breathe')!
       const observer = new MutationObserver(() => {
         if (! element.hasAttribute('data-image-loaded'))
           return
         observer.disconnect()
-        void getComputedStyle(element.querySelector('.image-lqip')!).opacity
+        // This fixture played the breathing animation through WAAPI, overriding the CSS pause.
+        breathing.pause()
+        void getComputedStyle(layer).opacity
         for (const animation of element.getAnimations({ subtree: true })) {
           if (animation instanceof CSSTransition && animation.transitionProperty === 'opacity') {
             animation.pause()
@@ -73,7 +77,6 @@ test('a direct list cover waits for decoding and paints blended pixels through i
         element.setAttribute('data-test-fade-paused', '')
       })
       observer.observe(element, { attributes: true, attributeFilter: ['data-image-loaded'] })
-      const breathing = element.querySelector('.image-lqip')!.getAnimations({ subtree: true }).find(animation => animation instanceof CSSAnimation && animation.animationName === 'image-placeholder-breathe')!
       breathing.currentTime = 2180
       breathing.play()
     })

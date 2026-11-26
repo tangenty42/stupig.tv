@@ -14,7 +14,7 @@ test('inserts a renamed pasted attachment and keeps the editor writable until pu
     element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
   })
   const dialog = page.getByRole('dialog', { name: '命名' })
-  await dialog.getByLabel('附件名称').fill('e2e-note.txt')
+  await dialog.getByLabel('附件名称').fill('e2e-note')
   let continue_seal!: () => void
   const gate = new Promise<void>((resolve) => {
     continue_seal = resolve
