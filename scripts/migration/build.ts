@@ -1,4 +1,3 @@
-import type { PluginBuild } from 'esbuild'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
@@ -59,66 +58,6 @@ export async function build_migration_scripts(dir: string, output_dir: string) {
     const source = await readFile(resolve(dir, filename), 'utf8')
     const result = await build({
       ... maintenance_build_options,
-      // Applied scripts retain their original configuration and reference parsers.
-      // Load snapshots under the original module identities to preserve artifact bytes.
-      plugins: [... (['20261024210100_content_references.ts', '20261024210200_content_workspace.ts'].includes(filename)
-        ? [{
-            name: 'content-v1-frozen-config',
-            setup(plugin: PluginBuild) {
-              plugin.onLoad({ filter: /[\\/]server[\\/]services[\\/]content[\\/]sync-outbox\.repository\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/sync-outbox.repository.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'server/services/content'),
-              }))
-              plugin.onLoad({ filter: /[\\/]server[\\/]shared[\\/]types[\\/]sync\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/sync-types.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'server/shared/types'),
-              }))
-              plugin.onLoad({ filter: /[\\/]server[\\/]lib[\\/]sync-channel\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/sync-channel.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'server/lib'),
-              }))
-              plugin.onLoad({ filter: /[\\/]server[\\/]shared[\\/]content-workspace\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/content-workspace.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'server/shared'),
-              }))
-              plugin.onLoad({ filter: /[\\/]server[\\/]shared[\\/]content-(?:markdown|reference)\.ts$/ }, async ({ path }) => ({
-                contents: await readFile(resolve(project_root, `migrations/lib/content-v1/${path.endsWith('content-markdown.ts') ? 'content-markdown' : 'content-reference'}.ts.snapshot`), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'server/shared'),
-              }))
-              plugin.onLoad({ filter: /[\\/]config[\\/]lib[\\/]loader\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/config-loader.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'config/lib'),
-              }))
-              plugin.onLoad({ filter: /[\\/]config[\\/]lib[\\/]schema\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/config-schema.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'config/lib'),
-              }))
-              plugin.onLoad({ filter: /[\\/]server[\\/]shared[\\/]settings\.generated\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/content-v1/settings.generated.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'server/shared'),
-              }))
-            },
-          }]
-        : []), ... (filename === '20261101133000_content_webp.ts'
-        ? [{
-            name: 'webp-v1-frozen-references',
-            setup(plugin: PluginBuild) {
-              plugin.onLoad({ filter: /[\\/]server[\\/]shared[\\/]content-reference-definitions-live\.ts$/ }, async () => ({
-                contents: await readFile(resolve(project_root, 'migrations/lib/webp-v1/content-reference-definitions-live.ts.snapshot'), 'utf8'),
-                loader: 'ts',
-                resolveDir: resolve(project_root, 'server/shared'),
-              }))
-            },
-          }]
-        : [])],
       absWorkingDir: project_root,
       stdin: { contents: source, resolveDir: dir, sourcefile: `migrations/${filename}`, loader: 'ts' },
       write: false,

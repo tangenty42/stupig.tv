@@ -13,7 +13,8 @@ export const html_wrappers_plugin: StoryMarkdownPlugin = (md, ctx) => {
     if (! chunks) {
       return default_html_block_rule(tokens, idx, options, env, self)
     }
-    const line_attr = token.map ? ` data-line="${token.map[0]}"` : ''
+    const line = token.attrGet('data-line')
+    const line_attr = line === null ? '' : ` data-line="${line}"`
     return `${chunks.map((chunk) => {
       if (! chunk.closed || html_no_markdown_tags.has(chunk.tag) || html_table_tags.has(chunk.tag)) {
         return chunk.source

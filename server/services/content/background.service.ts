@@ -13,16 +13,31 @@ import { sweep_preloads } from './preload.service'
 import { create_content_sync_dispatcher } from './sync-outbox.service'
 import { sweep_content_images, sweep_content_uploads } from './upload-api.service'
 
+/** Sweep period of each adapter in seconds; the status report shows the same values. */
+export function content_background_intervals() {
+  const { app } = runtime_config()
+  return {
+    images: app.contentImages.sweepIntervalSeconds,
+    uploads: app.contentUploads.sweepIntervalSeconds,
+    retirement: app.contentRetirement.sweepIntervalSeconds,
+    preload: app.contentPreload.sweepIntervalSeconds,
+    sync: app.contentSync.sweepIntervalSeconds,
+    receipts: app.contentReceipts.sweepIntervalSeconds,
+    storage_audit: app.storageAudit.sweepIntervalSeconds,
+  }
+}
+
 export function content_background_adapters(): BackgroundAdapter[] {
   const { app } = runtime_config()
+  const intervals = content_background_intervals()
   const adapters: BackgroundAdapter[] = [
-    { id: 'images', intervalSeconds: app.contentImages.sweepIntervalSeconds, resources: { image: 1, oss: 1 }, sweep: sweep_content_images },
-    { id: 'uploads', intervalSeconds: app.contentUploads.sweepIntervalSeconds, resources: { oss: 1 }, sweep: sweep_content_uploads },
-    { id: 'retirement', intervalSeconds: app.contentRetirement.sweepIntervalSeconds, resources: { oss: 1, esa: 1 }, sweep: signal => sweep_object_retirements(undefined, signal) },
-    { id: 'preload', intervalSeconds: app.contentPreload.sweepIntervalSeconds, resources: { esa: 1 }, sweep: sweep_preloads },
-    { id: 'sync', intervalSeconds: app.contentSync.sweepIntervalSeconds, resources: { notification: 1 }, sweep: create_content_sync_dispatcher(db, publish_sync_confirmed, app.contentSync) },
-    { id: 'receipts', intervalSeconds: app.contentReceipts.sweepIntervalSeconds, resources: {}, sweep: create_content_receipt_compactor(db, app.contentReceipts) },
-    { id: 'storage_audit', intervalSeconds: app.storageAudit.sweepIntervalSeconds, resources: { oss: 1 }, sweep: sweep_storage_audit },
+    { id: 'images', intervalSeconds: intervals.images, resources: { image: 1, oss: 1 }, sweep: sweep_content_images },
+    { id: 'uploads', intervalSeconds: intervals.uploads, resources: { oss: 1 }, sweep: sweep_content_uploads },
+    { id: 'retirement', intervalSeconds: intervals.retirement, resources: { oss: 1, esa: 1 }, sweep: signal => sweep_object_retirements(undefined, signal) },
+    { id: 'preload', intervalSeconds: intervals.preload, resources: { esa: 1 }, sweep: sweep_preloads },
+    { id: 'sync', intervalSeconds: intervals.sync, resources: { notification: 1 }, sweep: create_content_sync_dispatcher(db, publish_sync_confirmed, app.contentSync) },
+    { id: 'receipts', intervalSeconds: intervals.receipts, resources: {}, sweep: create_content_receipt_compactor(db, app.contentReceipts) },
+    { id: 'storage_audit', intervalSeconds: intervals.storage_audit, resources: { oss: 1 }, sweep: sweep_storage_audit },
   ]
   return adapters.map(adapter => ({ ... adapter, sweep: (signal: AbortSignal) => with_upload_context({}, () => adapter.sweep(signal)) }))
 }

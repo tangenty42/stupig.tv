@@ -46,6 +46,7 @@ beforeEach(() => {
     vi.stubGlobal(name, value)
   vi.stubGlobal('onUnmounted', (callback: () => void) => unmounts.push(callback))
   vi.stubGlobal('useNuxtApp', () => app)
+  vi.stubGlobal('useReactiveDateNow', () => ref(0))
   vi.stubGlobal('useMyToast', () => ({ error: toast_error }))
   vi.stubGlobal('useDataSync', () => ({ subscribe }))
   vi.stubGlobal('useApi', () => ({ content: { get_story_body, list_stories } }))
@@ -71,9 +72,39 @@ describe('content stories query', () => {
 
     expect(first.stories).toBe(second.stories)
     expect(first.loading).toBe(second.loading)
+    expect(first.error).toBe(second.error)
     expect(first.stories.value).toEqual([client_story])
     expect(list_stories).toHaveBeenCalledOnce()
     expect(subscribe).toHaveBeenCalledWith('content_stories:all', expect.any(Function))
+  })
+
+  it('distinguishes loading, a failed source and successful empty data without another query', async () => {
+    let reject!: (error: unknown) => void
+    list_stories.mockImplementationOnce(() => new Promise((_resolve, no) => reject = no))
+    const query = useContentStories()
+    const shared = useContentStories()
+    await vi.waitFor(() => expect(query.loading.value).toBe(true))
+    expect(query.error.value).toBe(false)
+    expect(query.stories.value).toBeNull()
+
+    const failure = new Error('offline')
+    reject(failure)
+    const control = await query.ready
+    await shared.ready
+    expect(query.loading.value).toBe(false)
+    expect(query.error.value).toBe(true)
+    expect(shared.error.value).toBe(true)
+    expect(toast_error).toHaveBeenCalledExactlyOnceWith(failure)
+    expect(list_stories).toHaveBeenCalledOnce()
+
+    list_stories.mockResolvedValueOnce([])
+    await control.refresh()
+    expect(query.error.value).toBe(false)
+    expect(query.stories.value).toEqual([])
+    list_stories.mockRejectedValueOnce(failure)
+    await control.refresh()
+    expect(query.error.value).toBe(true)
+    expect(query.stories.value).toEqual([])
   })
 
   it('keeps the server snapshot until hydration resolves', async () => {
@@ -115,12 +146,53 @@ describe('content stories query', () => {
     get_story_body.mockRejectedValue({ status: 404 })
     await listeners.get('content_story:7')!()
     expect(first.story.value).toBeNull()
+    expect(first.error.value).toBe(false)
 
     const second = useContentStory(ref('7'))
     await second.ready
     expect(second.story.value).toBeNull()
     expect(get_story_body).toHaveBeenCalledTimes(2)
     expect(toast_error).not.toHaveBeenCalled()
+  })
+
+  it('keeps the first-load failure visible during automatic retry and clears it on recovery', async () => {
+    const now = ref(100_000)
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now.value)
+    vi.stubGlobal('useReactiveDateNow', () => now)
+    vi.stubGlobal('document', { visibilityState: 'visible' })
+    const first = Promise.withResolvers<ContentStoryBody>()
+    const retry = Promise.withResolvers<ContentStoryBody>()
+    get_story_body.mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise)
+    const query = useContentStory(ref('7'))
+    const shared = useContentStory(ref('7'))
+    expect(query.loading.value).toBe(true)
+    expect(query.error.value).toBe(false)
+
+    try {
+      const failure = Object.assign(new Error('offline'), { status: 503 })
+      first.reject(failure)
+      await Promise.all([query.ready, shared.ready])
+      expect(query.story.value).toBeNull()
+      expect(query.loading.value).toBe(false)
+      expect(query.error).toBe(shared.error)
+      expect(query.error.value).toBe(true)
+      expect(toast_error).toHaveBeenCalledExactlyOnceWith(failure)
+
+      now.value += 60_000
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(get_story_body).toHaveBeenCalledTimes(2)
+      expect(query.loading.value).toBe(false)
+      expect(query.error.value).toBe(true)
+
+      retry.resolve({ id: 7, markdown: 'recovered' } as ContentStoryBody)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(query.story.value?.markdown).toBe('recovered')
+      expect(query.error.value).toBe(false)
+      expect(toast_error).toHaveBeenCalledOnce()
+    }
+    finally {
+      clock.mockRestore()
+    }
   })
 
   it('keeps a readable story when a refresh fails transiently', async () => {
@@ -131,6 +203,7 @@ describe('content stories query', () => {
 
     await listeners.get('content_story:7')!()
     expect(query.story.value?.markdown).toBe('saved')
+    expect(query.error.value).toBe(true)
     expect(toast_error).toHaveBeenCalledWith(failure)
   })
 

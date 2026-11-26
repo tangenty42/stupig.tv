@@ -1,21 +1,21 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { RenderEnvironment, StoryMarkdownPlugin } from './types'
 import { attachment_base_name, CONTENT_IMAGE_DENIED_TEXT } from '@shared/content-markdown'
+import { content_placeholder, CONTENT_PLACEHOLDER_TEXT } from '@shared/content-placeholder'
 import { content_name_key } from '@shared/content-reference'
 import { attachment_can_read, attachment_display_url, attachment_is_restricted, redacted_version_of } from '~/features/content/attachments/rules'
-import { image_lqip_style } from '~/features/content/lqip'
+import { image_frame_size, image_loading_mask, render_image_frame } from '~/features/content/image-frame'
+import { attachment_brand } from './attachment-brand'
 import { local_file_name, resolve_content_url } from './links'
 
 // Images resolve story-relative sources, feed the lightbox through the
 // shared env.images list, and render inside a frame that anchors the
-// "点击查看长图" cover (revealed by data-cropped when the min-w/object-crop
+// "点击查看完整图片" cover (revealed by data-cropped when the min-w/object-crop
 // rule actually clips a tall image). Every image uses the same .carousel-item
 // and optional caption, including mixed paragraphs and inline renders. Private
-// attachments use the server-issued readable URL for permitted viewers; everyone else gets the
-// plaintext 删减版 twin when the author uploaded one (amber brand strip, tag
-// 删减版), or keeps the frame and
-// caption with the <img> swapped for a gray denied placeholder when there is
-// none (no name, no lightbox entry).
+// attachments use the server-issued readable URL for permitted viewers. Other
+// viewers get the public 删减版 with its blue strip when available, or a gray
+// placeholder in the same frame with its caption and no lightbox entry.
 export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
   const default_image_rule = md.renderer.rules.image
     ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
@@ -23,21 +23,21 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
     const token = tokens[idx]
     const src = token?.attrGet('src')
     const carousel_item = (body: string, brand = '') => {
-      const caption = token?.content && token.content !== (src ? local_file_name(src) : null)
+      const caption = token?.content
         ? `<span class="carousel-caption">${md.renderInline(token.content, env)}</span>`
         : ''
-      const content = brand ? `<span class="encrypted-block">${brand}${body}${caption}</span>` : `${body}${caption}`
+      const content = brand ? `<span class="private-image-block">${brand}${body}${caption}</span>` : `${body}${caption}`
       return `<span class="carousel-item${caption ? ' carousel-item-captioned' : ''}">${content}</span>`
     }
     if (src?.startsWith('iframe://')) {
       const url = `https://${src.slice('iframe://'.length)}`
       const title = token?.content || '嵌入内容'
-      const frame = `<span class="img-frame iframe-frame" aria-busy="true"><iframe src="${md.utils.escapeHtml(url)}" title="${md.utils.escapeHtml(title)}" loading="lazy" allowfullscreen></iframe><span class="image-loading-mask" role="status"><span class="iconify i-lucide:loader-circle" aria-hidden="true"></span><span class="sr-only">内容加载中</span></span><span class="image-unavailable" role="img" aria-label="嵌入内容不可用"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span></span>`
+      const frame = `<span class="img-frame iframe-frame" aria-busy="true"><iframe src="${md.utils.escapeHtml(url)}" title="${md.utils.escapeHtml(title)}" loading="lazy" allowfullscreen></iframe>${image_loading_mask('内容加载中')}${content_placeholder('failed', 'media', CONTENT_PLACEHOLDER_TEXT.embed_failed, 'image-unavailable')}</span>`
       return carousel_item(frame)
     }
     let denied = false
     let invalid = ! src
-    /** Plaintext twin an unauthorized viewer gets instead of the ciphertext. */
+    /** Public version shown to a viewer without access to the full image. */
     let abridged: ContentStoryAttachment | null = null
     let image_attachment: ContentStoryAttachment | undefined
     if (src && token) {
@@ -59,7 +59,6 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
         }
       }
       if (! denied) {
-        // The abridged twin is a plaintext object: point the img straight at it.
         const resolved_src = abridged ? attachment_display_url(ctx.options.static_url, abridged) : resolve_content_url(ctx.options, src)
         if (! resolved_src) {
           invalid = true
@@ -67,56 +66,39 @@ export const images_plugin: StoryMarkdownPlugin = (md, ctx) => {
         else {
           const render_env = env as RenderEnvironment
           const preview_image_index = render_env.images.push(resolved_src) - 1
-          // An empty alt or one repeating the file path is not a real label; fall
-          // back to the base file name for both alt and the preview aria-label.
-          const base_name = file_name ? attachment_base_name(file_name) : null
-          const label = token.content && token.content !== file_name ? token.content : (base_name ?? '图片')
+          const label = token.content || (file_name ? attachment_base_name(file_name) : '图片')
           // The default rule rebuilds alt from the children, so swap them.
           token.children = [{ type: 'text', content: label } as unknown as NonNullable<typeof token.children>[number]]
           token.attrSet('src', resolved_src)
+          token.attrSet('loading', 'lazy')
           token.attrSet('data-preview-index', String(preview_image_index))
           token.attrSet('role', 'button')
           token.attrSet('tabindex', '0')
           token.attrSet('aria-label', `预览：${label}`)
-          const presentation = abridged ?? attachment
-          if (presentation?.image && image_lqip_style(presentation, ctx.options.lqip_max_bytes)) {
-            token.attrSet('width', String(presentation.image.width))
-            token.attrSet('height', String(presentation.image.height))
+          const size = image_frame_size((abridged ?? attachment)?.image)
+          if (size) {
+            token.attrSet('width', String(size.width))
+            token.attrSet('height', String(size.height))
           }
         }
       }
     }
-    // The denied placeholder keeps the picture's frame (and caption below) —
-    // only the <img> itself is swapped out.
-    const rendered_image = denied
-      ? `<span class="encrypted-image-denied" role="img"><span class="iconify i-lucide:ban" aria-hidden="true"></span><span>${CONTENT_IMAGE_DENIED_TEXT}</span></span>`
-      : invalid ? '' : default_image_rule(tokens, idx, options, env, self)
-    const unavailable = denied ? '' : `<span class="image-unavailable" role="img" aria-label="${invalid ? '附件不存在或引用无效' : '图片加载失败'}"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span>`
-    const presentation = abridged ?? image_attachment
-    const lqip = denied || invalid ? null : image_lqip_style(presentation, ctx.options.lqip_max_bytes)
-    // The validated metadata also reserves geometry in engines that ignore
-    // width/height aspect hints once CSS sets both dimensions to auto.
-    const dimensions = lqip && presentation?.image
-      ? `;--content-image-width:${presentation.image.width}px;--content-image-ratio:${presentation.image.width / presentation.image.height}`
-      : ''
-    const placeholder = lqip ? ` data-lqip style="${md.utils.escapeHtml(lqip + dimensions)}"` : ''
-    const loading = denied || invalid ? '' : '<span class="image-loading-mask" role="status"><span class="iconify i-lucide:loader-circle" aria-hidden="true"></span><span class="sr-only">图片加载中</span></span>'
-    const state = invalid ? ' data-image-error' : denied ? '' : ' aria-busy="true"'
-    const framed_image = `<span class="img-frame"${placeholder}${state}>${rendered_image}${unavailable}${loading}${denied || invalid ? '' : '<span class="long-img-cover" aria-hidden="true">点击查看长图</span>'}</span>`
+    const framed_image = denied
+      ? `<span class="img-frame">${content_placeholder('denied', 'media', CONTENT_IMAGE_DENIED_TEXT)}</span>`
+      : invalid
+        ? `<span class="img-frame" data-image-error>${content_placeholder('failed', 'media', CONTENT_PLACEHOLDER_TEXT.image_failed, 'image-unavailable')}</span>`
+        : render_image_frame(
+            default_image_rule(tokens, idx, options, env, self),
+            abridged ?? image_attachment,
+            ctx.options.lqip_max_bytes,
+            'inline',
+            '<span class="long-img-cover" aria-hidden="true">点击查看完整图片</span>',
+          )
 
-    // Permitted encrypted image: the normal picture/carousel body, just with
-    // an amber brand strip on top marking it 机密附件. It shares the normal
-    // image loading / error lifecycle; decryption is owned by the server.
-    // The abridged twin (unauthorized) renders the same strip with 删减版.
+    // The full private image gets an amber strip and its public 删减版 a blue one.
+    // Both share the regular image loading and error states.
     const private_image = token?.attrGet('data-private') === ''
-    const brand_text = private_image ? '机密附件·完整版' : '机密附件·删减版'
-    const brand_icon = private_image ? 'i-lucide:lock-keyhole-open' : 'i-lucide:lock-keyhole'
-    const brand = `<span class="encrypted-block-brand"><span class="iconify ${brand_icon}" aria-hidden="true"></span><span class="encrypted-block-brand-text">${brand_text}</span></span>`
-    // Images carry their alt text as a visible caption below the image.
-    // Spans also remain valid inside inline markup and table cells. An empty
-    // alt (the insertion default) or one repeating the file name is not a
-    // real caption — skip it. The caption is rendered as inline markdown (like
-    // a link label), so `**bold**` etc. resolve instead of showing literally.
-    return carousel_item(framed_image, private_image || abridged ? brand : '')
+    const brand = private_image ? attachment_brand('private', true) : abridged || image_attachment?.is_redaction ? attachment_brand('redacted', true) : ''
+    return carousel_item(framed_image, brand)
   }
 }

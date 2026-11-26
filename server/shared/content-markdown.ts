@@ -1,6 +1,7 @@
 import type { ReferenceDefinition } from './content-reference-definitions-live'
 import { html_no_markdown_tags, html_void_tags } from './content-html'
-import { content_name_key, content_ref_suffix, content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref, parse_migration_ref } from './content-reference'
+import { CONTENT_PLACEHOLDER_TEXT } from './content-placeholder'
+import { content_name_key, content_ref_suffix, content_title_key, decode_content_destination, format_attachment_ref, format_story_ref, link_file_name_illegal_chars, parse_content_ref } from './content-reference'
 import { scan_reference_definitions } from './content-reference-definitions-live'
 
 export { link_file_name_illegal_chars } from './content-reference'
@@ -77,7 +78,7 @@ export interface ContentStoryMeta {
   title: string
   labels: string[]
   event_precision: ContentEventPrecision
-  /** 'YYYY-MM-DD' entries for day precision, 'YYYY-MM' entries for month precision. */
+  /** Empty when undated, otherwise 'YYYY-MM-DD' for day precision or 'YYYY-MM' for month precision. */
   event_entries: string[]
   /** Optional plain-text description shown under the title. */
   desc: string | null
@@ -113,9 +114,13 @@ export interface ContentMarkdownConfig {
   /** Existing story titles (id + title) for duplicate-title linting; `current_story_id` excludes the story being edited. */
   existing_titles?: { id: number, title: string }[]
   attachment_paths?: string[]
+  private_attachment_paths?: string[]
 }
 
+export const private_cover_error_message = '封面不能使用机密附件，请改用公开图片或删减版！'
+
 const fm_key_line = /^([A-Z_]\w*)\s*:(.*)$/i
+const cover_image_pattern = /^!\[([^\]]*)\]\(([^)\s]+)\)$/
 const day_entry = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/
 const month_entry = /^(\d{4})\/(\d{1,2})$/
 
@@ -201,7 +206,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
 
   let title: string | null = null
   let labels: string[] = []
-  let event_precision: ContentEventPrecision | null = null
+  let event_precision: ContentEventPrecision = 'day'
   let event_entries: string[] = []
   let desc: string | null = null
   let cover: string | null = null
@@ -393,7 +398,7 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
         // malformed image/link markdown (e.g. `![](a.jpg)123`, `![]](a.jpg)`),
         // not a bare URL — attachment file names are sanitized to exclude
         // these, so reject rather than storing the wrapper as the link.
-        const image_match = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(value)
+        const image_match = cover_image_pattern.exec(value)
         const link = image_match ? image_match[2]! : value
         if (! link || /\s/.test(link) || (! image_match && /[[\]()]/.test(link))) {
           issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: 'cover 需为单个图片链接，如 ![](图片.jpg)' })
@@ -405,6 +410,9 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
           cover = attachment_name_from_url(link) ?? link
           // The markdown label is the image alt text; a bare link has none.
           cover_label = image_match ? (image_match[1]?.trim() || null) : null
+          const cover_key = content_name_key(cover)
+          if (config.private_attachment_paths?.some(path => content_name_key(path) === cover_key))
+            issues.push({ line: line_no, severity: 'error', source: 'front-matter', message: private_cover_error_message })
         }
         break
       }
@@ -417,14 +425,11 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
     if (! seen_keys.has('title')) {
       issues.push({ line: 1, severity: 'error', source: 'front-matter', message: 'Front Matter 缺少 title 字段' })
     }
-    if (! seen_keys.has('time')) {
-      issues.push({ line: 1, severity: 'error', source: 'front-matter', message: 'Front Matter 缺少 time 字段' })
-    }
   }
 
   issues.push(... lint_content_refs(markdown, config, title))
 
-  if (! front_matter_ok || issues.some(issue => issue.severity === 'error') || title === null || ! event_precision || ! event_entries.length) {
+  if (! front_matter_ok || issues.some(issue => issue.severity === 'error') || title === null) {
     return { meta: null, issues }
   }
 
@@ -434,13 +439,12 @@ export function parse_story_markdown(markdown: string, config: ContentMarkdownCo
   }
 }
 
-/** Skeleton inserted into the editor when creating a new story; `today` is a `YYYY/M/D` local date. */
-export function story_markdown_template(today: string) {
+/** New stories start without an exact event time. */
+export function story_markdown_template() {
   return [
     '---',
     'title: 新建档案',
     `label: ${rating_label('人上人')}`,
-    `time: ${today}`,
     '---',
     '',
   ].join('\n')
@@ -525,7 +529,7 @@ export function attachment_mime_type(file_name: string) {
 
 /** Accepted inputs; normalized display output is WebP with a JPEG fallback. */
 export function processable_image_mime(mime: string | null | undefined) {
-  return ['image/jpeg', 'image/png', 'image/webp', 'image/avif'].includes(mime ?? '')
+  return ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/heic', 'image/heif'].includes(mime ?? '')
 }
 
 /** The file name without its folder prefix. */
@@ -542,33 +546,48 @@ export function lowercased_attachment_extension(file_name: string) {
 
 // A `.good` path segment declares private access, inherited by its descendants.
 // It is an ACL marker; uploaded bytes retain their original format.
-export const encrypted_attachment_suffix = '.good'
+export const private_attachment_suffix = '.good'
 
-export function is_encrypted_attachment(file_name: string) {
-  return file_name.toLowerCase().endsWith(encrypted_attachment_suffix)
+export function attachment_has_private_suffix(file_name: string) {
+  return file_name.toLowerCase().endsWith(private_attachment_suffix)
 }
 
 /** Effective access includes declarations on any ancestor directory. */
 export function attachment_path_is_private(path: string) {
-  return path.split('/').some(is_encrypted_attachment)
+  return path.split('/').some(attachment_has_private_suffix)
 }
 
 export function attachment_inherits_private(path: string) {
   return attachment_path_is_private(attachment_folder_of(path) ?? '')
 }
 
-/** The name an encrypted attachment had before encryption (`a.png.good` → `a.png`). */
-export function decrypted_attachment_name(file_name: string) {
-  return is_encrypted_attachment(file_name) ? file_name.slice(0, - encrypted_attachment_suffix.length) : file_name
+/** The 删减版 of file `X.good` is file `X` in the same folder; none when `X` itself ends with `.good`. */
+export function attachment_redaction_path(path: string) {
+  const plain = attachment_name_without_private_suffix(path)
+  return plain !== path && ! attachment_has_private_suffix(plain) ? plain : null
+}
+
+/** Privacy over a whole namespace: a 删减版 is public even inside a private folder. */
+export function attachment_privacy(items: readonly { path: string, is_folder: boolean }[]) {
+  const redactions = new Set(items.flatMap((item) => {
+    const twin = item.is_folder ? null : attachment_redaction_path(item.path)
+    return twin ? [content_name_key(twin)] : []
+  }))
+  return (path: string, is_folder: boolean) => (is_folder || ! redactions.has(content_name_key(path))) && attachment_path_is_private(path)
+}
+
+/** Strips one trailing private marker from the final path segment (`a.png.good` → `a.png`). */
+export function attachment_name_without_private_suffix(file_name: string) {
+  return attachment_has_private_suffix(file_name) ? file_name.slice(0, - private_attachment_suffix.length) : file_name
 }
 
 /**
- * The name an attachment is saved under: its base name, encryption marker
+ * The name an attachment is saved under: its base name, privacy marker
  * stripped, extension lowercased — legacy rows may still carry an uppercase
  * extension, while new uploads normalize extensions at admission.
  */
 export function attachment_download_name(file_name: string) {
-  return lowercased_attachment_extension(attachment_base_name(decrypted_attachment_name(file_name)))
+  return lowercased_attachment_extension(attachment_base_name(attachment_name_without_private_suffix(file_name)))
 }
 
 /**
@@ -576,21 +595,21 @@ export function attachment_download_name(file_name: string) {
  *
  * The marker is itself the last dot, so lowercasing the final suffix alone
  * would leave the real extension (`secret.PNG.good` → `secret.PNG.good`) — the
- * plaintext extension has to be normalized first and the marker re-appended.
+ * file extension has to be normalized first and the marker re-appended.
  * Upload admission uses this rule; renames preserve the existing locked tail.
  * `lowercased_attachment_extension` is the primitive underneath it.
  */
 export function normalized_attachment_extension(file_name: string) {
-  if (! is_encrypted_attachment(file_name))
+  if (! attachment_has_private_suffix(file_name))
     return lowercased_attachment_extension(file_name)
-  return `${lowercased_attachment_extension(decrypted_attachment_name(file_name))}${encrypted_attachment_suffix}`
+  return `${lowercased_attachment_extension(attachment_name_without_private_suffix(file_name))}${private_attachment_suffix}`
 }
 
 /**
  * A stored file name split into the part a rename edits and the part it locks,
  * for `folder/name.png.good` → `{ editable: 'name', locked: '.png.good' }`.
  *
- * The locked tail is the extension plus the encryption marker, so
+ * The locked tail is the extension plus the privacy marker, so
  * `plain_file.good` locks only `.good` (there is no other extension). The
  * extension is locked because it decides the mime type and how the file
  * renders: letting it ride inside the editable text would let a rename dress a
@@ -602,7 +621,7 @@ export function normalized_attachment_extension(file_name: string) {
  */
 export function split_attachment_editable_name(file_name: string) {
   const base = attachment_base_name(file_name)
-  const plain = decrypted_attachment_name(base)
+  const plain = attachment_name_without_private_suffix(base)
   const dot = plain.lastIndexOf('.')
   const editable = dot > 0 ? plain.slice(0, dot) : plain
   return {
@@ -624,15 +643,15 @@ const redactable_attachment_mimes = ['image/png', 'image/jpeg', 'image/webp', 'i
  * upload shipped a type that contradicted its extension.
  */
 export function redactable_attachment_mime(file_name: string) {
-  const mime = attachment_mime_type(decrypted_attachment_name(file_name))
+  const mime = attachment_mime_type(attachment_name_without_private_suffix(file_name))
   return mime && redactable_attachment_mimes.includes(mime) ? mime : null
 }
 
-/** What an unauthorized viewer sees in place of an encrypted attachment (card or image placeholder). */
-export const CONTENT_ATTACHMENT_DENIED_TEXT = '你无权查看此机密附件'
+/** What an unauthorized viewer sees in place of a private attachment (card or image placeholder). */
+export const CONTENT_ATTACHMENT_DENIED_TEXT = CONTENT_PLACEHOLDER_TEXT.attachment_denied
 
 /** The image variant, rendered inside the picture's own frame with its caption kept. */
-export const CONTENT_IMAGE_DENIED_TEXT = '你无权查看此机密附件'
+export const CONTENT_IMAGE_DENIED_TEXT = CONTENT_PLACEHOLDER_TEXT.attachment_denied
 
 /** Join a folder and a base file name into an attachment path (null folder = root). */
 export function attachment_path_join(folder: string | null, base_name: string) {
@@ -647,9 +666,30 @@ export function attachment_path_join(folder: string | null, base_name: string) {
  * settles on the first character, where '1' < '2', before the '0' is ever
  * considered — so numbered files would read 1, 10, 11, 2, 3. The locale keeps
  * Chinese names in a sensible order rather than UTF-8 code-point order.
+ *
+ * The stem is compared before the extension. ICU ranks `_` below `.`, so a
+ * whole-string compare puts `1_1.png` before `1.png` (the second character `_`
+ * beats `.`), which reads backwards next to the auto-numbered siblings. Split
+ * off the last extension first: `1` ties, then `_1` orders after the bare stem,
+ * giving 1, 1_1, 1_2, 2, 2_1, 10 like a file manager.
  */
+function split_sort_extension(name: string) {
+  const base = name.slice(name.lastIndexOf('/') + 1)
+  const dot = base.lastIndexOf('.')
+  // dot 0 is a dotfile (`.env`), not an extension; -1 means none.
+  if (dot <= 0)
+    return [name, ''] as const
+  const at = name.lastIndexOf('.')
+  return [name.slice(0, at), name.slice(at)] as const
+}
+
 export function compare_attachment_names(left: string, right: string) {
-  return left.localeCompare(right, 'zh-CN', { numeric: true })
+  const options = { numeric: true } as const
+  const [left_stem, left_ext] = split_sort_extension(left)
+  const [right_stem, right_ext] = split_sort_extension(right)
+  return left_stem.localeCompare(right_stem, 'zh-CN', options)
+    || left_ext.localeCompare(right_ext, 'zh-CN', options)
+    || left.localeCompare(right, 'zh-CN', options)
 }
 
 /** Directory views put folders first, then use the same natural name order. */
@@ -701,13 +741,26 @@ export function folder_images<T extends ImageAttachment>(attachments: readonly T
     .sort((left, right) => compare_attachment_names(left.file_name, right.file_name))
 }
 
-/** Files at or below a folder, recursion included — the count the attachment list shows. */
-export function folder_file_count(attachments: readonly NamedAttachment[], folder_path: string) {
+/** Count each direct file and subfolder, including folders implied by descendant paths. */
+export function folder_item_count(attachments: readonly NamedAttachment[], folder_path: string, folders: readonly string[] = []) {
   const folder = normalize_folder_path(folder_path)
   if (! folder)
     return 0
   const prefix = `${folder}/`
-  return attachments.filter(item => content_name_key(item.file_name).startsWith(prefix)).length
+  const children = new Set<string>()
+  const add_child = (path: string) => {
+    const key = content_name_key(path)
+    if (! key.startsWith(prefix))
+      return
+    const [child] = key.slice(prefix.length).split('/', 1)
+    if (child)
+      children.add(child)
+  }
+  for (const attachment of attachments)
+    add_child(attachment.file_name)
+  for (const path of folders)
+    add_child(path)
+  return children.size
 }
 
 /**
@@ -817,8 +870,8 @@ export function link_file_name_byte_length(name: string) {
 
 /** Replace characters storage and Markdown cannot carry, and cap the byte length. */
 function clean_attachment_segment(base: string, max_bytes: number): string {
-  if (is_encrypted_attachment(base))
-    return clean_attachment_segment(decrypted_attachment_name(base), max_bytes - encrypted_attachment_suffix.length) + encrypted_attachment_suffix
+  if (attachment_has_private_suffix(base))
+    return clean_attachment_segment(attachment_name_without_private_suffix(base), max_bytes - private_attachment_suffix.length) + private_attachment_suffix
   let cleaned = base.replace(link_file_name_illegal_chars, '_').trim().replace(/^\.+/, '').replace(/\.+$/, '')
   if (link_file_name_reserved_base.test(cleaned.split('.')[0] ?? '')) {
     cleaned = `_${cleaned}`
@@ -1238,7 +1291,7 @@ function rewrite_markdown_links(text: string, patch: (span: MarkdownLinkSpan) =>
 
 function attachment_name_from_url(url: string) {
   const ref = parse_content_ref(url)
-  return ref?.kind === 'attachment' || ref?.kind === 'legacy_attachment' ? ref.path : null
+  return ref?.kind === 'attachment' ? ref.path : null
 }
 
 /** Extract attachment file names referenced from the markdown body for a story. */
@@ -1254,6 +1307,73 @@ export function extract_attachment_names(markdown: string) {
   return [... names]
 }
 
+/** Index the attachment paths used by one Markdown snapshot, including its cover and redacted fallbacks. */
+export function referenced_attachment_keys(markdown: string, attachments: readonly (ImageAttachment & { has_redacted?: boolean })[], folders: readonly string[], published_cover?: string | null) {
+  const body = strip_front_matter(markdown)
+  const definitions = scan_reference_definitions(body)
+  const files = new Set(attachments.map(item => content_name_key(item.file_name)))
+  const directories = new Set(folders.map(content_name_key))
+  const used = new Set<string>()
+  const subtrees = new Set<string>()
+  for (const path of [... files, ... directories]) {
+    for (const parent of attachment_ancestor_folders(path))
+      directories.add(parent)
+  }
+  const mark_path = (path: string) => {
+    used.add(path)
+    for (const parent of attachment_ancestor_folders(path))
+      used.add(parent)
+  }
+  const visit = (source: string, excluded: typeof definitions.ranges) => {
+    for (const span of scan_inline_links(source, excluded, definitions.resolve)) {
+      const ref = parse_content_ref(span.destination)
+      if (ref?.kind === 'attachment') {
+        const key = content_name_key(ref.path)
+        if (files.has(key)) {
+          mark_path(key)
+        }
+        else if (! span.image && directories.has(key)) {
+          mark_path(key)
+          if (! span.label)
+            subtrees.add(key)
+        }
+      }
+      if (span.label)
+        visit(span.label, [])
+    }
+  }
+  visit(body, definitions.ranges)
+
+  const cover_value = published_cover === undefined
+    ? markdown.split('\n').slice(1, front_matter_line_count(markdown)).map(line => fm_key_line.exec(line)).find(match => match?.[1] === 'cover')?.[2]?.trim()
+    : published_cover
+  if (cover_value) {
+    const destination = cover_image_pattern.exec(cover_value)?.[2] ?? cover_value
+    const cover = attachment_name_from_url(destination) ?? destination
+    const key = content_name_key(cover)
+    if (files.has(key))
+      mark_path(key)
+  }
+  for (const { file_name } of attachments) {
+    const key = content_name_key(file_name)
+    if (attachment_ancestor_folders(key).some(parent => subtrees.has(parent)))
+      used.add(key)
+  }
+  for (const { file_name, has_redacted } of attachments) {
+    if (! has_redacted || ! used.has(content_name_key(file_name)))
+      continue
+    const redaction = attachment_redaction_path(file_name)
+    const key = redaction && content_name_key(redaction)
+    if (key && files.has(key))
+      mark_path(key)
+  }
+  for (const directory of directories) {
+    if (attachment_ancestor_folders(directory).some(parent => subtrees.has(parent)))
+      used.add(directory)
+  }
+  return used
+}
+
 /** Rename matching attachment URLs and default link labels without touching custom labels. */
 export function rename_attachment_references(markdown: string, old_file_name: string, new_file_name: string): string {
   return rewrite_content_refs(markdown, [{ attachments: [{ from: old_file_name, to: new_file_name }] }])
@@ -1264,7 +1384,7 @@ export function extract_story_reference_titles(markdown: string) {
   const titles = new Set<string>()
   for_each_link_span(markdown, (span) => {
     const ref = parse_content_ref(span.destination)
-    if (ref?.kind === 'story' || ref?.kind === 'legacy_story')
+    if (ref?.kind === 'story')
       titles.add(ref.title)
   })
   return [... titles]
@@ -1296,12 +1416,12 @@ export function rewrite_attachment_path(path: string, step: ContentRefRewriteSte
 function rewrite_ref_step(markdown: string, step: ContentRefRewriteStep): string {
   return map_content_refs(markdown, (destination) => {
     const ref = parse_content_ref(destination)
-    if (ref?.kind === 'attachment' || ref?.kind === 'legacy_attachment') {
+    if (ref?.kind === 'attachment') {
       const path = rewrite_attachment_path(ref.path, step)
       if (path !== ref.path)
         return format_attachment_ref(path) + content_ref_suffix(destination)
     }
-    else if (ref?.kind === 'story' || ref?.kind === 'legacy_story') {
+    else if (ref?.kind === 'story') {
       const mapping = step.stories?.find(item => content_title_key(item.from) === content_title_key(ref.title))
       if (mapping)
         return format_story_ref(mapping.to) + content_ref_suffix(destination)
@@ -1324,8 +1444,8 @@ export function rewrite_default_reference_label(label: string, from: string, to:
     for (const [before, after] of [
       [old_ref.path, new_ref.path],
       [attachment_base_name(old_ref.path), attachment_base_name(new_ref.path)],
-      [decrypted_attachment_name(old_ref.path), decrypted_attachment_name(new_ref.path)],
-      [decrypted_attachment_name(attachment_base_name(old_ref.path)), decrypted_attachment_name(attachment_base_name(new_ref.path))],
+      [attachment_name_without_private_suffix(old_ref.path), attachment_name_without_private_suffix(new_ref.path)],
+      [attachment_name_without_private_suffix(attachment_base_name(old_ref.path)), attachment_name_without_private_suffix(attachment_base_name(new_ref.path))],
     ]) {
       if (content_name_key(label) === content_name_key(before!))
         return after!
@@ -1337,17 +1457,23 @@ export function rewrite_default_reference_label(label: string, from: string, to:
   return label
 }
 
-/** Map live destinations only; code and raw HTML use the same scanner as rendering/lint. */
-export function map_content_refs(markdown: string, transform: (destination: string, from: number, to: number) => string) {
+/** Map live destinations. A definition is image-only if every use is an image. */
+export function map_content_refs(markdown: string, transform: (destination: string, from: number, to: number, image_only: boolean) => string) {
+  const old_uses = scan_reference_labels(markdown)
+  const image_definitions = new Map<number, boolean>()
+  for (const use of old_uses) {
+    const from = use.reference!.definition.from
+    image_definitions.set(from, use.image && image_definitions.get(from) !== false)
+  }
   const destinations = new Map<number, string>()
   const visit = (text: string, offset = 0): string => rewrite_markdown_links(text, (span) => {
-    const destination = transform(span.destination, offset + span.dest_start, offset + span.dest_end)
-    destinations.set(offset + span.dest_start, destination)
+    const from = offset + span.dest_start
+    const destination = transform(span.destination, from, offset + span.dest_end, span.image || image_definitions.get(from) === true)
+    destinations.set(from, destination)
     const label = rewrite_default_reference_label(visit(span.label, offset + span.label_start), span.destination, destination)
     return { destination, label }
   })
   let body = visit(markdown)
-  const old_uses = scan_reference_labels(markdown)
   const new_uses = old_uses.length ? scan_reference_labels(body) : []
   if (old_uses.length !== new_uses.length)
     throw new Error('Reference rewrite changed definition uses')
@@ -1372,7 +1498,7 @@ export function map_content_refs(markdown: string, transform: (destination: stri
     const match = /^(cover:\s*)([^\s[\]()]+)\s*$/.exec(line)
     if (match) {
       const from = offset + match[1]!.length
-      covers.set(match[2]!, transform(match[2]!, from, from + match[2]!.length))
+      covers.set(match[2]!, transform(match[2]!, from, from + match[2]!.length, true))
     }
     offset += line.length + 1
   }
@@ -1434,23 +1560,6 @@ function rewrite_bare_cover(markdown: string, transform: (destination: string) =
     lines[index] = lines[index]!.replace(/^(cover:\s*)([^\s[\]()]+)(\s*)$/, (_match, prefix, destination, suffix) => prefix + transform(destination) + suffix)
   }
   return lines.join('\n')
-}
-
-/** Syntax-only, idempotent conversion; never needs a live attachment catalog. */
-export function upgrade_legacy_refs(markdown: string): string {
-  const upgrade = (destination: string) => {
-    const ref = parse_migration_ref(destination)
-    if (ref?.kind === 'legacy_attachment')
-      return format_attachment_ref(ref.path)
-    if (ref?.kind === 'legacy_story')
-      return format_story_ref(ref.title)
-    return destination
-  }
-  const rewritten = rewrite_markdown_links(markdown, span => ({
-    label: upgrade_legacy_refs(span.label),
-    destination: upgrade(span.destination),
-  }))
-  return rewrite_bare_cover(rewritten, upgrade)
 }
 
 /** Shared reference diagnostics, including exact ranges for safe editor fixes. */

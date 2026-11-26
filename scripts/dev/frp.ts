@@ -4,7 +4,8 @@ import { resolve } from 'node:path'
 import { rootCertificates } from 'node:tls'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build_frpc_config, load_dev_auth_config } from './auth-config'
-import { supervise_child } from './process.mjs'
+import { dev_auth_proxy_version, read_dev_auth_ca } from './auth-proxy'
+import { supervise_child } from './process'
 
 export function prepare_dev_frp() {
   const config = load_dev_auth_config()
@@ -32,11 +33,14 @@ export function verify_dev_frp(prepared: ReturnType<typeof prepare_dev_frp>) {
     throw new Error('frpc configuration validation failed; no tunnel was started')
 }
 
-async function existing_proxy(config: ReturnType<typeof load_dev_auth_config>) {
+export async function existing_proxy(config: ReturnType<typeof load_dev_auth_config>) {
   try {
     const response = await fetch(`http://${config.proxy.listenHost}:${config.proxy.listenPort}/`, { signal: AbortSignal.timeout(2000) })
     await response.body?.cancel()
-    if (response.status !== 404 || response.headers.get('x-dev-auth-proxy') !== '1')
+    const version = response.headers.get('x-dev-auth-proxy')
+    if (response.status === 404 && version === '1')
+      throw new Error('An older development auth proxy is forwarding to HTTP; stop the old tunnel and restart it for HTTPS')
+    if (response.status !== 404 || version !== dev_auth_proxy_version)
       throw new Error('Development proxy port is occupied by an unidentified process; stop it explicitly before starting the tunnel')
     return true
   }
@@ -50,6 +54,7 @@ async function existing_proxy(config: ReturnType<typeof load_dev_auth_config>) {
 export async function run_dev_tunnel() {
   const prepared = prepare_dev_frp()
   verify_dev_frp(prepared)
+  read_dev_auth_ca()
   const stops: (() => void)[] = []
   let health_timer: ReturnType<typeof setInterval> | undefined
   const shutdown = () => {
@@ -59,7 +64,7 @@ export async function run_dev_tunnel() {
   }
   const { config } = prepared
   if (! await existing_proxy(config)) {
-    stops.push(supervise_child(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./auth-proxy.mjs', import.meta.url))]))
+    stops.push(supervise_child(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./auth-proxy.ts', import.meta.url))]))
   }
   stops.push(supervise_child(config.frp.executable, ['-c', prepared.config_path], {
     env: prepared.env,
@@ -74,7 +79,7 @@ export async function run_dev_tunnel() {
     let state = 'callback unavailable'
     try {
       const response = await fetch(config.callbackUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', redirect: 'manual', signal: AbortSignal.timeout(5000) })
-      state = response.status === 403 && response.headers.get('x-dev-auth-proxy') === '1'
+      state = response.status === 403 && response.headers.get('x-dev-auth-proxy') === dev_auth_proxy_version
         ? 'callback reachable (real grant/download acceptance still required)'
         : `unexpected callback response: ${response.status}`
       await response.body?.cancel()

@@ -19,7 +19,6 @@ export const settings: Settings = {
         tokenName: 'stupig_session',
         userName: 'login',
       },
-      bcryptRounds: 12,
       syncPollIntervalSeconds: 30,
     },
     otp: {
@@ -51,6 +50,8 @@ export const settings: Settings = {
         eventDeduplicationLimit: 256,
         resourceGatherDelayMs: 200,
         reconnectDelayMs: 1000,
+        reconnectMaxDelayMs: 30000,
+        reconnectNoticeDelayMs: 5000,
         connectTimeoutMs: 30000,
       },
     },
@@ -61,6 +62,7 @@ export const settings: Settings = {
     },
     admin: {
       pollIntervalSeconds: 2,
+      statusPollIntervalSeconds: 5,
     },
     avatar: {
       maxSizeMb: 1,
@@ -123,11 +125,8 @@ export const settings: Settings = {
       image: {
         lqipMaxBytes: 8192,
         uploadMaxBytes: 20971520,
-        uploadMaxDimension: 4096,
-        uploadMaxPixels: 9437184,
-      },
-      encrypt: {
-        maxSizeMb: 20,
+        uploadMaxDimension: 8192,
+        uploadMaxPixels: 24000000,
       },
     },
   },

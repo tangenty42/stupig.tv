@@ -16,8 +16,9 @@ it('aggregates domain ledgers and receipt compaction without exposing payloads o
       return [[{ destination_id: 'a'.repeat(64), phase: 'objects', references_checked: '20', objects_checked: '100', last_error_code: 'https://signed.secret/?auth_key=x' }]]
     return [[{ phase: 'queued', error_code: 'https://signed.secret/?auth_key=x', total: '3', pending: '2', due: '1', leased: '1', oldest_pending_at: new Date('2026-10-24T00:00:00Z'), payload: 'secret' }]]
   })
-  const result = await read_background_ledgers({ execute } as unknown as Pool)
+  const result = await read_background_ledgers({ execute } as unknown as Pool, { receipts: 60, images: 5 })
   expect(result.ledgers.map(group => group.id)).toEqual(['receipts', 'images', 'uploads', 'retirement', 'preload', 'sync', 'storage_audit'])
+  expect(result.ledgers.map(group => group.interval_seconds)).toEqual([60, 5, null, null, null, null, null])
   expect(result.ledgers[0]!.groups[0]).toEqual({ phase: 'queued', error_code: null, total: 3, pending: 2, due: 1, leased: 1, oldest_pending_at: '2026-10-24T00:00:00.000Z' })
   expect(result.preload_targets).toEqual([{ total: 2, leased: 1, error_code: 'permission_denied' }])
   expect(result.storage_audit_findings).toEqual([{ kind: 'orphan_candidate', total: 2 }])

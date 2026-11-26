@@ -1,4 +1,4 @@
-import type { StorageAuditFinding, StorageAuditKind } from '@shared/types/storage-audit'
+import type { StorageAuditFindingsPage, StorageAuditFindingsQuery, StorageAuditKind } from '@shared/types/storage-audit'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { createHash, randomUUID } from 'node:crypto'
 
@@ -165,10 +165,34 @@ export function create_audit_catalog(pool: Pick<Pool, 'execute'>, destination: {
   }
 }
 
-export async function read_audit_findings(pool: Pick<Pool, 'execute'>, destination_id: string, after_id: number, limit: number): Promise<StorageAuditFinding[]> {
-  const [rows] = await pool.execute<RowDataPacket[]>(`SELECT id,object_key,kind,expected_size,observed_size,observations,first_seen_at,last_seen_at,resolved_at
-    FROM storage_audit_findings WHERE destination_id=? AND resolved_at IS NULL AND id>? ORDER BY id LIMIT ?`, [destination_id, after_id, limit])
-  return rows.map(row => ({ id: Number(row.id), object_key: audit_key(row.object_key), kind: row.kind,
-    expected_size: row.expected_size === null ? null : Number(row.expected_size), observed_size: row.observed_size === null ? null : Number(row.observed_size),
-    observations: Number(row.observations), first_seen_at: new Date(row.first_seen_at).toISOString(), last_seen_at: new Date(row.last_seen_at).toISOString(), resolved_at: null }))
+export async function read_audit_findings(pool: Pick<Pool, 'getConnection'>, destination_id: string, query: StorageAuditFindingsQuery): Promise<StorageAuditFindingsPage> {
+  const kinds = query.kinds ?? []
+  const params = [destination_id, ... kinds]
+  const kind_clause = kinds.length ? ` AND kind IN (${kinds.map(() => '?').join(',')})` : ''
+  const source = `FROM storage_audit_findings WHERE destination_id=? AND resolved_at IS NULL${kind_clause}`
+  const connection = await pool.getConnection()
+  try {
+    // The count and page must agree even if the audit worker resolves a finding between reads.
+    await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+    await connection.beginTransaction()
+    const [count] = await connection.execute<RowDataPacket[]>(`SELECT COUNT(*) AS total ${source}`, params)
+    const total = Number(count[0]!.total)
+    const page = Math.min(query.page, Math.max(1, Math.ceil(total / query.page_size)))
+    const offset = (page - 1) * query.page_size
+    const [rows] = await connection.execute<RowDataPacket[]>(`SELECT id,object_key,kind,expected_size,observed_size,observations,first_seen_at,last_seen_at
+      ${source} ORDER BY id LIMIT ? OFFSET ?`, [... params, String(query.page_size), String(offset)])
+    await connection.commit()
+    return {
+      page,
+      total,
+      rows: rows.map(row => ({ id: Number(row.id), object_key: audit_key(row.object_key), kind: row.kind,
+        expected_size: row.expected_size === null ? null : Number(row.expected_size), observed_size: row.observed_size === null ? null : Number(row.observed_size),
+        observations: Number(row.observations), first_seen_at: new Date(row.first_seen_at).toISOString(), last_seen_at: new Date(row.last_seen_at).toISOString(), resolved_at: null })),
+    }
+  }
+  catch (error) {
+    await connection.rollback()
+    throw error
+  }
+  finally { connection.release() }
 }

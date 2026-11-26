@@ -1,6 +1,57 @@
 import type { DraftResult } from '@shared/types/content-draft'
 import { expect } from '@playwright/test'
-import { content_mutation, create_story, draft_timeout, login, markdown, ready, test } from '../support/e2e-browser'
+import { content_mutation, create_story, draft_timeout, login, markdown, ready, set_page_visibility, test } from '../support/e2e-browser'
+
+test('restores editor focus and selection when returning to a draft', async ({ page }) => {
+  await login(page)
+  await page.goto('/content/new/edit')
+  await ready(page)
+  await expect(page).toHaveURL(/\/content\/draft-[a-f0-9]{32}\/edit$/, { timeout: draft_timeout })
+  const edit_url = page.url()
+  const editor = page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true })
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
+  await editor.fill(markdown('Focus', 'A beta Z'))
+  await expect(page.getByText('草稿已保存，尚未发布', { exact: true })).toBeVisible({ timeout: draft_timeout })
+
+  await editor.getByText('A beta Z', { exact: true }).click()
+  await editor.press('End')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  for (let i = 0; i < 'beta'.length; i += 1)
+    await page.keyboard.press('Shift+ArrowLeft')
+  const selected_text = () => page.evaluate(() => document.getSelection()?.toString())
+  await expect.poll(selected_text).toBe('beta')
+
+  await set_page_visibility(page, 'hidden')
+  await expect(editor).not.toBeEditable({ timeout: draft_timeout })
+  await set_page_visibility(page, 'visible')
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
+  await expect(editor).toBeFocused()
+  await expect.poll(selected_text).toBe('beta')
+  await page.keyboard.insertText('new')
+  await expect(editor.getByText('A new Z', { exact: true })).toBeVisible()
+  await expect(page.getByText('草稿已保存，尚未发布', { exact: true })).toBeVisible({ timeout: draft_timeout })
+
+  await page.goto('/content')
+  await ready(page)
+  await page.goto(edit_url)
+  await ready(page)
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
+  await expect(editor).toBeFocused()
+  await page.keyboard.insertText('er')
+  await expect(editor.getByText('A newer Z', { exact: true })).toBeVisible()
+
+  await editor.press('Control+f')
+  const search = page.getByRole('textbox', { name: '查找', exact: true })
+  await expect(search).toBeFocused()
+  await set_page_visibility(page, 'hidden')
+  await expect(editor).not.toBeEditable({ timeout: draft_timeout })
+  await set_page_visibility(page, 'visible')
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
+  await expect(search).toBeFocused()
+  await page.keyboard.insertText('needle')
+  await expect(search).toHaveValue('needle')
+})
 
 test('restores per-draft editor layout and scroll after re-entry and reload', async ({ page }) => {
   test.setTimeout(180_000)

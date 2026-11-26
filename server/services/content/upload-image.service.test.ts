@@ -41,6 +41,20 @@ it('wakes delivery after image adoption commits, without waiting for the periodi
   expect(wake).toHaveBeenCalledExactlyOnceWith('sync')
 })
 
+it('publishes an animated plain upload as an ordinary file without running or failing its image job', async () => {
+  listen()
+  const execute = vi.fn().mockResolvedValue([[{ id: 'one', actor_id: 7, job_id: 'j', image_status: 'cancelled', image_epoch: 1 }]])
+  const pool = { execute, getConnection: vi.fn() } as unknown as Pool
+  const uploads = { adopt: vi.fn() }
+  const images = create_upload_images(pool, storage, options)
+  await images.sweep(uploads as unknown as ReturnType<typeof create_upload_sessions>)
+  expect(uploads.adopt).toHaveBeenCalledOnce()
+  expect(String(execute.mock.calls[0]![0])).toContain(`j.status = 'cancelled' AND j.error_code = 'image_animated_plain'`)
+  expect(pool.getConnection).not.toHaveBeenCalled()
+  const state = await create_upload_images({ execute: vi.fn().mockResolvedValue([[{ status: 'cancelled', error_code: 'image_animated_plain', result: null }]]), getConnection: vi.fn() } as unknown as Pool, storage, options).state({ id: 'one' } as never)
+  expect(state).not.toHaveProperty('image_status')
+})
+
 it('stops claiming more images after the active publication reaches its checkpoint', async () => {
   const controller = new AbortController()
   const execute = vi.fn().mockResolvedValue([[{ id: 'one', actor_id: 7, image_status: 'ready' }, { id: 'two', actor_id: 7, image_status: 'ready' }]])

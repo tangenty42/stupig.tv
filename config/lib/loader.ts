@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse as parse_yaml } from 'yaml'
 import { load_environment } from './environment.mjs'
-import { aliyun_oss_config_schema, database_config_schema, deployment_config_schema, image_processing_options_schema, oss_bucket_config_schema, public_config_schema, settings_schema } from './schema'
+import { aliyun_oss_config_schema, database_config_schema, deployment_config_schema, oss_bucket_config_schema, public_config_schema, settings_schema } from './schema'
 
 export type { Settings } from './schema'
 
@@ -133,17 +133,7 @@ export function load_migration_source_config(bucket: 'public' | 'private', env =
   return parse_config(oss_bucket_config_schema, interpolate_config(buckets?.[bucket], env, `oss.buckets.${bucket}`), `oss.buckets.${bucket}`)
 }
 
-export function load_migration_image_profile(env = environment()) {
-  const merged = read_yaml_config(node_env_of(env))
-  const app = is_config_object(merged) && is_config_object(merged.app) ? merged.app : undefined
-  const images = app && is_config_object(app.contentImages) ? app.contentImages : undefined
-  return {
-    profile: parse_config(image_processing_options_schema, interpolate_config(images?.profile, env, 'app.contentImages.profile'), 'app.contentImages.profile'),
-    profile_version: parse_config(deployment_config_schema.shape.app.shape.contentImages.shape.profileVersion, interpolate_config(images?.profileVersion, env, 'app.contentImages.profileVersion'), 'app.contentImages.profileVersion'),
-  }
-}
-
-/** Current WebP profile; the older profile above belongs to frozen migrations. */
+/** Current WebP profile. */
 export function load_webp_image_profile(env = environment()) {
   const merged = read_yaml_config(node_env_of(env))
   const app = is_config_object(merged) && is_config_object(merged.app) ? merged.app : undefined

@@ -90,7 +90,7 @@ function body_fixture() {
   carousel.children = [image]
   carousel.closest.mockReturnValue(shell)
   carousel.querySelectorAll.mockReturnValue([image])
-  shell.querySelector.mockImplementation(selector => selector === '.carousel-prev' ? prev : next)
+  shell.querySelector.mockImplementation(selector => selector.endsWith('.carousel-prev') ? prev : next)
   root.querySelectorAll.mockImplementation((selector) => {
     if (selector === '.image-carousel')
       return [carousel]

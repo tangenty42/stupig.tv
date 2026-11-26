@@ -51,8 +51,8 @@ test('title changes update saved references and another browser draft, and delet
     await actor.bringToFront()
     await actor.getByRole('button', { name: '删除', exact: true }).click()
     const dialog = actor.getByRole('dialog', { name: '空城计？' })
-    await expect(dialog.getByText('有正文正在引用。')).toBeVisible()
-    await expect(dialog.getByText(source.title)).toHaveCount(0)
+    await expect(dialog.getByRole('region', { name: '正文引用' })).toBeVisible()
+    await expect(dialog.getByRole('link', { name: source.title })).toBeVisible()
     await dialog.getByRole('button', { name: '仍然删除' }).click()
     await expect(actor).toHaveURL(/\/content$/)
     await page.bringToFront()
@@ -60,10 +60,19 @@ test('title changes update saved references and another browser draft, and delet
     await expect(page.getByText(`档案『${renamed}』不可引用`)).toBeVisible()
     await expect.poll(() => editor_text(page)).toContain(`content://${renamed}?view=card#top`)
     await expect(editor).toBeEditable()
-    await page.getByRole('button', { name: '保存', exact: true }).click()
-    await expect(page.getByText('档案已保存', { exact: true })).toBeVisible()
+    const save = page.getByRole('button', { name: '保存', exact: true })
+    const published = page.getByText('档案已保存', { exact: true })
+    const changed = page.getByText('云端草稿已变化，请重新核对后操作', { exact: true })
+    const expected = markdown(source.title, `draft survives\n[custom](content://${renamed}?view=card#top)`)
+    await save.click()
+    await expect(published.or(changed)).toBeVisible()
+    if (await changed.isVisible()) {
+      await expect.poll(() => editor_text(page)).toBe(expected.trimEnd())
+      await save.click()
+      await expect(published).toBeVisible()
+    }
     const saved = await content_query<{ markdown: string }>(page, 'getStoryBody', { id: Number(source.id) })
-    expect(saved.markdown).toContain(`content://${renamed}?view=card#top`)
+    expect(saved.markdown.trimEnd()).toBe(expected.trimEnd())
     expect(target_id).toBeGreaterThan(0)
   }
   finally {

@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="image_url"
+    v-if="image_url && image_state !== 'error'"
     class="avatar-wrapper"
     :class="{ 'avatar-previewable cursor-zoom-in': previewable }"
     :style="{ width: size_computed, height: size_computed }"
@@ -8,13 +8,15 @@
     @click="on_click"
   >
     <img
+      :key="image_url"
+      ref="avatar_image"
       :src="image_url"
       :alt="`${props.user.username} 的头像`"
       :loading="lazy ? 'lazy' : 'eager'"
       class="h-full w-full object-cover"
       :class="{ 'opacity-0': show_skeleton }"
-      @load="loaded = true"
-      @error="on_error"
+      @load="on_image_settled"
+      @error="on_image_settled"
     >
     <div
       v-if="show_skeleton"
@@ -47,6 +49,7 @@
 </template>
 
 <script setup lang="ts">
+import { image_load_state } from '~/features/content/image-placeholders'
 import { avatar_url } from '~/utils/avatar'
 
 export interface AvatarUser {
@@ -69,14 +72,14 @@ const props = withDefaults(defineProps<{
 
 const static_url = useStaticUrl()
 
-const image_url = ref<string | undefined>(props.lazy ? undefined : (avatar_url(static_url, props.user.avatar_file, props.user.avatar_version ?? null) ?? undefined))
-const loaded = ref(false)
-const error = ref(false)
+const image_url = computed(() => avatar_url(static_url, props.user.avatar_file, props.user.avatar_version ?? null))
+const avatar_image = useTemplateRef<HTMLImageElement>('avatar_image')
+const image_state = ref<ReturnType<typeof image_load_state>>('loading')
 const fallback = computed(() => props.user.username.slice(0, 1).toUpperCase())
 const preview_visible = ref(false)
 const preview_images = computed(() => image_url.value ? [image_url.value] : [])
 
-const show_skeleton = computed(() => props.lazy && ! loaded.value && ! error.value && image_url.value)
+const show_skeleton = computed(() => props.lazy && image_state.value === 'loading')
 
 const size_computed = computed(() => {
   switch (props.size) {
@@ -88,13 +91,13 @@ const size_computed = computed(() => {
   }
 })
 
-watchEffect(() => {
-  const next_image_url = avatar_url(static_url, props.user.avatar_file, props.user.avatar_version ?? null) ?? undefined
-
-  if (image_url.value !== next_image_url) {
-    image_url.value = next_image_url
-  }
-})
+watch(image_url, () => {
+  image_state.value = 'loading'
+}, { flush: 'sync' })
+watch(avatar_image, (image) => {
+  if (image && image.getAttribute('src') === image_url.value)
+    image_state.value = image_load_state(image)
+}, { flush: 'post' })
 
 function on_click() {
   if (props.previewable && image_url.value) {
@@ -102,9 +105,10 @@ function on_click() {
   }
 }
 
-function on_error() {
-  error.value = true
-  image_url.value = undefined
+function on_image_settled(event: Event) {
+  const image = avatar_image.value
+  if (image && event.currentTarget === image && image.getAttribute('src') === image_url.value)
+    image_state.value = event.type === 'error' ? 'error' : image_load_state(image)
 }
 </script>
 

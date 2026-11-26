@@ -10,8 +10,9 @@ import { load_database_config } from '@config/loader'
 import { build } from 'esbuild'
 import mysql from 'mysql2/promise'
 import { initialize_cli_environment } from '../../config/lib/environment.mjs'
+import { baseline_migration } from '../migration/baseline'
 import { build_migration_scripts, maintenance_build_options } from '../migration/build'
-import { runtime_migration, sha256, single_ledger_migration } from '../migration/catalog'
+import { runtime_migration, sha256 } from '../migration/catalog'
 import { run_migrations } from '../migration/local'
 import { package_native_runtime } from '../migration/native'
 
@@ -21,6 +22,7 @@ async function verify() {
   if (process.env.NODE_ENV !== 'development')
     throw new Error('Migration verification requires NODE_ENV=development')
   const config = load_database_config()
+  assert(['127.0.0.1', 'localhost'].includes(config.host), 'Migration verification requires loopback MySQL')
   const root_password = process.env.MYSQL_DEV_ROOT_PASSWORD
   assert(root_password, 'MYSQL_DEV_ROOT_PASSWORD is required')
   const root = await mysql.createConnection({ host: config.host, port: config.port, user: 'root', password: root_password, timezone: 'Z' })
@@ -148,6 +150,10 @@ async function verify() {
     await run_migrations(chain_options)
     const [[fresh_legacy]] = await root.query<mysql.RowDataPacket[]>('SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [chain_name, 'schema_migrations'])
     assert.equal(fresh_legacy!.n, 0)
+    await root.query(`SELECT display_key, fallback_key, source_display_key, lqip, redacted_display_key, redacted_fallback_key, redacted_lqip
+      FROM \`${chain_name}\`.content_story_attachments LIMIT 0`)
+    await root.query(`SELECT display_key, fallback_key FROM \`${chain_name}\`.content_image_attempts LIMIT 0`)
+    await root.query(`SELECT attachment_id, adopted FROM \`${chain_name}\`.content_webp_migration_objects LIMIT 0`)
 
     const migration_dir = resolve(process.cwd(), 'migrations')
     const production_name = `${name}_production`
@@ -171,57 +177,23 @@ async function verify() {
     const [[receipts]] = await root.query<mysql.RowDataPacket[]>(`SELECT COUNT(*) n FROM \`${production_name}\`.migration_runs WHERE status='completed'`)
     const production_scripts = JSON.parse(await readFile(production_manifest, 'utf8')).scripts
     assert.equal(Number(receipts!.n), (await readdir(migration_dir)).filter(filename => filename.endsWith('.sql')).length + production_scripts.length)
-    const historical = (await readdir(migration_dir)).filter(file => file.endsWith('.sql') && file < runtime_migration).sort()
-    const retirement = await readFile(resolve(migration_dir, single_ledger_migration), 'utf8')
-    for (const mode of ['legacy', 'dual']) {
-      const upgrade_name = `${name}_${mode}`
-      await root.query(`CREATE DATABASE \`${upgrade_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
-      created.add(upgrade_name)
-      const upgrade: mysql.Connection = await mysql.createConnection({ host: config.host, port: config.port, user: 'root', password: root_password, database: upgrade_name, timezone: 'Z', multipleStatements: true })
-      try {
-        await upgrade.query('SET time_zone = "+00:00"')
-        await upgrade.query('CREATE TABLE schema_migrations(filename VARCHAR(255) COLLATE utf8mb4_bin PRIMARY KEY, checksum CHAR(64) COLLATE utf8mb4_bin NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)')
-        for (const file of historical) {
-          const sql = await readFile(resolve(migration_dir, file), 'utf8')
-          await upgrade.query(sql)
-          await upgrade.execute('INSERT INTO schema_migrations VALUES (?, ?, ?)', [file, sha256(sql), '2026-10-01 01:02:03'])
-        }
-        const upgrade_options = { database_config: { ... config, name: upgrade_name, user: 'root', password: root_password }, maintenance: true, through: single_ledger_migration }
-        if (mode === 'dual') {
-          const metadata_sql = await readFile(resolve(migration_dir, runtime_migration), 'utf8')
-          await upgrade.query(metadata_sql)
-          await upgrade.execute('INSERT INTO schema_migrations VALUES (?, ?, ?)', [runtime_migration, sha256(metadata_sql), '2026-10-01 01:02:03'])
-          const checksum = sha256(await readFile(resolve(migration_dir, historical[0]!), 'utf8'))
-          await upgrade.execute('INSERT INTO migration_runs(filename,checksum,status,phase,attempts,finished_at) VALUES (?,?,\'completed\',\'verify\',7,\'2026-10-02 01:02:03\')', [historical[0], checksum])
-          await upgrade.execute('INSERT INTO migration_runs(filename,checksum,status,phase,attempts) VALUES (?,?,\'failed\',\'apply\',1)', [historical[1], '0'.repeat(64)])
-          await assert.rejects(run_migrations(upgrade_options), /新旧迁移账本冲突/)
-          // The SQL guard independently protects callers using an older runner.
-          await assert.rejects(upgrade.query(retirement), (error: unknown) => (error as { code?: string }).code === 'ER_CHECK_CONSTRAINT_VIOLATED')
-          const [[retained]] = await upgrade.query<mysql.RowDataPacket[]>('SELECT COUNT(*) n FROM schema_migrations')
-          assert.equal(retained!.n, historical.length + 1)
-          await upgrade.query('DROP TEMPORARY TABLE IF EXISTS migration_ledger_guard')
-          await upgrade.execute('DELETE FROM migration_runs WHERE filename=?', [historical[1]])
-        }
-        await run_migrations(upgrade_options)
-        await run_migrations(upgrade_options)
-        const [[legacy_table]] = await upgrade.query<mysql.RowDataPacket[]>('SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?', ['schema_migrations'])
-        assert.equal(legacy_table!.n, 0)
-        const [[imported]] = await upgrade.query<mysql.RowDataPacket[]>('SELECT attempts, DATE_FORMAT(finished_at,\'%Y-%m-%d %H:%i:%s\') completed_at FROM migration_runs WHERE filename=?', [historical[2]])
-        assert.equal(imported!.attempts, 0)
-        assert.equal(imported!.completed_at, '2026-10-01 01:02:03')
-        if (mode === 'dual') {
-          const [[kept]] = await upgrade.query<mysql.RowDataPacket[]>('SELECT attempts FROM migration_runs WHERE filename=?', [historical[0]])
-          assert.equal(kept!.attempts, 7)
-        }
-        // Simulate loss of the final receipt after DROP; explicit retry stays idempotent.
-        await upgrade.execute('UPDATE migration_runs SET status=\'running\',finished_at=NULL WHERE filename=?', [single_ledger_migration])
-        await assert.rejects(run_migrations(upgrade_options), /retry-sql/)
-        await run_migrations({ ... upgrade_options, retry_sql: single_ledger_migration })
-        await run_migrations({ ... upgrade_options, through: undefined })
-      }
-      finally { await upgrade.end() }
-    }
-    console.log('migration_verification_passed: empty/read-only, maintenance, checkpoint, verify-only, concurrent, disconnect, partial-DDL, repeat, production-bundle, full-SQL-chain, legacy-only-upgrade, dual-ledger-upgrade, guarded-drop, lost-drop-receipt')
+
+    // Use the production catalog in the temporary directory to reproduce a failure
+    // after the baseline commits. Earlier SQL receipts must already be durable.
+    const recovery_name = `${name}_recovery`
+    await root.query(`CREATE DATABASE \`${recovery_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
+    created.add(recovery_name)
+    const recovery_sql = '20261113000000_qa_recovery.sql'
+    const recovery_dir = resolve(production, 'migrations')
+    await writeFile(resolve(recovery_dir, recovery_sql), 'INSERT INTO qa_recovery_fixture VALUES (1);\n')
+    const recovery_options = { ... chain_options, dir: recovery_dir, database_config: { ... chain_options.database_config, name: recovery_name } }
+    await assert.rejects(run_migrations(recovery_options), { code: 'execution_failed' })
+    const { preflight } = await run_migrations({ ... recovery_options, preflight: true })
+    assert.deepEqual(preflight?.sql_recovery_required, [recovery_sql])
+    assert.equal(preflight?.ledger.find(row => row.filename === baseline_migration)?.status, 'completed')
+    await root.query(`CREATE TABLE \`${recovery_name}\`.qa_recovery_fixture (id INT PRIMARY KEY)`)
+    await run_migrations({ ... recovery_options, retry_sql: recovery_sql })
+    console.log('migration_verification_passed: empty/read-only, maintenance, checkpoint, verify-only, concurrent, disconnect, partial-DDL, repeat, production-bundle, baseline-schema, baseline-recovery')
   }
   finally {
     if (probe)
@@ -229,7 +201,7 @@ async function verify() {
     // Only this invocation's successfully created database is eligible for cleanup.
     try {
       for (const target of created) {
-        assert([name, `${name}_chain`, `${name}_legacy`, `${name}_dual`, `${name}_production`].includes(target))
+        assert([name, `${name}_chain`, `${name}_production`, `${name}_recovery`].includes(target))
         await root.query(`DROP DATABASE \`${target}\``)
       }
     }

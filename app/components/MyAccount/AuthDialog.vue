@@ -4,6 +4,7 @@
     :pending="auth.locked.value"
     :draggable="false"
     class="w-full max-w-[32rem]"
+    @after-hide="offer_password_setup"
   >
     <template #header>
       <div class="flex items-center gap-3">
@@ -148,6 +149,40 @@
       </Transition>
     </template>
   </MyDialog>
+
+  <MyDialog
+    v-model:visible="password_setup_visible"
+    header="设置密码"
+    :pending="auth.password_setup_pending.value"
+  >
+    <Form
+      id="password-setup-form"
+      :resolver="password_setup_resolver"
+      :initial-values="form_default.profile_set_initial_password"
+      :validate-on-value-update="true"
+      :validate-on-blur="true"
+      @submit="submit_initial_password"
+    >
+      <div class="grid gap-4 pt-2">
+        <MyFormField name="new_password" input-id="password-setup-new" label="新密码" as="Password" autocomplete="new-password" />
+        <MyFormField name="confirm_new_password" input-id="password-setup-confirm" label="确认新密码" as="Password" autocomplete="new-password" no-paste />
+      </div>
+    </Form>
+
+    <template #footer>
+      <Button
+        type="submit"
+        form="password-setup-form"
+        label="设置密码"
+        :loading="auth.password_setup_pending.value"
+        :disabled="auth.password_setup_pending.value"
+      >
+        <template #icon>
+          <MyIcon name="lucide:check" />
+        </template>
+      </Button>
+    </template>
+  </MyDialog>
 </template>
 
 <script setup lang="ts">
@@ -162,10 +197,13 @@ const static_url = useStaticUrl()
 const auth = useAccountAuthFlow()
 const mode = ref<'login' | 'register'>('login')
 const login_method = ref<'password' | 'phone'>('password')
+const password_setup_visible = ref(false)
+let should_offer_password_setup = false
 
 const password_login_resolver = zodResolver(form_schema.login_with_password)
 const phone_login_resolver = zodResolver(form_schema.login_with_phone)
 const register_resolver = zodResolver(form_schema.register)
+const password_setup_resolver = zodResolver(form_schema.profile_set_initial_password)
 
 const password_login_fields = [
   { name: 'username_or_phone', label: '用户名 / 手机号', icon: 'lucide:user', autocomplete: 'username' },
@@ -212,8 +250,26 @@ async function submit_password_login(event: FormSubmitEvent) {
 }
 
 async function submit_phone_login(event: FormSubmitEvent) {
-  if (event.valid && await auth.login_with_phone(form_schema.login_with_phone.parse(event.values))) {
+  if (! event.valid) {
+    return
+  }
+  const result = await auth.login_with_phone(form_schema.login_with_phone.parse(event.values))
+  if (result) {
+    should_offer_password_setup = result.needs_password_setup === true
     visible.value = false
+  }
+}
+
+function offer_password_setup() {
+  if (should_offer_password_setup) {
+    should_offer_password_setup = false
+    password_setup_visible.value = true
+  }
+}
+
+async function submit_initial_password(event: FormSubmitEvent) {
+  if (event.valid && await auth.set_initial_password(form_schema.profile_set_initial_password.parse(event.values))) {
+    password_setup_visible.value = false
   }
 }
 

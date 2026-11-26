@@ -12,7 +12,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function setup() {
+function setup(random = 0.5) {
   let now = 10000
   let visible = true
   const ticks = new Set<() => void>()
@@ -29,6 +29,8 @@ function setup() {
     subscribe,
     now: () => now,
     visible: () => visible,
+    retryable_error: error => error instanceof Error && error.message === 'network',
+    random: () => random,
     start_polling: (tick) => {
       ticks.add(tick)
       return () => ticks.delete(tick)
@@ -194,6 +196,134 @@ describe('queryClient', () => {
     tick(21000)
     await query.refresh()
     expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares three quiet backoff attempts and stops after they fail', async () => {
+    const { client, subscriber, tick, ticks } = setup()
+    const fetcher = vi.fn().mockRejectedValue(new Error('network'))
+    const first = subscriber(fetcher)
+    const second = subscriber()
+    const query = client.acquire<string>('query:1')
+    query.add(first)
+    query.add(second)
+    await query.refresh()
+    expect(ticks.size).toBe(1)
+
+    for (const [index, time] of [15000, 25000, 45000].entries()) {
+      tick(time - 1)
+      tick(time, false)
+      expect(fetcher).toHaveBeenCalledTimes(index + 1)
+      tick(time)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(fetcher).toHaveBeenCalledTimes(index + 2)
+    }
+
+    expect(ticks.size).toBe(0)
+    tick(100000)
+    expect(fetcher).toHaveBeenCalledTimes(4)
+    expect(second.fetcher).not.toHaveBeenCalled()
+    for (const consumer of [first, second]) {
+      expect(consumer.error).toHaveBeenCalledOnce()
+      expect(vi.mocked(consumer.loading).mock.calls.filter(([loading]) => loading)).toEqual([[true]])
+    }
+  })
+
+  it('applies jitter, joins a manual retry and resets the backoff after success', async () => {
+    const { client, subscriber, tick, ticks } = setup(0)
+    const request = deferred<string>()
+    const fetcher = vi.fn().mockRejectedValueOnce(new Error('network')).mockReturnValueOnce(request.promise)
+    const consumer = subscriber(fetcher)
+    const query = client.acquire<string>('query:1')
+    query.add(consumer)
+    await query.refresh()
+
+    tick(13999)
+    expect(fetcher).toHaveBeenCalledOnce()
+    tick(14000)
+    tick(24000)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    const manual = query.refresh()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(consumer.loading).toHaveBeenLastCalledWith(true)
+    request.resolve('recovered')
+    await manual
+    expect(consumer.data).toHaveBeenCalledExactlyOnceWith('recovered')
+    expect(ticks.size).toBe(0)
+
+    fetcher.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce('new recovery')
+    await query.refresh()
+    tick(27999)
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    tick(28000)
+    expect(fetcher).toHaveBeenCalledTimes(4)
+  })
+
+  it.each([{ polling_interval: 0 }, { retry_on_error: false }])('honors a shared subscriber disabling backoff with %o', async (options) => {
+    const { client, subscriber, tick, ticks } = setup()
+    const fetcher = vi.fn().mockRejectedValue(new Error('network'))
+    const query = client.acquire<string>('query:1')
+    query.add(subscriber(fetcher))
+    query.add({ ... subscriber(), ... options })
+    await query.refresh()
+    tick(45000)
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(ticks.size).toBe(0)
+  })
+
+  it('lets ordinary polling take over a scheduled retry and disposes its clock with the query', async () => {
+    const { client, subscriber, tick, ticks } = setup()
+    const fetcher = vi.fn().mockRejectedValue(new Error('network'))
+    const query = client.acquire<string>('query:1')
+    const drop = query.add(subscriber(fetcher))
+    await query.refresh()
+    const remove_polling = query.add(subscriber(fetcher, 30000))
+    tick(15000)
+    expect(fetcher).toHaveBeenCalledOnce()
+    tick(40000)
+    await query.refresh()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+
+    remove_polling()
+    await query.refresh()
+    expect(ticks.size).toBe(1)
+    drop()
+    expect(ticks.size).toBe(0)
+    tick(90000)
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
+  it('delivers a terminal error reached during a quiet retry', async () => {
+    const { client, subscriber, tick, ticks } = setup()
+    const forbidden = new Error('forbidden')
+    const consumer = subscriber(vi.fn().mockRejectedValueOnce(new Error('network')).mockRejectedValueOnce(forbidden))
+    const query = client.acquire<string>('query:1')
+    query.add(consumer)
+    await query.refresh()
+    tick(15000)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(consumer.error).toHaveBeenCalledTimes(2)
+    expect(consumer.error).toHaveBeenLastCalledWith({ error: forbidden, notified: false })
+    expect(ticks.size).toBe(0)
+  })
+
+  it('does not schedule a retry from a failure superseded by a successful refresh', async () => {
+    const { client, subscriber, tick, ticks } = setup()
+    const stale = deferred<string>()
+    const fetcher = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValueOnce('current')
+    const consumer = subscriber(fetcher)
+    const query = client.acquire<string>('query:1', 'latest')
+    query.add(consumer)
+    const old_request = query.refresh()
+    await query.refresh()
+    stale.reject(new Error('network'))
+    await old_request
+    tick(90000)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(consumer.data).toHaveBeenCalledExactlyOnceWith('current')
+    expect(consumer.error).not.toHaveBeenCalled()
+    expect(ticks.size).toBe(0)
   })
 
   it('cleans subscriptions and polling and suppresses late results after the last subscriber leaves', async () => {

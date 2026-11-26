@@ -1,9 +1,9 @@
 import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { WorkspaceListRow } from '~/features/content/attachments/workspace-model'
 import { expect, it } from 'vitest'
-import { attachment_privacy_actions, attachment_summary_rows, attachment_summary_tree } from '~/features/content/attachments/list-model'
+import { attachment_privacy_actions, attachment_summary_rows, attachment_summary_tree, attachment_upload_privacy } from '~/features/content/attachments/list-model'
 import { workspace_capabilities } from '~/features/content/attachments/workspace-model'
-import { attachment_action_item, attachment_selection_edges, guard_attachment_selection, normalize_attachment_selection, select_attachment_row } from './list-interaction'
+import { attachment_action_item, attachment_add_menu_items, attachment_selection_edges, guard_attachment_selection, normalize_attachment_selection, select_attachment_row } from './list-interaction'
 
 const rows: WorkspaceListRow[] = [
   { key: 'folder', path: 'docs', name: 'docs', parent_id: 1, depth: 0, node: { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v' } },
@@ -11,6 +11,23 @@ const rows: WorkspaceListRow[] = [
   { key: 'upload', path: 'pending.txt', name: 'pending.txt', parent_id: 1, depth: 0 },
 ]
 const plain = { ctrlKey: false, metaKey: false, shiftKey: false }
+
+it('shares add-menu labels and disables only upload actions while busy', () => {
+  const calls: string[] = []
+  const items = attachment_add_menu_items({
+    upload_busy: true,
+    upload: () => calls.push('upload'),
+    upload_folder: () => calls.push('upload_folder'),
+    create_folder: () => calls.push('create_folder'),
+  })
+  expect(items.map(item => [item.label, item.icon_name, item.disabled])).toEqual([
+    ['上传', 'lucide:paperclip', true],
+    ['上传文件夹', 'lucide:paperclip', true],
+    ['新建文件夹', 'lucide:folder-plus', undefined],
+  ])
+  items[2]!.command?.({} as never)
+  expect(calls).toEqual(['create_folder'])
+})
 
 it('does not mix local preparations with server upload selections', () => {
   const preparation: WorkspaceListRow = { key: 'preparing:local', parent_id: 1, name: 'large.bin', path: 'large.bin', depth: 0,
@@ -53,6 +70,15 @@ it('keeps explicit empty folders and malformed paths visible instead of losing t
   expect(tree).toHaveLength(4)
 })
 
+it('marks a pending upload next to its X.good file as a public 删减版, even inside a private folder', () => {
+  const privacy = attachment_upload_privacy(['docs/Photo.PNG.good', 'secret.good/a.png.good', 'secret.good/a.png', 'x.good.good'])
+  expect(privacy('docs/photo.png')).toEqual({ is_private: false, is_redaction: true })
+  expect(privacy('secret.good/a.png')).toEqual({ is_private: false, is_redaction: true })
+  expect(privacy('secret.good/b.png')).toEqual({ is_private: true, is_redaction: false })
+  expect(privacy('x.good')).toEqual({ is_private: true, is_redaction: false })
+  expect(privacy('docs/other.png')).toEqual({ is_private: false, is_redaction: false })
+})
+
 it('projects conflict summaries onto the real list without inventing upload state or losing private metadata', () => {
   const private_file = { file_name: 'docs/photo.png.good', mime_type: 'image/png', file_size: 32, version: 'v1', is_image: true, is_private: true, has_redacted: true, url: null }
   const node = { id: 10, parent_id: 2, name: 'photo.png.good', path: private_file.file_name, kind: 'file' as const, version: 'v1', attachment: private_file }
@@ -81,17 +107,18 @@ it('plans shared file/folder privacy states and excludes unchanged or denied tar
     { private: false, targets: [private_file], disabled: false, reasons: [] },
   ])
   expect(attachment_privacy_actions([private_file], allowed)).toEqual([actions[1]])
-  expect(attachment_privacy_actions([public_file, rows[3]!], allowed)[1]).toMatchObject({ disabled: true, targets: [], reasons: ['无机密附件'] })
+  expect(attachment_privacy_actions([public_file, rows[3]!], allowed)[1]).toMatchObject({ disabled: true, targets: [], reasons: ['没有自身机密标记'] })
   expect(attachment_privacy_actions([public_file, rows[0]!], allowed)[0]).toEqual({ private: true, targets: [public_file, rows[0]!], disabled: false, reasons: [] })
   expect(attachment_privacy_actions([public_file, private_file], () => ({ private: false, reasons: { private: ['没有机密附件权限'] } })).every(action => action.disabled && action.reasons.includes('没有机密附件权限'))).toBe(true)
 })
 
-it('keeps inherited privacy immutable at the leaf while allowing independent files in the same batch', () => {
+it('allows adding and removing a file’s own marker regardless of inherited privacy', () => {
   const inherited = { ... rows[3]!, path: 'folder.good/sub/b.txt', node: { ... rows[3]!.node!, attachment: { is_private: true } } } as WorkspaceListRow
-  const standalone = { ... rows[3]!, key: 'own', path: 'b.txt.good', node: { ... rows[3]!.node!, attachment: { is_private: true } } } as WorkspaceListRow
+  const declared = { ... inherited, key: 'own', path: `${inherited.path}.good` }
   const capabilities = () => ({ private: true, reasons: { private: [] } })
-  expect(attachment_privacy_actions([inherited], capabilities)).toEqual([{ private: false, disabled: true, targets: [], reasons: ['机密状态由父目录继承，不能单独取消'] }])
-  expect(attachment_privacy_actions([inherited, standalone], capabilities)[1]).toEqual({ private: false, disabled: false, targets: [standalone], reasons: [] })
+  expect(attachment_privacy_actions([inherited], capabilities)).toEqual([{ private: true, disabled: false, targets: [inherited], reasons: [] }])
+  expect(attachment_privacy_actions([declared], capabilities)).toEqual([{ private: false, disabled: false, targets: [declared], reasons: [] }])
+  expect(attachment_privacy_actions([inherited, declared], capabilities).map(action => action.targets)).toEqual([[inherited], [declared]])
 })
 
 it('reports only applicable, unique reasons when no privacy target is eligible', () => {
@@ -100,12 +127,12 @@ it('reports only applicable, unique reasons when no privacy target is eligible',
   const private_folder = { ... rows[0]!, path: 'docs.good', name: 'docs.good' }
   expect(attachment_privacy_actions([private_folder], capabilities)).toEqual([{ private: false, targets: [private_folder], disabled: false, reasons: [] }])
   const inherited_folder = { ... rows[0]!, path: 'docs.good/sub', name: 'sub' }
-  expect(attachment_privacy_actions([inherited_folder], capabilities)).toEqual([{ private: false, targets: [], disabled: true, reasons: ['机密状态由父目录继承，不能单独取消'] }])
+  expect(attachment_privacy_actions([inherited_folder], capabilities)).toEqual([{ private: true, targets: [inherited_folder], disabled: false, reasons: [] }])
   const busy = { ... rows[2]!, session: { id: 'pending' } } as WorkspaceListRow
   expect(attachment_privacy_actions([rows[0]!, busy], capabilities)[0]).toMatchObject({ disabled: false, targets: [rows[0]!], reasons: [] })
   const busy_folder = { ... rows[0]!, session: { id: 'pending' } } as WorkspaceListRow
   expect(attachment_privacy_actions([busy_folder, busy], capabilities)[0]).toMatchObject({ disabled: true, targets: [], reasons: ['上传会话尚未结束'] })
-  expect(attachment_privacy_actions([rows[0]!, rows[2]!], capabilities)[1]).toMatchObject({ disabled: true, targets: [], reasons: ['无机密附件'] })
+  expect(attachment_privacy_actions([rows[0]!, rows[2]!], capabilities)[1]).toMatchObject({ disabled: true, targets: [], reasons: ['没有自身机密标记'] })
   expect(attachment_privacy_actions([busy_folder, busy, rows[3]!], capabilities)[0]).toMatchObject({ disabled: false, targets: [rows[3]!], reasons: [] })
 })
 
@@ -141,12 +168,16 @@ it('joins adjacent selected rows into the original rounded selection block', () 
   expect(rows.map((_, i) => attachment_selection_edges(rows, i, selected))).toEqual(['both', 'top', 'none', 'bottom', 'both'])
 })
 
-it('limits selection without replacing ordinary control toggles, ranges or marquee selection', () => {
+it('replaces the current single selection on Ctrl, Meta or Shift selection of another row', () => {
   const current = new Set(['b.txt'])
-  expect([... select_attachment_row(rows, current, 'b.txt', rows[3]!, { ... plain, ctrlKey: true }, 1)]).toEqual(['b.txt'])
-  expect([... select_attachment_row(rows, current, 'b.txt', rows[3]!, { ... plain, shiftKey: true }, 1)]).toEqual(['b.txt'])
+  for (const modifier of ['ctrlKey', 'metaKey', 'shiftKey'] as const)
+    expect([... select_attachment_row(rows, current, 'b.txt', rows[3]!, { ... plain, [modifier]: true }, 1)]).toEqual(['c.txt'])
   expect([... select_attachment_row(rows, current, 'b.txt', rows[2]!, { ... plain, ctrlKey: true }, 1)]).toEqual([])
   expect([... select_attachment_row(rows, new Set(), null, rows[3]!, { ... plain, ctrlKey: true }, 1)]).toEqual(['c.txt'])
+})
+
+it('keeps the last valid single selection when the marquee covers multiple rows', () => {
+  const current = new Set(['b.txt'])
   expect([... guard_attachment_selection(current, normalize_attachment_selection(rows, new Set(['b.txt', 'c.txt'])), 1)]).toEqual(['b.txt'])
   expect([... guard_attachment_selection(current, new Set(), 1)]).toEqual([])
   expect([... guard_attachment_selection(current, new Set(['c.txt']), 1)]).toEqual(['c.txt'])

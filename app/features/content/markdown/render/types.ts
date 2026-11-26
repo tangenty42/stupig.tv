@@ -1,5 +1,6 @@
 import type { ContentStoryAttachment, ContentStorySummary } from '@shared/types/content'
 import type MarkdownIt from 'markdown-it'
+import type { AttachmentBrand } from './attachment-brand'
 
 export interface RenderEnvironment {
   images: string[]
@@ -8,17 +9,8 @@ export interface RenderEnvironment {
 export interface FileCardData {
   icon: string
   size: string
-  /** Set when the link has no label; the card then renders the file name itself. */
-  name: string | null
-  /** Private attachment: amber card plus a 机密附件 tag. */
-  encrypted?: boolean
-  /** Renders the available 删减版 to a viewer without normal-version access. */
-  abridged?: boolean
-}
-
-export interface StoryCardMeta {
-  /** Dead references render a muted placeholder span instead of a link. */
-  dead: boolean
+  name: string
+  privacy?: AttachmentBrand
 }
 
 /**
@@ -31,6 +23,8 @@ export interface StoryMarkdownOptions {
   attachments: () => ContentStoryAttachment[]
   /** Workspace directory identities, including directories without files. */
   folders?: () => readonly string[]
+  /** Permission to view private folders, which have no readable file URL. */
+  can_read_private?: () => boolean
   /** Known stories so `[](content://title)` references render as story cards. */
   stories: () => ContentStorySummary[]
   static_url: (path: string) => string
@@ -48,6 +42,8 @@ export interface StoryMarkdownContext {
   options: StoryMarkdownOptions
   /** > 0 while a nested render (html wrapper re-rendering inner markdown) runs. */
   anchor_render_depth: number
+  /** Number of enclosing carousel bodies while parsing and rendering their content. */
+  carousel_render_depth: number
 }
 
 export type StoryMarkdownPlugin = (md: MarkdownIt, ctx: StoryMarkdownContext) => void

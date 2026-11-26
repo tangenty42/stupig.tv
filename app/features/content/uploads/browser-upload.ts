@@ -2,6 +2,7 @@ import type { ContentUploadPartGrant, ContentUploadSession } from '@shared/types
 import { md5 } from '@noble/hashes/legacy.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { settings } from '@shared/settings'
+import { upload_file_read_error } from './picks'
 
 export interface UploadSessionApi {
   resume: () => Promise<ContentUploadSession>
@@ -41,7 +42,9 @@ export async function verify_upload_file(file: Blob, state: Pick<ContentUploadSe
   for (const part of state.parts) {
     signal?.throwIfAborted()
     const start = (part.part_number - 1) * part_size
-    const bytes = await file.slice(start, start + part.size).arrayBuffer()
+    const bytes = await file.slice(start, start + part.size).arrayBuffer().catch((error: unknown) => {
+      throw upload_file_read_error(error) ?? error
+    })
     signal?.throwIfAborted()
     if (bytesToHex(md5(new Uint8Array(bytes))) !== part.etag.toLowerCase())
       throw file_mismatch()
@@ -183,9 +186,17 @@ export function create_browser_upload(api: UploadSessionApi, progress?: (value: 
       if (signal.aborted)
         throw new DOMException('上传已暂停，可重新选择原文件继续', 'AbortError')
       // SDK errors can contain request URLs/checkpoints. Keep them out of UI logs.
-      if (error instanceof Error && error.message === '请选择内容一致的原文件')
-        throw error
-      throw new Error('上传未完成，可稍后继续或重新查询会话状态')
+      if (error instanceof Error) {
+        if ('code' in error && (error.code === 'UPLOAD_FILE_MISMATCH' || error.code === 'UPLOAD_FILE_UNREADABLE'))
+          throw error
+        // ali-oss annotates a failed part read with its part number and DOM exception name.
+        if ('partNum' in error) {
+          const read_error = upload_file_read_error(error)
+          if (read_error)
+            throw read_error
+        }
+      }
+      throw new Error('上传未完成')
     }
     finally {
       active = null

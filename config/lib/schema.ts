@@ -11,7 +11,6 @@ export const settings_schema = z.strictObject({
       jwt: z.strictObject({ expiresInDays: positive_integer, renewBeforeDays: positive_integer }),
       session: z.strictObject({ maxAgeDays: positive_integer, maxTokenGenerations: positive_integer }),
       cookie: z.strictObject({ maxAgeDays: positive_integer, tokenName: identifier, userName: identifier }),
-      bcryptRounds: z.number().int().min(4).max(31),
       syncPollIntervalSeconds: positive_integer,
     }),
     otp: z.strictObject({ expiresMinutes: positive_integer, tier1: otp_tier, tier2: otp_tier }),
@@ -25,11 +24,13 @@ export const settings_schema = z.strictObject({
         eventDeduplicationLimit: z.number().int().positive(),
         resourceGatherDelayMs: z.number().int().positive(),
         reconnectDelayMs: z.number().int().positive(),
+        reconnectMaxDelayMs: z.number().int().positive(),
+        reconnectNoticeDelayMs: z.number().int().positive(),
         connectTimeoutMs: z.number().int().positive(),
       }),
     }),
     online: z.strictObject({ timeoutSeconds: positive_integer, pingIdleIntervalSeconds: positive_integer, pollIntervalSeconds: positive_integer }),
-    admin: z.strictObject({ pollIntervalSeconds: positive_integer }),
+    admin: z.strictObject({ pollIntervalSeconds: positive_integer, statusPollIntervalSeconds: positive_integer }),
     avatar: z.strictObject({ maxSizeMb: positive_integer }),
     content: z.strictObject({
       story: z.strictObject({
@@ -62,9 +63,8 @@ export const settings_schema = z.strictObject({
       imageEditor: z.strictObject({ maxPixels: positive_integer, maxActions: positive_integer, maxStrokePoints: positive_integer }),
       image: z.strictObject({
         lqipMaxBytes: positive_integer.max(8192), uploadMaxBytes: positive_integer.max(20971520),
-        uploadMaxDimension: positive_integer.max(4096), uploadMaxPixels: positive_integer.max(9437184),
+        uploadMaxDimension: positive_integer.max(8192), uploadMaxPixels: positive_integer.max(24_000_000),
       }),
-      encrypt: z.strictObject({ maxSizeMb: positive_integer }),
     }),
   }),
   integrations: z.strictObject({
@@ -79,7 +79,6 @@ export const settings_schema = z.strictObject({
     [auth.session.maxAgeDays > auth.jwt.renewBeforeDays, ['app', 'auth', 'session', 'maxAgeDays']],
     [content.workspace.heartbeatSeconds < content.workspace.leaseSeconds, ['app', 'content', 'workspace', 'heartbeatSeconds']],
     [content.upload.maxSizeMb <= content.upload.partSizeMb * 10000, ['app', 'content', 'upload', 'maxSizeMb']],
-    [content.encrypt.maxSizeMb <= content.upload.maxSizeMb, ['app', 'content', 'encrypt', 'maxSizeMb']],
   ] as const
   for (const [valid, path] of checks) {
     if (! valid) {
@@ -215,13 +214,6 @@ export const aliyun_oss_config_schema = z.object({
   copyPartSizeMb: positive_integer.min(1).max(5120).default(64),
   uploadRoleArn: z.string().regex(/^acs:ram::\d+:role\/[\w/-]+$/).nullable().default(null),
 })
-export const image_processing_options_schema = z.strictObject({
-  maxInputBytes: z.number().int().positive(), maxPixels: z.number().int().positive(),
-  avifQuality: z.number().int().min(1).max(100), avifEffort: z.number().int().min(0).max(9),
-  jpegQuality: z.number().int().min(1).max(100), jpegBackground: z.string().regex(/^#[0-9a-f]{6}$/i),
-  lqipMaxDimension: z.number().int().positive(), lqipQuality: z.number().int().min(1).max(100),
-  timeoutSeconds: z.number().int().positive(),
-})
 export const webp_processing_options_schema = z.strictObject({
   maxInputBytes: z.number().int().positive(), maxPixels: z.number().int().positive(),
   webpQuality: z.number().int().min(1).max(100), webpEffort: z.number().int().min(0).max(6),
@@ -231,11 +223,9 @@ export const webp_processing_options_schema = z.strictObject({
 })
 const content_images_config_schema = z.object({
   enabled: boolean_value, sweepIntervalSeconds: positive_integer, concurrency: positive_integer.max(4), scanLimit: positive_integer.max(100),
-  leaseSeconds: positive_integer.max(600), heartbeatSeconds: positive_integer, profileVersion: positive_integer,
-  profile: image_processing_options_schema,
+  leaseSeconds: positive_integer.max(600), heartbeatSeconds: positive_integer,
   cloud: z.object({ enabled: boolean_value, profileVersion: positive_integer, profile: webp_processing_options_schema }),
 }).refine(value => value.heartbeatSeconds < value.leaseSeconds, 'Image heartbeat must be shorter than its lease')
-  .refine(value => ! value.cloud?.enabled || value.cloud.profileVersion > value.profileVersion, 'Cloud encoding must use a newer profile version')
 
 export const deployment_config_schema = z.object({
   db: database_config_schema,

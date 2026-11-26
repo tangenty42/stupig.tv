@@ -2,9 +2,7 @@ import type { StoryMarkdownContext, StoryMarkdownOptions } from './types'
 import { create_content_markdown_parser } from '@shared/content-markdown-syntax'
 import { alerts_plugin } from './alerts'
 import { carousel_plugin } from './carousel'
-import { chips_plugin } from './chips'
 import { code_blocks_plugin } from './code-blocks'
-import { folder_images_plugin } from './folders'
 import { html_wrappers_plugin } from './html-wrappers'
 import { images_plugin } from './images'
 import { link_cards_plugin } from './link-cards'
@@ -20,16 +18,13 @@ import { source_anchor_plugin } from './source-anchor'
  */
 export function create_story_markdown(options: StoryMarkdownOptions) {
   const md = create_content_markdown_parser()
+  md.renderer.rules.softbreak = () => ' '
 
-  const ctx: StoryMarkdownContext = { options, anchor_render_depth: 0 }
+  const ctx: StoryMarkdownContext = { options, anchor_render_depth: 0, carousel_render_depth: 0 }
   source_anchor_plugin(md, ctx)
   alerts_plugin(md, ctx)
   carousel_plugin(md, ctx)
-  // Must follow carousel_plugin: its core rule is anchored before the carousel
-  // rule so expanded images join the carousel run like hand-written ones.
-  folder_images_plugin(md, ctx)
   images_plugin(md, ctx)
-  chips_plugin(md, ctx)
   link_cards_plugin(md, ctx)
   code_blocks_plugin(md, ctx)
   private_blocks_plugin(md, ctx)

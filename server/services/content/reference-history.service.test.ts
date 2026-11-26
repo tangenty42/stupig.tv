@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+interface AttachmentRow {
+  id: number
+  file_name: string
+  is_folder: number
+  object_key: string | null
+  version: string
+  is_private?: number
+}
+
 const state = vi.hoisted(() => ({
   story: { id: 1, title: '本文', markdown: '---\ntitle: 本文\ntime: 2026/10/14\ncover: att://old.png\n---\n[](att://old.png)', revision: 7, namespace_revision: 0, namespace_floor: 0, cover: 'old.png', cover_version: 'v1' },
-  nodes: [{ id: 11, file_name: 'old.png', is_folder: 0, object_key: 'key', version: 'v1' }],
+  nodes: [{ id: 11, file_name: 'old.png', is_folder: 0, object_key: 'key', version: 'v1' }] as AttachmentRow[],
   journals: [] as { scope_id: number, revision: number, changes: unknown }[],
   other_stories: [] as { id: number, markdown: string }[],
   title_revision: 0,
@@ -12,6 +21,7 @@ const state = vi.hoisted(() => ({
   released: 0,
   events: [] as unknown[],
   writes: [] as string[],
+  updates: [] as [number, number][],
   locks: [] as string[],
 }))
 
@@ -39,6 +49,10 @@ vi.mock('@server/lib/db', () => {
           ? changes.map(change => ({ revision: row.revision, node_id: change.node_id, from_ref: ref(change.from), to_ref: ref(change.to), is_folder: Number(change.is_folder ?? false) }))
           : [{ revision: row.revision, node_id: 0, from_ref: null, to_ref: null, is_folder: 0 }]
       })]
+    }
+    if (sql.startsWith('UPDATE content_story_attachments SET is_private')) {
+      state.updates.push([Number(params[0]), Number(params[1])])
+      return [{ affectedRows: 1 }]
     }
     if (sql.includes('FROM content_story_attachments'))
       return [structuredClone(state.nodes)]
@@ -154,30 +168,30 @@ describe('transactional reference history', () => {
     expect(await finish_namespace_change(connection, before)).toEqual({ attachments: true })
   })
 
-  it('does not refresh a confidential cover when a separate public namesake appears', async () => {
+  it('refreshes a confidential cover when its 删减版 appears or disappears', async () => {
     state.story.cover = 'old.png.good'
     state.nodes[0]!.file_name = 'old.png.good'
     Object.assign(state.nodes[0]!, { is_private: 1 })
     const connection = await db.getConnection()
     const before = await begin_namespace_change(connection, 1)
     state.nodes.push({ id: 12, file_name: 'old.png', is_folder: 0, object_key: 'public-copy', version: 'v2' })
-    expect(await finish_namespace_change(connection, before)).toEqual({ attachments: true })
+    expect(await finish_namespace_change(connection, before)).toEqual({ attachments: true, story: true, stories: true })
+    const added = await begin_namespace_change(connection, 1)
+    state.nodes.pop()
+    expect(await finish_namespace_change(connection, added)).toEqual({ attachments: true, story: true, stories: true })
     expect(state.writes.some(sql => sql.startsWith('UPDATE content_stories SET markdown'))).toBe(false)
   })
 
-  it('refreshes a confidential cover when its own redaction is added or removed', async () => {
-    state.story.cover = 'old.png.good'
-    state.nodes[0]!.file_name = 'old.png.good'
-    Object.assign(state.nodes[0]!, { is_private: 1 })
-    state.nodes.push({ id: 12, file_name: 'old.png', is_folder: 0, object_key: 'public-copy', version: 'v2' })
+  it('makes a 删减版 inside a private folder public', async () => {
+    state.nodes = [
+      { id: 11, file_name: 'a.good', is_folder: 1, object_key: null, version: '', is_private: 1 },
+      { id: 12, file_name: 'a.good/b.jpg', is_folder: 0, object_key: 'twin', version: 'v1', is_private: 1 },
+      { id: 13, file_name: 'a.good/b.jpg.good', is_folder: 0, object_key: 'source', version: 'v1', is_private: 1 },
+    ]
     const connection = await db.getConnection()
-    const before = await begin_namespace_change(connection, 1)
-    Object.assign(state.nodes[0]!, { redacted_display_key: 'own-webp', redacted_fallback_key: 'own-jpeg', redacted_revision: 1, node_revision: 1 })
-    expect(await finish_namespace_change(connection, before)).toEqual({ attachments: true, story: true, stories: true })
-    const redacted = await begin_namespace_change(connection, 1)
-    Object.assign(state.nodes[0]!, { redacted_display_key: null, redacted_fallback_key: null, redacted_revision: 2, node_revision: 2 })
-    expect(await finish_namespace_change(connection, redacted)).toEqual({ attachments: true, story: true, stories: true })
-    expect(state.writes.some(sql => sql.startsWith('UPDATE content_stories SET markdown'))).toBe(false)
+    await finish_namespace_change(connection, await begin_namespace_change(connection, 1))
+    expect(state.writes.filter(sql => sql.startsWith('UPDATE content_story_attachments SET is_private'))).toHaveLength(1)
+    expect(state.updates).toEqual([[0, 12]])
   })
 
   it('atomically journals the final rename, rewrites cover/body and leaves body revision unchanged', async () => {

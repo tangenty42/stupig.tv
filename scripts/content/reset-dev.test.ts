@@ -22,7 +22,7 @@ describe('development Content reset boundary', () => {
   })
 
   it('includes every owned image role without treating provenance as an owned file', () => {
-    expect(reset_attachment_objects({ storage_provider: 'aliyun', object_key: 'content/a.webp', display_key: 'content/a.webp', fallback_key: 'content/a.jpg', original_key: 'content/raw.png' })).toEqual([
+    expect(reset_attachment_objects({ object_key: 'content/a.webp', display_key: 'content/a.webp', fallback_key: 'content/a.jpg', original_key: 'content/raw.png' })).toEqual([
       { key: 'content/a.webp', location: 'aliyun' }, { key: 'content/raw.png', location: 'aliyun' }, { key: 'content/a.jpg', location: 'aliyun' },
     ])
   })
@@ -63,13 +63,9 @@ describe('development Content reset boundary', () => {
     expect(connection.end).toHaveBeenCalledTimes(1)
     expect(connection.beginTransaction).not.toHaveBeenCalled()
     expect(boundary.writeFile).not.toHaveBeenCalled()
-    connection.execute.mockImplementation(async (sql: string) => [sql.includes('SELECT object_key') ? [{ object_key: 'content/att/private', storage_provider: 'legacy', storage_bucket: 'private' }] : []])
-    await expect(reset_development_content(true)).rejects.toThrow('Tracked objects require the legacy private bucket')
-    expect(connection.end).toHaveBeenCalledTimes(2)
-    expect(connection.beginTransaction).not.toHaveBeenCalled()
     boundary.load_config.mockReturnValue(config('dev'))
     await expect(reset_development_content(true)).rejects.toThrow('Development and production buckets must be distinct')
-    expect(boundary.createConnection).toHaveBeenCalledTimes(2)
+    expect(boundary.createConnection).toHaveBeenCalledTimes(1)
   })
 
   it('checks all configured buckets while allowing the retired private bucket to be absent', () => {

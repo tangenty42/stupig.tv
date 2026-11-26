@@ -1,5 +1,5 @@
 <template>
-  <MyHeightSection tag="section" class="section-card-collapse">
+  <MyHeightSection v-if="active" tag="section" class="section-card-collapse">
     <div class="mb-6 flex flex-wrap items-center justify-between gap-2">
       <h2>
         登录记录
@@ -14,15 +14,18 @@
         aria-label="登录记录筛选"
       >
         <template #option="{ option }">
-          <span class="flex items-center gap-1.5">
-            <MyIcon :name="option.icon" />
-            <span>{{ option.label }}</span>
+          <span>
+            <MyIcon :name="option.icon" class="me-1.5" />{{ option.label }}
           </span>
         </template>
       </SelectButton>
     </div>
 
-    <div class="mt-4 columns-1 gap-4 md:columns-2">
+    <div v-if="! sessions && loading" class="my-4 flex justify-center text-slate-500 dark:text-slate-400" role="status" aria-label="正在加载登录记录">
+      <MyIcon name="lucide:loader-circle" size="2rem" class="animate-spin" />
+    </div>
+    <MyContentListLoadError v-else-if="! sessions && load_failed" class="py-8" @retry="refresh" />
+    <div v-else-if="visible_sessions.length" class="mt-4 columns-1 gap-4 md:columns-2">
       <div
         v-for="record in visible_sessions"
         :key="record.id"
@@ -41,7 +44,7 @@
                 {{ session_status_text(record) }}
               </MyBadge>
               <Button
-                v-if="! record.is_current"
+                v-if="! record.is_current && profile.editable"
                 size="small"
                 severity="secondary"
                 text
@@ -71,7 +74,7 @@
       </div>
     </div>
 
-    <div v-if="! visible_sessions.length" class="my-4 w-full text-center text-slate-500 dark:text-slate-400">
+    <div v-else-if="sessions" class="my-4 w-full text-center text-slate-500 dark:text-slate-400">
       ？！暂无记录！？
     </div>
   </MyHeightSection>
@@ -84,14 +87,14 @@ import { useAccountSessions } from '~/features/account/profile'
 
 const props = defineProps<{
   profile: Profile
-  isOperatingOther: boolean
+  isViewingOther: boolean
 }>()
 const { confirm_require } = useMyConfirm()
 const time_context = useDisplayTimeContext()
 const date_now = useReactiveDateNow()
 const profile = toRef(props, 'profile')
-const is_operating_other = toRef(props, 'isOperatingOther')
-const { sessions, pending_id, ready, force_logout } = useAccountSessions(profile, is_operating_other)
+const is_viewing_other = toRef(props, 'isViewingOther')
+const { sessions, active, loading, load_failed, pending_id, ready, refresh, force_logout } = useAccountSessions(profile, is_viewing_other)
 await ready
 
 type SessionFilter = 'valid' | 'expired'

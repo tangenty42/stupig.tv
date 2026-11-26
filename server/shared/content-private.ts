@@ -1,6 +1,10 @@
 import type StateBlock from 'markdown-it/lib/rules_block/state_block.mjs'
 import type StateInline from 'markdown-it/lib/rules_inline/state_inline.mjs'
+import type { ContentMarkdownSource } from './content-markdown-source'
 import MarkdownIt from 'markdown-it'
+import { content_carousel_plugin, read_content_carousel_open } from './content-carousel'
+import { content_markdown_fragment, content_markdown_source, content_markdown_token_body } from './content-markdown-source'
+import { content_placeholder, CONTENT_PLACEHOLDER_TEXT } from './content-placeholder'
 
 // Private (机密) content: a `<good>…</good>` element — block or inline —
 // together with its children is visible only to users holding the
@@ -17,10 +21,16 @@ const private_open_pattern = /^<good\s*>/i
 
 /** Finds the matching `</good>` from `from` on, counting `<good>` nesting. */
 function find_private_close(src: string, from: number) {
-  const boundary = /<good\b[^>]*>|<\/good\s*>/gi
+  const boundary = /<carousel\b|<good\b[^>]*>|<\/good\s*>/gi
   boundary.lastIndex = from
   let depth = 1
   for (let match = boundary.exec(src); match !== null; match = boundary.exec(src)) {
+    if (/^<carousel\b/i.test(match[0])) {
+      const open = read_content_carousel_open(src, match.index)
+      if (open)
+        boundary.lastIndex = open.end
+      continue
+    }
     if (match[0].startsWith('</')) {
       depth --
     }
@@ -71,6 +81,7 @@ function content_private_block(state: StateBlock, startLine: number, endLine: nu
   // The exact element source (open through close), so source-level stripping
   // can locate the range without absorbing trailing text.
   token.markup = state.src.slice(line_start, close.end)
+  token.meta = { body_start: open_end, body_end: close.start, open_length: open[0].length }
   // Trailing text after the close tag is ordinary content, emitted as its own
   // paragraph — only the element's children belong inside the card.
   const trailing = state.src.slice(close.end, state.eMarks[last_line]!).trim()
@@ -106,6 +117,7 @@ function content_private_inline(state: StateInline, silent: boolean) {
     token.content = state.src.slice(open_end, close.start)
     // The full matched source, so source-level stripping can locate it.
     token.markup = state.src.slice(start, close.end)
+    token.meta = { body_start: open_end, body_end: close.start, open_length: open[0].length }
   }
   state.pos = close.end
   return true
@@ -117,21 +129,31 @@ function content_private_inline(state: StateInline, silent: boolean) {
  * rule falls back to markdown-it's token renderer, so server code must never
  * render with this plugin alone.
  */
-export function content_private_plugin(md: MarkdownIt) {
-  md.block.ruler.before('html_block', 'content_private_block', content_private_block, { alt: [] })
+export function content_private_plugin(md: MarkdownIt, interrupt_paragraph: boolean | (() => boolean) = false) {
+  md.block.ruler.before('html_block', 'content_private_block', (state, start, end, silent) => {
+    if (silent && typeof interrupt_paragraph === 'function' && ! interrupt_paragraph())
+      return false
+    return content_private_block(state, start, end, silent)
+  }, { alt: interrupt_paragraph ? ['paragraph'] : [] })
   md.inline.ruler.before('html_inline', 'content_private_inline', content_private_inline)
 }
 
 // Private elements nested inside a raw html block (`<div>\n<good>…`) never
 // reach the inline rule — markdown-it swallows the whole block as one opaque
 // html_block token — so stripping must also scan those tokens raw.
-const raw_open_scan = /<good\s*>/gi
+const raw_open_scan = /<carousel\b|<good\s*>/gi
 
 /** Pushes [start, end) ranges of private elements found in raw HTML text. */
 function scan_raw_private_ranges(text: string, base: number, ranges: PrivateRange[]) {
   let found = false
   raw_open_scan.lastIndex = 0
   for (let match = raw_open_scan.exec(text); match !== null; match = raw_open_scan.exec(text)) {
+    if (/^<carousel\b/i.test(match[0])) {
+      const open = read_content_carousel_open(text, match.index)
+      if (open)
+        raw_open_scan.lastIndex = open.end
+      continue
+    }
     const close = find_private_close(text, match.index + match[0].length)
     if (! close) {
       continue
@@ -157,22 +179,36 @@ interface PrivateRange {
 }
 
 /** The grayed-out text an unauthorized viewer sees in place of private content. */
-export const CONTENT_PRIVATE_DENIED_TEXT = '你无权查看此机密内容'
+export const CONTENT_PRIVATE_DENIED_TEXT = CONTENT_PLACEHOLDER_TEXT.private_denied
 
-// What an unauthorized viewer sees in place of a private element: the card is
-// still rendered, grayed out, so the layout hints that something exists here
-// without leaking it. Rendered as raw HTML by the markdown pipeline.
-export const CONTENT_PRIVATE_BLOCK_PLACEHOLDER = `<div class="private-block-denied"><span class="iconify i-lucide:ban" aria-hidden="true"></span><span>${CONTENT_PRIVATE_DENIED_TEXT}</span></div>`
-export const CONTENT_PRIVATE_INLINE_PLACEHOLDER = `<span class="private-inline-denied"><span class="iconify i-lucide:ban" aria-hidden="true"></span>${CONTENT_PRIVATE_DENIED_TEXT}</span>`
+// What an unauthorized viewer sees in place of a private element: the shared
+// content placeholder, so the layout hints that something exists here without
+// leaking it. Rendered as raw HTML by the markdown pipeline.
+export const CONTENT_PRIVATE_BLOCK_PLACEHOLDER = content_placeholder('denied', 'block', CONTENT_PRIVATE_DENIED_TEXT)
+export const CONTENT_PRIVATE_INLINE_PLACEHOLDER = content_placeholder('denied', 'inline', CONTENT_PRIVATE_DENIED_TEXT)
 
 // Cheap prescan so stories without the tag never pay for a tokenize.
-const private_scan_pattern = /<good[\s>]/
+const private_scan_pattern = /<good[\s>]/i
 
 let strip_md: MarkdownIt | null = null
+let carousel_strip_md: MarkdownIt | null = null
 
-function get_strip_md() {
+function get_strip_md(in_carousel: boolean) {
+  if (in_carousel) {
+    if (! carousel_strip_md) {
+      carousel_strip_md = new MarkdownIt({ html: true, linkify: false })
+      content_carousel_plugin(carousel_strip_md, true)
+      // Carousel whitespace is only a separator; a private item can start
+      // immediately after the previous link without an intervening blank line.
+      content_private_plugin(carousel_strip_md, true)
+    }
+    return carousel_strip_md
+  }
   if (! strip_md) {
     strip_md = new MarkdownIt({ html: true, linkify: false })
+    // Malformed containers still have to expose their inner private elements
+    // to the redactor; rendering continues to require the strict syntax.
+    content_carousel_plugin(strip_md, true)
     content_private_plugin(strip_md)
   }
   return strip_md
@@ -184,13 +220,14 @@ interface PrivateTokenLike {
   content: string
   markup: string
   children: PrivateTokenLike[] | null
+  meta?: { body_start: number, body_end: number, open_length: number } | null
 }
 
-function collect_private_tokens(markdown: string) {
+function collect_private_tokens(markdown: string, in_carousel = false) {
   if (! private_scan_pattern.test(markdown)) {
     return null
   }
-  const tokens = get_strip_md().parse(markdown, {}) as unknown as PrivateTokenLike[]
+  const tokens = get_strip_md(in_carousel).parse(markdown, {}) as unknown as PrivateTokenLike[]
   return tokens
 }
 
@@ -198,16 +235,22 @@ function collect_private_tokens(markdown: string) {
 function has_private_inline(children: PrivateTokenLike[]): boolean {
   return children.some(child =>
     child.type === 'content_private_inline'
+    || (child.type === 'content_carousel_inline' && has_private_source(child.content, true))
     || (child.children !== null && has_private_inline(child.children)))
 }
 
 export function has_private_content(markdown: string): boolean {
-  const tokens = collect_private_tokens(markdown)
+  return has_private_source(markdown)
+}
+
+function has_private_source(markdown: string, in_carousel = false): boolean {
+  const tokens = collect_private_tokens(markdown, in_carousel)
   if (! tokens) {
     return false
   }
   return tokens.some(token =>
     token.type === 'content_private_block'
+    || (['content_carousel_block', 'content_carousel_inline'].includes(token.type) && has_private_source(token.content, true))
     || (token.type === 'inline' && has_private_inline(token.children ?? []))
     || (token.type === 'html_block' && has_raw_private(token.content)))
 }
@@ -226,58 +269,69 @@ export function redact_private_content_with_source_map(markdown: string) {
   return private_representation(markdown, true)
 }
 
+function private_content_ranges(markdown: string, in_carousel = false) {
+  const ranges: PrivateRange[] = []
+  const walk = (current: ContentMarkdownSource, children: PrivateTokenLike[]) => {
+    let cursor = 0
+    for (const child of children) {
+      if (['content_private_inline', 'content_carousel_inline'].includes(child.type)) {
+        const body = content_markdown_token_body(current, child, cursor)
+        if (child.type === 'content_private_inline')
+          ranges.push({ from: body.open_from, to: body.close_to, block: false })
+        else
+          scan(body.source, true)
+        cursor = body.end
+      }
+      else if (child.children && child.content) {
+        const at = current.text.indexOf(child.content, cursor)
+        if (at >= 0)
+          walk(content_markdown_fragment(current, child.content, at), child.children)
+      }
+      else if (child.type === 'html_inline') {
+        const at = current.text.indexOf(child.content, cursor)
+        if (at >= 0)
+          cursor = at + child.content.length
+      }
+    }
+  }
+  function scan(current: ContentMarkdownSource, carousel: boolean) {
+    const starts = [0]
+    for (let index = 0; index < current.text.length; index ++) {
+      if (current.text[index] === '\n')
+        starts.push(index + 1)
+    }
+    for (const token of collect_private_tokens(current.text, carousel) ?? []) {
+      if (! token.map)
+        continue
+      const start = starts[token.map[0]]!
+      if (['content_carousel_block', 'content_private_block'].includes(token.type)) {
+        const body = content_markdown_token_body(current, token, start)
+        if (token.type === 'content_private_block')
+          ranges.push({ from: body.open_from, to: body.close_to, block: true })
+        else
+          scan(body.source, true)
+      }
+      else if (token.type === 'html_block') {
+        const block = content_markdown_fragment(current, token.content, start)
+        const raw: PrivateRange[] = []
+        scan_raw_private_ranges(token.content, 0, raw)
+        for (const range of raw)
+          ranges.push({ from: block.offsets[range.from]!, to: block.offsets[range.to]!, block: false })
+      }
+      else if (token.type === 'inline') {
+        walk(content_markdown_fragment(current, token.content, start), token.children ?? [])
+      }
+    }
+  }
+  scan(content_markdown_source(markdown), in_carousel)
+  return ranges
+}
+
 function private_representation(markdown: string, map_source: boolean): { markdown: string, source_lines?: number[] } {
-  const tokens = collect_private_tokens(markdown)
-  if (! tokens) {
+  if (! private_scan_pattern.test(markdown)) {
     return { markdown }
   }
-  const lines = markdown.split('\n')
-  const line_starts: number[] = []
-  let offset = 0
-  for (const line of lines) {
-    line_starts.push(offset)
-    offset += line.length + 1
-  }
-
-  const ranges: PrivateRange[] = []
-  for (const token of tokens) {
-    if (token.type === 'content_private_block' && token.map) {
-      // markup is the exact element source (open through close); the block's
-      // line range would absorb trailing text on the close line.
-      const indent = /^ */.exec(lines[token.map[0]]!)![0].length
-      const from = line_starts[token.map[0]]! + indent
-      ranges.push({ from, to: from + token.markup.length, block: true })
-    }
-    else if (token.type === 'html_block' && token.map) {
-      // Raw html blocks never reach the inline rule; scan them textually.
-      const indent = /^ */.exec(lines[token.map[0]]!)![0].length
-      scan_raw_private_ranges(token.content, line_starts[token.map[0]]! + indent, ranges)
-    }
-    else if (token.type === 'inline' && token.map) {
-      // Inline token content starts after the first line's (up to 3) indent.
-      const indent = /^ */.exec(lines[token.map[0]]!)![0].length
-      const base = line_starts[token.map[0]]! + indent
-      let cursor = 0
-      // Children are in source order, so one cursor stays monotonic even when
-      // private elements hide inside image captions or link labels.
-      const walk = (children: PrivateTokenLike[]) => {
-        for (const child of children) {
-          if (child.type === 'content_private_inline') {
-            const at = token.content.indexOf(child.markup, cursor)
-            if (at === - 1) {
-              continue
-            }
-            ranges.push({ from: base + at, to: base + at + child.markup.length, block: false })
-            cursor = at + child.markup.length
-          }
-          else if (child.children) {
-            walk(child.children)
-          }
-        }
-      }
-      walk(token.children ?? [])
-    }
-  }
+  const ranges = private_content_ranges(markdown)
   if (! ranges.length) {
     return { markdown }
   }

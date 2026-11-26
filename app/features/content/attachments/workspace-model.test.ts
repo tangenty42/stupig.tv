@@ -4,19 +4,81 @@ import type { UploadPreparation } from '../uploads/admission'
 import type { WorkspaceListRow } from './workspace-model'
 import { find_delete_references } from '@shared/content-delete-impact'
 import { expect, it } from 'vitest'
-import { project_workspace_rows, workspace_capabilities, workspace_command_footprint } from './workspace-model'
+import { project_workspace_commands, project_workspace_rows, workspace_capabilities, workspace_command_footprint } from './workspace-model'
 
 it('projects local preparations without granting stored-file actions and hands off by actual session identity', () => {
   const preparation: UploadPreparation = { id: 'local', path: 'docs/large.bin', size: 9000, loaded: 100, phase: 'admitting' }
   const before = project_workspace_rows([], [], 1, new Set(), [preparation])
-  expect(before).toHaveLength(1)
-  expect(before[0]).toMatchObject({ key: 'preparing:local', path: preparation.path, preparation })
-  expect(workspace_capabilities(before[0]!, { readonly: false, can_private: true, pending: false })).toMatchObject({ open: false, move: false, delete: false })
+  expect(before.map(row => row.key)).toEqual(['pending-folder:docs', 'preparing:local'])
+  expect(before[0]).toMatchObject({ pending_folder: true, name: 'docs', depth: 0 })
+  expect(before[0]!.node).toBeUndefined()
+  expect(before[1]).toMatchObject({ key: 'preparing:local', path: preparation.path, preparation, depth: 1 })
+  expect(before[1]!.parent_id).toBeLessThan(0)
+  expect(workspace_capabilities(before[1]!, { readonly: false, can_private: true, pending: false })).toMatchObject({ open: false, move: false, delete: false })
   const session = { id: 'actual-session', path: preparation.path, parent_id: 50, size: preparation.size, status: 'queued' } as ContentUploadSession
   const after = project_workspace_rows([], [session], 1, new Set(), [{ ... preparation, session_id: session.id, phase: 'admitting' }])
-  expect(after).toHaveLength(1)
-  expect(after[0]).toMatchObject({ key: `session:${session.id}`, parent_id: 1, session })
-  expect(after[0]?.preparation).toBeUndefined()
+  expect(after.map(row => row.key)).toEqual(['pending-folder:docs', 'session:actual-session'])
+  expect(after[1]).toMatchObject({ key: 'session:actual-session', session, depth: 1 })
+  expect(after[1]?.preparation).toBeUndefined()
+})
+
+it('synthesizes each missing directory level once and nests pending rows even while collapsed', () => {
+  const preparation_a: UploadPreparation = { id: 'one', path: 'docs/sub/new.bin', size: 1, loaded: 0, phase: 'waiting' }
+  const preparation_b: UploadPreparation = { id: 'two', path: 'docs/sub/other.bin', size: 1, loaded: 0, phase: 'waiting' }
+  const rows = project_workspace_rows([], [], 1, new Set(), [preparation_a, preparation_b])
+  expect(rows.map(row => [row.key, row.depth])).toEqual([['pending-folder:docs', 0], ['pending-folder:docs/sub', 1], ['preparing:one', 2], ['preparing:two', 2]])
+  expect(rows.filter(row => row.pending_folder)).toHaveLength(2)
+})
+
+it('nests an admitted session through synthesized folders when its parent folder is not in the catalog yet', () => {
+  const docs: ContentWorkspaceNode = { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v' }
+  const session = { id: 'accepted', path: 'docs/fresh/later.bin', parent_id: 77, status: 'uploading' } as ContentUploadSession
+  const rows = project_workspace_rows([docs], [session], 1, new Set([2]))
+  expect(rows.map(row => [row.key, row.depth])).toEqual([['node:2', 0], ['pending-folder:docs/fresh', 1], ['session:accepted', 2]])
+  expect(rows[2]).toMatchObject({ name: 'later.bin', session })
+})
+
+it('places a local preparation inside its existing target folder without exposing the full path as its name', () => {
+  const folder: ContentWorkspaceNode = { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v' }
+  const preparation: UploadPreparation = { id: 'local', path: 'docs/large.bin', size: 9000, loaded: 0, phase: 'waiting' }
+  const rows = project_workspace_rows([folder], [], 1, new Set([2]), [preparation])
+  expect(rows.map(row => row.key)).toEqual(['node:2', 'preparing:local'])
+  expect(rows[1]).toMatchObject({ parent_id: 2, name: 'large.bin', path: 'docs/large.bin', depth: 1 })
+  expect(project_workspace_rows([folder], [], 1, new Set(), [preparation]).map(row => row.key)).toEqual(['node:2'])
+})
+
+it('projects requested rename and move destinations, including folder descendants', () => {
+  const nodes: ContentWorkspaceNode[] = [
+    { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v1' },
+    { id: 3, parent_id: 2, name: 'old.txt.good', path: 'docs/old.txt.good', kind: 'file', version: 'v1', attachment: { file_name: 'old.txt.good' } as ContentWorkspaceNode['attachment'] },
+    { id: 4, parent_id: 1, name: 'other', path: 'other', kind: 'folder', version: 'v1' },
+  ]
+  const renamed = project_workspace_commands(nodes, [{ operation: 'rename', target: { id: 3, version: 'v1' }, name: 'new.txt' }])
+  expect(renamed[1]).toMatchObject({ name: 'new.txt.good', path: 'docs/new.txt.good', attachment: { file_name: 'new.txt.good' } })
+  const moved = project_workspace_commands(nodes, [{ operation: 'move', targets: [{ id: 2, version: 'v1' }], parent_id: 4 }])
+  expect(moved.slice(0, 2).map(row => row.path)).toEqual(['other/docs', 'other/docs/old.txt.good'])
+  expect(moved[1]).toMatchObject({ parent_id: 2, name: 'old.txt.good' })
+})
+
+it('keeps a folder merge in place until the receipt replaces the tree', () => {
+  const nodes: ContentWorkspaceNode[] = [
+    { id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v1' },
+    { id: 3, parent_id: 1, name: 'other', path: 'other', kind: 'folder', version: 'v1' },
+    { id: 4, parent_id: 2, name: 'other', path: 'docs/other', kind: 'folder', version: 'v1' },
+  ]
+  const renamed = project_workspace_commands(nodes, [{ operation: 'rename', target: { id: 3, version: 'v1' }, name: 'Docs' }])
+  expect(renamed.map(node => node.path)).toEqual(['docs', 'other', 'docs/other'])
+  const moved = project_workspace_commands(nodes, [{ operation: 'move', targets: [{ id: 3, version: 'v1' }], parent_id: 2 }])
+  expect(moved.map(node => node.path)).toEqual(['docs', 'other', 'docs/other'])
+})
+
+it.each(['replace', 'redact'] as const)('shows only the new %s preparation and restores its source when preparation is cancelled', (purpose) => {
+  const nodes: ContentWorkspaceNode[] = [{ id: 2, parent_id: 1, name: 'docs', path: 'docs', kind: 'folder', version: 'v1' }, { id: 3, parent_id: 2, name: 'a.txt', path: 'docs/a.txt', kind: 'file', version: 'v1' }]
+  const preparation: UploadPreparation = { id: 'replacement', path: 'docs/new.txt', size: 10, loaded: 0, phase: 'waiting', purpose, source_id: 3 }
+  const rows = project_workspace_rows(nodes, [], 1, new Set([2]), [preparation])
+  expect(rows.map(row => row.key)).toEqual(['node:2', 'preparing:replacement'])
+  expect(rows[1]).toMatchObject({ parent_id: 2, name: 'new.txt', depth: 1 })
+  expect(project_workspace_rows(nodes, [], 1, new Set([2]), []).map(row => row.key)).toEqual(['node:2', 'node:3'])
 })
 
 it.each([true, false])('protects both subtrees when folder privacy changes to %s', (private_value) => {

@@ -1,12 +1,50 @@
+import type { SQLInputValue } from 'node:sqlite'
 import type { AuditPool } from './repository'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
+import { audit_destination } from './repository'
 
-vi.mock('@config/loader', () => ({ runtime_config: () => ({}) }))
-vi.mock('@server/lib/db', () => ({ db: {} }))
-const { create_storage_auditor } = await import('./service')
+const destination = { bucket: 'test-dev', endpoint: 'https://oss.example.test' }
+const { getConnection } = vi.hoisted(() => ({ getConnection: vi.fn() }))
+vi.mock('@config/loader', () => ({ runtime_config: () => ({ aliyun: { oss: destination } }) }))
+vi.mock('@server/lib/db', () => ({ db: { getConnection } }))
+const { create_storage_auditor, get_storage_audit_findings } = await import('./service')
 const options = { enabled: true, sweepIntervalSeconds: 30, cycleIntervalSeconds: 86400, retrySeconds: 300,
   leaseSeconds: 300, batchSize: 100, batchBudgetMs: 15000, orphanGraceSeconds: 86400, staticKeys: [] as string[] }
-const destination = { bucket: 'test-dev', endpoint: 'https://oss.example.test' }
+
+it('counts and pages open findings in the configured bucket, filtered by any selected kind', async () => {
+  using db = new DatabaseSync(':memory:')
+  db.exec(`CREATE TABLE storage_audit_findings (
+    id INTEGER PRIMARY KEY, destination_id TEXT, object_key TEXT, kind TEXT, expected_size INTEGER, observed_size INTEGER,
+    observations INTEGER DEFAULT 1, first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP, resolved_at TEXT)`)
+  const insert = db.prepare('INSERT INTO storage_audit_findings (id,destination_id,object_key,kind,resolved_at) VALUES (?,?,?,?,?)')
+  const bucket = audit_destination(destination.bucket, destination.endpoint)
+  insert.run(1, bucket, 'size', 'size_mismatch', null)
+  insert.run(2, 'other-bucket', 'private-to-other-bucket', 'missing_object', null)
+  insert.run(3, bucket, 'resolved', 'missing_object', '2026-01-01')
+  insert.run(4, bucket, 'first', 'missing_object', null)
+  insert.run(5, bucket, 'second', 'missing_object', null)
+  insert.run(6, bucket, 'unmanaged', 'unmanaged_object', null)
+  getConnection.mockResolvedValue({
+    query: vi.fn(),
+    beginTransaction: () => db.exec('BEGIN'),
+    execute: (sql: string, values: SQLInputValue[]) => [db.prepare(sql).all(... values)],
+    commit: () => db.exec('COMMIT'),
+    rollback: () => db.exec('ROLLBACK'),
+    release: vi.fn(),
+  })
+  const page = async (page: number, page_size: number, kinds?: string[]) => {
+    const result = await get_storage_audit_findings({ page, page_size, kinds })
+    return { page: result.page, total: result.total, ids: result.rows.map(row => row.id) }
+  }
+  const kinds = ['missing_object', 'size_mismatch']
+  expect(await page(1, 2, kinds)).toEqual({ page: 1, total: 3, ids: [1, 4] })
+  expect(await page(2, 2, kinds)).toEqual({ page: 2, total: 3, ids: [5] })
+  expect(await page(3, 2, kinds)).toEqual({ page: 2, total: 3, ids: [5] })
+  expect(await page(2, 2, ['public_object'])).toEqual({ page: 1, total: 0, ids: [] })
+  expect(await page(1, 10)).toEqual({ page: 1, total: 4, ids: [1, 4, 5, 6] })
+  expect(await page(1, 154800, [])).toEqual({ page: 1, total: 4, ids: [1, 4, 5, 6] })
+})
 
 /** In-memory infrastructure boundary; the real repository and scanner run together. */
 function fixture(override = {}) {

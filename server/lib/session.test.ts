@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
         jwt: { secret: 'unit-test-secret-with-at-least-32-characters', expiresInDays: 30 },
         cookie: { tokenName: 'auth_token', userName: 'auth_user', maxAgeDays: 45 },
       },
+      otp: { expiresMinutes: 10 },
     },
   },
 }))
@@ -20,10 +21,12 @@ const {
   clear_auth_token_cookie,
   get_auth_token_from_cookie,
   get_client_ip,
+  has_password_setup_proof,
   is_auth_token_expiring,
   make_token_hash,
   set_auth_token_cookie,
   set_auth_user_cookie,
+  set_password_setup_proof,
   sign_auth_token,
   verify_auth_token,
 } = await import('@server/lib/session')
@@ -60,6 +63,23 @@ function create_event(remote_address = '10.0.0.1') {
 function decode(token: string) {
   return jwt.decode(token) as jwt.JwtPayload
 }
+
+it('expires a password setup proof and scopes it to the verified phone and exact login token', () => {
+  const event = create_event()
+  const phone = '13800000007'
+  const session = sign_auth_token(7).token
+  const other_session = sign_auth_token(7).token
+  set_password_setup_proof(event, session, phone)
+  const [,, proof, options] = set_cookie.mock.calls[0]!
+  expect(options).toMatchObject({ httpOnly: true, sameSite: 'lax', secure: true, maxAge: 600 })
+  get_cookie.mockImplementation((_event, key) => key === 'auth_token' ? session : proof)
+  expect(has_password_setup_proof(event, phone)).toBe(true)
+  expect(has_password_setup_proof(event, '13900000007')).toBe(false)
+  get_cookie.mockImplementationOnce(() => other_session)
+  expect(has_password_setup_proof(event, phone)).toBe(false)
+  vi.advanceTimersByTime(600_000)
+  expect(has_password_setup_proof(event, phone)).toBe(false)
+})
 
 describe('sign_auth_token', () => {
   it('issues a verifiable token carrying the subject and a unique id', () => {

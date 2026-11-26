@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parse as parse_yaml } from 'yaml'
 import { settings } from '../../server/shared/settings'
-import { interpolate_config, load_aliyun_oss_config, load_config, load_content_migration_options, load_database_config, load_development_tunnel_layer, load_migration_image_profile, load_migration_source_config, merge_config_layers, public_config_from } from './loader'
+import { interpolate_config, load_aliyun_oss_config, load_config, load_content_migration_options, load_database_config, load_development_tunnel_layer, load_migration_source_config, merge_config_layers, public_config_from } from './loader'
 import { aliyun_oss_config_schema, deployment_config_schema, public_config_defaults } from './schema'
 
 const database_env = { MYSQL_HOST: 'db', MYSQL_PORT: '3306', MYSQL_PASSWORD: 'placeholder', MYSQL_USER: 'stupig_tv', MYSQL_DATABASE: 'stupig_tv' }
@@ -48,7 +48,6 @@ describe('deployment configuration', () => {
     expect(source.accessKeyId).toBe('source-id')
     expect(source.accessKeySecret).toBe('source-secret')
     expect(() => load_migration_source_config('private', { NODE_ENV: 'development' })).toThrow('oss.buckets.private')
-    expect(load_migration_image_profile({ NODE_ENV: 'development' })).toMatchObject({ profile_version: 1, profile: { avifQuality: 65 } })
     expect(load_content_migration_options({ NODE_ENV: 'production' }).partSizeMb).toBe(8)
     expect(public_config_from(load_config(deployment_env))).not.toHaveProperty('app.contentMigration')
   })
@@ -109,10 +108,10 @@ describe('deployment configuration', () => {
   })
   it('loads independent ESA secrets server-side and allows provisioning without a key', () => {
     const empty = load_config({ ... deployment_env, NODE_ENV: 'development', ALIYUN_ESA_AUTH_KEY: '' })
-    expect(empty.aliyun.esa).toEqual({ baseUrl: 'https://stupig-static-dev.oss.tangenty.cn', authKey: '', urlTtlSeconds: 300 })
+    expect(empty.aliyun.esa).toEqual({ baseUrl: 'https://stupig-static-dev.oss.tangenty.cn', authKey: '', urlTtlSeconds: 3600 })
     const secret = 'a1'.repeat(32)
     const configured = load_config({ ... deployment_env, NODE_ENV: 'production', ALIYUN_ESA_AUTH_KEY: secret })
-    expect(configured.aliyun.esa).toEqual({ baseUrl: 'https://stupig-static.oss.tangenty.cn', authKey: secret, urlTtlSeconds: 300 })
+    expect(configured.aliyun.esa).toEqual({ baseUrl: 'https://stupig-static.oss.tangenty.cn', authKey: secret, urlTtlSeconds: 3600 })
     expect(public_config_from(configured)).not.toHaveProperty('aliyun.esa')
     expect(JSON.stringify(public_config_from(configured))).not.toContain(secret)
     const special = load_config({ ... deployment_env, ALIYUN_ESA_AUTH_KEY: `${secret}#special!` })
@@ -125,11 +124,12 @@ describe('deployment configuration', () => {
 
   it('keeps image processing budgets server-only and rejects invalid lease/profile limits', () => {
     const config = load_config(deployment_env)
-    expect(config.app.contentImages).toMatchObject({ enabled: true, concurrency: 1, profileVersion: 1 })
+    expect(config.app.contentImages).toMatchObject({ enabled: true, concurrency: 1 })
     expect(config.app.contentImages.cloud).toMatchObject({ enabled: true, profileVersion: 3, profile: { webpQuality: 100, jpegQuality: 85, lqipQuality: 40 } })
+    expect(config.app.contentImages.cloud.profile.maxPixels).toBe(settings.app.content.image.uploadMaxPixels)
     expect(public_config_from(config).app).not.toHaveProperty('contentImages')
     const image = config.app.contentImages
-    for (const invalid of [{ ... image, heartbeatSeconds: image.leaseSeconds }, { ... image, concurrency: 0 }, { ... image, profile: { ... image.profile, webpQuality: 101 } }])
+    for (const invalid of [{ ... image, heartbeatSeconds: image.leaseSeconds }, { ... image, concurrency: 0 }, { ... image, cloud: { ... image.cloud, profile: { ... image.cloud.profile, webpQuality: 101 } } }])
       expect(deployment_config_schema.safeParse({ ... config, app: { ... config.app, contentImages: invalid } }).success).toBe(false)
   })
 
@@ -265,11 +265,11 @@ describe('deployment configuration', () => {
     expect(config.oss.bucket).toBe('stupig-static')
   })
 
-  it('uses the configured development MQTT WebSocket port', () => {
+  it('serves both browser MQTT endpoints on the development HTTPS origin', () => {
     vi.stubEnv('NODE_ENV', 'development')
-    expect(load_config({ ... deployment_env, MQTT_WS_PORT: '18083' }).mqtt.web.wsUrl).toBe('ws://localhost:18083/mqtt')
-    expect(load_config(deployment_env).mqtt.web.wsUrl).toBe('ws://localhost:8083/mqtt')
-    expect(() => load_config({ ... deployment_env, MQTT_WS_PORT: undefined })).toThrow(/MQTT_WS_PORT/)
+    const config = load_config({ ... deployment_env, APP_PORT: '13042', MQTT_WS_PORT: '18083' })
+    expect(config.site.url).toBe('https://localhost:13042')
+    expect(config.mqtt.web).toEqual({ wsUrl: 'wss://localhost:13042/mqtt', draftWsUrl: 'wss://localhost:13042/mqtt-drafts' })
   })
 
   it('uses development buckets while retaining independent credentials', () => {
@@ -291,7 +291,7 @@ describe('deployment configuration', () => {
     const config = load_config(deployment_env)
 
     expect(config.aliyun.dypns).toEqual({ endpoint: 'dypnsapi.aliyuncs.com', regionId: 'cn-hongkong', accessKeyId: deployment_env.ALIYUN_DYPNS_ACCESS_KEY_ID, accessKeySecret: deployment_env.ALIYUN_DYPNS_ACCESS_KEY_SECRET })
-    expect(config.aliyun.sms).toEqual({ signName: '速通互联验证服务', templateCode: '100001', schemeName: '蠢猪小组官网' })
+    expect(config.aliyun.sms).toEqual({ signName: '恒创联众', templateCode: '100001', schemeName: '蠢猪小组官网' })
     expect(config.aliyun).not.toHaveProperty('accessKeyId')
     expect(config.aliyun).not.toHaveProperty('accessKeySecret')
   })

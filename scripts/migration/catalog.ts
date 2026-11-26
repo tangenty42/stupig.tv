@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { retired_migrations } from './baseline'
 
 export interface MigrationFile {
   filename: string
@@ -33,8 +34,6 @@ export interface MigrationPlan {
   inconsistent: InconsistentMigration[]
 }
 export const runtime_migration = '20261024020000_migration_runs.sql'
-export const single_ledger_migration = '20261024030000_single_migration_ledger.sql'
-// Freeze the historical adoption boundary; future SQL and scripts must actually run.
 export const legacy_baseline_through = '20261024010000_content_preload.sql'
 
 export function sha256(value: string | Buffer) {
@@ -81,17 +80,17 @@ export function read_migrations(dir: string, manifest_path?: string): MigrationF
   return files.sort((a, b) => a.filename.localeCompare(b.filename))
 }
 
-export function plan_migrations(files: MigrationFile[], applied: Map<string, string>): MigrationPlan {
+export function plan_migrations(files: MigrationFile[], applied: Map<string, string>, started = new Map<string, string>()): MigrationPlan {
   const by_name = new Map(files.map(file => [file.filename, file]))
   const inconsistent: InconsistentMigration[] = []
-  for (const [filename, checksum] of applied) {
-    const file = by_name.get(filename)
-    if (! file)
+  for (const [filename, checksum] of [... applied, ... started]) {
+    const expected = by_name.get(filename)?.checksum ?? (applied.has(filename) ? retired_migrations.get(filename) : undefined)
+    if (expected === undefined)
       inconsistent.push({ filename, reason: 'missing' })
-    else if (file.checksum !== checksum)
+    else if (expected !== checksum)
       inconsistent.push({ filename, reason: 'modified' })
   }
-  const latest = [... applied.keys()].sort().at(- 1)
+  const latest = [... applied.keys(), ... started.keys()].sort().at(- 1)
   const pending = files.filter(file => ! applied.has(file.filename))
   for (const file of pending) {
     // The additive runtime table can be introduced into an existing SQL history.

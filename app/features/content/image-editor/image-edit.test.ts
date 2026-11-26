@@ -8,9 +8,8 @@ const stroke: ImageEditAction = { kind: 'stroke', stroke: { width: 2, points: [{
 
 describe('image edit operations', () => {
   it('suggests names accepted by upload admission without reserved whitespace', () => {
-    expect(suggested_image_name('folder/photo.PNG.good', 'copy')).toBe('photo_副本.webp')
-    expect(suggested_image_name('folder/photo.PNG.good', 'redacted')).toBe('photo_删减版.webp')
-    expect(attachment_path_violation(suggested_image_name('photo.png', 'copy'))).toBeNull()
+    expect(suggested_image_name('folder/photo.PNG.good')).toBe('photo_副本.webp')
+    expect(attachment_path_violation(suggested_image_name('photo.png'))).toBeNull()
   })
   it('keeps geometry across brush and clear operations', () => {
     const actions: ImageEditAction[] = [stroke, { kind: 'rotate', direction: 1 }, { kind: 'crop', rect: { x: 2, y: 1, width: 4, height: 6 } }, { kind: 'clear' }]

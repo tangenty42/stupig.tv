@@ -38,10 +38,11 @@ async function verify() {
   try {
     await root.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
     created = true
-    await run_migrations({ database_config: config, maintenance: true, through: '20261028210200_reference_journal_contract.sql' })
+    await run_migrations({ database_config: config, maintenance: true })
     await root.query(`INSERT INTO \`${name}\`.content_stories (title, event_precision, event_dates, markdown) VALUES ('Target', 'day', JSON_ARRAY('2026-10-30'), ?)`, ['---\ntitle: Target\ntime: 2026/10/30\n---\n[](att://old/file.txt) [ordinary](relative.pdf)'])
-    await run_migrations({ database_config: config, maintenance: true })
-    await run_migrations({ database_config: config, maintenance: true })
+    await root.query(`INSERT INTO \`${name}\`.content_story_drafts (id, story_id, markdown, namespace_revision, title_revision, published_main_revision, unpublished_changes)
+      SELECT REPEAT('a', 32), s.id, s.markdown, s.namespace_revision, t.revision, s.revision, 0
+      FROM \`${name}\`.content_stories s CROSS JOIN \`${name}\`.content_title_namespace t WHERE s.id = 1 AND t.id = 1`)
     const runtime = runtime_config()
     runtime.db = config
     runtime.app.auth.jwt.secret = randomBytes(32).toString('hex')
@@ -65,21 +66,20 @@ async function verify() {
     const initial = (await get_draft(a, { story_id: 1 })).snapshot!
     assert(initial.markdown.endsWith('[ordinary](relative.pdf)'))
     assert.equal(initial.unpublished_changes, false)
-    check('upgrade preserves exact main and current baselines; repeat migration is harmless')
+    check('published draft loads with its current main and reference revisions')
     const request = randomBytes(16).toString('hex')
     const draft = (await create_draft(a, request)).snapshot!
     assert.equal((await create_draft(a, request)).snapshot!.id, draft.id)
-    assert.notEqual((await create_draft(a, randomBytes(16).toString('hex'))).snapshot!.id, draft.id)
-    const first_page = await list_drafts(a, '', 1)
-    assert.equal(first_page.items.length, 1)
-    assert(first_page.next)
-    const second_page = await list_drafts(a, first_page.next, 1)
-    assert.equal(second_page.items.length, 1)
-    assert.notEqual(first_page.items[0]!.id, second_page.items[0]!.id)
-    assert.equal(first_page.items[0]!.title, '新建档案')
-    assert.equal(first_page.items[0]!.story_id, null)
-    assert(! ('markdown' in first_page.items[0]!))
-    assert(! (await list_drafts(a)).items.some(item => item.id === initial.id))
+    const other_draft = (await create_draft(a, randomBytes(16).toString('hex'))).snapshot!
+    assert.notEqual(other_draft.id, draft.id)
+    const { items } = await list_drafts(a)
+    assert.equal(items.length, 2)
+    assert.deepEqual(new Set(items.map(item => item.id)), new Set([draft.id, other_draft.id]))
+    for (const item of items) {
+      assert.equal(item.title, '新建档案')
+      assert.equal(item.story_id, null)
+      assert(! ('markdown' in item))
+    }
     check('new drafts have separate identity and creation retry is idempotent')
     const token_a = randomBytes(32).toString('hex')
     const token_b = randomBytes(32).toString('hex')
@@ -260,11 +260,9 @@ async function verify() {
     check('title replay updates both published representations; delete cascades its draft and preserves dangling references elsewhere')
     await db.execute('UPDATE users SET is_admin = 0, permissions = JSON_ARRAY() WHERE id = ?', [owner.id])
     await assert.rejects(get_draft(owner, { id: draft.id }), (error: unknown) => (error as { statusCode?: number }).statusCode === 403)
-    for (const permission of [{ field: 'content_manage', level: 'full' }, { field: 'content_private', level: 'read' }]) {
-      await db.execute('UPDATE users SET permissions = CAST(? AS JSON) WHERE id = ?', [JSON.stringify([permission]), owner.id])
-      await assert.rejects(get_draft(owner, { id: draft.id }), (error: unknown) => (error as { statusCode?: number }).statusCode === 403)
-    }
-    await db.execute('UPDATE users SET permissions = CAST(? AS JSON) WHERE id = ?', [JSON.stringify([{ field: 'content_manage', level: 'full' }, { field: 'content_private', level: 'read' }]), owner.id])
+    await db.execute('UPDATE users SET permissions = CAST(? AS JSON) WHERE id = ?', [JSON.stringify([{ field: 'content_access', level: 'private_read' }]), owner.id])
+    await assert.rejects(get_draft(owner, { id: draft.id }), (error: unknown) => (error as { statusCode?: number }).statusCode === 403)
+    await db.execute('UPDATE users SET permissions = CAST(? AS JSON) WHERE id = ?', [JSON.stringify([{ field: 'content_access', level: 'full' }]), owner.id])
     assert((await get_draft(owner, { id: draft.id })).snapshot)
     await db.execute('UPDATE users SET is_admin = 1 WHERE id = ?', [owner.id])
     check('current database permissions override stale incoming admin claims')

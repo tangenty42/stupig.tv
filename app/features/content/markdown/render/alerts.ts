@@ -52,7 +52,8 @@ export const alerts_plugin: StoryMarkdownPlugin = (md) => {
       return default_blockquote_rule(tokens, idx, options, env, self)
     }
     const token = tokens[idx]!
-    const line_attr = token.map ? ` data-line="${token.map[0]}"` : ''
+    const line = token.attrGet('data-line')
+    const line_attr = line === null ? '' : ` data-line="${line}"`
     const icon = alert_icons[alert_type]
     const alert_title = token.meta?.alert_title as string | null | undefined
     const title = alert_title ? md.utils.escapeHtml(alert_title) : alert_labels[alert_type]

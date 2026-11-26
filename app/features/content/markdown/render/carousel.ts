@@ -1,128 +1,183 @@
+import type Token from 'markdown-it/lib/token.mjs'
 import type { StoryMarkdownPlugin } from './types'
 import { html_void_tags } from '@shared/content-html'
-import { is_reference_card } from './link-cards'
+import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_INLINE_PLACEHOLDER } from '@shared/content-private'
+import { sanitize_story_html } from './sanitize'
 
-// Consecutive images/cards share a scroll strip; surrounding prose keeps its
-// normal flow. Each element renders identically inside or outside that strip.
-export const carousel_plugin: StoryMarkdownPlugin = (md, ctx) => {
-  md.core.ruler.after('inline', 'image_carousels', (state) => {
-    type Token = InstanceType<typeof state.Token>
-    const whitespace = (token: Token) => ['softbreak', 'hardbreak'].includes(token.type) || (token.type === 'text' && ! token.content.trim())
-    const nesting = (token: Token) => {
-      if (token.type !== 'html_inline')
-        return token.nesting
-      const tag = /^<(\/?)([a-z][\w-]*)\b[^>]*?(\/?)>$/i.exec(token.content)
-      return ! tag || tag[3] || html_void_tags.has(tag[2]!.toLowerCase()) ? 0 : tag[1] ? - 1 : 1
-    }
-    const clone = (token: Token) => Object.assign(new state.Token(token.type, token.tag, token.nesting), token, {
-      attrs: token.attrs?.map(attribute => [... attribute]) ?? null,
-    })
-    for (let index = 0; index < state.tokens.length - 2;) {
-      const opening = state.tokens[index]!
-      const inline = state.tokens[index + 1]!
-      const closing = state.tokens[index + 2]!
-      if (opening.type !== 'paragraph_open' || inline.type !== 'inline' || closing.type !== 'paragraph_close') {
-        index ++
-        continue
-      }
-      const children = inline.children ?? []
-      const units: { children: Token[], media: boolean, whitespace: boolean }[] = []
-      for (let position = 0; position < children.length;) {
-        const first = children[position]!
-        let end = position + 1
-        // Never cut an emphasis, link label or raw inline HTML container in half.
-        if (nesting(first) === 1) {
-          let depth = 1
-          while (end < children.length && depth > 0)
-            depth += nesting(children[end ++]!)
-        }
-        units.push({ children: children.slice(position, end), media: first.type === 'image' || is_reference_card(children, position, ctx.options), whitespace: whitespace(first) })
-        position = end
-      }
-      const segments: { carousel: boolean, children: Token[] }[] = []
-      let normal_start = 0
-      for (let position = 0; position < units.length;) {
-        if (! units[position]!.media) {
-          position ++
-          continue
-        }
-        let end = position + 1
-        let count = 1
-        for (let next = end; next < units.length;) {
-          while (units[next]?.whitespace)
-            next ++
-          if (! units[next]?.media)
-            break
-          end = next + 1
-          count ++
-          next = end
-        }
-        const standalone = units.slice(0, position).every(unit => unit.whitespace) && units.slice(end).every(unit => unit.whitespace)
-        if (count < 2 && ! standalone) {
-          position = end
-          continue
-        }
-        const before = units.slice(normal_start, position).flatMap(unit => unit.children)
-        while (before.length && whitespace(before.at(- 1)!))
-          before.pop()
-        if (before.length)
-          segments.push({ carousel: false, children: before })
-        segments.push({ carousel: true, children: units.slice(position, end).filter(unit => unit.media).flatMap(unit => unit.children) })
-        normal_start = end
-        while (units[normal_start]?.whitespace)
-          normal_start ++
-        position = normal_start
-      }
-      if (! segments.length) {
-        index += 3
-        continue
-      }
-      const after = units.slice(normal_start).flatMap(unit => unit.children)
-      if (after.length)
-        segments.push({ carousel: false, children: after })
-      const replacement = segments.flatMap((segment) => {
-        const start = clone(opening)
-        const content = clone(inline)
-        const end = clone(closing)
-        content.children = segment.children
-        if (segment.carousel) {
-          start.attrJoin('class', 'image-carousel')
-          start.meta = { ... start.meta, carousel: true }
-          end.meta = { ... end.meta, carousel: true }
-        }
-        return [start, content, end]
-      })
-      state.tokens.splice(index, 3, ... replacement)
-      index += replacement.length
-    }
-  })
+interface InlineUnit { tokens: Token[], media: boolean, whitespace: boolean }
 
-  // Hoist the carousel into a .carousel-shell <div> with the two nav
-  // buttons; the scroll strip keeps the .image-carousel class and behavior.
-  md.renderer.rules.paragraph_open = (tokens, idx, options, env, self) => {
-    const token = tokens[idx]!
-    if (token.meta?.carousel) {
-      return `<div class="carousel-shell"><button type="button" class="carousel-nav carousel-prev" aria-label="上一张"><span class="iconify i-lucide:chevron-left" aria-hidden="true"></span></button><div${self.renderAttrs(token)}>`
+/** Raw HTML wrappers stay intact instead of splitting their children into cards. */
+function update_html_stack(token: Token, stack: string[]) {
+  const sources = token.type === 'inline' ? token.children ?? [] : [token]
+  for (const source of sources) {
+    if (! ['html_inline', 'html_block'].includes(source.type))
+      continue
+    for (const match of source.content.matchAll(/<!--[\s\S]*?-->|<(\/?)([a-z][\w-]*)\b[^>]*>/gi)) {
+      if (! match[2])
+        continue
+      const tag = match[2].toLowerCase()
+      if (match[1]) {
+        const opening = stack.lastIndexOf(tag)
+        if (opening !== - 1)
+          stack.splice(opening)
+      }
+      else if (! html_void_tags.has(tag) && ! match[0].endsWith('/>')) {
+        stack.push(tag)
+      }
     }
-    return self.renderToken(tokens, idx, options)
   }
+}
 
-  md.renderer.rules.paragraph_close = (tokens, idx, options, env, self) => {
-    const token = tokens[idx]!
-    if (token.meta?.carousel) {
-      // End anchor: the scroll sync interpolates element-to-element, so the
-      // strip anchors its bottom edge to the line right after it (the map's
-      // exclusive end) — using the last carousel line would share the head's
-      // line for one-line strips and pin the editor there. Same top-level
-      // guard as source-anchor; the map lives on the opening token
-      // (paragraph_close has none).
-      const opening = tokens[idx - 2]
-      const map = opening?.type === 'paragraph_open' ? opening.map : null
-      const end_anchor = map && ctx.anchor_render_depth === 0
-        ? `<span class="carousel-end-anchor" data-line="${map[1]}" aria-hidden="true"></span>`
-        : ''
-      return `</div><button type="button" class="carousel-nav carousel-next" aria-label="下一张"><span class="carousel-hint-text" aria-hidden="true">右边还有·可左右滚动</span><span class="iconify i-lucide:chevron-right" aria-hidden="true"></span></button>${end_anchor}</div>\n`
+function inline_units(tokens: Token[]) {
+  const units: InlineUnit[] = []
+  for (let from = 0; from < tokens.length;) {
+    const first = tokens[from]!
+    if (first.type === 'text') {
+      const leading = /^[\t ]*/.exec(first.content)![0].length
+      const trailing = /[\t ]*$/.exec(first.content)![0].length
+      const middle_end = Math.max(leading, first.content.length - trailing)
+      for (const [content, whitespace] of [[first.content.slice(0, leading), true], [first.content.slice(leading, middle_end), false], [first.content.slice(middle_end), true]] as const) {
+        if (content)
+          units.push({ tokens: [Object.assign(Object.create(Object.getPrototypeOf(first)), first, { content })], media: false, whitespace })
+      }
+      from ++
+      continue
     }
-    return self.renderToken(tokens, idx, options)
+    let to = from + 1
+    if (first.nesting === 1) {
+      let depth = 1
+      while (to < tokens.length && depth)
+        depth += tokens[to ++]!.nesting
+    }
+    else if (first.type === 'html_inline') {
+      const stack: string[] = []
+      update_html_stack(first, stack)
+      while (to < tokens.length && stack.length)
+        update_html_stack(tokens[to ++]!, stack)
+    }
+    const placeholder = first.type === 'html_inline' && /^<(?:span|div) class="content-placeholder /.test(first.content)
+    units.push({
+      tokens: tokens.slice(from, to),
+      media: ['image', 'link_open', 'content_private_inline', 'content_carousel_inline'].includes(first.type) || placeholder,
+      whitespace: ['softbreak', 'hardbreak'].includes(first.type),
+    })
+    from = to
+  }
+  return units
+}
+
+// Only an explicit carousel block creates a strip. Its contents use the same
+// Markdown parser, renderers, image collection and sanitization as the body.
+export const carousel_plugin: StoryMarkdownPlugin = (md, ctx) => {
+  const space = '<span class="carousel-space" aria-hidden="true"> </span>'
+  const shell_attributes = (token: Token, inline: boolean) => {
+    const classes = ['carousel-shell', inline && 'carousel-shell-inline', token.attrGet('class')].filter(Boolean).join(' ')
+    // These attributes track the rendered source and controller state.
+    const attrs = token.attrs?.filter(([name]) => ! ['class', 'data-line', 'data-wired'].includes(name)) ?? []
+    const authored = attrs.map(([name, value]) => ` ${md.utils.escapeHtml(name)}="${md.utils.escapeHtml(value)}"`).join('')
+    return ` class="${md.utils.escapeHtml(classes)}"${authored}`
+  }
+  const open_shell = (tag: string, attrs: string, line: string) => `<${tag}${attrs}><button type="button" class="carousel-nav carousel-prev" aria-label="上一项"><span class="iconify i-lucide:chevron-left" aria-hidden="true"></span></button><${tag} class="image-carousel"${line}>`
+  const close_shell = (tag: string, end_line?: number) => {
+    const anchor = end_line !== undefined && ctx.anchor_render_depth === 0
+      ? `<span class="carousel-end-anchor" data-line="${end_line}" aria-hidden="true"></span>`
+      : ''
+    return `</${tag}><button type="button" class="carousel-nav carousel-next" aria-label="下一项"><span class="carousel-hint-text" aria-hidden="true"><span>右边还有！</span><span class="carousel-hint-detail">可左右滚动</span></span><span class="iconify i-lucide:chevron-right" aria-hidden="true"></span></button>${anchor}</${tag}>`
+  }
+  md.renderer.rules.content_carousel_inline = md.renderer.rules.content_carousel_block = (tokens, index, options, env, self) => {
+    const token = tokens[index]!
+    const inline = token.type === 'content_carousel_inline'
+    let body = ''
+    let pending_space = false
+    const append = (html: string, wrapper?: 'span' | 'div') => {
+      const content = sanitize_story_html(html)
+      if (! content.trim())
+        return
+      if (pending_space && body)
+        body += space
+      body += wrapper ? `<${wrapper} class="carousel-content-item">${content}</${wrapper}>` : content
+      pending_space = false
+    }
+    const paragraph = (children: Token[]) => {
+      let prose: InlineUnit[] = []
+      const flush_prose = () => {
+        let from = 0
+        let to = prose.length
+        while (from < to && prose[from]!.whitespace)
+          from ++
+        while (to > from && prose[to - 1]!.whitespace)
+          to --
+        if (from)
+          pending_space = Boolean(body)
+        if (to > from)
+          append(self.renderInline(prose.slice(from, to).flatMap(unit => unit.tokens), options, env), 'span')
+        if (to < prose.length)
+          pending_space = Boolean(body)
+        prose = []
+      }
+      for (const unit of inline_units(children)) {
+        if (! unit.media) {
+          prose.push(unit)
+          continue
+        }
+        flush_prose()
+        append(self.renderInline(unit.tokens, options, env))
+      }
+      flush_prose()
+    }
+    const render_blocks = () => {
+      const blocks = md.parse(token.content, env)
+      for (let from = 0; from < blocks.length;) {
+        const first = blocks[from]!
+        if (body)
+          pending_space = true
+        const projected = first.type === 'html_block'
+          ? [CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_INLINE_PLACEHOLDER].find(placeholder => first.content.startsWith(placeholder))
+          : undefined
+        if (projected && first.content.slice(projected.length).trim()) {
+          // A raw block placeholder can make CommonMark absorb the following
+          // public Markdown until a blank line. Keep the projected item intact
+          // and parse the remaining public source through the normal rules.
+          append(projected)
+          blocks.splice(from, 1, ... md.parse(first.content.slice(projected.length), env))
+          continue
+        }
+        if (first.type === 'paragraph_open' && blocks[from + 1]?.type === 'inline' && blocks[from + 2]?.type === 'paragraph_close') {
+          paragraph(blocks[from + 1]!.children ?? [])
+          from += 3
+          continue
+        }
+        let to = from + 1
+        if (first.nesting === 1) {
+          let depth = 1
+          while (to < blocks.length && depth)
+            depth += blocks[to ++]!.nesting
+        }
+        else if (first.type === 'html_block') {
+          const stack: string[] = []
+          update_html_stack(first, stack)
+          while (to < blocks.length && stack.length)
+            update_html_stack(blocks[to ++]!, stack)
+        }
+        const placeholder = first.type === 'html_block' && /^<(?:span|div) class="content-placeholder /.test(first.content)
+        append(self.render(blocks.slice(from, to), options, env), placeholder ? undefined : 'div')
+        from = to
+      }
+    }
+    ctx.anchor_render_depth ++
+    ctx.carousel_render_depth ++
+    try {
+      if (inline)
+        paragraph(md.parseInline(token.content, env)[0]?.children ?? [])
+      else
+        render_blocks()
+    }
+    finally {
+      ctx.carousel_render_depth --
+      ctx.anchor_render_depth --
+    }
+    const tag = inline ? 'span' : 'div'
+    const line = ! inline && token.map && ctx.anchor_render_depth === 0 ? ` data-line="${token.map[0]}"` : ''
+    return `${open_shell(tag, shell_attributes(token, inline), line)}${body}${close_shell(tag, token.map?.[1])}${inline ? '' : '\n'}`
   }
 }

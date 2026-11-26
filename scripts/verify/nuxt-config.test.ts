@@ -62,6 +62,13 @@ describe('production SSR configuration', () => {
     expect(config.modules?.[0]).toBe('./config/lib/nuxt-module')
   })
 
+  it('registers the sitemap source and keeps admin and editing pages out of search', () => {
+    expect(config.modules).toEqual(expect.arrayContaining(['@nuxtjs/sitemap', '@nuxtjs/robots']))
+    expect(config.sitemap.sources).toContain('/api/hooks/sitemap/urls')
+    expect(config.sitemap.exclude).toEqual(['/admin/**', '/content/new/**', '/content/*/edit'])
+    expect(config.robots.disallow).toEqual(['/admin', '/content/new', '/content/*/edit'])
+  })
+
   it('bundles Pinia so Nitro replaces its Vue compile-time flags', () => {
     expect(config.nitro?.externals?.inline).toContain('pinia')
     expect(config.nitro?.externals?.inline).toContain('yaml')

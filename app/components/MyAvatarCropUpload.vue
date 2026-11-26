@@ -26,14 +26,11 @@
               </template>
             </Button>
           </div>
-          <div class="flex items-center gap-2">
-            <Button label="取消" severity="secondary" text :disabled="pending" @click="close_crop_modal" />
-            <Button label="确定" :loading="pending" :disabled="pending" @click="submit_avatar">
-              <template #icon>
-                <MyIcon name="lucide:check" />
-              </template>
-            </Button>
-          </div>
+          <Button label="确定" :loading="pending" :disabled="pending" @click="submit_avatar">
+            <template #icon>
+              <MyIcon name="lucide:check" />
+            </template>
+          </Button>
         </div>
       </template>
     </MyDialog>

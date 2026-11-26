@@ -1,13 +1,10 @@
 import { workspace_issue } from '@shared/content-workspace'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, ref, watch } from 'vue'
+import { error_message } from '~/utils/error'
+import { TrpcApiError, useTrpcClient } from './useTrpcClient'
 
-const mocks = vi.hoisted(() => ({ logout: vi.fn(), response: {} as unknown, fetch: undefined as typeof globalThis.fetch | undefined }))
-vi.mock('@trpc/client', () => ({ createTRPCClient: () => ({}), splitLink: () => ({}),
-  httpLink: (options: { fetch: typeof globalThis.fetch }) => {
-    mocks.fetch = options.fetch
-    return {}
-  }, httpBatchLink: () => ({}) }))
+const mocks = { logout: vi.fn(), response: {} as unknown }
 
 class FakeXHR {
   status = 400
@@ -26,7 +23,6 @@ class FakeXHR {
   abort() { this.listeners.get('abort')?.() }
 }
 
-const { TrpcApiError, useTrpcClient } = await import('./useTrpcClient')
 let active_app: object
 let active_logout: ReturnType<typeof vi.fn>
 
@@ -92,14 +88,49 @@ describe('tRPC application error transport', () => {
   })
 
   it('starts a small pagehide release as keepalive, while ordinary mutations remain normal requests', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response('{}'))
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: { data: null } }))
     vi.stubGlobal('fetch', fetch)
-    useTrpcClient()
-    await mocks.fetch!('/api/trpc/content.commandDraft', { method: 'POST', body: JSON.stringify({ kind: 'release' }) })
+    const { client, call } = useTrpcClient()
+    const command = {
+      id: 'a'.repeat(32),
+      lease: { page_id: 'b'.repeat(32), token: 'c'.repeat(32), epoch: 1 },
+      seq: 1,
+      base_namespace_revision: 1,
+      base_title_revision: 1,
+    }
+    await call(client.content.commandDraft.mutate({ ... command, kind: 'release' }))
     expect(fetch).toHaveBeenLastCalledWith('/api/trpc/content.commandDraft', expect.objectContaining({ keepalive: true, credentials: 'include' }))
-    await mocks.fetch!('/api/trpc/content.commandDraft', { method: 'POST', body: JSON.stringify({ kind: 'sync' }) })
+    await call(client.content.commandDraft.mutate({ ... command, kind: 'sync' }))
     expect(fetch.mock.calls.at(- 1)?.[1]).not.toHaveProperty('keepalive')
   })
+
+  it('shows the existing network fallback when a browser read fails before receiving a response', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>().mockRejectedValueOnce(new TypeError('Failed to fetch')))
+    const { client, call } = useTrpcClient()
+    const error = await call(client.content.listStories.query()).catch(error => error)
+    expect(error).toBeInstanceOf(TrpcApiError)
+    expect(error.status).toBeUndefined()
+    expect(error_message(error)).toBe('《我们仍未知道那天所发生の网络错误の名字》')
+  })
+
+  it('keeps an intentionally aborted read out of the error toast', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>().mockRejectedValueOnce(new DOMException('The operation was aborted.', 'AbortError')))
+    const { client, call } = useTrpcClient()
+    const error = await call(client.content.listStories.query()).catch(error => error)
+    expect(error_message(error)).toBe('')
+  })
+
+  it('preserves the server message and HTTP status for a rejected read', async () => {
+    const message = '档案发生变化，请刷新'
+    vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(Response.json([{
+      error: { message, code: - 32009, data: { code: 'CONFLICT', httpStatus: 409 } },
+    }], { status: 409 })))
+    const { client, call } = useTrpcClient()
+    const error = await call(client.content.listStories.query()).catch(error => error)
+    expect(error).toMatchObject({ message, status: 409 })
+    expect(error_message(error)).toBe(message)
+  })
+
   const applicationError = { code: 'BATCH_REJECTED' as const, details: { items: [workspace_issue('a.txt', 'name_conflict', 'NAME_CONFLICT', '同名文件已存在')], valid_count: 0 } }
   it('keeps typed details through ordinary API error normalization', async () => {
     const error = Object.assign(new Error('整批未执行'), { data: { httpStatus: 400, applicationError } })

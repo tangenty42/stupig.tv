@@ -1,113 +1,124 @@
 <template>
   <div class="space-y-12 pb-12 pt-8">
     <div v-if="private_blocked" class="section-card-collapse py-12 text-center text-slate-500 dark:text-slate-400">
-      编辑云端草稿需要档案管理和机密读取权限
+      编辑云端草稿需要『蠢猪档案·完全』权限
     </div>
 
-    <div v-else-if="cloud">
-      <MyContentStoryHeader back :invalid="! header_meta" :title="header_title" :labels="header_labels" :desc="header_desc" :cover="header_cover" :cover-label="header_cover_label" :cover-url="header_cover_url" :cover-image="header_cover_image" :date="header_date" :story-id="is_edit ? story_id : null">
-        <template #actions>
-          <Button
-            v-if="is_edit"
-            severity="danger"
-            text
-            size="small"
-            label="删除"
-            :loading="delete_pending"
-            :disabled="delete_pending || ! tab_writable"
-            @click="confirm_delete_story"
-          >
-            <template #icon>
-              <MyIcon name="lucide:trash-2" />
-            </template>
-          </Button>
-          <Button
-            :label="is_edit ? '保存' : '创建'"
-            size="small"
-            :loading="save_pending"
-            :disabled="save_pending || reference_rewrite_pending || ! tab_writable"
-            @click="on_save_click"
-          >
-            <template #icon>
-              <MyIcon :name="is_edit ? 'lucide:save' : 'lucide:check'" />
-            </template>
-          </Button>
-        </template>
-      </MyContentStoryHeader>
-
-      <MyHeightSection tag="section" class="section-card-collapse mt-6">
-        <MyContentMarkdownEditor
-          :key="editor_session_key"
-          ref="markdown_editor"
-          v-model="markdown"
-          :readonly="reference_rewrite_pending || ! tab_writable"
-          :allow-write="can_write_now"
-          :story-id="is_edit ? story_id : null"
-          :view-state-key="user && cloud ? `${user.id}:${cloud.id}` : null"
-          :attachments="stored_attachments"
-          :stories="existing_stories ?? []"
-          :folders="folder_names"
-          @files-dropped="on_editor_files_dropped"
-          @files-pasted="on_editor_files_pasted"
-          @attachment-drop-outside="on_attachment_drop_outside"
-        >
-          <template #toolbar-start>
-            <div
-              class="flex text-xs items-center gap-1"
-              :class="draft_storage_error || (! tab_writable && tab_lock_unavailable) ? 'text-red-500 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'"
-            >
-              <MyIcon
-                :name="draft_storage_error || (! tab_writable && tab_lock_unavailable) ? 'lucide:circle-alert' : save_pending || reference_rewrite_pending || ! tab_writable ? 'lucide:loader-circle' : 'lucide:cloud-check'"
-                class="mr-1 align-text-bottom"
-                :class="{ 'animate-spin': ! draft_storage_error && ! tab_lock_unavailable && (save_pending || reference_rewrite_pending || ! tab_writable) }"
-              />
-              <span>{{ draft_status_label }}</span>
+    <!-- Animate entry when a draft becomes available. Clear its content immediately on loss of access. -->
+    <Transition v-else name="site-page" :mode="cloud ? 'out-in' : undefined" :css="!! cloud">
+      <div v-if="cloud" key="ready">
+        <div :key="`edit-${editor_session_key}`">
+          <MyContentStoryHeader back :invalid="! header_meta" :title="header_title" :labels="header_labels" :desc="header_desc" :cover="header_cover" :cover-label="header_cover_label" :cover-url="header_cover_url" :cover-image="header_cover_image" :date="header_date" :story-id="is_edit ? story_id : null">
+            <template #actions>
               <Button
-                v-if="(draft_dirty || ! is_edit) && ! save_pending"
-                label="舍弃草稿"
-                size="small"
-                text
+                v-if="is_edit"
                 severity="danger"
-                class="!px-1.5 !py-1 !text-xs"
-                :loading="discard_draft_pending"
-                :disabled="discard_draft_pending || ! tab_writable"
-                @click="confirm_abandon_draft"
-              />
-            </div>
-          </template>
-          <template #attachments>
-            <MyContentAttachmentWorkspace v-if="is_edit" :controller="attachment_panel" :dialogs="false" layout="stack" class="h-full" />
+                text
+                size="small"
+                label="删除"
+                :loading="delete_pending || delete_impact_loading"
+                :disabled="delete_pending || delete_impact_loading || ! tab_writable"
+                @click="confirm_delete_story"
+              >
+                <template #icon>
+                  <MyIcon name="lucide:trash-2" />
+                </template>
+              </Button>
+              <Button
+                :label="is_edit ? '保存' : '创建'"
+                size="small"
+                :loading="save_pending"
+                :disabled="save_pending || reference_rewrite_pending || ! tab_writable"
+                @click="on_save_click"
+              >
+                <template #icon>
+                  <MyIcon :name="is_edit ? 'lucide:save' : 'lucide:check'" />
+                </template>
+              </Button>
+            </template>
+          </MyContentStoryHeader>
+
+          <MyHeightSection tag="section" class="section-card-collapse mt-6">
+            <MyContentMarkdownEditor
+              ref="markdown_editor"
+              v-model="markdown"
+              :history-key="cloud.lease_epoch"
+              :readonly="! tab_writable"
+              :allow-write="can_write_now"
+              :story-id="is_edit ? story_id : null"
+              :view-state-key="user && cloud ? `${user.id}:${cloud.id}` : null"
+              :attachments="stored_attachments"
+              :attachments-failure="attachments_completion_failure"
+              :stories="existing_stories ?? []"
+              :stories-failure="stories_completion_failure"
+              :folders="folder_names"
+              :referenced-paths="referenced_paths"
+              @files-dropped="on_editor_files_dropped"
+              @files-pasted="on_editor_files_pasted"
+              @attachment-drop-outside="on_attachment_drop_outside"
+            >
+              <template #toolbar-start>
+                <div
+                  class="flex text-xs items-center gap-1"
+                  :class="draft_storage_error ? 'text-red-500 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'"
+                >
+                  <MyIcon
+                    :name="draft_storage_error ? 'lucide:circle-alert' : save_pending || reference_rewrite_pending || ! tab_writable ? 'lucide:loader-circle' : 'lucide:cloud-check'"
+                    class="mr-1 align-text-bottom"
+                    :class="{ 'animate-spin': ! draft_storage_error && (save_pending || reference_rewrite_pending || ! tab_writable) }"
+                  />
+                  <span>{{ draft_status_label }}</span>
+                  <Button
+                    v-if="(draft_dirty || ! is_edit) && ! save_pending"
+                    label="舍弃草稿"
+                    size="small"
+                    text
+                    severity="danger"
+                    class="!px-1.5 !py-1 !text-xs"
+                    :disabled="! tab_writable"
+                    @click="confirm_abandon_draft"
+                  />
+                </div>
+              </template>
+              <template #attachments>
+                <MyContentAttachmentWorkspace v-if="is_edit" :controller="attachment_panel" :dialogs="false" layout="stack" class="h-full" />
+                <div v-else class="py-10 text-center text-sm text-slate-400 dark:text-slate-500">
+                  创建档案后即可上传附件
+                </div>
+              </template>
+            </MyContentMarkdownEditor>
+          </MyHeightSection>
+
+          <MyDivider v-show="markdown_editor?.editor_mode !== 'preview'" class="mt-12">
+            附件
+          </MyDivider>
+
+          <MyHeightSection
+            v-show="markdown_editor?.editor_mode !== 'preview'"
+            tag="section"
+            class="section-card-collapse transition-colors mt-6"
+          >
+            <MyContentAttachmentWorkspace v-if="is_edit" :controller="attachment_panel" />
             <div v-else class="py-10 text-center text-sm text-slate-400 dark:text-slate-500">
               创建档案后即可上传附件
             </div>
-          </template>
-        </MyContentMarkdownEditor>
-      </MyHeightSection>
-
-      <MyDivider v-show="markdown_editor?.editor_mode !== 'preview'" class="mt-12">
-        附件
-      </MyDivider>
-
-      <MyHeightSection
-        v-show="markdown_editor?.editor_mode !== 'preview'"
-        tag="section"
-        class="section-card-collapse transition-colors mt-6"
-      >
-        <MyContentAttachmentWorkspace v-if="is_edit" :controller="attachment_panel" />
-        <div v-else class="py-10 text-center text-sm text-slate-400 dark:text-slate-500">
-          创建档案后即可上传附件
+          </MyHeightSection>
         </div>
-      </MyHeightSection>
-    </div>
+      </div>
 
-    <div v-else class="section-card-collapse flex flex-col items-center gap-4 py-12 text-center text-slate-500 dark:text-slate-400" role="status">
-      <MyIcon name="lucide:loader-circle" size="3rem" class="animate-spin" />
-      正在连接云端草稿，或草稿已不可访问
-    </div>
+      <MyContentListLoadError v-else-if="draft_open_error === 'failed'" key="load-failed" class="section-card-collapse py-12" @retry="retry_draft_open" />
+      <div v-else-if="draft_open_error" key="unavailable" class="section-card-collapse py-12 text-center text-slate-500 dark:text-slate-400">
+        {{ draft_open_error === 'forbidden' ? '当前身份无权访问云端草稿' : '云端草稿不存在或已被删除' }}
+      </div>
+      <div v-else key="loading" class="section-card-collapse flex flex-col items-center gap-4 py-12 text-center text-slate-500 dark:text-slate-400" role="status">
+        <MyIcon name="lucide:loader-circle" size="3rem" class="animate-spin" />
+        正在连接云端草稿……
+      </div>
+    </Transition>
 
     <MyContentDeleteImpact
-      v-model:visible="delete_visible" description="确认删除整个档案？所有附件都会一起消失。" :impact="delete_impact"
-      :loading="delete_impact_loading" :failure="delete_impact_failure" :pending="delete_pending" :disabled="! tab_writable" @retry="load_delete_impact" @confirm="delete_story_confirmed"
+      v-model:visible="delete_visible" :impact="delete_impact"
+      :pending="delete_pending" :disabled="! tab_writable" @confirm="delete_story_confirmed"
     />
 
     <MyDialog v-model:visible="reference_history_warning_visible" header="引用历史不可用" :pending="save_pending">
@@ -115,7 +126,6 @@
         这份草稿的部分引用历史已不可用，无法自动更新这段时间内变化的引用。请核对当前正文中的引用，确认后将按当前内容继续保存
       </p>
       <template #footer>
-        <Button label="取消" severity="secondary" text :disabled="save_pending" @click="reference_history_warning_visible = false" />
         <Button label="继续保存" :loading="save_pending" :disabled="save_pending || reference_rewrite_pending || ! tab_writable" @click="confirm_reference_history_save">
           <template #icon>
             <MyIcon name="lucide:check" />
@@ -124,17 +134,35 @@
       </template>
     </MyDialog>
 
-    <div v-if="recovery" class="section-card-collapse mt-6" role="status">
-      <p>编辑权已变更，以下修改未上传。可复制保留；关闭本页后将消失。</p>
-      <Textarea :model-value="recovery" readonly class="mt-3 w-full" rows="8" aria-label="未上传修改恢复区" />
-      <Button label="关闭恢复区" text @click="dismiss_recovery" />
-    </div>
+    <MyDialog v-model:visible="draft_leave_visible" header="草稿尚未保存">
+      <p class="text-sm text-slate-600 dark:text-slate-300">
+        有修改还未保存到云端草稿！离开后，这些修改可能丢失！
+      </p>
+      <template #footer>
+        <Button label="离开" severity="danger" text @click="finish_draft_leave(true)" />
+        <Button label="留下" autofocus @click="finish_draft_leave(false)">
+          <template #icon>
+            <MyIcon name="lucide:check" />
+          </template>
+        </Button>
+      </template>
+    </MyDialog>
+
+    <MyDialog v-model:visible="recovery_visible" header="恢复区" :closable="recovery_copy_attempted">
+      <p class="text-sm text-slate-600 dark:text-slate-300">
+        编辑权发生变化，当前编辑器内的内容尚未保存到云端，且关闭本弹窗后这些内容将丢失！请及时复制保存：
+      </p>
+      <Button type="button" label="复制未保存内容" size="large" class="mt-4 w-full" @click="copy_recovery">
+        <template #icon>
+          <MyIcon name="lucide:copy" />
+        </template>
+      </Button>
+    </MyDialog>
 
     <MyDialog v-model:visible="paste_visible" header="命名">
-      <InputText v-model="paste_name" class="w-full" aria-label="附件名称" @keydown.enter="submit_paste" />
+      <MyFileNameInput v-model="paste_name" :suffix="paste_name_suffix" aria-label="附件名称" @keydown.enter="submit_paste" />
       <template #footer>
-        <Button label="取消" severity="secondary" text @click="paste_visible = false" />
-        <Button label="上传" @click="submit_paste">
+        <Button label="上传" :disabled="! paste_name.trim()" @click="submit_paste">
           <template #icon>
             <MyIcon name="lucide:check" />
           </template>
@@ -148,7 +176,7 @@
 import type { ContentStoryMeta } from '@shared/content-markdown'
 import type MyContentMarkdownEditor from '~/components/MyContent/Markdown/Editor.vue'
 import type { AttachmentUploadPick } from '~/features/content/uploads/picks'
-import { parse_story_markdown } from '@shared/content-markdown'
+import { link_file_name_illegal_chars, parse_story_markdown, split_attachment_editable_name } from '@shared/content-markdown'
 import { content_name_key } from '@shared/content-reference'
 import { settings } from '@shared/settings'
 import { content_attachment_drag_file_names } from '~/features/content/attachments/drag'
@@ -166,6 +194,7 @@ definePageMeta({
 })
 
 const route = useRoute()
+const { ok: toast_ok, error: toast_error } = useMyToast()
 const time_context = useDisplayTimeContext()
 const raw_id = computed(() => route.params.id as string)
 const cloud_draft_id = /^draft-[a-f0-9]{32}$/.test(raw_id.value) ? raw_id.value.slice(6) : undefined
@@ -180,12 +209,22 @@ const editing = useStoryEditing({
   draft_id: cloud_draft_id,
   editor: {
     apply_reference_changes: (before, changes) => ! markdown_editor.value || markdown_editor.value.apply_reference_changes(before, changes),
-    insert_markdown: (text, position) => markdown_editor.value?.insert_at_position(text, position),
+    validate: text => markdown_editor.value?.validate(text) ?? null,
   },
   attachment_interaction: content_browser_navigation,
 })
+const { draft_leave_visible, finish_draft_leave } = editing
+if (import.meta.client) {
+  // Match the page key, including transitions to a different draft on the same route record.
+  const editing_path = route.path
+  onScopeDispose(useRouter().beforeEach((to, from) => {
+    if (from.path === editing_path && to.path !== editing_path)
+      return editing.before_draft_leave()
+  }))
+}
 await editing.ready
-const { user, markdown, existing_stories, attachment_panel, attachment_workspace } = editing
+const { user, markdown, existing_stories, stories_completion_failure, attachments_completion_failure, attachment_panel, attachment_workspace } = editing
+const { referenced_paths } = attachment_panel
 
 // Existing titles must reach the save/header validation too, or every `content://` reference
 // is flagged as dead (undefined existing_titles → `! undefined?.some()` is true).
@@ -240,40 +279,81 @@ const header_cover_url = computed(() => {
 const header_cover_image = computed(() => stored_attachments.value.find(item => content_name_key(item.file_name) === content_name_key(header_cover.value ?? '') && item.url === header_cover_url.value)?.image)
 
 const { cloud, draft_phase, private_blocked, editor_session_key, draft_storage_error, draft_dirty,
-  draft_status_label, save_pending, reference_rewrite_pending, tab_writable, tab_lock_unavailable, delete_pending, discard_draft_pending,
+  draft_status_label, save_pending, reference_rewrite_pending, tab_writable, delete_pending,
   reference_history_warning_visible, confirm_reference_history_save, confirm_abandon_draft,
-  on_save_click, confirm_delete_story, delete_visible, delete_impact, delete_impact_loading, delete_impact_failure, load_delete_impact, delete_story_confirmed,
-  upload_picks, can_write_now, recovery, dismiss_recovery } = editing
+  on_save_click, confirm_delete_story, delete_visible, delete_impact, delete_impact_loading, delete_story_confirmed,
+  upload_picks, can_write_now, draft_open_error, retry_draft_open, recovery, dismiss_recovery } = editing
+
+const recovery_copy_attempted = ref(false)
+watch(recovery, () => {
+  recovery_copy_attempted.value = false
+}, { flush: 'sync' })
+const recovery_visible = computed({
+  get: () => Boolean(recovery.value),
+  set: (value: boolean) => {
+    if (! value)
+      dismiss_recovery()
+  },
+})
+
+async function copy_recovery() {
+  recovery_copy_attempted.value = true
+  try {
+    await navigator.clipboard.writeText(recovery.value)
+  }
+  catch {
+    toast_error('复制失败，请重试')
+    return
+  }
+  toast_ok('已复制未保存内容')
+}
 
 watch(draft_phase, (phase) => {
   if (phase === 'forbidden')
     last_valid_meta.value = null
 })
 function on_editor_files_dropped(picks: AttachmentUploadPick[], position: number | null) {
-  void upload_picks(picks, position)
+  void upload_picks(picks, upload_insertion(position))
 }
 
+function upload_insertion(position: number | null) {
+  return position === null ? null : markdown_editor.value?.track_upload_insertion(position) ?? (() => false)
+}
 const paste_visible = ref(false)
 const paste_name = ref('')
-let paste_pick: { pick: AttachmentUploadPick, position: number | null } | null = null
+const paste_name_suffix = ref('')
+let paste_pick: { pick: AttachmentUploadPick, insert: ReturnType<typeof upload_insertion> } | null = null
+watch(paste_visible, (open) => {
+  if (! open)
+    paste_pick = null
+}, { flush: 'sync' })
 watch(editor_session_key, () => {
   paste_pick = null
   paste_visible.value = false
   paste_name.value = ''
+  paste_name_suffix.value = ''
 }, { flush: 'sync' })
 function on_editor_files_pasted(picks: AttachmentUploadPick[], position: number | null) {
+  const insert = upload_insertion(position)
   if (picks.length !== 1)
-    return void upload_picks(picks, position)
-  paste_pick = { pick: picks[0]!, position }
-  paste_name.value = picks[0]!.file_name
+    return void upload_picks(picks, insert)
+  paste_pick = { pick: picks[0]!, insert }
+  // Same split as the ordinary rename prompt: only the stem is editable, the
+  // extension stays a fixed suffix so a paste cannot change the file type.
+  // The locked suffix is filtered too: a raw clipboard name can carry illegal
+  // characters past the last dot (`.png:`) and the submit must stay clean.
+  const parts = split_attachment_editable_name(picks[0]!.file_name)
+  paste_name.value = parts.editable
+  paste_name_suffix.value = parts.locked.replace(link_file_name_illegal_chars, '_')
   paste_visible.value = true
 }
 function submit_paste() {
   const held = paste_pick
+  if (! held || ! paste_name.value.trim())
+    return
   paste_visible.value = false
   paste_pick = null
-  if (held)
-    void upload_picks([{ ... held.pick, file_name: paste_name.value }], held.position)
+  void upload_picks([{ ... held.pick, file_name: `${paste_name.value}${paste_name_suffix.value}` }], held.insert)
 }
 function on_attachment_drop_outside(event: DragEvent) {
   const folder = get_content_folder_drag_data(event.dataTransfer)

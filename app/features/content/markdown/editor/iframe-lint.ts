@@ -5,6 +5,10 @@ import { create_content_markdown_parser, dedent_html_inner, split_html_wrappers 
 
 export const outer_refs_source = 'outer-refs'
 
+function line_at(source: string, offset: number) {
+  return source.slice(0, offset).split('\n').length - 1
+}
+
 /** Diagnose link uses at their source line, including resolved reference links. */
 export function iframe_link_diagnostics(source: string, doc: Text): Diagnostic[] {
   const md = create_content_markdown_parser()
@@ -19,7 +23,7 @@ export function iframe_link_diagnostics(source: string, doc: Text): Diagnostic[]
     const accepted = link_rule(state, silent)
     if (accepted && ! silent && state.tokens[index]?.type === 'link_open') {
       const token = state.tokens[index]!
-      token.meta = { ... token.meta, source_line_offset: state.src.slice(0, position).split('\n').length - 1 }
+      token.meta = { ... token.meta, source_line_offset: line_at(state.src, position) }
     }
     return accepted
   })
@@ -29,6 +33,10 @@ export function iframe_link_diagnostics(source: string, doc: Text): Diagnostic[]
     for (const block of md.parse(markdown, env)) {
       if (! block.map)
         continue
+      if (block.type === 'content_carousel_block') {
+        scan(block.content, line_offset + line_at(markdown, block.meta.body_start))
+        continue
+      }
       if (block.type === 'html_block') {
         const chunks = split_html_wrappers(block.content)
         let cursor = 0
@@ -46,6 +54,10 @@ export function iframe_link_diagnostics(source: string, doc: Text): Diagnostic[]
       if (block.type !== 'inline')
         continue
       for (const token of block.children ?? []) {
+        if (token.type === 'content_carousel_inline') {
+          scan(token.content, line_offset + block.map[0] + line_at(block.content, token.meta.body_start))
+          continue
+        }
         if (token.type !== 'link_open' || ! token.attrGet('href')?.startsWith('iframe://'))
           continue
         const line_number = Math.min(line_offset + block.map[0] + 1 + (token.meta?.source_line_offset ?? 0), doc.lines)

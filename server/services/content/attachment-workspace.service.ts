@@ -16,7 +16,7 @@ export async function get_attachment_workspace(story_id: number, viewer: AuthUse
     if (! stories[0])
       throw new ApiError(404, '档案不存在或已被删除')
     const rows = await workspace_rows(connection, story_id)
-    const can_private = has_permission(viewer, 'content_private', 'read')
+    const can_private = has_permission(viewer, 'content_access', 'private_read')
     const attachments = await list_scope_attachments(story_id, connection, can_private)
     const versions = workspace_node_versions(rows)
     const attachments_by_id = new Map(attachments.map(attachment => [attachment.id, attachment]))

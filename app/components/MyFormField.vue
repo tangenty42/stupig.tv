@@ -25,15 +25,14 @@
     </div>
 
     <component :is="otpSend ? 'InputGroup' : 'div'" v-if="props.as === 'InputOtp'">
-      <MyInputOtp :id="id" v-model="$field.value" :placeholder="placeholder" :aria-describedby="described_by" v-bind="{ ... extra, ... $field.props, invalid: $field.invalid }" />
-      <InputGroupAddon v-if="otpSend" class="shrink-0 !px-6">
-        <MyOtpButton
-          v-model="otp_cooldown_until"
-          class="!text-sm h-full"
-          :loading="otp_btn_loading"
-          @click="on_otp_send"
-        />
-      </InputGroupAddon>
+      <MyInputOtp :id="id" v-model="$field.value" class="min-w-0" :placeholder="placeholder" :aria-describedby="described_by" v-bind="{ ... extra, ... $field.props, invalid: $field.invalid }" />
+      <MyOtpButton
+        v-if="otpSend"
+        v-model="otp_cooldown_until"
+        class="otp-send-button shrink-0 whitespace-nowrap !text-sm"
+        :loading="otp_btn_loading"
+        @click="on_otp_send"
+      />
     </component>
     <IconField v-else-if="props.as === 'Password'">
       <InputIcon><MyIcon name="lucide:key" /></InputIcon>
@@ -95,6 +94,7 @@ import type { useFormReturn } from '@primevue/forms/useform'
 import { FormField } from '@primevue/forms'
 import { phone_schema } from '@shared/schemas'
 import { useApi } from '~/composables/useApi'
+import { invalidate_shared_queries } from '~/composables/useSyncedData'
 
 interface OtpChannels { phone: string | null, identity: string | null }
 interface OtpCooldownSnapshot { until: string | null, channels: OtpChannels | null }
@@ -108,6 +108,7 @@ interface MyFormFieldOtpSendOptions {
 
 const props = withDefaults(defineProps<{
   name: string
+  inputId?: string
   label?: string
   icon?: string
   placeholder?: string
@@ -123,7 +124,7 @@ const props = withDefaults(defineProps<{
 
 const { error } = useMyToast()
 
-const id = computed(() => `field-${props.name}`)
+const id = computed(() => props.inputId ?? `field-${props.name}`)
 const hint_id = computed(() => `${id.value}-hint`)
 const error_id = computed(() => `${id.value}-error`)
 const described_by = computed(() => {
@@ -135,6 +136,7 @@ const described_by = computed(() => {
 })
 
 const { auth: auth_api } = useApi()
+const nuxt_app = useNuxtApp()
 const pc_form = inject<useFormReturn | undefined>('$pcForm', undefined)
 
 // Store a UTC ISO string rather than Dayjs so the cooldown survives payload serialization.
@@ -142,6 +144,7 @@ const otp_state_key = props.otpSend ? `${props.otpSend.purpose}:${props.name}` :
 const otp_cooldown_until = useSyncedState<string | null>(`otp_cooldown_${otp_state_key}`, () => null)
 const otp_send_loading = ref(false)
 const otp_sync_loading = useState(`otp_cooldown_loading_${otp_state_key}`, () => false)
+const otp_query_key_prefix = 'otp-cooldown:'
 
 async function target_field_has_error() {
   const field_name = props.otpSend?.targetFieldName
@@ -170,6 +173,9 @@ async function on_otp_send() {
     await props.otpSend.sendHandler()
   }
   finally {
+    // A send can reserve a device-wide cooldown even when SMS fails or MQTT
+    // misses the update. Recheck each target through its own shared query.
+    await invalidate_shared_queries(nuxt_app, otp_query_key_prefix)
     otp_send_loading.value = false
   }
 }
@@ -253,7 +259,7 @@ if (props.otpSend) {
     // first fetch (so the initial query can run with no channel known yet),
     // a phone change re-fetches exactly once, and channel updates arriving
     // with the data only re-subscribe without fetching again.
-    { query_key: otp_target_phone },
+    { query_key: computed(() => otp_target_phone.value ? `${otp_query_key_prefix}${otp_target_phone.value}` : null) },
   )
 
   watch(otp_sync_source_has_error, (new_val) => {
@@ -271,3 +277,10 @@ function on_paste(e: Event) {
   }
 }
 </script>
+
+<style scoped>
+.p-inputgroup > .otp-send-button.p-button {
+  /* The input already draws the shared edge. */
+  border-inline-start-width: 0;
+}
+</style>

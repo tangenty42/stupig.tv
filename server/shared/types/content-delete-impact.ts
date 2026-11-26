@@ -1,6 +1,8 @@
 export interface ContentDeleteTarget {
   path: string
   kind: 'file' | 'folder' | 'story'
+  /** This public 删减版 also serves references to its paired private file. */
+  redaction_of?: string
 }
 
 export interface ContentDeleteReference {

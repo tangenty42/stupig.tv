@@ -4,7 +4,7 @@ import type { WorkspaceChange } from './workspace-change'
 import { ApiError } from '@server/errors/ApiError'
 import { db } from '@server/lib/db'
 import { attachment_cover_url } from '@server/services/content-attachments.service'
-import { rewrite_attachment_path } from '@shared/content-markdown'
+import { attachment_path_is_private, attachment_privacy, rewrite_attachment_path } from '@shared/content-markdown'
 import { content_name_key, format_attachment_ref, parse_content_ref } from '@shared/content-reference'
 import { replay_content_references, replay_reference_destination } from '@shared/content-reference-replay'
 import { rewrite_cloud_drafts } from './draft.repository'
@@ -22,10 +22,8 @@ interface NamespaceNode extends RowDataPacket {
   version: string
   is_private: number
   storage_bucket: 'public' | 'private'
-  storage_provider?: 'legacy' | 'aliyun'
   oss_version_id?: string | null
   node_revision?: number
-  encryption_key?: string | null
 }
 
 export async function get_title_reference_version() {
@@ -52,15 +50,28 @@ export async function begin_namespace_change(connection: Connection, story_id: n
   if (! stories[0])
     throw new ApiError(404, '档案不存在或已被删除')
   const [nodes] = await connection.execute<NamespaceNode[]>(
-    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, storage_provider, oss_version_id, node_revision, encryption_key, redacted_display_key, redacted_fallback_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [story_id],
+    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, oss_version_id, node_revision, redacted_display_key, redacted_fallback_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [story_id],
   )
   return { story_id, revision: Number(stories[0].namespace_revision), nodes }
 }
 
+/** Rows locked by begin_namespace_change; a 删减版 can change privacy without being touched itself. */
+async function apply_attachment_privacy(connection: Connection, story_id: number) {
+  const [rows] = await connection.execute<NamespaceNode[]>('SELECT id, file_name, is_folder, is_private FROM content_story_attachments WHERE story_id = ? AND file_name <> \'\'', [story_id])
+  const privacy = attachment_privacy(rows.map(row => ({ path: row.file_name, is_folder: Boolean(row.is_folder) })))
+  for (const row of rows) {
+    const value = privacy(row.file_name, Boolean(row.is_folder))
+    // Only a 删减版 is made public here; a private row without a `.good` path stays private.
+    if (value !== Boolean(row.is_private) && (value || attachment_path_is_private(row.file_name)))
+      await connection.execute('UPDATE content_story_attachments SET is_private = ?, read_revision = read_revision + 1, node_revision = node_revision + 1 WHERE id = ?', [value ? 1 : 0, row.id])
+  }
+}
+
 /** Snapshot deltas omit temporary paths; a whole batch is one simultaneous step. */
 export async function finish_namespace_change(connection: Connection, before: Awaited<ReturnType<typeof begin_namespace_change>>, folder_moves: { from: string, to: string }[] = []): Promise<WorkspaceChange> {
+  await apply_attachment_privacy(connection, before.story_id)
   const [nodes] = await connection.execute<NamespaceNode[]>(
-    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, storage_provider, oss_version_id, node_revision, encryption_key, redacted_display_key, redacted_fallback_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [before.story_id],
+    'SELECT id, file_name, is_folder, object_key, version, is_private, storage_bucket, oss_version_id, node_revision, redacted_display_key, redacted_fallback_key, redacted_revision FROM content_story_attachments WHERE story_id = ? ORDER BY id FOR UPDATE', [before.story_id],
   )
   const current = new Map(nodes.map(node => [Number(node.id), node]))
   const previous_ids = new Set(before.nodes.map(node => Number(node.id)))
@@ -76,7 +87,7 @@ export async function finish_namespace_change(connection: Connection, before: Aw
       changes.push({ node_id: Number(old.id), from: format_attachment_ref(old.file_name), to: next === null ? null : format_attachment_ref(next), is_folder: Boolean(old.is_folder) })
       changed = true
     }
-    if (node && (node.object_key !== old.object_key || node.version !== old.version || node.is_private !== old.is_private || node.storage_bucket !== old.storage_bucket || node.storage_provider !== old.storage_provider || node.oss_version_id !== old.oss_version_id || node.node_revision !== old.node_revision || node.encryption_key !== old.encryption_key))
+    if (node && (node.object_key !== old.object_key || node.version !== old.version || node.is_private !== old.is_private || node.storage_bucket !== old.storage_bucket || node.oss_version_id !== old.oss_version_id || node.node_revision !== old.node_revision))
       changed = true
   }
   for (const node of nodes) {

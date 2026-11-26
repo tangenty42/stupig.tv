@@ -10,6 +10,7 @@ import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { format_profile_row, select_profile_row_sql } from '@server/services/profile.service'
 import { logout_all_user_sessions } from '@server/services/session.service'
 import { normalize_permission_grants } from '@shared/permissions'
+import { compile_admin_filter } from './admin-filter'
 
 const config = runtime_config()
 
@@ -27,7 +28,7 @@ async function require_non_admin_target(target_id: number) {
     [target_id],
   )
   if (! rows[0]) {
-    throw new ApiError(404, '用户不存在')
+    throw new ApiError(404, '用户不存在', { code: 'ADMIN_TARGET_REJECTED' })
   }
   return rows[0]
 }
@@ -43,7 +44,10 @@ export async function force_logout_user(target_id: number) {
   publish_refresh({ resource: sync_resource('profile_sessions', target_id) })
 }
 
-export async function ban_user(target_id: number) {
+export async function ban_user(actor_id: number, target_id: number) {
+  if (actor_id === target_id) {
+    throw new ApiError(400, '不能封禁自己', { code: 'ADMIN_TARGET_REJECTED' })
+  }
   await db.execute(
     'UPDATE users SET is_banned = 1 WHERE id = ?',
     [target_id],
@@ -68,12 +72,10 @@ export async function list_users(
   const { page, page_size } = options
   const offset = (page - 1) * page_size
 
-  const filter = options.filter ? options.filter.trim() : ''
-  const where_clause = filter || '1=1'
-  const params: string[] = []
+  const { where: where_clause, order_by, params } = compile_admin_filter(viewer, options.filter)
 
   const [count_rows] = await db.execute<CountRow[]>(
-    `SELECT COUNT(*) AS total FROM users WHERE ${where_clause}`,
+    `SELECT COUNT(*) AS total FROM users u WHERE ${where_clause}`,
     params,
   )
   const total = count_rows[0]?.total ?? 0
@@ -81,7 +83,7 @@ export async function list_users(
   const [user_rows] = await db.execute<UserRow[]>(
     `${select_profile_row_sql}
      WHERE ${where_clause}
-     ORDER BY u.id DESC
+     ORDER BY ${order_by}
      LIMIT ? OFFSET ?`,
     [config.app.online.timeoutSeconds, ... params, String(page_size), String(offset)],
   )
@@ -112,7 +114,7 @@ export async function list_users(
 
 export async function set_user_admin_role(actor_id: number, target_id: number, is_admin: boolean) {
   if (! is_admin && actor_id === target_id) {
-    throw new ApiError(400, '不能移除自己的管理员身份')
+    throw new ApiError(400, '不能移除自己的管理员身份', { code: 'ADMIN_TARGET_REJECTED' })
   }
   await require_non_admin_target(target_id)
   await db.execute(
@@ -126,7 +128,7 @@ export async function set_user_admin_role(actor_id: number, target_id: number, i
 export async function set_user_permissions(target_id: number, grants: PermissionGrant[]) {
   const target = await require_non_admin_target(target_id)
   if (target.is_admin) {
-    throw new ApiError(400, '管理员拥有全部权限，无需编辑权限')
+    throw new ApiError(400, '管理员拥有全部权限，无需编辑权限', { code: 'ADMIN_TARGET_REJECTED' })
   }
   const normalized = normalize_permission_grants(grants)
   await db.execute(
@@ -137,9 +139,13 @@ export async function set_user_permissions(target_id: number, grants: Permission
 }
 
 export async function set_profile_verification(target_id: number, is_verified: boolean, verified_note?: string | null) {
+  const note = is_verified ? verified_note?.trim() ?? null : null
+  if (is_verified && ! note) {
+    throw new ApiError(400, '请填写认证说明', { code: 'ADMIN_TARGET_REJECTED' })
+  }
   await db.execute(
     'UPDATE users SET is_verified = ?, verified_note = ? WHERE id = ?',
-    [is_verified ? 1 : 0, verified_note ?? null, target_id],
+    [is_verified ? 1 : 0, note, target_id],
   )
   publish_user_refresh(target_id)
 }

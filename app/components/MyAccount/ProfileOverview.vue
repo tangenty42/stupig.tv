@@ -37,15 +37,13 @@
     </div>
 
     <div class="w-full mt-6">
-      <div class="font-medium flex items-center gap-x-2 gap-y-0.5 text-3xl">
-        <span>{{ profile.username }}</span>
-        <MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="text-emerald-500" />
+      <div class="font-medium text-3xl">
+        <span>{{ profile.username }}<MyIcon v-if="profile.is_verified" name="lucide:badge-check" class="ms-2 text-emerald-500" /></span>
       </div>
       <div class="mt-6 flex flex-wrap items-start gap-2">
         <span v-if="profile.is_verified && profile.verified_note" class="label border-emerald-300 dark:border-emerald-700/50 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-          <span class="shrink-0 flex items-center gap-1">
-            <MyIcon name="lucide:badge-check" class="text-emerald-500" />
-            <span class="font-semibold">已认证</span>
+          <span class="shrink-0 font-semibold">
+            <MyIcon name="lucide:badge-check" class="me-1 text-emerald-500" />已认证
           </span>
           <span>{{ profile.verified_note }}</span>
         </span>
@@ -60,9 +58,8 @@
       <div v-for="item in profile_meta_items" :key="item.key" class="mb-2 rounded-sm flex flex-col items-start overflow-hidden border border-slate-200/50 dark:border-slate-700/50 bg-slate-100 dark:bg-slate-800/50">
         <div class="h-full w-full px-2 py-1 flex items-center justify-start border-b border-slate-300/50 dark:border-slate-700/50 bg-slate-200 dark:bg-slate-800 rounded-b-sm">
           <div class="w-full flex gap-2 items-center justify-between text-slate-500 dark:text-slate-400 px-2 py-1">
-            <div class="shrink-0 flex gap-2 items-center">
-              <MyIcon :name="item.icon" class="text-xl" />
-              <span class="text-lg font-semibold">{{ item.label }}</span>
+            <div class="shrink-0 text-lg font-semibold">
+              <MyIcon :name="item.icon" class="me-2" />{{ item.label }}
             </div>
             <div class="shrink-0">
               <Button
@@ -122,7 +119,7 @@
     </h2>
 
     <MyBadge v-if="profile.is_admin" outlined type="warning">
-      <span><MyIcon name="lucide:shield-check" class="me-1" />管理员·全部权限</span>
+      <span><MyIcon name="lucide:shield-check" class="me-1" />管理员·大权独揽</span>
     </MyBadge>
 
     <div v-else class="flex flex-wrap gap-2">
@@ -138,14 +135,11 @@
     </Form>
 
     <template #footer>
-      <div class="flex justify-end gap-2">
-        <Button label="取消" severity="secondary" text :disabled="birthday_pending" @click="birthday_editor_visible = false" />
-        <Button type="submit" form="birthday-form" label="确定" :loading="birthday_pending" :disabled="birthday_pending">
-          <template #icon>
-            <MyIcon name="lucide:check" />
-          </template>
-        </Button>
-      </div>
+      <Button type="submit" form="birthday-form" label="确定" :loading="birthday_pending" :disabled="birthday_pending">
+        <template #icon>
+          <MyIcon name="lucide:check" />
+        </template>
+      </Button>
     </template>
   </MyDialog>
 </template>
@@ -227,7 +221,7 @@ const profile_meta_items = computed(() => [
         icon: 'lucide:person-standing',
       }]
     : []),
-  ... (profile.value.editable
+  ... (profile.value.sensitive_readable
     ? [{
         key: 'phone',
         label: '手机号',

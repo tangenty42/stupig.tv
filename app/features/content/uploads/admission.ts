@@ -1,5 +1,5 @@
 import type { ImageSaveMode, UploadBatch } from '@shared/content-upload'
-import type { ErrorPolicy, WorkspaceIssue } from '@shared/content-workspace'
+import type { ErrorPolicy, PrivacyConfirmation, WorkspaceIssue } from '@shared/content-workspace'
 import type { ContentStoryAttachment } from '@shared/types/content'
 import type { ContentUploadSession } from '@shared/types/content-upload'
 import type { AttachmentUploadPick } from './picks'
@@ -7,13 +7,17 @@ import type { useApi } from '~/composables/useApi'
 import { image_upload_error } from '@shared/content-image-upload'
 import { normalized_attachment_extension, processable_image_mime } from '@shared/content-markdown'
 import { upload_content_mime } from '@shared/content-upload'
-import { error_policy_schema } from '@shared/content-workspace'
+import { apply_resolution_choices, error_policy_schema } from '@shared/content-workspace'
 import { settings } from '@shared/settings'
+import { is_client_error } from '~/composables/useApi'
+import { random_uuid } from '~/utils/random'
 import { image_upload_size } from './image-upload'
+import { upload_file_read_error } from './picks'
 
 export interface UploadEntry extends AttachmentUploadPick {
   image_mode?: ImageSaveMode
   image_input_basis?: 'display' | 'original'
+  save_as_redaction?: true
   purpose?: 'create' | 'replace' | 'redact'
   access?: 'public' | 'private'
   source?: { id: number, version: string }
@@ -29,6 +33,11 @@ export interface UploadPreparation {
   phase: 'waiting' | 'admitting' | 'failed'
   error?: string
   session_id?: string
+  purpose?: UploadEntry['purpose']
+  image_overwrite?: true
+  image_save_as?: true
+  source_id?: number
+  replacement_id?: number
 }
 
 interface AdmissionOptions {
@@ -44,6 +53,7 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
   const preparations = ref<UploadPreparation[]>([])
   const can_cancel_preparation = computed(() => preparations.value.length > 0 && ! preparations.value.some(item => item.phase === 'admitting'))
   const resolution = ref<{ items: WorkspaceIssue[], valid_count: number } | null>(null)
+  const privacy_confirmation = ref<PrivacyConfirmation | null>(null)
   const admission_error = ref('')
   const admitting = ref(false)
   let pending: { input: UploadBatch, entries: UploadEntry[] } | null = null
@@ -52,9 +62,8 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
   async function submit(policy?: ErrorPolicy) {
     if (! pending || admitting.value)
       return
-    if (policy) {
-      pending.input.on_error = policy
-      pending.input.request_id = crypto.randomUUID()
+    if (policy && resolution.value) {
+      pending.input = { ... pending.input, request_id: random_uuid(), on_error: apply_resolution_choices(pending.input.on_error, resolution.value.items, policy) }
     }
     admitting.value = true
     admission_error.value = ''
@@ -77,6 +86,7 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
           return
       }
       resolution.value = null
+      privacy_confirmation.value = null
       pending = null
       preparations.value = []
       // Admission of the complete selection precedes every byte transfer.
@@ -95,11 +105,21 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
     catch (error) {
       if (epoch !== options.snapshot_epoch())
         return
-      const value = error as { code?: string, details?: { items: WorkspaceIssue[], valid_count: number } }
-      if (value.code === 'BATCH_REJECTED' && value.details && 'valid_count' in value.details)
-        resolution.value = value.details
-      else
-        admission_error.value = error instanceof Error ? error.message : '受理结果未知，请重试查询'
+      const value = error as { code?: string, details?: unknown }
+      if (value.code === 'BATCH_REJECTED' && value.details && typeof value.details === 'object' && 'valid_count' in value.details) {
+        resolution.value = value.details as { items: WorkspaceIssue[], valid_count: number }
+        privacy_confirmation.value = null
+      }
+      else if (value.code === 'PRIVACY_CONFIRMATION' && value.details) {
+        privacy_confirmation.value = value.details as PrivacyConfirmation
+        resolution.value = null
+      }
+      else {
+        // A lost reply may already have committed. Retry its receipt, not the previous conflict.
+        resolution.value = null
+        privacy_confirmation.value = null
+        admission_error.value = is_client_error(error) && error instanceof Error ? error.message : '上传受理结果待确认'
+      }
     }
     finally {
       if (epoch === options.snapshot_epoch())
@@ -113,6 +133,21 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
       preparations.value = []
     }
   }
+  /** 「继续」 approves exactly the listed effects; different effects ask again. */
+  function confirm_privacy() {
+    if (! pending || ! privacy_confirmation.value || admitting.value)
+      return
+    pending.input = { ... pending.input, request_id: random_uuid(), privacy_digest: privacy_confirmation.value.digest }
+    privacy_confirmation.value = null
+    return submit()
+  }
+  function dismiss_privacy() {
+    if (privacy_confirmation.value && ! admitting.value) {
+      pending = null
+      privacy_confirmation.value = null
+      preparations.value = []
+    }
+  }
   async function start(entries: UploadEntry[]) {
     if (accepting)
       throw new Error('正在处理所选文件，请稍后再试')
@@ -120,12 +155,18 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
       throw new Error('请先处理上一批上传的受理结果')
     if (entries.length > settings.app.content.workspace.batchLimit)
       throw new Error(`一次最多选择 ${settings.app.content.workspace.batchLimit} 个文件，请分批上传`)
-    accepting = true
     const run = ++ preparation_generation
     const epoch = options.snapshot_epoch()
     const current = () => epoch === options.snapshot_epoch() && run === preparation_generation
-    preparations.value = entries.map(entry => ({ id: crypto.randomUUID(), path: entry.file_name, size: entry.file.size, loaded: 0, phase: 'waiting' }))
+    accepting = true
     try {
+      const request_id = random_uuid()
+      preparations.value = entries.map((entry, index): UploadPreparation => ({
+        id: `${request_id}:${index}`, path: entry.file_name, size: entry.file.size, loaded: 0, phase: 'waiting',
+        purpose: entry.purpose, image_overwrite: entry.image_mode === 'overwrite' ? true : undefined,
+        image_save_as: entry.image_mode === 'copy' ? true : undefined,
+        source_id: entry.source?.id, replacement_id: entry.replacement?.id,
+      }))
       for (const preparation of preparations.value) {
         if (preparation.size > settings.app.content.upload.maxSizeMb * 1024 ** 2) {
           preparation.phase = 'failed'
@@ -151,7 +192,7 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
           catch (error) {
             if (! current())
               return
-            message = error instanceof Error ? error.message : '无法检查图片尺寸，请重新选择文件'
+            message = upload_file_read_error(error)?.message ?? (error instanceof Error ? error.message : '无法检查图片尺寸，请重新选择文件')
           }
         }
         if (message) {
@@ -160,16 +201,19 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
           invalid = true
         }
       }
-      if (invalid)
+      if (invalid) {
+        preparations.value = preparations.value.filter(item => item.phase === 'failed')
         return
+      }
       if (current() && entries.length) {
         for (const preparation of preparations.value)
           preparation.phase = 'admitting'
         const prepared: UploadBatch['entries'] = entries.map(entry => ({ path: normalized_attachment_extension(entry.file_name), size: entry.file.size,
           purpose: entry.purpose ?? 'create', access: entry.access ?? 'public', source: entry.source, replacement: entry.replacement,
           selection_root: entry.selection_root, image_mode: entry.image_mode, image_input_basis: entry.image_input_basis,
+          save_as_redaction: entry.save_as_redaction,
           original_name: entry.file.name, content_type: entry.file.type }))
-        pending = { input: { scope_id: scope, request_id: crypto.randomUUID(), on_error: error_policy_schema.parse({}), entries: prepared }, entries }
+        pending = { input: { scope_id: scope, request_id, on_error: error_policy_schema.parse({ by_item: {} }), entries: prepared }, entries }
         await submit()
       }
     }
@@ -192,8 +236,9 @@ export function createContentUploadAdmission(scope: number, options: AdmissionOp
     accepting = false
     pending = null
     resolution.value = null
+    privacy_confirmation.value = null
     admission_error.value = ''
     admitting.value = false
   }
-  return { preparations, can_cancel_preparation, cancel_preparation, resolution, admission_error, admitting, submit, dismiss_resolution, start, reset }
+  return { preparations, can_cancel_preparation, cancel_preparation, resolution, privacy_confirmation, admission_error, admitting, submit, dismiss_resolution, confirm_privacy, dismiss_privacy, start, reset }
 }

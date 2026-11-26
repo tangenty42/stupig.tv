@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, effectScope, isRef, ref, watch } from 'vue'
+import { get_error_status } from './useApi'
 import { useSyncedState } from './useSyncedState'
+import { TrpcApiError } from './useTrpcClient'
 
 describe('useSyncedData hydration updates', () => {
   it('refreshes upload membership on mutation and reconnect sync', async () => {
@@ -156,6 +158,7 @@ describe('useSyncedData hydration updates', () => {
     vi.stubGlobal('isRef', isRef)
     vi.stubGlobal('ref', ref)
     vi.stubGlobal('watch', watch)
+    vi.stubGlobal('useReactiveDateNow', () => ref(0))
     vi.stubGlobal('onUnmounted', () => {})
     vi.stubGlobal('get_error_status', () => undefined)
     vi.stubGlobal('useState', (_key: string, init: () => unknown) => {
@@ -503,6 +506,86 @@ describe('useSyncedData hydration updates', () => {
     expect(toast).toHaveBeenCalledOnce()
     expect(first_error).toHaveBeenCalledOnce()
     expect(second_error).toHaveBeenCalledOnce()
+  })
+
+  it('leaves data and error feedback alone when a refresh is cancelled', async () => {
+    const toast = vi.fn()
+    const on_error = vi.fn()
+    const nuxt_app = { isHydrating: false, hook: vi.fn() }
+    vi.stubGlobal('useNuxtApp', () => nuxt_app)
+    vi.stubGlobal('useMyToast', () => ({ error: toast }))
+    vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
+    const { useSyncedData } = await import('./useSyncedData')
+    const fetcher = vi.fn<() => Promise<string>>()
+      .mockResolvedValueOnce('last result')
+      .mockRejectedValueOnce(new DOMException('用户打断了施法', 'AbortError'))
+      .mockResolvedValueOnce('next result')
+    const data = ref<string | null>(null)
+    const loading = ref(false)
+    const { refresh } = await useSyncedData('cancelled:read', fetcher, data, loading, { on_error, default_error_toast: true })
+
+    await refresh()
+    expect(data.value).toBe('last result')
+    expect(loading.value).toBe(false)
+    expect(on_error).not.toHaveBeenCalled()
+    expect(toast).not.toHaveBeenCalled()
+
+    await refresh()
+    expect(data.value).toBe('next result')
+  })
+
+  it.each([
+    { label: 'a normalized network failure without a status', error: new TrpcApiError('Failed to fetch', undefined, undefined, { cause: new TypeError('Failed to fetch') }), retries: true },
+    { label: 'a transport timeout', error: new DOMException('Timed out', 'TimeoutError'), retries: true },
+    { label: 'a 408 response', error: new TrpcApiError('Request timeout', 408), retries: true },
+    { label: 'a 503 response', error: new TrpcApiError('Service unavailable', 503), retries: true },
+    { label: 'a 401 response', error: new TrpcApiError('Unauthorized', 401), retries: false },
+    { label: 'a 403 response', error: new TrpcApiError('Forbidden', 403), retries: false },
+    { label: 'a 404 response', error: new TrpcApiError('Not found', 404), retries: false },
+    { label: 'a 429 response', error: new TrpcApiError('Too many requests', 429), retries: false },
+    { label: 'an intentional abort', error: new DOMException('Aborted', 'AbortError'), retries: false },
+    { label: 'an unclassified error', error: new Error('Unclassified failure'), retries: false },
+  ])('checks the default retry behavior for $label', async ({ error, retries }) => {
+    const app = { isHydrating: false, hook: vi.fn() }
+    const now = ref(100_000)
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now.value)
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    const use_clock = vi.fn(() => now)
+    let unmount: (() => void) | undefined
+    vi.stubGlobal('useNuxtApp', () => app)
+    vi.stubGlobal('useMyToast', () => ({ error: vi.fn() }))
+    vi.stubGlobal('useDataSync', () => ({ subscribe: vi.fn(() => () => {}) }))
+    vi.stubGlobal('useReactiveDateNow', use_clock)
+    vi.stubGlobal('document', { visibilityState: 'visible' })
+    vi.stubGlobal('get_error_status', get_error_status)
+    vi.stubGlobal('onUnmounted', (callback: () => void) => {
+      unmount = callback
+    })
+    const { useSyncedData } = await import('./useSyncedData')
+    const data = ref<string | null>(null)
+    const fetcher = vi.fn<() => Promise<string>>().mockRejectedValueOnce(error).mockResolvedValue('recovered')
+
+    try {
+      const ready = useSyncedData('retry:classification', fetcher, data)
+      expect(use_clock).toHaveBeenCalledOnce()
+      await ready
+      expect(fetcher).toHaveBeenCalledOnce()
+      expect(data.value).toBeNull()
+
+      now.value += 60_000
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(fetcher).toHaveBeenCalledTimes(retries ? 2 : 1)
+      expect(data.value).toBe(retries ? 'recovered' : null)
+
+      now.value += 60_000
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(fetcher).toHaveBeenCalledTimes(retries ? 2 : 1)
+    }
+    finally {
+      unmount?.()
+      random.mockRestore()
+      clock.mockRestore()
+    }
   })
 
   it('discards hydration buffers and removes hooks and subscriptions on disposal', async () => {

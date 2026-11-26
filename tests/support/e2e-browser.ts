@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import type { DraftResult } from '@shared/types/content-draft'
 import { randomUUID } from 'node:crypto'
 import { test as base, expect } from '@playwright/test'
 import { settings } from '@shared/settings'
@@ -38,19 +39,45 @@ export const test = base.extend({
 
 export async function ready(page: Page) {
   await page.waitForFunction(() => (window as unknown as { __STUPIG_E2E_READY__?: () => boolean }).__STUPIG_E2E_READY__?.(), undefined, { timeout: 15_000 })
-  const timing = await page.evaluate(() => {
+  const removal_limit_ms = 2000
+  const timing = await page.evaluate(async (limit) => {
     const state = window as Window & { __STUPIG_E2E_MASK_DEADLINE__?: number, __STUPIG_E2E_HYDRATED_AT__?: number, __STUPIG_E2E_MASK_DISMISSED_AT__?: number }
-    return { hydrated: state.__STUPIG_E2E_HYDRATED_AT__ ?? performance.now(), deadline: state.__STUPIG_E2E_MASK_DEADLINE__ ?? null, dismissed: state.__STUPIG_E2E_MASK_DISMISSED_AT__ ?? null }
-  })
+    const started = performance.now()
+    const hydrated = state.__STUPIG_E2E_HYDRATED_AT__ ?? started
+    const deadline = state.__STUPIG_E2E_MASK_DEADLINE__ ?? null
+    const dismissed = state.__STUPIG_E2E_MASK_DISMISSED_AT__ ?? null
+    // Measure removal inside the document, so Playwright's polling cadence cannot miss the deadline.
+    if (! document.getElementById('app-loading-mask')) {
+      return { hydrated, deadline, dismissed, removed_after_ms: 0 }
+    }
+    const removed_after_ms = await new Promise<number | null>((resolve) => {
+      let timer: number
+      const observer = new MutationObserver(() => {
+        if (! document.getElementById('app-loading-mask')) {
+          const elapsed = performance.now() - started
+          observer.disconnect()
+          window.clearTimeout(timer)
+          resolve(elapsed)
+        }
+      })
+      observer.observe(document, { childList: true, subtree: true })
+      timer = window.setTimeout(() => {
+        observer.disconnect()
+        resolve(null)
+      }, Math.max(0, Math.ceil(started + limit - performance.now())))
+    })
+    return { hydrated, deadline, dismissed, removed_after_ms }
+  }, removal_limit_ms)
   if (timing.deadline !== null) {
     expect(timing.hydrated).toBeLessThan(timing.deadline)
     expect(timing.dismissed).not.toBeNull()
     expect(timing.dismissed).toBeLessThan(timing.deadline)
   }
-  await expect(page.locator('#app-loading-mask')).toHaveCount(0, { timeout: 2000 })
+  expect(timing.removed_after_ms, 'The first-paint mask was still present at the removal deadline').not.toBeNull()
+  expect(timing.removed_after_ms).toBeLessThanOrEqual(removal_limit_ms)
 }
 
-export async function login(page: Page, username = 'admin', password = 'AaAaAaAa888') {
+export async function submit_password_login(page: Page, username: string, password = 'AaAaAaAa888') {
   await page.goto('/content')
   await ready(page)
   await page.getByRole('button', { name: '登录 / 注册', exact: true }).click()
@@ -71,6 +98,11 @@ export async function login(page: Page, username = 'admin', password = 'AaAaAaAa
     page.waitForResponse(response => response.url().includes('auth.loginWithPassword')),
     page.getByRole('button', { name: '立即登录', exact: true }).click(),
   ])
+  return response
+}
+
+export async function login(page: Page, username = 'admin', password?: string) {
+  const response = await submit_password_login(page, username, password)
   expect(response.ok()).toBe(true)
   await expect(page.getByRole('button', { name: /^用户菜单：/ })).toBeVisible()
   await expect(page.getByRole('button', { name: '登录 / 注册', exact: true })).toHaveCount(0)
@@ -80,9 +112,16 @@ export async function create_story(page: Page) {
   const title = `E2E${randomUUID().slice(0, 8)}`
   await page.goto('/content/new/edit')
   await ready(page)
+  const draft_path = /^\/content\/draft-([a-f0-9]{32})\/edit$/
+  await expect(page, 'New draft should open at its assigned edit URL').toHaveURL(url => draft_path.test(url.pathname), { timeout: draft_timeout })
+  const draft_id = draft_path.exec(new URL(page.url()).pathname)![1]!
   const editor = page.getByRole('textbox', { name: '档案内容 Markdown 编辑器', exact: true })
-  await expect(editor).toBeVisible({ timeout: draft_timeout })
-  await editor.fill(markdown(title, 'E2E initial body'))
+  await expect(editor).toBeEditable({ timeout: draft_timeout })
+  const body = markdown(title, 'E2E initial body')
+  await editor.fill(body)
+  await expect.poll(async () => (await content_mutation<DraftResult>(page, 'getDraft', { id: draft_id })).snapshot?.markdown, { timeout: draft_timeout }).toBe(body)
+  // The server may have saved this exact text while the browser is still replaying a lost acknowledgement.
+  await expect(page.getByText('草稿已保存，尚未发布', { exact: true })).toBeVisible({ timeout: draft_timeout })
   await page.getByRole('button', { name: '创建', exact: true }).click()
   await expect(page).toHaveURL(/\/content\/\d+(?:\/edit)?$/, { timeout: draft_timeout })
   await expect(page.getByRole('button', { name: '保存', exact: true })).toBeVisible()

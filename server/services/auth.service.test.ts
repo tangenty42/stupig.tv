@@ -1,5 +1,7 @@
 import type { H3Event } from 'h3'
-import bcrypt from 'bcryptjs'
+import type { SQLInputValue } from 'node:sqlite'
+import { DatabaseSync } from 'node:sqlite'
+import { hash_password, verify_password } from '@server/lib/password'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -7,7 +9,6 @@ const mocks = vi.hoisted(() => ({
     app: {
       auth: {
         jwt: { secret: 'unit-test-secret-with-at-least-32-characters', expiresInDays: 30 },
-        bcryptRounds: 4,
       },
       otp: {
         tier1: { dailyLimit: 5, cooldownMs: 60_000 },
@@ -23,6 +24,8 @@ const mocks = vi.hoisted(() => ({
     make_token_hash: vi.fn(),
     set_auth_token_cookie: vi.fn(),
     clear_auth_token_cookie: vi.fn(),
+    clear_password_setup_proof: vi.fn(),
+    set_password_setup_proof: vi.fn(),
   },
   sessions: { create_login_session: vi.fn(), logout_session: vi.fn() },
   guards: { require_auth_user: vi.fn() },
@@ -456,7 +459,29 @@ describe('send_otp_for_request', () => {
 describe('login_with_password token issuance', () => {
   const payload = { username_or_phone: 'tester', password: 'secret' }
 
-  function use_user(password_hash: string, overrides: Record<string, unknown> = {}) {
+  async function use_accounts(database: DatabaseSync, accounts: { id: number, username: string, phone: string, password: string, banned?: boolean }[]) {
+    database.exec(`CREATE TABLE users (
+      id INTEGER PRIMARY KEY, username TEXT NOT NULL, phone TEXT NOT NULL,
+      password_hash TEXT NOT NULL, is_banned INTEGER NOT NULL,
+      avatar_file TEXT, avatar_version TEXT, is_verified INTEGER DEFAULT 0,
+      is_admin INTEGER DEFAULT 0, permissions TEXT
+    )`)
+    const insert = database.prepare('INSERT INTO users (id, username, phone, password_hash, is_banned) VALUES (?, ?, ?, ?, ?)')
+    for (const account of accounts)
+      insert.run(account.id, account.username, account.phone, await hash_password(account.password), Number(account.banned ?? false))
+    mocks.db.execute.mockImplementation(async (sql: string, params: SQLInputValue[] = []) => [database.prepare(sql).all(... params), []])
+  }
+
+  function use_collision(database: DatabaseSync, banned = false) {
+    // Exact equality reproduces the two matching accounts without depending on
+    // MySQL's full-width/half-width collation in this isolated SQLite fixture.
+    return use_accounts(database, [
+      { id: 1, username: PHONE, phone: '13900138001', password: 'legacy-password' },
+      { id: 7, username: 'phone-owner', phone: PHONE, password: 'phone-password', banned },
+    ])
+  }
+
+  function use_user(password_hash: string | null, overrides: Record<string, unknown> = {}) {
     mocks.db.execute.mockImplementation(async (sql: string) => {
       if (String(sql).includes('SELECT id, password_hash')) {
         return [[{ id: 7, password_hash, is_banned: 0, ... overrides }], []]
@@ -492,7 +517,7 @@ describe('login_with_password token issuance', () => {
   })
 
   it('rejects a wrong password', async () => {
-    use_user(bcrypt.hashSync('another-secret', 4))
+    use_user(await hash_password('another-secret'))
 
     await expect(login_with_password(create_event(), payload, create_device_context(), DEVICE))
       .rejects.toMatchObject({ statusCode: 401, message: '用户名或密码错误' })
@@ -500,8 +525,17 @@ describe('login_with_password token issuance', () => {
     expect(mocks.sessions.create_login_session).not.toHaveBeenCalled()
   })
 
+  it('directs accounts with no password to phone login without creating a session', async () => {
+    use_user(null)
+
+    await expect(login_with_password(create_event(), payload, create_device_context(), DEVICE))
+      .rejects.toMatchObject({ statusCode: 400, message: '尚未设置密码，请使用手机号验证码登录' })
+
+    expect(mocks.sessions.create_login_session).not.toHaveBeenCalled()
+  })
+
   it('issues a cookie-backed session and never returns the token in the body', async () => {
-    use_user(bcrypt.hashSync('secret', 4))
+    use_user(await hash_password('secret'))
 
     const result = await login_with_password(create_event(), payload, create_device_context(), DEVICE)
 
@@ -530,10 +564,52 @@ describe('login_with_password token issuance', () => {
     })
     expect(JSON.stringify(result)).not.toContain('issued-token')
   })
+
+  it('logs in the phone owner when a historical username matches the same identifier', async () => {
+    using users = new DatabaseSync(':memory:')
+    await use_collision(users)
+
+    const result = await login_with_password(create_event(), { username_or_phone: PHONE, password: 'phone-password' }, create_device_context(), DEVICE)
+
+    expect(result.user).toMatchObject({ id: 7, username: 'phone-owner', phone: PHONE })
+    expect(mocks.sessions.create_login_session).toHaveBeenCalledExactlyOnceWith(7, expect.any(Object), DEVICE, expect.any(Object))
+  })
+
+  it.each([false, true])('never falls back to a colliding username when the phone owner rejects login (banned=%s)', async (banned) => {
+    using users = new DatabaseSync(':memory:')
+    await use_collision(users, banned)
+
+    await expect(login_with_password(create_event(), { username_or_phone: PHONE, password: 'legacy-password' }, create_device_context(), DEVICE))
+      .rejects.toMatchObject({ statusCode: 401, message: banned ? '账号已被禁用' : '用户名或密码错误' })
+    expect(mocks.db.execute).toHaveBeenCalledTimes(1)
+    expect(mocks.sessions.create_login_session).not.toHaveBeenCalled()
+    expect(mocks.session_lib.sign_auth_token).not.toHaveBeenCalled()
+  })
+
+  it.each(['ordinary-user', '42', '４２', PHONE])('still accepts a username-only match for %s', async (username) => {
+    using users = new DatabaseSync(':memory:')
+    await use_accounts(users, [{ id: 1, username, phone: '13900138001', password: 'legacy-password' }])
+
+    const result = await login_with_password(create_event(), { username_or_phone: username, password: 'legacy-password' }, create_device_context(), DEVICE)
+
+    expect(result.user).toMatchObject({ id: 1, username, phone: '13900138001' })
+    expect(mocks.sessions.create_login_session).toHaveBeenCalledExactlyOnceWith(1, expect.any(Object), DEVICE, expect.any(Object))
+  })
 })
 
 describe('register_user token issuance', () => {
   const payload = { username: 'newbie', phone: PHONE, password: 'secret', otp: '123456' }
+
+  it('verifies the captcha before spending the code or touching the database', async () => {
+    mocks.captcha.verify_captcha.mockRejectedValue(new Error('captcha rejected'))
+    const input = { ... payload, lot_number: 'lot' }
+
+    await expect(register_user(create_event(), input, create_device_context(), DEVICE)).rejects.toThrow('captcha rejected')
+
+    expect(mocks.captcha.verify_captcha).toHaveBeenCalledWith(input)
+    expect(mocks.sms.check_otp_sms).not.toHaveBeenCalled()
+    expect(mocks.db.execute).not.toHaveBeenCalled()
+  })
 
   it('refuses a duplicate username or phone and leaves no session behind', async () => {
     mocks.db.execute.mockResolvedValue([[{ id: 9 }], []])
@@ -572,7 +648,8 @@ describe('register_user token issuance', () => {
     const insert = mocks.db.execute.mock.calls.find(call => String(call[0]).includes('INSERT INTO users'))!
     // Never store the plaintext password.
     expect(insert[1]?.[2]).not.toBe('secret')
-    expect(String(insert[1]?.[2])).toMatch(/^\$2[aby]\$/)
+    expect(String(insert[1]?.[2])).toMatch(/^\$argon2id\$/)
+    expect(await verify_password(payload.password, insert[1]?.[2])).toBe(true)
   })
 })
 
@@ -581,7 +658,7 @@ describe('login_with_phone token issuance', () => {
 
   function use_phone_lookup(rows: Record<string, unknown>[]) {
     mocks.db.execute.mockImplementation(async (sql: string) => {
-      if (String(sql).includes('SELECT id, is_banned FROM users WHERE phone')) {
+      if (String(sql).includes('SELECT id, password_hash, is_banned FROM users WHERE phone')) {
         return [rows, []]
       }
       return [[{
@@ -595,6 +672,17 @@ describe('login_with_phone token issuance', () => {
       }], []]
     })
   }
+
+  it('verifies the captcha before spending the code or looking the account up', async () => {
+    mocks.captcha.verify_captcha.mockRejectedValue(new Error('captcha rejected'))
+    const input = { ... payload, lot_number: 'lot' }
+
+    await expect(login_with_phone(create_event(), input, create_device_context(), DEVICE)).rejects.toThrow('captcha rejected')
+
+    expect(mocks.captcha.verify_captcha).toHaveBeenCalledWith(input)
+    expect(mocks.sms.check_otp_sms).not.toHaveBeenCalled()
+    expect(mocks.db.execute).not.toHaveBeenCalled()
+  })
 
   it('checks the code before looking the account up', async () => {
     mocks.sms.check_otp_sms.mockRejectedValue(new Error('验证码不正确'))
@@ -624,7 +712,7 @@ describe('login_with_phone token issuance', () => {
   })
 
   it('issues a cookie-backed session without returning the token', async () => {
-    use_phone_lookup([{ id: 7, is_banned: 0 }])
+    use_phone_lookup([{ id: 7, is_banned: 0, password_hash: 'already-set' }])
 
     const result = await login_with_phone(create_event(), payload, create_device_context(), DEVICE)
 
@@ -649,6 +737,17 @@ describe('login_with_phone token issuance', () => {
       },
     })
     expect(JSON.stringify(result)).not.toContain('issued-token')
+    expect(mocks.session_lib.set_password_setup_proof).not.toHaveBeenCalled()
+  })
+
+  it('flags a successful SMS login for a passwordless account and grants setup to that session', async () => {
+    use_phone_lookup([{ id: 7, is_banned: 0, password_hash: null }])
+    const event = create_event()
+
+    const result = await login_with_phone(event, payload, create_device_context(), DEVICE)
+
+    expect(result).toMatchObject({ user: { id: 7 }, needs_password_setup: true })
+    expect(mocks.session_lib.set_password_setup_proof).toHaveBeenCalledExactlyOnceWith(event, 'issued-token', PHONE)
   })
 })
 

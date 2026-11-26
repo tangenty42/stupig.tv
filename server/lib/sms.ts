@@ -4,6 +4,7 @@ import { Config } from '@alicloud/openapi-client'
 import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { error_fields, log_error } from '@server/lib/log'
+import { dev_phone_pattern } from '@shared/schemas'
 
 const config = runtime_config()
 
@@ -28,8 +29,16 @@ interface SendOtpSmsInput {
   out_id: string
 }
 
+function bypass_otp_for_debug(phone: string) {
+  const debug = process.env.NODE_ENV === 'development' && config.app.otp.debug
+  if (! debug && dev_phone_pattern.test(phone)) {
+    throw new ApiError(400, '测试手机号须启用开发短信调试')
+  }
+  return debug
+}
+
 export async function send_otp_sms(input: SendOtpSmsInput) {
-  if (process.env.NODE_ENV === 'development' && config.app.otp.debug) {
+  if (bypass_otp_for_debug(input.phone)) {
     return
   }
 
@@ -70,7 +79,7 @@ interface CheckOtpSmsInput {
 }
 
 export async function check_otp_sms(input: CheckOtpSmsInput) {
-  if (process.env.NODE_ENV === 'development' && config.app.otp.debug) {
+  if (bypass_otp_for_debug(input.phone)) {
     return
   }
 

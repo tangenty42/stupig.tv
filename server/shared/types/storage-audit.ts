@@ -11,3 +11,15 @@ export interface StorageAuditFinding {
   last_seen_at: string
   resolved_at: string | null
 }
+
+export interface StorageAuditFindingsQuery {
+  page: number
+  page_size: number
+  kinds?: string[]
+}
+
+export interface StorageAuditFindingsPage {
+  rows: StorageAuditFinding[]
+  total: number
+  page: number
+}

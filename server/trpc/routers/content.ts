@@ -19,18 +19,18 @@ import { upload_batch_schema } from '@shared/content-upload'
 import { workspace_command_schema } from '@shared/content-workspace'
 import { has_permission } from '@shared/permissions'
 
-const content_admin_procedure = permission_procedure('content_manage', 'full')
+const content_admin_procedure = permission_procedure('content_access', 'full')
 
 export const content_router = router({
   createDraft: content_admin_procedure.input(draft_schema.create).mutation(({ ctx, input }) => create_draft(ctx.auth_user, input.request_id)),
-  listDrafts: content_admin_procedure.input(draft_schema.list).query(({ ctx, input }) => list_drafts(ctx.auth_user, input.after, input.limit)),
+  listDrafts: content_admin_procedure.query(({ ctx }) => list_drafts(ctx.auth_user)),
   getDraft: content_admin_procedure.input(draft_schema.get).mutation(({ ctx, input }) => get_draft(ctx.auth_user, input)),
   acquireDraft: content_admin_procedure.input(draft_schema.acquire).mutation(({ ctx, input }) => acquire_draft(ctx.auth_user, input)),
   commandDraft: content_admin_procedure.input(draft_schema.command).mutation(({ ctx, input }) => command_draft(ctx.auth_user, input)),
   // Short-lived MQTT reader credentials; the service applies the draft permission check.
   draftSyncCredentials: protected_procedure.query(({ ctx }) => draft_sync_credentials(ctx.auth_user)),
   getDeleteImpact: content_admin_procedure.input(api_schema.content.delete_impact)
-    .query(({ ctx, input }) => get_delete_impact(input, has_permission(ctx.auth_user, 'content_private', 'read'))),
+    .query(({ ctx, input }) => get_delete_impact(input, has_permission(ctx.auth_user, 'content_access', 'private_read'))),
   imageEditorSource: content_admin_procedure.input(api_schema.content.image_editor_source)
     .query(({ ctx, input }) => image_editor_source(input.id, input.version, ctx.auth_user, input.redacted)),
   executeWorkspaceCommand: content_admin_procedure.input(workspace_command_schema)
@@ -82,7 +82,7 @@ export const content_router = router({
 
   rewriteDraftReferences: content_admin_procedure
     .input(api_schema.content.rewrite_draft_references)
-    .mutation(({ ctx, input }) => rewrite_draft_references(input.id, input.markdown, input, has_permission(ctx.auth_user, 'content_private', 'read'))),
+    .mutation(({ ctx, input }) => rewrite_draft_references(input.id, input.markdown, input, has_permission(ctx.auth_user, 'content_access', 'private_read'))),
 
   // Ordinary downloads are public at the application layer; confidential rows
   // and every ancestor archive are authorized by the download service.

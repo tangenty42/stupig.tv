@@ -30,7 +30,7 @@ beforeEach(() => {
   state.permissions = []
   state.rows.clear()
   state.rows.set(11, { id: 11, story_id: 1, read_revision: 1, object_key: 'content/att/file', file_name: 'file.txt', version: 'etag',
-    storage_bucket: 'private', storage_provider: 'aliyun', oss_version_id: 'v1', is_private: 0, encryption_key: null })
+    storage_bucket: 'private', oss_version_id: 'v1', is_private: 0 })
   state.execute.mockImplementation(async (sql: string, args: unknown[]) => {
     if (sql.includes('FROM user_login_session_tokens'))
       return [state.session && state.generation === Number(args[1]) ? [{ id: 7, is_admin: Number(state.admin), permissions: state.permissions }] : []]
@@ -109,7 +109,7 @@ describe('online ESA authorization before cached bytes', () => {
     Object.assign(row(), { original_key: 'content/att/copy-original', display_key: 'content/att/copy.webp', fallback_key: 'content/att/copy.jpg',
       image_metadata: { original: { name: 'copy.webp' }, source_id: null, archive_source_id: null, archive_source_key: null } })
     state.rows.set(22, { ... row(), id: 22, original_key: 'content/att/source-original' })
-    const urls = [await signed(), await signed('original')]
+    const urls = [await signed('auto', admin), await signed('original', admin)]
     state.rows.get(22)!.is_private = 1
     state.rows.get(22)!.read_revision = 2
     for (const url of urls)
@@ -124,7 +124,7 @@ describe('online ESA authorization before cached bytes', () => {
     const url = await signed('auto', admin)
     state.admin = false
     expect(await authorize_edge_read(request(url))).toBeNull()
-    state.permissions = [{ field: 'content_private', level: 'read' }]
+    state.permissions = [{ field: 'content_access', level: 'private_read' }]
     expect(await authorize_edge_read(request(url))).toBeTruthy()
     state.session = false
     expect(await authorize_edge_read(request(url))).toBeNull()

@@ -39,7 +39,6 @@ const draft_lease = z.object({ page_id: draft_id, epoch: z.number().int().nonneg
 export const draft_schema = {
   create: z.object({ request_id: draft_id }),
   get: z.object({ id: draft_id.optional(), story_id: z.number().int().positive().optional(), lease: draft_lease.optional() }).refine(value => !! value.id !== !! value.story_id, '必须指定一份草稿'),
-  list: z.object({ after: draft_id.or(z.literal('')).default(''), limit: z.number().int().min(1).max(100).default(30) }).default({ after: '', limit: 30 }),
   acquire: z.object({ id: draft_id, expected_epoch: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1), page_id: draft_id, token: z.string().regex(/^[a-f0-9]{64}$/) }),
   command: z.object({
     id: draft_id, lease: draft_lease, seq: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -54,9 +53,9 @@ export const draft_schema = {
 
 export const api_schema = {
   auth: {
-    register: form_schema.register,
+    register: z.intersection(form_schema.register, captcha_input),
     login_with_password: z.intersection(form_schema.login_with_password, captcha_input),
-    login_with_phone: form_schema.login_with_phone,
+    login_with_phone: z.intersection(form_schema.login_with_phone, captcha_input),
     send_otp: z.intersection(z.object({
       phone: phone_schema.optional(),
       purpose: z.enum(['register', 'login', 'change_password', 'verify_old_phone', 'change_phone']),
@@ -78,6 +77,7 @@ export const api_schema = {
       operate_for: z.coerce.number().int().positive().optional(),
     }),
     reset_password_for: operate_for_input.extend(form_schema.profile_operate_password_reset.shape),
+    set_initial_password: form_schema.profile_set_initial_password,
     change_password: z.intersection(form_schema.profile_change_password, captcha_input),
     change_password_by_otp: z.intersection(form_schema.profile_change_password_by_otp, captcha_input),
     change_phone_for: operate_for_input.extend(form_schema.profile_operate_phone_change.shape),
@@ -87,7 +87,11 @@ export const api_schema = {
   },
 
   admin: {
-    storage_audit_findings: z.object({ after_id: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(50) }),
+    storage_audit_findings: z.object({
+      page: z.number().int().positive().default(1),
+      page_size: z.number().int().min(1).max(154800).default(10),
+      kinds: z.array(z.string().min(1).max(40)).max(32).optional(),
+    }),
     list_users: z.object({
       page: z.coerce.number().int().positive().default(1),
       page_size: z.coerce.number().int().positive().default(10),
@@ -97,7 +101,7 @@ export const api_schema = {
     force_logout: public_id_input,
     set_verification: public_id_input.extend({
       is_verified: z.boolean(),
-      verified_note: z.string().max(255).optional().nullable(),
+      verified_note: z.string().trim().max(255, '认证说明最多 255 个字符').nullish(),
     }),
     set_role: public_id_input.extend({
       is_admin: z.boolean(),

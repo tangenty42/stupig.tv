@@ -27,4 +27,19 @@ describe('iframe dialect diagnostics', () => {
       expect.objectContaining({ line: 2, severity: 'warning' }),
     ])
   })
+
+  it('uses the original line number for ordinary links inside nested carousels', () => {
+    const source = ['<carousel>', '', `![适用](${target})`, '', '<carousel>', '```md', `[示例](${target})`, '```', '', `- [误用](${target})`, '</carousel>', '</carousel>'].join('\n')
+    expect(warnings(source)).toEqual([
+      expect.objectContaining({ line: 10, severity: 'warning' }),
+    ])
+  })
+
+  it.each([
+    ['前文\n\n😀 <carousel title="a > b">', 3],
+    ['前文\n\n<carousel\n class="rail"\n title="a > b">', 5],
+  ])('finds ordinary video links immediately after the attributed tag %j', (before, line) => {
+    const source = `${before}[误用](${target}) ![适用](${target})</carousel> 后文`
+    expect(warnings(source)).toEqual([expect.objectContaining({ line, severity: 'warning' })])
+  })
 })

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -130,7 +130,7 @@ describe('维护脚本产物', () => {
     }
 
     // 连不上库是预期结果：端口 1 必然拒绝
-    expect(failure?.stderr).toMatch(/ECONNREFUSED/)
+    expect(failure?.stderr).toContain('migration_failed: ECONNREFUSED')
     // 反过来，不能是打包漏了东西（模块解析失败 / ESM 里残留 CJS require）
     expect(failure?.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Dynamic require|Cannot find module/)
   }, 60_000)
@@ -149,13 +149,8 @@ describe('维护脚本产物', () => {
     expect(scripts['storage:cleanup']).toBeUndefined()
     await expect(readFile(resolve(dirname(build_output), 'cleanup.mjs'))).rejects.toMatchObject({ code: 'ENOENT' })
     const manifest = JSON.parse(await readFile(resolve(project_root, '.output/server/maintenance/migration-scripts/manifest.json'), 'utf8'))
-    expect(manifest.scripts.map((item: { filename: string }) => item.filename)).toEqual([
-      '20261024210100_content_references.ts',
-      '20261024210200_content_workspace.ts',
-      '20261028210100_reference_journal_entries.ts',
-      '20261101133000_content_webp.ts',
-      '20261101143000_retire_legacy_content.ts',
-    ])
+    const source_scripts = (await readdir(resolve(project_root, 'migrations'))).filter(name => name.endsWith('.ts')).sort()
+    expect(manifest.scripts.map((item: { filename: string }) => item.filename)).toEqual(source_scripts)
   })
 
   it('迁移产物同样能在容器里跑起来（只读 --status，不写库）', async () => {
@@ -173,7 +168,7 @@ describe('维护脚本产物', () => {
     }
 
     // 断言必须拒连：既证明产物真的走到了建连，也保证这个测试永远不会连上真库
-    expect(failure?.stderr).toMatch(/ECONNREFUSED/)
+    expect(failure?.stderr).toContain('migration_failed: ECONNREFUSED')
     expect(failure?.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Dynamic require|Cannot find module/)
   }, 60_000)
 })

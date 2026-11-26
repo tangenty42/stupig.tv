@@ -86,7 +86,7 @@ export async function put_object(bucket: StorageBucket, key: string, body: Uint8
   return strip_etag(result.ETag)
 }
 
-/** Downloads an object's bytes (server-side transforms like attachment encryption). */
+/** Downloads the full object into memory. */
 export async function get_object(bucket: StorageBucket, key: string) {
   const result = await get_client(bucket).send(new GetObjectCommand({
     Bucket: storage_bucket_name(bucket),

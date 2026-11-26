@@ -44,4 +44,11 @@ describe('attachment_pick_from_file', () => {
   it('preserves the local extension case until resolve', () => {
     expect(attachment_pick_from_file(new File([new Uint8Array(1)], '照片 2026.PNG')).file_name).toBe('照片 2026.PNG')
   })
+
+  it('lets a drop fall back when its file handle is unreadable', async () => {
+    const handle = { kind: 'file', name: 'slides.pptx', getFile: async () => {
+      throw new DOMException('File is locked', 'NotReadableError')
+    } } as unknown as FileSystemFileHandle
+    expect(await picks_from_file_handles([handle])).toEqual([])
+  })
 })

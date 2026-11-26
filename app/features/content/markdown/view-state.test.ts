@@ -5,7 +5,7 @@ import { useStoryEditorViewState } from './view-state'
 
 const storage = new Map<string, string>()
 const fixtures: { unmount: () => void }[] = []
-const position: StoryEditorPosition = { anchor: 42, head: 46, editor: { top: 900, left: 12 }, preview: { top: 720, left: 0 }, page: { top: 300, left: 0 } }
+const position: StoryEditorPosition = { anchor: 42, head: 46, focused: true, editor: { top: 900, left: 12 }, preview: { top: 720, left: 0 }, page: { top: 300, left: 0 } }
 let window_events: EventTarget
 let document_events: EventTarget
 

@@ -65,6 +65,7 @@ describe('data sync transport', () => {
       transport.dispose()
     }
     vi.useRealTimers()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
@@ -355,6 +356,39 @@ describe('data sync transport', () => {
     await vi.advanceTimersByTimeAsync(settings.app.client.sync.reconnectDelayMs * 2)
     expect(mocks.connect).toHaveBeenCalledTimes(2)
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('backs off with jitter and a ceiling until the broker acknowledges the subscriptions', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const { transport, client } = await start(false, ['profile:1'])
+    acknowledge(client)
+    client.emit('close')
+    expect(transport.reconnecting.value).toBe(true)
+
+    const { reconnectDelayMs, reconnectMaxDelayMs } = settings.app.client.sync
+    for (const [index, multiplier] of [1, 2, 4, 8, 16, 32, 64].entries()) {
+      transport.subscribe(`profile:${index + 2}`, vi.fn())
+      const delay = Math.round(Math.min(reconnectDelayMs * multiplier, reconnectMaxDelayMs) * 0.9)
+      await vi.advanceTimersByTimeAsync(delay - 1)
+      expect(clients).toHaveLength(index + 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(clients).toHaveLength(index + 2)
+
+      const retry = clients.at(- 1)!
+      retry.connected = true
+      retry.emit('connect')
+      expect(transport.reconnecting.value).toBe(true)
+      if (multiplier < 64) {
+        acknowledge(retry, null, 128)
+      }
+    }
+
+    const recovered = clients.at(- 1)!
+    acknowledge(recovered)
+    expect(transport.reconnecting.value).toBe(false)
+    recovered.emit('close')
+    await vi.advanceTimersByTimeAsync(reconnectDelayMs)
+    expect(clients).toHaveLength(9)
   })
 
   it('preserves SDK close cleanup and consumes late errors during asynchronous disposal', async () => {

@@ -4,6 +4,8 @@ export interface PermissionLevelDefinition {
   level: string
   name: string
   description: string
+  /** false 表示管理员特有：只随 is_admin 生效，不能写进任何用户的 permissions 列表 */
+  grantable?: boolean
 }
 
 export interface PermissionDefinition {
@@ -20,24 +22,17 @@ export const PERMISSIONS = [
     name: '控制台',
     description: '访问控制台、以管理员身份访问用户主页',
     levels: [
-      { level: 'readonly', name: '只读', description: '可查看用户列表、读取用户主页私密信息' },
-      { level: 'full', name: '完全', description: '允许对用户的任何管理操作' },
+      { level: 'readonly', name: '只读', description: '可查看用户列表、运行状态及存储异常明细，也可读取用户主页私密信息' },
+      { level: 'full', name: '完全', description: '允许对用户的任何管理操作；管理员特有', grantable: false },
     ],
   },
   {
-    field: 'content_manage',
-    name: '『蠢猪档案』管理后台',
-    description: '创建、编辑、删除『蠢猪档案』',
+    field: 'content_access',
+    name: '蠢猪档案',
+    description: '查看蠢猪档案的机密内容，或管理蠢猪档案',
     levels: [
-      { level: 'full', name: '完全', description: '允许对『蠢猪档案』的任何管理操作' },
-    ],
-  },
-  {
-    field: 'content_private',
-    name: '『蠢猪档案』机密',
-    description: '查看『蠢猪档案』完整的机密内容、附件',
-    levels: [
-      { level: 'read', name: '可读', description: '查看『蠢猪档案』完整的机密内容、附件' },
+      { level: 'private_read', name: '机密可读', description: '查看蠢猪档案完整的机密内容、附件' },
+      { level: 'full', name: '完全', description: '创建、编辑、删除蠢猪档案及其附件' },
     ],
   },
 ] as const satisfies PermissionDefinition[]
@@ -55,8 +50,8 @@ export function get_permission_definition(field: string) {
 }
 
 export function is_valid_permission_grant(field: string, level: string) {
-  const definition = get_permission_definition(field)
-  return !! definition && definition.levels.some(item => item.level === level)
+  const definition: PermissionDefinition | undefined = get_permission_definition(field)
+  return !! definition && definition.levels.some(item => item.level === level && item.grantable !== false)
 }
 
 function level_rank(field: string, level: string) {
@@ -65,7 +60,9 @@ function level_rank(field: string, level: string) {
 }
 
 export function permission_grant_covers(grant: PermissionGrant, field: PermissionField, level: PermissionLevel) {
-  return grant.field === field && level_rank(grant.field, grant.level) >= level_rank(field, level)
+  return grant.field === field
+    && is_valid_permission_grant(grant.field, grant.level)
+    && level_rank(grant.field, grant.level) >= level_rank(field, level)
 }
 
 export function has_permission(

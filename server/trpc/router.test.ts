@@ -144,16 +144,25 @@ describe('tRPC router contracts', () => {
     await expect(caller.content.executeWorkspaceCommand({ request_id: crypto.randomUUID(), scope_id: 24, operation: 'create_folder', parent_id: 1, name: 'docs' })).rejects.toThrow('read unavailable')
   })
 
-  it('requires full admin permission for paginated object-key findings', async () => {
+  it('requires console read permission for paginated object-key findings', async () => {
     const caller = app_router.createCaller({ event: create_event() })
-    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'admin_access', level: 'readonly' }] })
+    auth_mocks.require_auth_user.mockRejectedValue(new ApiError(401, '未登录'))
+    await expect(caller.admin.getStorageAuditFindings({})).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [] })
     await expect(caller.admin.getStorageAuditFindings({})).rejects.toMatchObject({ code: 'FORBIDDEN' })
     expect(audit_mocks.get_storage_audit_findings).not.toHaveBeenCalled()
+    const findings = { rows: [{ id: 3, object_key: 'uploads/test.png', kind: 'missing_object' }], total: 1, page: 1 }
+    audit_mocks.get_storage_audit_findings.mockResolvedValue(findings)
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'admin_access', level: 'readonly' }] })
+    const query = { page: 2, page_size: 154800, kinds: ['missing_object', 'size_mismatch'] }
+    expect(await caller.admin.getStorageAuditFindings(query)).toEqual(findings)
+    expect(audit_mocks.get_storage_audit_findings).toHaveBeenCalledWith(query)
+    await expect(caller.admin.getStorageAuditFindings({ page_size: 154801 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(caller.admin.getStorageAuditFindings({ page: 0 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(caller.admin.getStorageAuditFindings({ kinds: [''] })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     auth_mocks.require_auth_user.mockResolvedValue(auth_user)
-    audit_mocks.get_storage_audit_findings.mockResolvedValue([])
-    expect(await caller.admin.getStorageAuditFindings({ after_id: 2, limit: 10 })).toEqual([])
-    expect(audit_mocks.get_storage_audit_findings).toHaveBeenCalledWith({ after_id: 2, limit: 10 })
-    await expect(caller.admin.getStorageAuditFindings({ limit: 1001 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(await caller.admin.getStorageAuditFindings({})).toEqual(findings)
+    expect(audit_mocks.get_storage_audit_findings).toHaveBeenLastCalledWith({ page: 1, page_size: 10 })
   })
   it('allows background status only with admin read permission', async () => {
     const caller = app_router.createCaller({ event: create_event() })
@@ -208,10 +217,12 @@ describe('tRPC router contracts', () => {
     auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [] })
     await expect(caller.content.getDeleteImpact({ kind: 'story', id: 3 })).rejects.toMatchObject({ code: 'FORBIDDEN' })
     expect(delete_impact_mocks.get_delete_impact).not.toHaveBeenCalled()
-    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'content_manage', level: 'full' }] })
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'content_access', level: 'private_read' }] })
+    await expect(caller.content.getDeleteImpact({ kind: 'story', id: 3 })).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    auth_mocks.require_auth_user.mockResolvedValue({ ... auth_user, is_admin: false, permissions: [{ field: 'content_access', level: 'full' }] })
     delete_impact_mocks.get_delete_impact.mockResolvedValue({ targets: [], sources: [] })
     await caller.content.getDeleteImpact({ kind: 'story', id: 3 })
-    expect(delete_impact_mocks.get_delete_impact).toHaveBeenCalledWith({ kind: 'story', id: 3 }, false)
+    expect(delete_impact_mocks.get_delete_impact).toHaveBeenCalledWith({ kind: 'story', id: 3 }, true)
     await expect(caller.content.getDeleteImpact({ kind: 'attachment', id: 3, targets: [] })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 

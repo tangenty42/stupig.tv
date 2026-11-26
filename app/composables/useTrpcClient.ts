@@ -3,7 +3,7 @@ import type { ApplicationError } from '@shared/content-reference-error'
 import type { inferRouterOutputs } from '@trpc/server'
 import { parse_application_error } from '@shared/content-reference-error'
 import { settings } from '@shared/settings'
-import { createTRPCClient, httpBatchLink, httpLink, splitLink } from '@trpc/client'
+import { createTRPCClient, httpBatchLink, httpLink, splitLink, TRPCClientError } from '@trpc/client'
 
 type RouterOutputs = inferRouterOutputs<AppRouter>
 interface UploadOutputByPath {
@@ -37,8 +37,8 @@ export class TrpcApiError extends Error {
   code?: ApplicationError['code']
   details?: ApplicationError['details']
 
-  constructor(message: string, status?: number, application_error?: ApplicationError) {
-    super(message)
+  constructor(message: string, status?: number, application_error?: ApplicationError, options?: ErrorOptions) {
+    super(message, options)
     this.name = 'ApiError'
     this.status = status
     const safe = parse_application_error(application_error)
@@ -132,15 +132,23 @@ export function useTrpcClient() {
 
   async function normalize_error(error: unknown): Promise<never> {
     const status = get_trpc_error_status(error)
-    const message = error instanceof Error ? error.message : DEFAULT_API_ERROR_MESSAGE
+    const missing_server_error = error instanceof TRPCClientError && ! error.shape
+    const cause = missing_server_error ? error.cause : error
+    if (status === undefined && cause instanceof Error && cause.name === 'AbortError') {
+      const cancelled = new Error('用户打断了施法', { cause: error })
+      cancelled.name = 'AbortError'
+      throw cancelled
+    }
 
     if (status === 401) {
       await handle_unauthorized()
     }
 
+    const transport_failed = status === undefined && (missing_server_error || error instanceof TypeError)
+    const message = ! transport_failed && error instanceof Error && error.message ? error.message : DEFAULT_API_ERROR_MESSAGE
     const data = error as { data?: { applicationError?: unknown }, code?: unknown, details?: unknown }
     const application_error = parse_application_error(data?.data?.applicationError ?? { code: data?.code, details: data?.details })
-    throw new TrpcApiError(message, status, application_error)
+    throw new TrpcApiError(message, status, application_error, { cause: error })
   }
 
   async function call<T>(request: Promise<T>) {
@@ -217,11 +225,11 @@ export function useTrpcClient() {
         })
         xhr.addEventListener('abort', () => {
           cleanup()
-          reject(new TrpcApiError('上传已取消'))
+          reject(new DOMException('上传已取消', 'AbortError'))
         })
 
         if (signal?.aborted) {
-          reject(new TrpcApiError('上传已取消'))
+          reject(new DOMException('上传已取消', 'AbortError'))
           return
         }
 

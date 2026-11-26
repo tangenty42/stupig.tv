@@ -18,24 +18,3 @@ interface FileSystemFileHandle {
 interface DataTransferItem {
   getAsFileSystemHandle?: () => Promise<FileSystemHandle | null>
 }
-
-interface FilePickerAcceptType {
-  description?: string
-  accept: Record<string, string[]>
-}
-
-interface OpenFilePickerOptions {
-  multiple?: boolean
-  excludeAcceptAllOption?: boolean
-  types?: FilePickerAcceptType[]
-}
-
-interface DirectoryPickerOptions {
-  id?: string
-  mode?: 'read' | 'readwrite'
-}
-
-interface Window {
-  showOpenFilePicker?: (options?: OpenFilePickerOptions) => Promise<FileSystemFileHandle[]>
-  showDirectoryPicker?: (options?: DirectoryPickerOptions) => Promise<FileSystemDirectoryHandle>
-}

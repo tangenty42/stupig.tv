@@ -1,7 +1,21 @@
+import { isError } from 'h3'
 import { ZodError } from 'zod'
 import { ApiError } from './ApiError'
 
 export const INTERNAL_ERROR_MESSAGE = '服务器放双休了~'
+
+/** H3 wraps an error thrown by a route before passing it to Nitro. */
+export function http_error_details(error: unknown) {
+  const wrapped = isError(error) ? error : undefined
+  const cause = wrapped?.unhandled && (wrapped.cause instanceof ApiError || wrapped.cause instanceof ZodError)
+    ? wrapped.cause
+    : error
+  if (cause instanceof ApiError)
+    return { cause, status: cause.statusCode }
+  if (cause instanceof ZodError)
+    return { cause, status: 400 }
+  return { cause, status: wrapped?.statusCode || 500 }
+}
 
 /** Only `.refine()`-style custom messages are user-facing; Zod's internal type messages are not. */
 export function zod_validation_message(error: ZodError) {

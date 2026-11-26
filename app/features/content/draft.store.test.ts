@@ -73,6 +73,130 @@ afterEach(() => {
 })
 
 describe('shared cloud draft session', () => {
+  describe('flush_changes', () => {
+    it('joins an in-flight save and immediately sends the newest text without waiting for the throttle', async () => {
+      const f = await fixture()
+      const reply = deferred<DraftResult>()
+      f.api.command.mockReturnValueOnce(reply.promise)
+      f.store.markdown = 'older input'
+      const older = f.store.cycle()
+      const sent = f.api.command.mock.calls[0]![0]
+      f.store.markdown = 'newest input'
+      const flushing = f.store.flush_changes(new AbortController().signal)
+      expect(f.api.command).toHaveBeenCalledOnce()
+      f.change({ markdown: 'older input', draft_revision: 2, unpublished_changes: true })
+      reply.resolve({ snapshot: f.head(), receipt: { kind: 'sync', seq: sent.seq, ok: true } })
+      await older
+      await flushing
+      expect(f.api.command.mock.calls.map(([input]) => ({ kind: input.kind, seq: input.seq, markdown: input.markdown }))).toEqual([
+        { kind: 'sync', seq: 1, markdown: 'older input' },
+        { kind: 'sync', seq: 2, markdown: 'newest input' },
+      ])
+      expect(f.store.cloud?.markdown).toBe('newest input')
+      expect(f.store.unconfirmed_changes).toBe(false)
+    })
+
+    it.each(['sent', 'sent plus newer input'])('stops an aborted flush after the old receipt while accepting its late acknowledgement (%s)', async (local) => {
+      const f = await fixture()
+      const reply = deferred<DraftResult>()
+      f.api.command.mockReturnValueOnce(reply.promise)
+      f.store.markdown = 'sent'
+      const older = f.store.cycle()
+      const sent = f.api.command.mock.calls[0]![0]
+      f.store.markdown = local
+      const controller = new AbortController()
+      const flushing = f.store.flush_changes(controller.signal)
+      controller.abort()
+      f.change({ markdown: 'sent', draft_revision: 2, unpublished_changes: true })
+      reply.resolve({ snapshot: f.head(), receipt: { kind: 'sync', seq: sent.seq, ok: true } })
+      await older
+      await flushing
+      expect(f.api.command).toHaveBeenCalledOnce()
+      expect(f.store.cloud?.markdown).toBe('sent')
+      expect(f.store.markdown).toBe(local)
+      expect(f.store.unconfirmed_changes).toBe(local !== 'sent')
+      expect(f.store.can_write_now()).toBe(true)
+    })
+
+    it('preserves the lease during a flush and releases only after the page is hidden', async () => {
+      const f = await fixture()
+      const may_write = f.store.capture_write_permit()
+      f.store.markdown = 'saved before leaving'
+      await f.store.flush_changes(new AbortController().signal)
+      expect(f.api.command.mock.calls.map(([input]) => input.kind)).toEqual(['sync'])
+      expect(f.store.unconfirmed_changes).toBe(false)
+      expect(f.store.cloud?.owned).toBe(true)
+      expect(f.store.can_write_now()).toBe(true)
+      expect(may_write()).toBe(true)
+      f.store.set_visible(false)
+      await f.store.cycle()
+      expect(f.api.command.mock.calls.map(([input]) => input.kind)).toEqual(['sync', 'release'])
+      expect(f.api.command.mock.calls[1]![0].lease).toEqual(f.api.command.mock.calls[0]![0].lease)
+      expect(f.store.cloud?.owned).toBe(false)
+      expect(f.store.recovery).toBe('')
+    })
+
+    it('stops at a required reference review without confirming or resubmitting the blocked text', async () => {
+      const f = await fixture()
+      f.store.markdown = 'needs reference review'
+      f.api.command.mockResolvedValueOnce({ snapshot: f.head(), receipt: { kind: 'sync', seq: 1, ok: false,
+        error: 'reference_review_required', review_token: 'e'.repeat(64) } })
+      await f.store.flush_changes(new AbortController().signal)
+      expect(f.store.review).toEqual({ text: 'needs reference review', token: 'e'.repeat(64) })
+      expect(f.store.unconfirmed_changes).toBe(true)
+      await f.store.flush_changes(new AbortController().signal)
+      expect(f.api.command).toHaveBeenCalledOnce()
+      expect(f.api.command.mock.calls[0]![0]).not.toHaveProperty('confirm_reference_history')
+      expect(f.store.can_write_now()).toBe(true)
+    })
+
+    it('retains an unknown save for an exact retry without releasing the lease', async () => {
+      const f = await fixture()
+      f.store.markdown = 'keep this input'
+      f.api.command.mockRejectedValueOnce(new Error('Save reply lost'))
+      await expect(f.store.flush_changes(new AbortController().signal)).rejects.toThrow('Save reply lost')
+      const sent = f.api.command.mock.calls[0]![0]
+      expect(f.store.markdown).toBe('keep this input')
+      expect(f.store.unconfirmed_changes).toBe(true)
+      expect(f.store.cloud?.owned).toBe(true)
+      await f.store.flush_changes(new AbortController().signal)
+      expect(f.api.command.mock.calls[1]![0]).toEqual(sent)
+      expect(f.api.command.mock.calls.map(([input]) => input.kind)).toEqual(['sync', 'sync'])
+      expect(f.store.unconfirmed_changes).toBe(false)
+    })
+  })
+
+  it('keeps typing available during reference replay and sends newer edits with their original revision', async () => {
+    const f = await fixture()
+    const old = '[](att://a)'
+    const renamed = '[](att://b)'
+    f.store.markdown = old
+    let acknowledge!: () => void
+    f.api.command.mockImplementationOnce(input => new Promise((resolve) => {
+      acknowledge = () => resolve({ snapshot: { ... f.head(), markdown: renamed, namespace_revision: 1 }, receipt: { seq: input.seq, kind: 'sync', ok: true } })
+    }))
+    const saving = f.store.cycle()
+    f.store.markdown += ' before replay'
+    let replay!: () => void
+    f.api.rewrite.mockImplementationOnce(() => new Promise((resolve) => {
+      replay = () => resolve({ markdown: `${renamed} before replay`, changes: [{ from: 0, to: old.length, insert: renamed }], diagnostics: [],
+        namespace_revision: 1, title_revision: 0, base_namespace_revision: 0, base_title_revision: 0, baseline_unavailable: { namespace: false, title: false } })
+    }))
+    acknowledge()
+    await vi.waitFor(() => expect(f.store.reference_pending).toBe(true))
+    expect(f.store.writable).toBe(true)
+    expect(f.store.can_write_now()).toBe(true)
+    f.store.markdown += ' during replay'
+    replay()
+    await saving
+    const latest = `${old} before replay during replay`
+    expect(f.store.markdown).toBe(latest)
+    expect(f.store.phase).toBe('editing')
+    await vi.advanceTimersByTimeAsync(settings.app.content.draft.saveThrottleMs)
+    await f.store.cycle()
+    expect(f.api.command.mock.calls.at(- 1)?.[0]).toMatchObject({ markdown: latest, base_namespace_revision: 0 })
+  })
+
   it('replays default filename labels in unsaved input after a cloud privacy rename without losing trailing text', async () => {
     const old = '![photo.png.good](att://docs/photo.png.good) [说明][p]\n\n[p]: att://docs/photo.png.good'
     const current = '![photo.png](att://docs/photo.png) [说明][p]\n\n[p]: att://docs/photo.png'
@@ -102,11 +226,13 @@ describe('shared cloud draft session', () => {
     })
     f.store.set_visible(true)
     await expect(f.store.cycle()).rejects.toThrow('Acquire response lost')
+    expect(f.store.message).toBe('Acquire response lost')
     const first = f.api.acquire.mock.calls.at(- 1)
     f.api.acquire.mockImplementationOnce(async () => ({ snapshot: head({ owned: true, occupied: true, lease_epoch: 2 }) }))
     await f.store.cycle()
     expect(f.api.acquire.mock.calls.at(- 1)).toEqual(first)
     expect(f.store.writable).toBe(true)
+    expect(f.store.message).toBe('')
   })
   it('keeps trailing input while continuous typing is throttled and refresh notifications cannot bypass N', async () => {
     const f = await fixture()
@@ -250,6 +376,24 @@ describe('shared cloud draft session', () => {
     expect(f.store.markdown).toBe('sent and more')
     expect(f.store.dirty).toBe(true)
   })
+  it('clears the connection warning after a successful retry of a clean keepalive', async () => {
+    const f = await fixture()
+    const disconnect = '连接中断，已暂停编辑'
+    f.api.command.mockRejectedValueOnce(new Error(disconnect))
+
+    await expect(f.store.cycle()).rejects.toThrow(disconnect)
+    const keepalive = f.api.command.mock.calls[0]![0]
+    expect(keepalive.kind).toBe('sync')
+    expect(keepalive.markdown).toBeUndefined()
+    expect(f.store.unconfirmed_changes).toBe(false)
+    expect(f.store.writable).toBe(false)
+    expect(f.store.message).toBe(disconnect)
+
+    await f.store.cycle()
+    expect(f.api.command).toHaveBeenNthCalledWith(2, keepalive)
+    expect(f.store.writable).toBe(true)
+    expect(f.store.message).toBe('')
+  })
   it('retries a lost response with the exact sequence and original payload before new text', async () => {
     const f = await fixture()
     f.api.command.mockRejectedValueOnce(new Error('Response lost'))
@@ -315,15 +459,29 @@ describe('shared cloud draft session', () => {
     expect(may_insert()).toBe(false)
     expect(f.store.capture_write_permit()()).toBe(true)
   })
-  it('does not overwrite review-required input or automatically retry the rejected text', async () => {
+  it('keeps review-required text and its message when a keepalive fails and recovers', async () => {
     const f = await fixture()
-    f.store.markdown = 'needs review'
-    f.api.command.mockResolvedValueOnce({ snapshot: head({ owned: true, occupied: true, lease_epoch: 1 }), receipt: { seq: 1, kind: 'sync', ok: false, error: 'reference_review_required', review_token: 'e'.repeat(64) } })
+    const review = { text: 'needs review', token: 'e'.repeat(64) }
+    const review_message = '请先核对引用'
+    f.store.markdown = review.text
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ owned: true, occupied: true, lease_epoch: 1 }), receipt: {
+      seq: 1, kind: 'sync', ok: false, error: 'reference_review_required', review_token: review.token, message: review_message,
+    } })
     await f.store.cycle()
-    expect(f.store.markdown).toBe('needs review')
-    expect(f.store.review?.text).toBe('needs review')
+    expect(f.store.markdown).toBe(review.text)
+    expect(f.store.review).toEqual(review)
+    expect(f.store.message).toBe(review_message)
+
+    const disconnect = '连接中断，已暂停编辑'
+    f.api.command.mockRejectedValueOnce(new Error(disconnect))
+    await expect(f.store.cycle()).rejects.toThrow(disconnect)
+    expect(f.store.message).toBe(disconnect)
     await f.store.cycle()
-    expect(f.api.command.mock.calls[1]![0].markdown).toBeUndefined()
+    expect(f.api.command.mock.calls.map(([command]) => command.markdown)).toEqual([review.text, undefined, undefined])
+    expect(f.store.markdown).toBe(review.text)
+    expect(f.store.review).toEqual(review)
+    expect(f.store.message).toBe(review_message)
+    expect(f.store.writable).toBe(true)
   })
   it('lets a recovered lease confirm history review even when local input cannot be replayed', async () => {
     const f = await fixture()
@@ -350,6 +508,53 @@ describe('shared cloud draft session', () => {
     await f.store.confirm_review()
     expect(f.api.command.mock.calls[1]![0]).toMatchObject({ seq: 2, markdown: 'needs review', confirm_reference_history: 'e'.repeat(64) })
   })
+  it('retries a late failed save before releasing the newest hidden-page text', async () => {
+    const f = await fixture()
+    const reply = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(reply.promise)
+    f.store.markdown = 'older input'
+    const saving = f.store.cycle()
+    const failed_save = expect(saving).rejects.toThrow('Late transport failure')
+    const sent = f.api.command.mock.calls[0]![0]
+    f.store.markdown = 'newest input'
+    f.store.set_visible(false)
+    const releasing = f.store.cycle()
+    expect(f.api.command).toHaveBeenCalledOnce()
+    reply.reject(new Error('Late transport failure'))
+    await failed_save
+    await releasing
+    expect(f.api.command).toHaveBeenCalledTimes(3)
+    expect(f.api.command.mock.calls[1]![0]).toEqual(sent)
+    expect(f.api.command.mock.calls[2]![0]).toMatchObject({ kind: 'release', seq: 2, markdown: 'newest input', lease: sent.lease })
+    expect(f.store.cloud?.markdown).toBe('newest input')
+    expect(f.store.cloud?.owned).toBe(false)
+    expect(f.store.unconfirmed_changes).toBe(false)
+    expect(f.store.recovery).toBe('')
+  })
+
+  it('does not let an old hidden session release or refresh the same store after reopening', async () => {
+    const previous = await fixture()
+    const reply = deferred<DraftResult>()
+    previous.api.command.mockReturnValueOnce(reply.promise)
+    previous.store.markdown = 'old session input'
+    const saving = previous.store.cycle()
+    previous.store.set_visible(false)
+    const releasing = previous.store.cycle()
+    const current = await fixture({ markdown: 'reopened session' })
+    expect(current.store).toBe(previous.store)
+    expect(current.store.owns(previous.owner)).toBe(false)
+    reply.reject(new Error('Old session transport failure'))
+    await saving
+    await releasing
+    expect(current.api.command).not.toHaveBeenCalled()
+    expect(current.api.acquire).toHaveBeenCalledOnce()
+    expect(current.store.markdown).toBe('reopened session')
+    expect(current.store.cloud?.owned).toBe(true)
+    expect(current.store.can_write_now()).toBe(true)
+    expect(current.store.owns(current.owner)).toBe(true)
+    expect(current.store.recovery).toBe('')
+  })
+
   it('closes input before sending the final snapshot and release together', async () => {
     const f = await fixture()
     f.store.markdown = 'last input'
@@ -357,6 +562,37 @@ describe('shared cloud draft session', () => {
     expect(f.store.writable).toBe(false)
     await f.store.cycle()
     expect(f.api.command.mock.calls.at(- 1)![0]).toMatchObject({ kind: 'release', markdown: 'last input' })
+    expect(f.store.cloud?.markdown).toBe('last input')
+    expect(f.store.recovery).toBe('')
+  })
+  it.each([
+    ['later input', 1],
+    ['sent', 2],
+  ] as const)('keeps local text %s when release receipt %i does not confirm that text', async (local, receipt_seq) => {
+    const f = await fixture()
+    const reply = deferred<DraftResult>()
+    f.api.command.mockReturnValueOnce(reply.promise)
+    f.store.markdown = 'sent'
+    f.store.set_visible(false)
+    f.store.markdown = local
+    reply.resolve({ snapshot: head({ markdown: 'sent' }), receipt: { kind: 'release', seq: receipt_seq, ok: true } })
+    await f.store.cycle()
+    expect(f.store.recovery).toBe(local)
+  })
+  it('keeps local text when a lost release response cannot be confirmed after takeover', async () => {
+    const f = await fixture()
+    f.api.command.mockRejectedValueOnce(new Error('release response lost'))
+    f.store.markdown = 'sent'
+    f.store.set_visible(false)
+    await f.store.cycle()
+    const release = f.api.command.mock.calls[0]![0]
+    f.api.command.mockResolvedValueOnce({ snapshot: head({ markdown: 'other editor', lease_epoch: 2, occupied: true }),
+      receipt: { kind: 'release', seq: release.seq, ok: false, error: 'lease_lost' } })
+    f.store.set_visible(true)
+    await f.store.cycle()
+    expect(f.api.command.mock.calls[1]![0]).toEqual(release)
+    expect(f.store.recovery).toBe('sent')
+    expect(f.store.markdown).toBe('other editor')
   })
   it('stops editing at the conservative deadline even with no network event', async () => {
     const f = await fixture()

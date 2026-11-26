@@ -38,6 +38,7 @@ export function story_lint_config(limits: StoryLintLimits, stories: ContentStory
     cover_max_bytes: limits.coverMaxBytes,
     markdown_max_bytes: limits.markdownMaxBytes,
     attachment_paths: [... attachments.map(item => item.file_name), ... folders],
+    private_attachment_paths: attachments.filter(item => item.is_private).map(item => item.file_name),
     existing_titles: stories
       .filter(story => story.id !== story_id)
       .map(story => ({ id: story.id, title: story.title })),

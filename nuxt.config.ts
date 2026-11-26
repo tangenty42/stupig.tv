@@ -3,6 +3,7 @@ import { production_browser_queries, production_css_targets } from './config/bro
 import { browser_regexp_plugin } from './config/browser-transforms'
 import { load_settings } from './config/lib/loader'
 import { public_config_defaults } from './config/lib/schema'
+import primevue_prefetch from './config/primevue-prefetch'
 import { primevue_preset } from './config/primevue-preset'
 import { style_root_id } from './config/ui-style'
 
@@ -16,7 +17,7 @@ const alias = {
 
 // First-paint loading mask. The CSS and the markup script are inlined into the
 // SSR document so the mask covers the page from the first paint until the app is
-// hydrated; `app.vue` calls `window.__hide_app_loading_mask()` once mounted.
+// hydrated; `app.vue` calls `window.__hide_app_loading_mask()` once hydration finishes.
 const app_loading_mask_css = `
 #app-loading-mask {
   position: fixed;
@@ -84,6 +85,10 @@ const app_loading_mask_script = `
       return
     }
     hiding = true
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      mask.remove()
+      return
+    }
     var fade_ms = 500
     var fade = null
     // Fade from the breath animation's current opacity. Forcing opacity: 0 in
@@ -93,7 +98,7 @@ const app_loading_mask_script = `
     if (typeof mask.animate === 'function') {
       fade = mask.animate([{ opacity: window.getComputedStyle(mask).opacity }, { opacity: 0 }], {
         duration: fade_ms,
-        easing: 'ease',
+        easing: 'ease-in-out',
         fill: 'forwards',
       })
     }
@@ -186,8 +191,10 @@ export default defineNuxtConfig({
   },
   modules: [
     './config/lib/nuxt-module',
+    './config/dev-mqtt-proxy',
     '@pinia/nuxt',
     '@primevue/nuxt-module',
+    primevue_prefetch,
     '@nuxtjs/color-mode',
     '@nuxt/icon',
     '@teages/nuxt-legacy',

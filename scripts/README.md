@@ -8,13 +8,15 @@
 | `env/` | env 模板合成、GPG、CLI 环境预载 |
 | `background/` | 独立 worker 和状态查询 |
 | `db/` | 数据库样本导出 |
-| `storage/` | 旧存储只读盘点 |
+| `storage/` | OSS 元数据专项盘点、断点与保护关系核对 |
 | `content/` | 开发数据重置、预热检查 |
 | `deploy/` | 远端部署、Docker/Compose 交付验证 |
 | `esa/` | ESA 函数配置、预检和发布 |
 | `migration/` | 统一迁移、本地入口、维护产物打包 |
 | `verify/` | 跨模块接线检查、隔离数据库集成验证 |
+| `testing/` | E2E 目标与分片端口、Playwright 全局准备、草稿验证用的一次性 broker |
+| `ci/` | CI 复用 PR 检查结果 |
 
-具体命令、每个脚本的用途及尚未实施的简化建议见[完整清单](../docs-legacy/development/commands.md)。版本化迁移位于根目录的 [migrations/](../migrations/)，不要放进这里；它们及冻结依赖的内容和路径必须保持稳定。
+操作入口按[开发](../docs/1_workflows/1_develop/AGENT-DESIGN.md)、[测试](../docs/1_workflows/2_test/AGENT-DESIGN.md)、[发布](../docs/1_workflows/3_deliver/AGENT-DESIGN.md)、[维护](../docs/1_workflows/4_maintain/AGENT-DESIGN.md)查阅，未实施建议已记入对应阶段的 AGENT。版本化迁移位于根目录的 [migrations/](../migrations/)，不要放进这里；它们及冻结依赖的内容和路径必须保持稳定。
 
-生产 EMQX 由项目 Compose 自动部署，镜像携带 ACL、初始化与健康检查入口；真实镜像权限和持久化测试通过 `STUPIG_EMQX_IMAGE` 启用，并在 Check 工作流中执行。首次切换、手动反代、凭据维护和生产验收见 [MQTT 手册](../docs-legacy/deployment/mqtt.md)。
+生产 EMQX 由项目 Compose 自动部署，镜像携带 ACL、初始化与健康检查入口；真实镜像权限和持久化测试通过 `STUPIG_EMQX_IMAGE` 启用，并在 Check 工作流中执行。首次配置和反代见 [SID#1.0](../docs/1_workflows/0_setup/AGENT-DESIGN.md)，凭据轮换见 [SID#1.4](../docs/1_workflows/4_maintain/AGENT-DESIGN.md#emqx-升级与凭据轮换)，镜像及公网验收见 [SID#1.2](../docs/1_workflows/2_test/AGENT-DESIGN.md#mqtt-镜像与-ci-汇总)。

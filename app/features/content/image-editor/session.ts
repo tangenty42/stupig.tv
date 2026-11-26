@@ -11,7 +11,6 @@ interface ImageEditSessionOptions {
   file_name: () => string
   output_mime: () => string
   busy: () => boolean
-  cropping: () => boolean
   refit: () => void
   reset_tools: () => void
   on_ready: (bitmap: ImageBitmap) => void
@@ -28,7 +27,9 @@ export function useImageEditSession(options: ImageEditSessionOptions) {
   const limits = settings.app.content.imageEditor
   // Encoded byte size does not bound the memory needed by a decoded bitmap.
   const max_editable_dimension = settings.app.content.redact.maxDimension
-  const working = ref(false)
+  const activity = ref<'edit' | 'export' | null>(null)
+  const working = computed(() => activity.value !== null)
+  const exporting = computed(() => activity.value === 'export')
   const loading = ref(false)
   const load_error = ref('')
   const natural_size = ref({ width: 0, height: 0 })
@@ -103,7 +104,7 @@ export function useImageEditSession(options: ImageEditSessionOptions) {
 
   async function commit_action(action: ImageEditAction) {
     const generation = load_generation
-    working.value = true
+    activity.value = 'edit'
     try {
       const next = append_image_edit(history.value, action, limits)
       history.value = next
@@ -120,15 +121,15 @@ export function useImageEditSession(options: ImageEditSessionOptions) {
     }
     finally {
       if (generation === load_generation)
-        working.value = false
+        activity.value = null
     }
   }
 
   /** Steps to a history entry and repaints the overlay from it. */
   async function goto_history(index: number) {
-    if (options.busy() || options.cropping())
+    if (options.busy())
       return
-    working.value = true
+    activity.value = 'edit'
     const generation = load_generation
     history.value = { ... history.value, index }
     try {
@@ -140,7 +141,7 @@ export function useImageEditSession(options: ImageEditSessionOptions) {
     }
     finally {
       if (generation === load_generation)
-        working.value = false
+        activity.value = null
     }
   }
 
@@ -194,9 +195,9 @@ export function useImageEditSession(options: ImageEditSessionOptions) {
   }
 
   async function submit(crop?: ImageCrop) {
-    if (options.busy() || loading.value || load_error.value || options.cropping() || ! source_bitmap.value)
+    if (options.busy() || loading.value || load_error.value || ! source_bitmap.value)
       return
-    working.value = true
+    activity.value = 'export'
     const generation = load_generation
     try {
       const file = await export_file(crop)
@@ -209,7 +210,7 @@ export function useImageEditSession(options: ImageEditSessionOptions) {
     }
     finally {
       if (generation === load_generation)
-        working.value = false
+        activity.value = null
     }
   }
 
@@ -223,14 +224,14 @@ export function useImageEditSession(options: ImageEditSessionOptions) {
     history.value = { actions: [], index: 0 }
     natural_size.value = { width: 0, height: 0 }
     loading.value = false
-    working.value = false
+    activity.value = null
     for (const canvas of [image_canvas.value, stroke_canvas.value]) {
       if (canvas)
         canvas.width = canvas.height = 0
     }
   }
 
-  return { working, loading, load_error, natural_size, source_bitmap, history, has_paint, can_undo, can_redo,
+  return { working, exporting, loading, load_error, natural_size, source_bitmap, history, has_paint, can_undo, can_redo,
     load_source, release_source, repaint, commit_action, undo, redo, clear_strokes, submit,
     get generation() { return load_generation } }
 }

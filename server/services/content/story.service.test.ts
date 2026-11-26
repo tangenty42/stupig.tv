@@ -1,4 +1,5 @@
 import type { AuthUser } from '@server/types/auth'
+import { private_cover_error_message } from '@shared/content-markdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -11,8 +12,15 @@ vi.mock('@server/lib/db', () => ({ db: {
 } }))
 vi.mock('@server/lib/storage', () => ({ delete_object_best_effort: vi.fn() }))
 vi.mock('@server/lib/sync', () => ({ publish_refresh: vi.fn(), sync_resource: (type: string, id: number) => `${type}:${id}` }))
+vi.mock('./reference-history.service', () => ({
+  lock_title_namespace: vi.fn(async () => ({ revision: mocks.title_revision, floor: 0 })),
+  replay_locked_references: vi.fn(async (_connection: unknown, _id: number, markdown: string) => ({ markdown, namespace_revision: 3, title_revision: 4, baseline_unavailable: { namespace: false, title: false } })),
+  record_title_change: vi.fn(async () => []),
+}))
+vi.mock('./workspace.repository', () => ({ ensure_workspace_root: vi.fn() }))
+vi.mock('./sync-outbox.repository', () => ({ enqueue_content_refresh: vi.fn() }))
 
-const { get_story_body, list_stories } = await import('./story.service')
+const { create_story, get_story_body, list_stories, update_story } = await import('./story.service')
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -38,6 +46,14 @@ beforeEach(() => {
 })
 
 describe('independent viewer-specific story body', () => {
+  it.each(['[]', []])('returns undated public summaries and bodies without inventing an event date (%s)', async (event_dates) => {
+    mocks.story.event_dates = event_dates
+    const [summary] = await list_stories()
+    const body = await get_story_body(1, null)
+    expect(summary).toMatchObject({ event_precision: 'day', event_dates: [] })
+    expect(body).toMatchObject({ event_precision: 'day', event_dates: [] })
+  })
+
   it('includes the same public cover dimensions and LQIP in the homepage list and story body', async () => {
     const [summary] = await list_stories()
     const body = await get_story_body(1, null)
@@ -99,5 +115,72 @@ describe('independent viewer-specific story body', () => {
     expect(mocks.commit).not.toHaveBeenCalled()
     expect(mocks.rollback).toHaveBeenCalledOnce()
     expect(mocks.release).toHaveBeenCalledOnce()
+  })
+})
+
+describe('story publication event dates', () => {
+  it.each([
+    [undefined, 'day', []],
+    ['2026/10/14', 'day', ['2026-10-14']],
+    ['2026/10', 'month', ['2026-10-01']],
+  ] as const)('persists the event date array on creation and update (time=%s)', async (time, precision, dates) => {
+    const execute = mocks.execute.getMockImplementation()!
+    mocks.execute.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT id, title FROM content_stories') || sql.startsWith('SELECT id FROM content_stories WHERE title'))
+        return [[]]
+      if (sql.startsWith('INSERT INTO content_stories'))
+        return [{ insertId: 2 }]
+      if (sql.startsWith('UPDATE content_stories'))
+        return [{ affectedRows: 1 }]
+      return execute(sql)
+    })
+    const markdown = ['---', 'title: story', ... (time ? [`time: ${time}`] : []), '---', '正文'].join('\n')
+    expect(await create_story(7, markdown, true)).toBe(2)
+    await update_story(1, markdown, 9, true)
+    const inserted = mocks.execute.mock.calls.find(([sql]) => sql.startsWith('INSERT INTO content_stories'))!
+    const updated = mocks.execute.mock.calls.find(([sql]) => sql.startsWith('UPDATE content_stories'))!
+    expect(inserted[1].slice(5, 7)).toEqual([precision, JSON.stringify(dates)])
+    expect(updated[1].slice(6, 8)).toEqual([precision, JSON.stringify(dates)])
+  })
+})
+
+describe('story publication cover access', () => {
+  const attachments = [
+    { file_name: 'Docs.good/Cover.png.good', version: 'private', is_private: 1 },
+    { file_name: 'Docs.good/Cover.png', version: 'redacted', is_private: 0 },
+    { file_name: 'Docs.good/Photo.png', version: 'inherited-private', is_private: 1 },
+  ]
+  beforeEach(() => {
+    const execute = mocks.execute.getMockImplementation()!
+    mocks.execute.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT id, title FROM content_stories') || sql.startsWith('SELECT id FROM content_stories WHERE title'))
+        return [[]]
+      if (sql.startsWith('SELECT file_name, version, is_private FROM content_story_attachments'))
+        return [attachments]
+      if (sql.startsWith('UPDATE content_stories'))
+        return [{ affectedRows: 1 }]
+      return execute(sql)
+    })
+  })
+
+  it.each(['DOCS.GOOD/COVER.PNG.GOOD', 'docs.good/photo.png'])('rejects the confidential attachment named by the cover (%s)', async (path) => {
+    const markdown = `---\ntitle: story\ncover: ![封面](att://${path})\n---\n正文`
+
+    await expect(update_story(1, markdown, 9, true)).rejects.toMatchObject({ statusCode: 400, message: private_cover_error_message })
+    expect(mocks.execute.mock.calls.some(([sql]) => sql.startsWith('UPDATE content_stories'))).toBe(false)
+    expect(mocks.commit).not.toHaveBeenCalled()
+    expect(mocks.rollback).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { link: 'att://docs.good/cover.png', version: 'redacted' },
+    { link: 'https://example.com/cover.png', version: null },
+  ])('publishes a readable cover ($link)', async ({ link, version }) => {
+    const markdown = `---\ntitle: story\ncover: ![封面](${link})\n---\n正文`
+
+    await expect(update_story(1, markdown, 9, true)).resolves.toMatchObject({ revision: 10 })
+    const updated = mocks.execute.mock.calls.find(([sql]) => sql.startsWith('UPDATE content_stories'))!
+    expect(updated[1][5]).toBe(version)
+    expect(mocks.commit).toHaveBeenCalledOnce()
   })
 })

@@ -7,7 +7,8 @@
           ref="ac_ref"
           v-model="cmd"
           :suggestions="suggestions"
-          :placeholder="placeholder"
+          :placeholder="can_manage ? '输入筛选条件或管理命令' : '输入筛选条件，如 is_banned = TRUE'"
+          :aria-label="can_manage ? '筛选条件或管理命令' : '筛选条件'"
           :complete-on-focus="true"
           :delay="100"
           class="w-full"
@@ -19,27 +20,17 @@
         >
           <template #option="{ option }">
             <div class="flex w-full items-center gap-2">
-              <MyIcon :name="suggestion_icon(option)" class="shrink-0 text-base opacity-60" />
-              <span class="font-mono text-xs">{{ option }}</span>
+              <span class="font-mono text-xs"><MyIcon :name="suggestion_icon(option)" class="me-2 opacity-60" />{{ option }}</span>
               <span class="ml-auto text-xs opacity-50">{{ suggestion_desc(option) }}</span>
             </div>
           </template>
         </AutoComplete>
         <div v-if="cmd" class="flex shrink-0 items-center gap-1">
           <Button
-            v-if="selected_ids.size > 0"
-            severity="secondary"
-            variant="text"
-            size="small"
-            :label="`${selected_ids.size} 已选`"
-            class="!px-2 !py-1 !text-xs !font-medium"
-            @click="emit('clear-selection')"
-          />
-          <Button
             severity="secondary"
             variant="text"
             class="!p-1 !text-slate-400"
-            aria-label="清空"
+            aria-label="清空输入框"
             @click="clear"
           >
             <MyIcon name="lucide:x" class="text-base" />
@@ -49,7 +40,7 @@
           severity="secondary"
           variant="text"
           class="shrink-0 !p-1 !text-slate-400 hover:!text-sky-600 dark:hover:!text-sky-400"
-          aria-label="执行"
+          :aria-label="can_manage ? '执行筛选或命令' : '应用筛选条件'"
           @click="execute"
         >
           <MyIcon name="lucide:corner-down-left" class="text-base" />
@@ -65,19 +56,20 @@
 </template>
 
 <script setup lang="ts">
+import type { AdminCommand } from '@shared/admin-command'
 import type AutoComplete from 'primevue/autocomplete'
+import { ADMIN_COMMANDS, ADMIN_FILTER_KEYWORDS } from '@shared/admin-command'
+import { ADMIN_FILTER_FIELDS } from '@shared/types/user'
 import sqlParser from 'node-sql-parser'
-import { useAdminCommandMeta } from '~/features/admin/users'
 
 const props = defineProps<{
   selected_ids: Set<number>
-  placeholder?: string
+  can_manage: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'execute-filter', filter: string): void
-  (e: 'execute-command', command: string): void
-  (e: 'clear-selection'): void
+  (e: 'execute-command', command: AdminCommand | ''): void
 }>()
 
 const sql_parser = new sqlParser.Parser()
@@ -90,12 +82,8 @@ type AutoCompleteInstance = InstanceType<typeof AutoComplete> & {
   $refs: { focusInput: any }
 }
 
-// Suggestion lists (populated from server)
-const { fields, sql_keywords, commands, ready: command_meta_ready } = useAdminCommandMeta()
-
 const ac_ref = ref<AutoCompleteInstance | null>(null)
 
-// Must register onMounted() before the first async call
 onMounted(() => {
   const ref_target = ac_ref.value?.$refs?.focusInput
   const input_el: HTMLElement | null = ref_target?.$el ?? ref_target
@@ -116,8 +104,6 @@ onMounted(() => {
   }, { capture: true })
 })
 
-await command_meta_ready
-
 const cmd = ref('')
 const suggestions = ref<string[]>([])
 const invalid = ref(false)
@@ -130,26 +116,26 @@ watch(cmd, (newVal, oldVal) => {
 }, { flush: 'sync' })
 
 const all_suggestions = computed(() => [
-  ... fields.value,
-  ... sql_keywords.value,
-  ... commands.value,
+  ... ADMIN_FILTER_FIELDS,
+  ... ADMIN_FILTER_KEYWORDS,
+  ... (props.can_manage ? ADMIN_COMMANDS : []),
 ])
 
 function suggestion_icon(sug: string) {
-  if (commands.value.includes(sug)) {
+  if (ADMIN_COMMANDS.some(command => command === sug)) {
     return 'lucide:zap'
   }
-  if (fields.value.includes(sug)) {
+  if (ADMIN_FILTER_FIELDS.some(field => field === sug)) {
     return 'lucide:columns-3'
   }
   return 'lucide:code'
 }
 
 function suggestion_desc(sug: string) {
-  if (commands.value.includes(sug)) {
+  if (ADMIN_COMMANDS.some(command => command === sug)) {
     return '命令'
   }
-  if (fields.value.includes(sug)) {
+  if (ADMIN_FILTER_FIELDS.some(field => field === sug)) {
     return '字段'
   }
   return '关键字'
@@ -198,7 +184,7 @@ function apply_suggestion_inner(sug: string) {
   const raw = cmd.value
   const trimmed = raw.trimEnd()
   const last_space = trimmed.lastIndexOf(' ')
-  const is_command = commands.value.includes(sug)
+  const is_command = ADMIN_COMMANDS.some(command => command === sug)
   const space = is_command ? '' : ' '
 
   if (last_space < 0) {
@@ -235,14 +221,21 @@ function execute() {
   }
 
   const upper = val.toUpperCase()
-  const known_command = commands.value.find(c => c.toUpperCase() === upper)
+  const known_command = ADMIN_COMMANDS.find(command => command === upper)
   if (known_command) {
-    if ((upper === 'BAN' || upper === 'KICK' || upper === 'UNBAN' || upper === 'VERIFY' || upper === 'UNVERIFY' || upper === 'PROMOTE' || upper === 'DEMOTE') && props.selected_ids.size === 0) {
+    if (! props.can_manage) {
       invalid.value = true
-      error_msg.value = '请先选择欲操作用户'
+      error_msg.value = '只有管理员能使用管理命令。你可以输入筛选条件查找用户。'
       return
     }
-    emit('execute-command', upper)
+    if (known_command !== 'ALL' && props.selected_ids.size === 0) {
+      invalid.value = true
+      error_msg.value = '请先点选要操作的用户卡片'
+      return
+    }
+    invalid.value = false
+    error_msg.value = ''
+    emit('execute-command', known_command)
     cmd.value = ''
     ac_ref.value?.hide?.()
     return
@@ -253,13 +246,13 @@ function execute() {
   }
   catch {
     invalid.value = true
-    error_msg.value = 'SQL 语法错误'
+    error_msg.value = '筛选条件语法有误，可写成 id = 1'
     return
   }
 
   if (/;|--|\/\*/.test(val)) {
     invalid.value = true
-    error_msg.value = '含有非法字符'
+    error_msg.value = '筛选条件中不能使用分号或注释'
     return
   }
 

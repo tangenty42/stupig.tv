@@ -7,6 +7,7 @@ import { settings } from '@shared/settings'
 import { reactive } from 'vue'
 import { get_error_status } from '~/composables/useApi'
 import { create_browser_upload } from './browser-upload'
+import { unreadable_upload_file_message } from './picks'
 import { delete_upload_file_handle, load_upload_file_handle, save_upload_file_handle, upload_session_handle_key } from './upload-file-handle'
 import { create_upload_timeline } from './upload-timeline'
 
@@ -26,7 +27,7 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
   const finalizing = reactive(new Set<string>())
   const paused = new Set<string>()
   const files = new Map<string, File>()
-  const handles = new Map<string, FileSystemFileHandle>()
+  const handles = new Map<string, FileSystemFileHandle | null>()
   const drivers = new Map<string, ReturnType<typeof create_browser_upload>>()
   const runs = new Map<string, symbol>()
   const lookups = new Set<string>()
@@ -68,6 +69,9 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
   async function source(id: string, epoch: number) {
     if (files.has(id))
       return files.get(id)
+    // A rejected source stays unusable even if deleting its persisted handle is delayed.
+    if (handles.get(id) === null)
+      return
     try {
       const storage_key = key(id)
       const handle = handles.get(id) ?? (storage_key ? await load_upload_file_handle(db_name, storage_key) : null)?.handle
@@ -226,6 +230,7 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
       if (! live())
         return true
       if (needs_bytes && ! input) {
+        errors.set(id, unreadable_upload_file_message)
         finalizing.delete(id)
         end_timeline(id, 'stopped')
         return false
@@ -279,9 +284,9 @@ export function create_upload_runtime(scope: number, actor: () => number | null,
         complete(id, receipt.attachment, receipt.workspace)
     }
     catch (error) {
-      if (live() && error instanceof Error && 'code' in error && error.code === 'UPLOAD_FILE_MISMATCH') {
+      if (live() && error instanceof Error && 'code' in error && (error.code === 'UPLOAD_FILE_MISMATCH' || error.code === 'UPLOAD_FILE_UNREADABLE')) {
         files.delete(id)
-        handles.delete(id)
+        handles.set(id, null)
         const storage_key = key(id)
         if (storage_key) {
           // Serialize with a later reattachment so stale cleanup cannot erase its handle.

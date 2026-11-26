@@ -45,7 +45,6 @@ function setup() {
   const source = ref<string | null>('https://static.test/source')
   const mime = ref('image/png')
   const blocked = ref(false)
-  const cropping = ref(false)
   const ready = vi.fn()
   const save = vi.fn()
   const error = vi.fn()
@@ -53,10 +52,10 @@ function setup() {
   const refit = vi.fn()
   const api: ReturnType<typeof useImageEditSession> = useImageEditSession({ image_canvas: shallowRef(image as unknown as HTMLCanvasElement), stroke_canvas: shallowRef(ink as unknown as HTMLCanvasElement),
     source_url: () => source.value, file_name: () => 'same-name.png', output_mime: () => mime.value,
-    busy: () => blocked.value || api.working.value, cropping: () => cropping.value,
+    busy: () => blocked.value || api.working.value,
     on_ready: ready, on_save: save, on_error: error, refit, reset_tools: reset,
   })
-  return { api, image, ink, source, mime, blocked, cropping, ready, save, error, reset, refit }
+  return { api, image, ink, source, mime, blocked, ready, save, error, reset, refit }
 }
 async function settle() {
   await nextTick()
@@ -105,7 +104,10 @@ it('rejects oversized sources, closes their bitmaps and keeps save unavailable',
 it('replays geometry and history while clear removes paint and a new edit replaces the redo branch', async () => {
   const f = setup()
   await f.api.load_source()
-  await f.api.commit_action({ kind: 'rotate', direction: 1 })
+  const rotating = f.api.commit_action({ kind: 'rotate', direction: 1 })
+  expect(f.api.working.value).toBe(true)
+  expect(f.api.exporting.value).toBe(false)
+  await rotating
   expect(f.api.natural_size.value).toEqual({ width: 100, height: 200 })
   await f.api.commit_action({ kind: 'crop', rect: { x: 1, y: 2, width: 40, height: 50 } })
   expect(f.api.natural_size.value).toEqual({ width: 40, height: 50 })
@@ -127,17 +129,12 @@ it('replays geometry and history while clear removes paint and a new edit replac
   expect(f.ink.context.clearRect).toHaveBeenCalled()
 })
 
-it('blocks history and export during a gesture or crop and releases all owned resources', async () => {
+it('blocks history and export while busy and releases all owned resources', async () => {
   const f = setup()
   await f.api.load_source()
   const source = f.api.source_bitmap.value!
   await f.api.commit_action({ kind: 'rotate', direction: 1 })
   f.blocked.value = true
-  f.api.undo()
-  await f.api.submit()
-  expect(f.api.history.value.index).toBe(1)
-  f.blocked.value = false
-  f.cropping.value = true
   f.api.undo()
   await f.api.submit()
   expect(f.api.history.value.index).toBe(1)
@@ -191,7 +188,9 @@ it('does not emit an export that completes after close or source replacement', a
   } })
   const pending = f.api.submit()
   expect(f.api.working.value).toBe(true)
+  expect(f.api.exporting.value).toBe(true)
   f.api.release_source()
+  expect(f.api.exporting.value).toBe(false)
   finish(new Blob(['encoded'], { type: 'image/png' }))
   await pending
   expect(f.save).not.toHaveBeenCalled()
@@ -213,9 +212,11 @@ it('keeps edits on an encoding failure so the same save can be retried', async (
   } })
   await f.api.submit()
   expect(f.error).toHaveBeenCalledExactlyOnceWith('导出图片失败，请保留编辑并重试')
+  expect(f.api.exporting.value).toBe(false)
   expect(f.api.history.value.index).toBe(1)
   expect(f.api.source_bitmap.value).not.toBeNull()
   failing = false
   await f.api.submit()
   expect(f.save).toHaveBeenCalledOnce()
+  expect(f.api.exporting.value).toBe(false)
 })

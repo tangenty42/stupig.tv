@@ -9,7 +9,8 @@ export const code_blocks_plugin: StoryMarkdownPlugin = (md) => {
     const info = token.info ? md.utils.unescapeAll(token.info).trim() : ''
     const lang_name = info ? md.utils.escapeHtml(info.split(/\s+/g)[0] ?? '') : ''
     const lang_class = lang_name ? ` class="language-${lang_name}"` : ''
-    const line_attr = token.map ? ` data-line="${token.map[0]}"` : ''
+    const line = token.attrGet('data-line')
+    const line_attr = line === null ? '' : ` data-line="${line}"`
     return `<pre${line_attr}><div class="code-scroll"><code${lang_class}>${md.utils.escapeHtml(token.content)}</code></div></pre>\n`
   }
 

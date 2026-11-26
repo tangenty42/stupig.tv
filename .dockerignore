@@ -2,20 +2,34 @@
 node_modules
 .output
 .nuxt
+.nitro
 .data
+.dev
+.esa
 .cache
+.pnpm-store
 dist
+coverage
+playwright-report
+test-results
+*.tsbuildinfo
 .env
 .env.*
 !.env.example
 # 本机覆盖绝不能进镜像（local.yaml 不进仓库，模板见 config/local.example.yaml）
 config/local.yaml
+config/https
 tmp.env
 .tmp-*
+*.tmp.mjs
 *.log
+# 本机 Agent 工具与会话记录不参与应用构建
+.copilot
+.mcp
+.mcp.json
 .vscode
+.fleet
 .idea
 .github
 docs
-docs-legacy
 docker-compose.dev.yml

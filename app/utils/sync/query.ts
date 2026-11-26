@@ -12,6 +12,7 @@ export interface QuerySubscriber<T> {
   error: (failure: QueryFailure) => void
   invalidate?: () => void
   polling_interval?: number
+  retry_on_error?: boolean
   resources: readonly string[]
 }
 
@@ -20,7 +21,12 @@ interface QueryEnvironment {
   now: () => number
   start_polling: (tick: () => void) => () => void
   visible: () => boolean
+  retryable_error: (error: unknown) => boolean
+  random: () => number
 }
+
+const retry_base_delay_ms = 5000
+const max_retry_attempts = 3
 
 export function call_query_subscriber(callback: () => unknown) {
   try {
@@ -42,6 +48,9 @@ export class Query<T> {
   private disposed = false
   private last_completion = 0
   private stop_polling: (() => void) | null = null
+  private retry_at: number | null = null
+  private retry_attempts = 0
+  private background_retry = false
   private fetched = false
   private value!: T
 
@@ -55,7 +64,7 @@ export class Query<T> {
     this.subscribers.add(subscriber)
     this.sync_subscriptions()
     this.sync_polling()
-    call_query_subscriber(() => subscriber.loading(this.pending.size > 0))
+    call_query_subscriber(() => subscriber.loading(this.pending.size > 0 && ! this.background_retry))
     if (this.fetched) {
       call_query_subscriber(() => subscriber.data(this.value))
     }
@@ -109,8 +118,21 @@ export class Query<T> {
     }
   }
 
+  private polling_interval() {
+    const intervals = [... this.subscribers]
+      .map(subscriber => subscriber.polling_interval ?? 0)
+      .filter(interval => interval > 0)
+    return intervals.length ? Math.min(... intervals) : undefined
+  }
+
+  private retry_enabled() {
+    return [... this.subscribers].every(subscriber => subscriber.polling_interval === undefined && subscriber.retry_on_error !== false)
+  }
+
   private sync_polling() {
-    const polling = [... this.subscribers].some(subscriber => (subscriber.polling_interval ?? 0) > 0)
+    if (this.retry_at !== null && ! this.retry_enabled())
+      this.retry_at = null
+    const polling = this.polling_interval() !== undefined || this.retry_at !== null
     if (polling && ! this.stop_polling) {
       this.stop_polling = this.environment.start_polling(() => this.tick())
     }
@@ -124,11 +146,15 @@ export class Query<T> {
     if (this.disposed || this.pending.size || ! this.environment.visible()) {
       return
     }
-    const intervals = [... this.subscribers]
-      .map(subscriber => subscriber.polling_interval ?? 0)
-      .filter(interval => interval > 0)
-    if (intervals.length && this.environment.now() - this.last_completion >= Math.min(... intervals)) {
-      void this.refresh()
+    const now = this.environment.now()
+    const interval = this.polling_interval()
+    if (interval !== undefined) {
+      if (now - this.last_completion >= interval)
+        void this.refresh()
+    }
+    else if (this.retry_at !== null && now >= this.retry_at) {
+      this.retry_attempts ++
+      void this.request('join', true)
     }
   }
 
@@ -146,16 +172,31 @@ export class Query<T> {
   }
 
   refresh(policy = this.refresh_policy): Promise<void> {
+    return this.request(policy, false)
+  }
+
+  private request(policy: QueryRefreshPolicy, background_retry: boolean): Promise<void> {
     if (this.disposed) {
       return Promise.resolve()
     }
     if (policy === 'join' && this.task) {
+      // A foreground refresh can reuse the request already running in the background.
+      if (! background_retry && this.background_retry) {
+        this.background_retry = false
+        this.retry_attempts = 0
+        for (const subscriber of this.subscribers)
+          call_query_subscriber(() => subscriber.loading(true))
+      }
       return this.task
     }
     const provider = this.subscribers.values().next().value
     if (! provider) {
       return Promise.resolve()
     }
+    this.retry_at = null
+    this.background_retry = background_retry
+    if (! background_retry)
+      this.retry_attempts = 0
     const version = ++ this.version
     const epoch = this.epoch
     const current = () => ! this.disposed
@@ -163,7 +204,8 @@ export class Query<T> {
       && epoch === this.epoch
     for (const subscriber of this.subscribers) {
       call_query_subscriber(() => subscriber.invalidate?.())
-      call_query_subscriber(() => subscriber.loading(true))
+      if (! background_retry)
+        call_query_subscriber(() => subscriber.loading(true))
     }
     let response: Promise<T>
     try {
@@ -182,6 +224,7 @@ export class Query<T> {
       }
       this.value = value
       this.fetched = true
+      this.retry_attempts = 0
       for (const subscriber of this.subscribers) {
         if (current()) {
           call_query_subscriber(() => subscriber.data(value))
@@ -195,6 +238,14 @@ export class Query<T> {
         this.dirty = true
         return
       }
+      const retryable = this.environment.retryable_error(error)
+      if (retryable && this.retry_enabled() && this.retry_attempts < max_retry_attempts) {
+        const delay = retry_base_delay_ms * 2 ** this.retry_attempts
+        const jitter = 0.8 + this.environment.random() * 0.4
+        this.retry_at = this.environment.now() + delay * jitter
+      }
+      if (this.background_retry && retryable)
+        return
       const failure: QueryFailure = { error, notified: false }
       for (const subscriber of this.subscribers) {
         if (current()) {
@@ -205,12 +256,14 @@ export class Query<T> {
       this.pending.delete(task)
       if (this.task === task) {
         this.task = null
+        this.background_retry = false
       }
       if (this.disposed) {
         return
       }
       this.last_completion = this.environment.now()
       if (version === this.version) {
+        this.sync_polling()
         for (const subscriber of this.subscribers) {
           call_query_subscriber(() => subscriber.loading(false))
         }
@@ -270,6 +323,11 @@ export class QueryClient {
     for (const query of this.queries) {
       void query.invalidate()
     }
+  }
+
+  async invalidate_shared(key_prefix: string) {
+    const matching = [... this.shared].filter(([key]) => key.startsWith(key_prefix))
+    await Promise.all(matching.map(([, query]) => query.invalidate()))
   }
 
   invalidate_without_subscription() {

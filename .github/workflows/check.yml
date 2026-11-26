@@ -1,11 +1,11 @@
-# 持续集成检查：lint + typecheck + 单测 + 迁移全量重放。
+# 持续集成检查：代码检查、测试、数据库初始化与升级验证。
 #
 # 背景：deploy.yml 只有构建部署，迁移 SQL 过去要到生产容器启动时才第一次被
 # 验证。本工作流把验证前置到合入前：
 #   - unit：与本地一致的 pnpm check，包含生成检查、lint、类型和单测；
 #   - check：唯一必需状态，始终汇总分类及包括 CSS 在内的全部应用验证；
-#   - migrations：对全新 MySQL 8.4 从空库跑完整迁移链，再跑第二遍验证
-#     执行器的"全部已应用"幂等路径，最后用 information_schema 断言结构落地；
+#   - migrations：在 MySQL 8.4 验证空库基线及后续迁移，重跑验证幂等，
+#     并检查关键结构、模拟存量库升级、失败恢复及草稿服务；
 #   - browser：真实浏览器端到端，按 `--shard` 拆成三个 job 并行；
 #   - browser-css：独立并行验证生产 CSS 和组件样式边界；
 #   - mqtt：生产 broker 镜像的权限与持久化；
@@ -17,7 +17,7 @@
 # PR 再也合不进去。被 `if` 跳过的 job 在分支保护里按成功上报。
 #
 # 分支保护：main 只要求 GitHub Actions 的 check（见仓库 Ruleset）。
-# 参考 schema 的 drift 对比已不再需要——`migrations/` 本身就是唯一事实源。
+# 当前结构由基线 SQL 及其后的迁移定义，基线清单保存历史迁移的摘要。
 
 name: Check
 
@@ -348,17 +348,11 @@ jobs:
         env:
           NODE_ENV: development
           MYSQL_DEV_ROOT_PASSWORD: ci-root-password
-          ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
-          ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
         run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/deployment.ts
 
       - name: Apply migrations on a fresh database
         env:
           NODE_ENV: production
-          # Frozen Content scripts validate their destination even on an empty
-          # database. No objects exist here; these are schema-only identities.
-          ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
-          ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
         run: |
           pnpm migrate:prod --maintenance
           # 第二遍：全部已记录，应直接判 up to date（执行器幂等路径）
@@ -369,7 +363,7 @@ jobs:
         run: |
           # 关键结构断言（数量断言太脆，每次迁移都要改）：
           # Current runtime ledgers are present; obsolete task/migration tables are absent.
-          for TABLE in content_transfer_sessions content_transfer_attempts content_image_jobs content_image_attempts content_story_drafts migration_runs storage_audit_targets storage_audit_findings; do
+          for TABLE in content_transfer_sessions content_transfer_attempts content_image_jobs content_image_attempts content_webp_migration_objects content_story_drafts migration_runs storage_audit_targets storage_audit_findings; do
             FOUND=$(mysql -h 127.0.0.1 -P 3306 -u stupig_tv -pci-mysql-password stupig_tv \
               -N -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stupig_tv' AND TABLE_NAME = '$TABLE'")
             if [ "$FOUND" != "1" ]; then
@@ -399,17 +393,6 @@ jobs:
           NODE_ENV: development
           MYSQL_DEV_ROOT_PASSWORD: ci-root-password
         run: pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/migration-runtime.ts
-
-      - name: Verify Content conversion on an isolated database
-        env:
-          NODE_ENV: development
-          MYSQL_DEV_ROOT_PASSWORD: ci-root-password
-          # The verifier uses in-memory OSS; these are schema-only fixtures.
-          ALIYUN_OSS_ACCESS_KEY_ID: qa-local-only
-          ALIYUN_OSS_ACCESS_KEY_SECRET: qa-local-only
-        run: |
-          pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/content-migration.ts
-          pnpm exec tsx --tsconfig scripts/tsconfig.json scripts/verify/webp-migration.ts
 
       - name: Verify shared drafts and private MQTT on isolated resources
         env:

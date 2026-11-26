@@ -1,12 +1,12 @@
 import type { ContentStorySummary } from '@shared/types/content'
 import type { StoryMarkdownOptions } from './types'
-import { content_name_key, content_ref_suffix, content_title_key, decode_content_destination, parse_content_ref, parse_migration_ref } from '@shared/content-reference'
+import { content_name_key, content_ref_suffix, content_title_key, decode_content_destination, parse_content_ref } from '@shared/content-reference'
 import { attachment_display_url } from '~/features/content/attachments/rules'
 
 /** Attachment file name (or folder path) for a story-relative URL, else null. */
 export function local_file_name(url: string) {
   const ref = parse_content_ref(url)
-  return ref?.kind === 'attachment' || ref?.kind === 'legacy_attachment' ? ref.path : null
+  return ref?.kind === 'attachment' ? ref.path : null
 }
 
 /**
@@ -35,11 +35,9 @@ export function with_reference_suffix(target: string, reference: string) {
 
 /**
  * Resolve att:// destinations through the current attachment projection.
- * Other URLs pass through; legacy business syntax never synthesizes storage URLs.
+ * Other URLs, including plain relative paths, pass through unchanged.
  */
 export function resolve_content_url(options: StoryMarkdownOptions, url: string) {
-  if (parse_migration_ref(url)?.kind.startsWith('legacy_'))
-    return ''
   const file_name = local_file_name(url)
   if (file_name) {
     // markdown-it percent-encodes the src (e.g. CJK file names), so decode it

@@ -4,6 +4,14 @@ import type { WorkspaceListRow } from '~/features/content/attachments/workspace-
 
 export type AttachmentMenuItem = MenuItem & { icon_name?: string, spin?: boolean }
 
+export function attachment_add_menu_items(actions: { upload: () => void, upload_folder: () => void, create_folder: () => void, upload_busy?: boolean, create_folder_disabled?: boolean }): AttachmentMenuItem[] {
+  return [
+    { label: '上传', icon_name: 'lucide:paperclip', disabled: actions.upload_busy, command: actions.upload },
+    { label: '上传文件夹', icon_name: 'lucide:paperclip', disabled: actions.upload_busy, command: actions.upload_folder },
+    { label: '新建文件夹', icon_name: 'lucide:folder-plus', disabled: actions.create_folder_disabled, command: actions.create_folder },
+  ]
+}
+
 /** An existing selection owns its menu; an outside right-click targets only that row. */
 export function attachment_menu_context(row: WorkspaceListRow, selected_rows: WorkspaceListRow[]) {
   const selected = selected_rows.some(item => item.key === row.key) ? selected_rows : [row]
@@ -34,9 +42,13 @@ export function guard_attachment_selection(selected: ReadonlySet<string>, next: 
 }
 
 export function select_attachment_row(rows: WorkspaceListRow[], selected: ReadonlySet<string>, anchor: string | null, row: WorkspaceListRow, event: Pick<MouseEvent, 'ctrlKey' | 'metaKey' | 'shiftKey'>, limit = Number.POSITIVE_INFINITY) {
-  const kind = (item: WorkspaceListRow) => item.node ? 'node' : item.preparation ? 'preparation' : 'session'
-  const group = rows.filter(item => kind(item) === kind(row))
   const additive = event.ctrlKey || event.metaKey
+  if (limit === 1) {
+    const deselected = additive && ! event.shiftKey && selected.has(row.key)
+    return new Set(! deselected && rows.some(item => item.key === row.key) ? [row.key] : [])
+  }
+  const kind = (item: WorkspaceListRow) => item.node ? 'node' : item.preparation || item.pending_folder ? 'preparation' : 'session'
+  const group = rows.filter(item => kind(item) === kind(row))
   const next = additive ? new Set(group.filter(item => selected.has(item.key)).map(item => item.key)) : new Set<string>()
   const from = group.findIndex(item => item.key === anchor)
   const to = group.findIndex(item => item.key === row.key)

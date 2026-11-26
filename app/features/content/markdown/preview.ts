@@ -11,8 +11,13 @@ export function useStoryPreview(markdown: () => string, options: StoryMarkdownOp
     return options.public_view?.() ? redact_private_content_with_source_map(body) : { markdown: body }
   })
   const body_markdown = computed(() => body_representation.value.markdown)
-  const preview_attachments = computed(() => options.public_view?.() ? public_preview_attachments(options.attachments()) : options.attachments())
-  const md = create_story_markdown({ ... options, attachments: () => preview_attachments.value })
+  const can_read_private = computed(() => ! options.public_view?.() && (options.can_read_private?.() ?? false))
+  const preview_attachments = computed(() => can_read_private.value ? options.attachments() : public_preview_attachments(options.attachments()))
+  const md = create_story_markdown({
+    ... options,
+    attachments: () => preview_attachments.value,
+    can_read_private: () => can_read_private.value,
+  })
   const render_result = computed(() => {
     const environment: RenderEnvironment = { images: [] }
     const html = md.render(body_markdown.value, environment)

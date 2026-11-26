@@ -12,7 +12,7 @@ export interface ContentStorySummary {
   /** Space-separated front matter labels; `#`-prefixed ones are hidden rating tiers. */
   labels: string[]
   event_precision: ContentEventPrecision
-  /** 'YYYY-MM-DD' strings; month-precision stories use the first day of the month. */
+  /** Empty when undated; otherwise 'YYYY-MM-DD' strings, using the first day for month precision. */
   event_dates: string[]
   created_at: string
   updated_at: string
@@ -34,6 +34,8 @@ export interface ContentStoryAttachment {
   /** Authorized, version-bound presentation; absent for unreadable private files. */
   image?: { revision: number, width: number, height: number, lqip: string | null, has_original: boolean }
   has_redacted?: boolean
+  /** This public file is the 删减版 of the private `<file_name>.good` in the same folder. */
+  is_redaction?: boolean
   is_redacted_view?: boolean
   redacted_url?: string | null
   redacted_image?: ContentStoryAttachment['image']
@@ -49,11 +51,11 @@ export interface ContentStoryAttachment {
   version: string
   /** Same-origin attachment read URL with a version-bound identity; null when unreadable. */
   url: string | null
-  /** Confidentiality flag; current attachment objects contain plaintext. */
+  /** Effective privacy for this attachment, including inherited folder access. */
   is_private?: boolean
 }
 
-/** Body projection carries no attachment/task arrays or decryption material. */
+/** Attachments and tasks are fetched independently of the body projection. */
 export interface ContentStoryBody extends ContentStorySummary {
   title_revision: number
   markdown: string
@@ -91,6 +93,8 @@ export interface ContentAttachmentWorkspace extends ContentAttachmentScope {
 }
 
 export interface ContentWorkspaceCommandResult extends WorkspaceReport {
+  /** Final paths whose own declaration was removed but which still inherit private access. */
+  still_inherited_private?: string[]
   workspace: ContentAttachmentWorkspace
 }
 

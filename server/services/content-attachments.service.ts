@@ -7,12 +7,11 @@ import { createHash } from 'node:crypto'
 
 import { db } from '@server/lib/db'
 
-import { attachment_mime_type, compare_attachment_names } from '@shared/content-markdown'
+import { attachment_mime_type, attachment_redaction_path, compare_attachment_names } from '@shared/content-markdown'
 
 import { content_name_key } from '@shared/content-reference'
 import { attachment_owned_object_keys } from './content/attachment-objects'
 import { image_presentation } from './content/image-presentation'
-import { has_redacted_variant, redacted_presentation_row } from './content/redacted-variant'
 
 /**
  * The pool or a transaction connection. Structure changes run their
@@ -46,39 +45,36 @@ interface AttachmentRow extends RowDataPacket {
   mime_type: string | null
   file_size: number
   version: string
-  encryption_key: string | null
   is_private: number
   storage_bucket: StorageBucket
-  storage_provider?: 'legacy' | 'aliyun'
   oss_version_id?: string | null
 }
 
 /** Bind reads to object identity even when a replacement has the same ETag. */
-export function attachment_access_version(row: Pick<AttachmentRow, 'version' | 'object_key' | 'storage_bucket' | 'is_private' | 'storage_provider' | 'oss_version_id'> & { redacted_revision?: number }) {
-  const identity = [row.version, row.object_key, row.storage_bucket, Number(row.is_private)]
-  // Keep existing legacy URLs valid; new provider identity must invalidate them.
-  if (row.storage_provider === 'aliyun')
-    identity.push(row.storage_provider, row.oss_version_id ?? '')
+export function attachment_access_version(row: Pick<AttachmentRow, 'version' | 'object_key' | 'storage_bucket' | 'is_private' | 'oss_version_id'> & { redacted_revision?: number }) {
+  // The provider literal keeps issued URLs and cache keys stable.
+  const identity = [row.version, row.object_key, row.storage_bucket, Number(row.is_private), 'aliyun', row.oss_version_id ?? '']
   if (Number(row.redacted_revision) > 0)
     identity.push(String(row.redacted_revision))
   return createHash('sha256').update(JSON.stringify(identity)).digest('hex')
 }
 
 /** Stable same-origin entry; no expiring credentials in payloads or Markdown. */
-export function attachment_object_url(row: Pick<AttachmentRow, 'id' | 'version' | 'object_key' | 'storage_bucket' | 'is_private' | 'storage_provider' | 'oss_version_id'>) {
+export function attachment_object_url(row: Pick<AttachmentRow, 'id' | 'version' | 'object_key' | 'storage_bucket' | 'is_private' | 'oss_version_id'>) {
   return `/api/links/attachments/${Number(row.id)}?version=${attachment_access_version(row)}`
 }
 
-function format_row(row: AttachmentRow, private_readable = false): ContentStoryAttachment {
+function format_row(row: AttachmentRow, private_readable = false, redaction?: AttachmentRow, is_redaction = false): ContentStoryAttachment {
   const mime_type = row.mime_type ?? attachment_mime_type(row.file_name)
-  const redacted = Boolean(row.is_private && ! private_readable && has_redacted_variant(row))
+  const redacted = Boolean(row.is_private && ! private_readable && redaction)
   const image = image_presentation(row, private_readable)
-  const redacted_image = has_redacted_variant(row) ? image_presentation({ ... redacted_presentation_row(row), is_private: false }, true) : undefined
+  const redacted_image = redaction ? image_presentation(redaction, true) : undefined
   return {
     ... (image ? { image } : {}),
-    has_redacted: has_redacted_variant(row),
+    has_redacted: Boolean(redaction),
+    is_redaction,
     is_redacted_view: redacted,
-    ... (redacted_image ? { redacted_image, redacted_url: `${attachment_object_url(row)}&role=redacted` } : {}),
+    ... (redaction ? { redacted_url: attachment_object_url(redaction), ... (redacted_image ? { redacted_image } : {}) } : {}),
     id: Number(row.id),
     file_name: row.file_name,
     mime_type,
@@ -90,13 +86,28 @@ function format_row(row: AttachmentRow, private_readable = false): ContentStoryA
   }
 }
 
+/** Each private file's public 删减版, keyed by the private row id (see attachment_redaction_path). */
+export function redaction_rows<T extends Pick<AttachmentRow, 'id' | 'file_name' | 'is_folder' | 'is_private' | 'object_key'>>(rows: readonly T[]) {
+  const public_files = new Map(rows.filter(row => ! row.is_folder && ! row.is_private && row.object_key).map(row => [content_name_key(row.file_name), row]))
+  const twins = new Map<number, T>()
+  for (const row of rows) {
+    const path = ! row.is_folder && row.is_private ? attachment_redaction_path(row.file_name) : null
+    const twin = path ? public_files.get(content_name_key(path)) : undefined
+    if (twin)
+      twins.set(Number(row.id), twin)
+  }
+  return twins
+}
+
 export async function list_scope_attachments(story_id: number, executor: DbExecutor = db, private_readable = false) {
   const [rows] = await executor.execute<AttachmentRow[]>(
     'SELECT * FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
     [story_id],
   )
+  const twins = redaction_rows(rows)
+  const redaction_ids = new Set([... twins.values()].map(twin => Number(twin.id)))
   return rows
-    .map(row => format_row(row, private_readable))
+    .map(row => format_row(row, private_readable, twins.get(Number(row.id)), redaction_ids.has(Number(row.id))))
     .sort((a, b) => compare_attachment_names(a.file_name, b.file_name))
 }
 
@@ -108,10 +119,10 @@ export async function get_scope_attachment_by_id(story_id: number, id: number) {
 /** Every object key owned by a story (delete_story collects before removing rows). */
 export async function get_story_object_keys(story_id: number, executor: DbExecutor = db) {
   const [rows] = await executor.execute<AttachmentRow[]>(
-    'SELECT object_key, original_key, display_key, fallback_key, redacted_display_key, redacted_fallback_key, storage_bucket, storage_provider FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
+    'SELECT object_key, original_key, display_key, fallback_key, redacted_display_key, redacted_fallback_key, storage_bucket FROM content_story_attachments WHERE story_id = ? AND is_folder = 0',
     [story_id],
   )
-  return rows.flatMap(row => attachment_owned_object_keys(row).map(key => ({ bucket: row.storage_bucket, key, ... (row.storage_provider === 'aliyun' ? { provider: 'aliyun' as const } : {}) })))
+  return rows.flatMap(row => attachment_owned_object_keys(row).map(key => ({ bucket: row.storage_bucket, key, provider: 'aliyun' as const })))
 }
 
 /** Raw file rows for server-side object identity and publication checks. */
@@ -135,20 +146,20 @@ export async function delete_story_attachment_rows(story_id: number, executor: D
 }
 
 /** Cover reads and change detection use only the named attachment's public representation. */
-type CoverRow = Pick<AttachmentRow, 'id' | 'file_name' | 'object_key' | 'version' | 'storage_bucket' | 'storage_provider' | 'oss_version_id' | 'is_private'> & Partial<AttachmentRow>
+type CoverRow = Pick<AttachmentRow, 'id' | 'file_name' | 'object_key' | 'version' | 'storage_bucket' | 'oss_version_id' | 'is_private'> & Partial<AttachmentRow>
 
 function cover_attachment(file_name: string, rows: CoverRow[]) {
-  const public_file = (name: string) => rows.find(row => content_name_key(row.file_name) === content_name_key(name) && ! row.is_folder && ! row.is_private && ! row.encryption_key && row.object_key)
-  const redacted = rows.find(row => content_name_key(row.file_name) === content_name_key(file_name) && row.is_private && ! row.is_folder && ! row.encryption_key && has_redacted_variant(row))
-  if (redacted)
-    return { row: redacted, redacted: true }
-  const row = public_file(file_name)
-  return row ? { row, redacted: false } : null
+  const row = rows.find(row => content_name_key(row.file_name) === content_name_key(file_name) && ! row.is_folder && row.object_key)
+  if (! row)
+    return null
+  if (! row.is_private)
+    return row
+  return redaction_rows(rows.map(item => ({ ... item, is_folder: Number(item.is_folder ?? 0) }))).get(Number(row.id)) ?? null
 }
 
 export function attachment_cover_url(file_name: string, rows: CoverRow[]) {
-  const selected = cover_attachment(file_name, rows)
-  return selected ? `${attachment_object_url(selected.row)}${selected.redacted ? '&role=redacted' : ''}` : null
+  const row = cover_attachment(file_name, rows)
+  return row ? attachment_object_url(row) : null
 }
 
 /** Public cover projections, keyed `story_id:file_name`; never expose normal private metadata. */
@@ -164,20 +175,22 @@ export async function list_cover_presentations(covers: { story_id: number, file_
   for (const cover of covers) {
     const names = wanted.get(cover.story_id) ?? new Set<string>()
     names.add(content_name_key(cover.file_name))
+    const twin = attachment_redaction_path(cover.file_name)
+    if (twin)
+      names.add(content_name_key(twin))
     wanted.set(cover.story_id, names)
   }
   const [candidates] = await executor.execute<AttachmentRow[]>(
-    `SELECT id, story_id, file_name FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND story_id IN (${scopes.map(() => '?').join(', ')})`,
+    `SELECT id, story_id, file_name FROM content_story_attachments WHERE is_folder = 0 AND story_id IN (${scopes.map(() => '?').join(', ')})`,
     scopes,
   )
   const ids = candidates.filter(row => wanted.get(Number(row.story_id))?.has(content_name_key(row.file_name))).map(row => Number(row.id))
   if (! ids.length)
     return urls
   const [rows] = await executor.execute<AttachmentRow[]>(
-    `SELECT id, story_id, file_name, object_key, version, storage_bucket, storage_provider, oss_version_id, is_private,
-      display_key, fallback_key, image_revision, image_metadata, lqip,
-      redacted_display_key, redacted_fallback_key, redacted_revision, redacted_metadata, redacted_lqip
-      FROM content_story_attachments WHERE is_folder = 0 AND encryption_key IS NULL AND id IN (${ids.map(() => '?').join(', ')})`,
+    `SELECT id, story_id, file_name, is_folder, object_key, version, storage_bucket, oss_version_id, is_private,
+      display_key, fallback_key, image_revision, image_metadata, lqip
+      FROM content_story_attachments WHERE is_folder = 0 AND id IN (${ids.map(() => '?').join(', ')})`,
     ids,
   )
   const by_story = new Map<number, AttachmentRow[]>()
@@ -188,14 +201,9 @@ export async function list_cover_presentations(covers: { story_id: number, file_
     by_story.set(scope, group)
   }
   for (const cover of covers) {
-    const selected = cover_attachment(cover.file_name, by_story.get(cover.story_id) ?? [])
-    if (selected) {
-      const { row, redacted } = selected
-      urls.set(`${cover.story_id}:${cover.file_name}`, {
-        url: `${attachment_object_url(row)}${redacted ? '&role=redacted' : ''}`,
-        image: image_presentation(redacted ? redacted_presentation_row(row) : row, redacted),
-      })
-    }
+    const row = cover_attachment(cover.file_name, by_story.get(cover.story_id) ?? [])
+    if (row)
+      urls.set(`${cover.story_id}:${cover.file_name}`, { url: attachment_object_url(row), image: image_presentation(row, false) })
   }
   return urls
 }

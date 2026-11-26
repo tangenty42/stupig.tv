@@ -108,6 +108,26 @@ it('does not diagnose valid column spans as malformed ordinary tables', () => {
   expect(build_diagnostics(source, state.doc, config).filter(item => item.source === 'MD056')).toEqual([])
 })
 
+it('keeps carousel delimiters separate from the Markdown they enclose', () => {
+  const items = '前文\n<carousel title="a > b">\n[**说明**](att://old.txt) ![caption](att://old.txt)\n\n[](att://old.txt)\n</carousel>\n后文'
+  const fenced = ['```md', '<carousel>', '[](att://old.txt)', '</carousel>', '```'].join('\n')
+  const { nodes } = parse(`${metadata + items}\n\n${fenced}`)
+  expect(nodes.filter(node => node.name === 'CarouselMark').map(node => node.text)).toEqual(['<carousel title="a > b">', '</carousel>'])
+  expect(nodes.some(node => node.name === 'Link' && node.text === '[**说明**](att://old.txt)')).toBe(true)
+  expect(nodes.some(node => node.name === 'Image' && node.text === '![caption](att://old.txt)')).toBe(true)
+  expect(nodes.filter(node => node.name === 'Paragraph').map(node => node.text)).toEqual(expect.arrayContaining(['前文', '后文']))
+})
+
+it('highlights an attributed tag and inline Markdown without creating a new paragraph', () => {
+  const body = '前文 <carousel title="a > b">**说明** [链接](att://old.txt)</carousel> 后文'
+  const { nodes } = parse(metadata + body)
+  expect(nodes.filter(node => node.name === 'Paragraph').map(node => node.text)).toContain(body)
+  expect(nodes.some(node => node.name === 'TagName' && node.text === 'carousel')).toBe(true)
+  expect(nodes.some(node => node.name === 'AttributeName' && node.text === 'title')).toBe(true)
+  expect(nodes.some(node => node.name === 'StrongEmphasis' && node.text === '**说明**')).toBe(true)
+  expect(nodes.some(node => node.name === 'Link' && node.text === '[链接](att://old.txt)')).toBe(true)
+})
+
 it('recognizes ordinary tables after prose and captions after the final row', () => {
   const body = '说明\n| A | B |\n| --- | --- |\n| 一 | 二 |\n[尾部说明][table-id]\n\n正文'
   const source = metadata + body

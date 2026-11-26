@@ -4,7 +4,7 @@ import { settings } from '@shared/settings'
 import sharp from 'sharp'
 import { login, logout, ready, test } from '../support/e2e-browser'
 
-test('account lifecycle: registration, birthday, avatar, password and logout', async ({ page }) => {
+test('account lifecycle: registration, birthday, avatar, password and logout', async ({ page, browser }) => {
   test.setTimeout(240_000)
   const username = `e2e${randomUUID().slice(0, 8)}`
   const phone = `18${randomInt(1_000_000_000).toString().padStart(9, '0')}`
@@ -85,8 +85,35 @@ test('account lifecycle: registration, birthday, avatar, password and logout', a
     await expect(page.getByText('密码修改成功！', { exact: true })).toBeVisible()
   })
 
-  await test.step('logout clears authentication and only the new password works', async () => {
-    await logout(page)
+  await test.step('revoking a second device from login history leaves this device signed in', async () => {
+    const device = await browser.newContext({ baseURL: new URL(page.url()).origin })
+    try {
+      const other = await device.newPage()
+      await login(other, username, 'E2eUpdated!953')
+      await page.getByRole('button', { name: '强制退出', exact: true }).click()
+      await page.getByRole('button', { name: '确定', exact: true }).click()
+      await expect(other.getByRole('button', { name: '登录 / 注册', exact: true })).toBeVisible()
+      expect((await other.request.get('/api/trpc/profile.getMe')).status()).toBe(401)
+      expect((await page.request.get('/api/trpc/profile.getMe')).ok()).toBe(true)
+      await expect(page.getByRole('button', { name: `用户菜单：${username}`, exact: true })).toBeVisible()
+    }
+    finally {
+      await device.close()
+    }
+  })
+
+  await test.step('logout reaches an already-open tab and only the new password works', async () => {
+    const other = await page.context().newPage()
+    try {
+      await other.goto('/contact')
+      await ready(other)
+      await expect(other.getByRole('button', { name: `用户菜单：${username}`, exact: true })).toBeVisible()
+      await logout(page)
+      await expect(other.getByRole('button', { name: '登录 / 注册', exact: true })).toBeVisible()
+    }
+    finally {
+      await other.close()
+    }
     await page.reload()
     await ready(page)
     await expect(page.getByRole('button', { name: '登录 / 注册', exact: true })).toBeVisible()

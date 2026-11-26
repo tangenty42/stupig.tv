@@ -26,10 +26,6 @@ export function observe_cropped_images(body: HTMLElement) {
     const cropped_tall = image.clientWidth * ratio - image.clientHeight > 1
     const cropped_wide = image.clientHeight / ratio - image.clientWidth > 1
     frame?.toggleAttribute('data-cropped', cropped_tall || cropped_wide)
-    const cover = frame?.querySelector('.long-img-cover')
-    if (cover) {
-      cover.textContent = '点击查看完整图片'
-    }
   }
   const observer = new ResizeObserver(entries =>
     entries.forEach(entry => update(entry.target as HTMLImageElement)))

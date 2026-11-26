@@ -6,6 +6,10 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 
+const content_tag_theme = EditorView.baseTheme({
+  '.cm-content-tag': { borderRadius: '3px', fontWeight: '600' },
+})
+
 const light_theme = EditorView.theme({
   '&': { backgroundColor: 'transparent', color: '#1e293b', height: '100%' },
   '.cm-gutters': { backgroundColor: 'transparent', color: '#94a3b8', border: 'none' },
@@ -25,6 +29,10 @@ const light_theme = EditorView.theme({
   '.cm-alert-marker-important': { color: '#4338ca' },
   '.cm-alert-marker-warning': { color: '#b45309' },
   '.cm-alert-marker-caution': { color: '#b91c1c' },
+  '.cm-content-tag-good': { backgroundColor: 'rgba(251, 191, 36, 0.22)' },
+  '.cm-content-tag-good, .cm-content-tag-good span': { color: '#92400e' },
+  '.cm-content-tag-carousel': { backgroundColor: 'rgba(167, 139, 250, 0.22)' },
+  '.cm-content-tag-carousel, .cm-content-tag-carousel span': { color: '#5b21b6' },
 }, { dark: false })
 
 const dark_theme = EditorView.theme({
@@ -44,6 +52,10 @@ const dark_theme = EditorView.theme({
   '.cm-alert-marker-important': { color: '#818cf8' },
   '.cm-alert-marker-warning': { color: '#fbbf24' },
   '.cm-alert-marker-caution': { color: '#f87171' },
+  '.cm-content-tag-good': { backgroundColor: 'rgba(251, 191, 36, 0.19)' },
+  '.cm-content-tag-good, .cm-content-tag-good span': { color: '#fcd34d' },
+  '.cm-content-tag-carousel': { backgroundColor: 'rgba(167, 139, 250, 0.22)' },
+  '.cm-content-tag-carousel, .cm-content-tag-carousel span': { color: '#ddd6fe' },
 }, { dark: true })
 
 const light_highlight = HighlightStyle.define([
@@ -84,6 +96,6 @@ const dark_highlight = HighlightStyle.define([
 
 export function theme_extensions(mode: 'light' | 'dark') {
   return mode === 'dark'
-    ? [dark_theme, syntaxHighlighting(dark_highlight)]
-    : [light_theme, syntaxHighlighting(light_highlight)]
+    ? [content_tag_theme, dark_theme, syntaxHighlighting(dark_highlight)]
+    : [content_tag_theme, light_theme, syntaxHighlighting(light_highlight)]
 }

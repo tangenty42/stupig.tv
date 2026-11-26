@@ -8,9 +8,9 @@ import { useImageEditorDialog } from './dialog'
 const wrappers: { unmount: () => void }[] = []
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 
-async function open(redacted = false) {
-  const props = reactive({ visible: false, pending: false, redacted,
-    attachment: { id: 1, file_name: 'docs/photo.png.good', url: '/read?version=v1' } as ContentStoryAttachment })
+async function open(file_name = 'docs/photo.png.good') {
+  const props = reactive({ visible: false,
+    attachment: { id: 1, file_name, url: '/read?version=v1' } as ContentStoryAttachment })
   const load = vi.fn().mockResolvedValue({ display_url: '/view?role=display', original_url: '/view?role=original', original_reason: '' })
   const save = vi.fn()
   const confirm = vi.fn()
@@ -29,7 +29,7 @@ async function open(redacted = false) {
 
 it('loads the authorized source and emits a copy name with its fixed WebP suffix', async () => {
   const { dialog, load, save } = await open()
-  expect(load).toHaveBeenCalledWith(1, 'v1', false)
+  expect(load).toHaveBeenCalledWith(1, 'v1')
   dialog.mode.value = 'copy'
   await flushPromises()
   dialog.display_name.value = '改名.v2'
@@ -39,28 +39,35 @@ it('loads the authorized source and emits a copy name with its fixed WebP suffix
   dialog.display_name.value = ' '
   dialog.save(file)
   expect(save).toHaveBeenCalledOnce()
+  dialog.mode.value = 'redacted'
+  dialog.save(file)
+  expect(save).toHaveBeenLastCalledWith(file, 'redacted', 'docs/photo.png', 'display')
 })
 
-it.each([false, true])('resets pixels without changing the save destination (redacted: %s)', async (redacted) => {
-  const { dialog, confirm, save } = await open(redacted)
+it.each([['overwrite', 'docs/photo.png.good'], ['redacted', 'docs/photo.png']] as const)('resets pixels without changing the save destination (%s)', async (mode, destination) => {
+  const { dialog, confirm, save } = await open()
+  dialog.mode.value = mode
   dialog.base_ready.value = true
   dialog.request_reset(new Event('click'))
   expect(save).not.toHaveBeenCalled()
   confirm.mock.calls[0]![2]()
   expect(dialog.source_url.value).toContain('/view?role=original&editor_reset=')
   dialog.save(new File(['pixels'], 'edited.png'))
-  expect(save).toHaveBeenLastCalledWith(expect.any(File), redacted ? 'redacted' : 'overwrite', 'docs/photo.png.good', 'original')
+  expect(save).toHaveBeenLastCalledWith(expect.any(File), mode, destination, 'original')
 })
 
-it.each(['closed', 'pending', 'changed', 'unmounted'])('ignores stale confirmation after %s', async (change) => {
+it('offers 作为删减版 only for a file named with `.good`', async () => {
+  expect((await open()).dialog.modes.value.map(item => item.value)).toEqual(['copy', 'overwrite', 'redacted'])
+  expect((await open('docs.good/photo.png')).dialog.modes.value.map(item => item.value)).toEqual(['copy', 'overwrite'])
+})
+
+it.each(['closed', 'changed', 'unmounted'])('ignores stale confirmation after %s', async (change) => {
   const { dialog, props, confirm, wrapper } = await open()
   dialog.base_ready.value = true
   dialog.request_reset(new Event('click'))
   const accept = confirm.mock.calls[0]![2]
   if (change === 'closed')
     props.visible = false
-  if (change === 'pending')
-    props.pending = true
   if (change === 'changed')
     props.attachment = { ... props.attachment, id: 2 }
   if (change === 'unmounted')

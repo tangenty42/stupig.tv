@@ -8,7 +8,7 @@ import { ApiError } from '@server/errors/ApiError'
 import { ReferenceSafetyError } from '@server/errors/ReferenceSafetyError'
 import { db } from '@server/lib/db'
 import { delete_story_attachment_rows, get_story_object_keys, list_cover_presentations } from '@server/services/content-attachments.service'
-import { parse_story_markdown } from '@shared/content-markdown'
+import { parse_story_markdown, private_cover_error_message } from '@shared/content-markdown'
 import { has_private_content, redact_private_content } from '@shared/content-private'
 import { content_name_key, format_story_ref } from '@shared/content-reference'
 import { build_html_diagnostics, html_lint_line } from '@shared/html-lint'
@@ -39,7 +39,7 @@ interface StoryRow extends RowDataPacket {
   /** Cover object's ETag; null for external covers or unwritten rows. */
   cover_version: string | null
   event_precision: 'day' | 'month'
-  /** JSON array of 'YYYY-MM-DD' strings; month-precision stories use the first of the month. */
+  /** Empty JSON array when undated. Month-precision entries use the first of the month. */
   event_dates: string | string[]
   markdown: string
   created_at: string
@@ -169,12 +169,12 @@ export async function list_stories() {
 function story_viewer_key(viewer: AuthUser | null | undefined) {
   return viewer === undefined
     ? 'internal'
-    : `${viewer?.id ?? 'anon'}:${has_permission(viewer, 'content_private', 'read')}`
+    : `${viewer?.id ?? 'anon'}:${has_permission(viewer, 'content_access', 'private_read')}`
 }
 
 /** Hash the viewer's actual representation; hidden source bytes never enter guest hashes. */
 function format_story_body(story: StoryRow, viewer: AuthUser | null, presentation: { url: string, image: ContentStoryAttachment['image'] } | undefined, title_revision: number): ContentStoryBody {
-  const private_readable = has_permission(viewer, 'content_private', 'read')
+  const private_readable = has_permission(viewer, 'content_access', 'private_read')
   const body = {
     id: story.id, title: story.title, labels: parse_labels(story.label),
     event_precision: story.event_precision, event_dates: parse_event_dates(story.event_dates),
@@ -306,10 +306,14 @@ export async function update_story(id: number, markdown: string, base_revision: 
         continue
       }
       await ensure_unique_title(meta.title, id, connection)
-      const [attachments] = await connection.execute<RowDataPacket[]>('SELECT file_name, version FROM content_story_attachments WHERE story_id = ? AND is_folder = 0', [id])
+      const [attachments] = await connection.execute<RowDataPacket[]>('SELECT file_name, version, is_private FROM content_story_attachments WHERE story_id = ? AND is_folder = 0', [id])
+      const cover_key = content_name_key(meta.cover ?? '')
+      const cover_attachment = attachments.find(row => content_name_key(String(row.file_name)) === cover_key)
+      if (cover_attachment?.is_private)
+        throw new ApiError(400, private_cover_error_message)
       await connection.execute(
         'UPDATE content_stories SET title = ?, label = ?, description = ?, cover = ?, cover_label = ?, cover_version = ?, event_precision = ?, event_dates = CAST(? AS JSON), markdown = ?, revision = revision + 1 WHERE id = ?',
-        [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', attachments.find(row => content_name_key(String(row.file_name)) === content_name_key(meta.cover ?? ''))?.version ?? null, meta.event_precision, story_event_dates(meta), markdown, id],
+        [meta.title, meta.labels.join(' '), meta.desc ?? '', meta.cover ?? '', meta.cover_label ?? '', cover_attachment?.version ?? null, meta.event_precision, story_event_dates(meta), markdown, id],
       )
       let title_revision = title_namespace.revision
       if (story.title !== meta.title) {

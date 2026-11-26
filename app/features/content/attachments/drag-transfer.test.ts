@@ -1,6 +1,6 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { describe, expect, it } from 'vitest'
-import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown } from '~/features/content/attachments/drag'
+import { content_attachment_drag_type, content_attachment_markdown, content_folder_drag_type, content_folder_markdown, content_selection_markdown, resolve_markdown_selection } from '~/features/content/attachments/drag'
 import { get_content_attachment_drag_data, get_content_folder_drag_data, set_content_attachment_drag_data, set_content_folder_drag_data } from './drag-transfer'
 
 /** Minimal DataTransfer stand-in; the module only reads/writes these members. */
@@ -151,11 +151,11 @@ describe('attachment drag payload', () => {
 
 describe('markdown shorthand', () => {
   it('prefixes an image reference with !', () => {
-    expect(content_attachment_markdown({ file_name: 'a.png', is_image: true, url: '/a.png' })).toBe('![](att://a.png)')
+    expect(content_attachment_markdown({ file_name: 'a.png', is_image: true })).toBe('![](att://a.png)')
   })
 
   it('leaves a non-image reference as a plain link', () => {
-    expect(content_attachment_markdown({ file_name: 'a.zip', is_image: false, url: '/a.zip' })).toBe('[](att://a.zip)')
+    expect(content_attachment_markdown({ file_name: 'a.zip', is_image: false })).toBe('[](att://a.zip)')
   })
 
   it('uses the same plain-link form for a folder', () => {
@@ -164,5 +164,28 @@ describe('markdown shorthand', () => {
 
   it('keeps nested paths intact', () => {
     expect(content_folder_markdown('a/b')).toBe('[](att://a/b)')
+  })
+
+  it.each([
+    ['folder', ['[](att://讲义.pdf)', '[](att://Album)', '[](att://empty)'], []],
+    ['files', ['[](att://讲义.pdf)', '![](att://Album/2.png)', '![](att://Album/10.png)', '[](att://Album/notes.txt)'], ['empty']],
+    ['images', ['[](att://讲义.pdf)', '![](att://Album/2.png)', '![](att://Album/10.png)'], ['empty']],
+  ] as const)('applies %s mode to all folders without including subfolders or filtering explicit files', (mode, lines, empty_folders) => {
+    const files = ['讲义.pdf', 'Album/10.png', 'Album/2.png', 'Album/notes.txt', 'Album/sub/child.png', 'empty/sub/photo.jpg', 'Album-old/photo.png']
+      .map(file_name => ({ file_name, is_image: /\.(?:png|jpg)$/.test(file_name) }))
+    const selection = resolve_markdown_selection(['讲义.pdf', 'album', 'empty'], files, ['Album', 'empty'])
+    expect(content_selection_markdown(selection, files, mode)).toEqual({ markdown: `<carousel>\n${lines.map(line => `  ${line}`).join('\n')}\n</carousel>`, items: lines, empty_folders })
+  })
+
+  it('wraps the expanded unique items rather than the selected row count', () => {
+    const files = [{ file_name: 'album/a.png', is_image: true }, { file_name: 'album/b.txt', is_image: false }]
+    const selection = resolve_markdown_selection(['album', 'album/a.png', 'ALBUM/A.PNG'], files, ['album'])
+    expect(content_selection_markdown(selection, files, 'files')).toEqual({
+      markdown: '<carousel>\n  ![](att://album/a.png)\n  [](att://album/b.txt)\n</carousel>',
+      items: ['![](att://album/a.png)', '[](att://album/b.txt)'],
+      empty_folders: [],
+    })
+    expect(content_selection_markdown(selection, files, 'images')).toEqual({ markdown: '![](att://album/a.png)', items: ['![](att://album/a.png)'], empty_folders: [] })
+    expect(content_selection_markdown([{ path: 'empty', kind: 'folder' }], files, 'files')).toEqual({ markdown: '', items: [], empty_folders: ['empty'] })
   })
 })

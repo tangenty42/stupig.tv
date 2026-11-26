@@ -1,3 +1,4 @@
+import type { ContentAttachmentWorkspace, ContentStorySummary } from '@shared/types/content'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { computed, effectScope, ref, shallowRef, watch } from 'vue'
@@ -51,12 +52,18 @@ it('initializes every editing context synchronously and exposes one readiness ba
   const session_ready = new Promise<{ refresh: () => Promise<void> }>((resolve) => {
     resolve_session = resolve
   })
-  mocks.stories.mockReturnValue({ stories: ref([]), loading: ref(false), ready: stories_ready })
+  const stories_error = ref(false)
+  const stories_loading = ref(false)
+  const stories = ref<ContentStorySummary[] | null>(null)
+  const catalog_data = ref<ContentAttachmentWorkspace | null>(null)
+  const catalog_error = ref<string | null>(null)
+  const catalog_loading = ref(false)
+  mocks.stories.mockReturnValue({ stories, loading: stories_loading, error: stories_error, ready: stories_ready })
   mocks.panel.mockReturnValue({
     ready: panel_ready,
     start: vi.fn(async () => {}),
     uploads: { finalizing: new Set() },
-    catalog: { data: ref(null), loading: ref(false) },
+    catalog: { data: catalog_data, loading: catalog_loading, error: catalog_error, active: true },
   })
   vi.stubGlobal('useSyncedData', () => session_ready)
 
@@ -64,7 +71,7 @@ it('initializes every editing context synchronously and exposes one readiness ba
   const editing = scope.run(() => useStoryEditing({
     story_id: 7,
     attachment_interaction: interaction,
-    editor: { apply_reference_changes: () => true, insert_markdown: vi.fn() },
+    editor: { apply_reference_changes: () => true, validate: () => [] },
   }))!
   let settled = false
   void editing.ready.then(() => {
@@ -73,7 +80,27 @@ it('initializes every editing context synchronously and exposes one readiness ba
 
   expect(mocks.stories).toHaveBeenCalledOnce()
   expect(mocks.panel).toHaveBeenCalledOnce()
-  expect(mocks.panel).toHaveBeenCalledWith({ scope: 7, markdown: expect.any(Function), interaction })
+  expect(mocks.panel).toHaveBeenCalledWith({ scope: 7, markdown: expect.any(Function), reference_source: expect.any(Function), interaction })
+  expect(editing.stories_completion_failure.value).toBeUndefined()
+  expect(editing.attachments_completion_failure.value).toBeUndefined()
+  stories_error.value = true
+  catalog_error.value = '连接中断'
+  expect(editing.stories_completion_failure.value).toBe('load')
+  expect(editing.attachments_completion_failure.value).toBe('load')
+  stories.value = []
+  catalog_data.value = { root_id: 10, nodes: [], attachments: [], folders: [], namespace_revision: 1, viewer_key: '1:true' }
+  expect(editing.stories_completion_failure.value).toBe('refresh')
+  expect(editing.attachments_completion_failure.value).toBe('refresh')
+  stories_loading.value = true
+  catalog_loading.value = true
+  expect(editing.stories_completion_failure.value).toBeUndefined()
+  expect(editing.attachments_completion_failure.value).toBeUndefined()
+  stories_error.value = false
+  stories_loading.value = false
+  catalog_error.value = null
+  catalog_loading.value = false
+  expect(editing.stories_completion_failure.value).toBeUndefined()
+  expect(editing.attachments_completion_failure.value).toBeUndefined()
   expect(settled).toBe(false)
   resolve_stories()
   resolve_panel()

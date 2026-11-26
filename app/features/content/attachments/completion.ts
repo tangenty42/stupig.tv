@@ -2,10 +2,10 @@ import type { ContentStoryAttachment } from '@shared/types/content'
 
 /** Pending uploads retain a ticket, not a destroyed editor's callback closure. */
 export function create_upload_completion_context() {
-  const callbacks = new Map<symbol, (attachment: ContentStoryAttachment) => void>()
+  let callbacks = new WeakMap<object, (attachment: ContentStoryAttachment) => void>()
   let disposed = false
   function bind(callback: (attachment: ContentStoryAttachment) => void) {
-    const ticket = Symbol('upload-completion')
+    const ticket = {}
     if (! disposed)
       callbacks.set(ticket, callback)
     return (attachment: ContentStoryAttachment) => {
@@ -14,8 +14,11 @@ export function create_upload_completion_context() {
       deliver?.(attachment)
     }
   }
-  return { bind, reset: () => callbacks.clear(), dispose: () => {
+  function reset() {
+    callbacks = new WeakMap()
+  }
+  return { bind, reset, dispose: () => {
     disposed = true
-    callbacks.clear()
+    reset()
   } }
 }

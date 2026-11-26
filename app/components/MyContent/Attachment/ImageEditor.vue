@@ -1,173 +1,196 @@
 <template>
   <MyDialog
     v-model:visible="visible"
-    :header="redacted ? '编辑删减版' : '编辑'"
+    header="编辑"
     fullscreen
   >
-    <div v-if="source_loading || loading" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 py-12 text-lg text-slate-500 dark:text-slate-400" role="status">
-      <MyIcon name="lucide:loader-circle" class="animate-spin text-5xl" />
-      <span>正在加载图片</span>
-    </div>
-
-    <div v-else-if="load_error" class="py-10 text-center text-sm text-red-600 dark:text-red-400">
-      {{ load_error }}
-    </div>
-
-    <div v-else class="image-editor-workspace flex min-h-0 flex-1 flex-col">
-      <div class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 px-3 py-2 dark:border-slate-700" role="toolbar" aria-label="图片编辑工具">
-        <Button class="aspect-square" aria-label="向左旋转" title="向左旋转" severity="secondary" text @click="rotate(- 1)">
-          <template #icon>
-            <MyIcon name="lucide:rotate-ccw" />
-          </template>
-        </Button>
-        <Button class="aspect-square" aria-label="向右旋转" title="向右旋转" severity="secondary" text @click="rotate(1)">
-          <template #icon>
-            <MyIcon name="lucide:rotate-cw" />
-          </template>
-        </Button>
-        <Button class="aspect-square" aria-label="撤销" title="撤销" severity="secondary" text :disabled="! can_undo" @click="undo">
-          <template #icon>
-            <MyIcon name="lucide:undo-2" />
-          </template>
-        </Button>
-        <Button class="aspect-square" aria-label="重做" title="重做" severity="secondary" text :disabled="! can_redo" @click="redo">
-          <template #icon>
-            <MyIcon name="lucide:redo-2" />
-          </template>
-        </Button>
-        <Button size="small" label="适应窗口" severity="secondary" text @click="viewport.fit_to_stage()" />
-        <Button size="small" label="原始比例" severity="secondary" text @click="scale = 1" />
-        <span class="w-16 shrink-0 text-center text-xs tabular-nums text-slate-500" aria-label="当前缩放比例">{{ Math.round(scale * 100) }} %</span>
-        <div class="ml-auto shrink-0">
-          <Button label="回退原图" size="small" @click="! processing && request_reset($event)">
-            <template #icon>
-              <MyIcon name="lucide:step-back" />
-            </template>
-          </Button>
+    <!-- Share the space so the canvases can mount and paint while the spinner leaves. -->
+    <div class="grid min-h-0 flex-1 grid-cols-1 grid-rows-1">
+      <Transition name="site-page" :css="visible && ! image_loading && !! source_bitmap && ! load_error">
+        <div v-if="image_loading" class="col-start-1 row-start-1 flex min-h-0 flex-col items-center justify-center gap-4 py-12 text-lg text-slate-500 dark:text-slate-400" role="status">
+          <MyIcon name="lucide:loader-circle" class="animate-spin text-5xl" />
+          <span>正在加载图片</span>
         </div>
-      </div>
-      <p class="hidden shrink-0 px-4 py-2 text-xs text-slate-500 sm:block">
-        Ctrl + 滚轮缩放 · Ctrl / ⌘ 或空格 + 拖动平移 · 双指缩放／平移
-      </p>
-      <div
-        class="min-h-0 flex-1 overflow-hidden bg-slate-100 touch-none dark:bg-slate-800"
-        @pointerdown.capture="touch_start"
-        @pointermove.capture="touch_move"
-        @pointerup.capture="touch_end"
-        @pointercancel.capture="touch_end"
-      >
-        <div
-          ref="stage"
-          class="redact-stage flex h-full overflow-auto touch-none"
-          :class="{ 'redact-pan-ready': space_held || pan_modifier, 'redact-panning': pan_state !== null, 'redact-crop-moving': crop_drag?.handle === 'move' }"
-          @wheel="on_wheel"
-          @contextmenu.prevent
-          @pointerdown="on_stage_pointerdown"
-          @pointermove="on_stage_pointermove"
-          @pointerup="on_stage_pointerup"
-          @pointercancel="on_stage_pointerup"
-        >
-          <!-- overflow-hidden also clips the brush preview at the edge, so a dot
-             near the border can never widen the scroll area: an absolutely
-             positioned box inside a scroll container contributes to its
-             scrollable overflow, which would grow a scrollbar under the pointer
-             and shift the whole image sideways mid-stroke. Strokes are clipped
-             by the canvas the same way, so the preview stays honest. -->
-          <div
-            class="relative m-auto shrink-0 overflow-hidden"
-            :style="{ width: `${display_width}px`, height: `${display_height}px` }"
-          >
-            <canvas
-              ref="image_canvas"
-              class="absolute inset-0 h-full w-full"
-              :width="natural_size.width"
-              :height="natural_size.height"
-            />
-            <canvas
-              ref="stroke_canvas"
-              role="img"
-              aria-label="图片编辑画布"
-              class="redact-canvas absolute inset-0 h-full w-full touch-none"
-              :class="{ 'redact-canvas-hidden': !! cursor_style }"
-              :width="natural_size.width"
-              :height="natural_size.height"
-              @pointerdown="on_pointerdown"
-              @pointermove="on_pointermove"
-              @pointerup="on_pointerup"
-              @pointercancel="on_pointerup"
-              @pointerleave="on_cursor_leave"
-            />
-            <div class="redact-crop-frame pointer-events-none absolute border border-white touch-none" :style="crop_style" @pointermove="crop_move" @pointerup="crop_end" @pointercancel="crop_end">
-              <span class="pointer-events-auto absolute inset-x-0 top-0 h-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
-              <span class="pointer-events-auto absolute inset-x-0 bottom-0 h-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
-              <span class="pointer-events-auto absolute inset-y-0 left-0 w-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
-              <span class="pointer-events-auto absolute inset-y-0 right-0 w-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
-              <span v-for="handle in crop_handles" :key="handle" class="pointer-events-auto absolute h-8 w-8 -translate-x-1/2 -translate-y-1/2 touch-none" :style="{ left: handle.includes('w') ? '0%' : handle.includes('e') ? '100%' : '50%', top: handle.includes('n') ? '0%' : handle.includes('s') ? '100%' : '50%', cursor: `${handle}-resize` }" @pointerdown="crop_start($event, handle)">
-                <span class="redact-crop-handle absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 border border-white" />
-              </span>
+
+        <div v-else-if="load_error" class="col-start-1 row-start-1 py-10 text-center text-sm text-red-600 dark:text-red-400">
+          {{ load_error }}
+        </div>
+
+        <div v-else class="image-editor-workspace col-start-1 row-start-1 flex min-h-0 min-w-0 flex-col">
+          <div class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-200 px-3 py-2 dark:border-slate-700" role="toolbar" aria-label="图片编辑工具">
+            <Button class="aspect-square" aria-label="向左旋转" title="向左旋转" severity="secondary" text @click="rotate(- 1)">
+              <template #icon>
+                <MyIcon name="lucide:rotate-ccw" />
+              </template>
+            </Button>
+            <Button class="aspect-square" aria-label="向右旋转" title="向右旋转" severity="secondary" text @click="rotate(1)">
+              <template #icon>
+                <MyIcon name="lucide:rotate-cw" />
+              </template>
+            </Button>
+            <Button class="aspect-square" aria-label="撤销" title="撤销" severity="secondary" text :disabled="! can_undo" @click="undo">
+              <template #icon>
+                <MyIcon name="lucide:undo-2" />
+              </template>
+            </Button>
+            <Button class="aspect-square" aria-label="重做" title="重做" severity="secondary" text :disabled="! can_redo" @click="redo">
+              <template #icon>
+                <MyIcon name="lucide:redo-2" />
+              </template>
+            </Button>
+            <Button size="small" label="适应窗口" severity="secondary" text @click="viewport.fit_to_stage()" />
+            <Button size="small" label="原始比例" severity="secondary" text @click="scale = 1" />
+            <span class="w-16 shrink-0 text-center text-xs tabular-nums text-slate-500" aria-label="当前缩放比例">{{ Math.round(scale * 100) }} %</span>
+            <div class="ml-auto shrink-0">
+              <Button label="回退原图" size="small" @click="! working && request_reset($event)">
+                <template #icon>
+                  <MyIcon name="lucide:step-back" />
+                </template>
+              </Button>
             </div>
-            <!-- The brush's own cross-section, so what is about to be covered is
-               visible before the button goes down. -->
-            <span
-              v-if="cursor_style"
-              class="redact-cursor pointer-events-none absolute rounded-full"
-              :class="{ 'redact-eraser': erasing }"
-              :style="cursor_style"
-              aria-hidden="true"
-            />
-            <!-- While the width slider is worked the pointer is on the slider,
-               far from here, so the size being dialled in is previewed on the
-               image itself. -->
-            <Transition name="brush-preview">
-              <span
-                v-if="brush_preview_style"
-                class="redact-cursor pointer-events-none absolute left-1/2 top-1/2 rounded-full"
-                :class="{ 'redact-eraser': erasing }"
-                :style="brush_preview_style"
-                aria-hidden="true"
+          </div>
+          <ul class="hidden shrink-0 flex-wrap items-center gap-1.5 px-4 py-2 sm:flex" role="list" aria-label="图片编辑手势">
+            <li>
+              <MyBadge type="info" outlined>
+                Ctrl／⌘ + 滚轮缩放
+              </MyBadge>
+            </li>
+            <li>
+              <MyBadge type="info" outlined>
+                Ctrl／⌘ 或空格 + 拖动平移
+              </MyBadge>
+            </li>
+            <li>
+              <MyBadge type="info" outlined>
+                双指缩放／平移
+              </MyBadge>
+            </li>
+          </ul>
+          <div
+            class="min-h-0 flex-1 overflow-hidden bg-slate-100 touch-none dark:bg-slate-800"
+            @pointerdown.capture="touch_start"
+            @pointermove.capture="touch_move"
+            @pointerup.capture="touch_end"
+            @pointercancel.capture="touch_end"
+          >
+            <div
+              ref="stage"
+              class="redact-stage flex h-full overflow-auto touch-none"
+              :class="{ 'redact-pan-ready': space_held || pan_modifier, 'redact-panning': pan_state !== null, 'redact-crop-moving': crop_drag?.handle === 'move' }"
+              @wheel="on_wheel"
+              @contextmenu.prevent
+              @pointerdown="on_stage_pointerdown"
+              @pointermove="on_stage_pointermove"
+              @pointerup="on_stage_pointerup"
+              @pointercancel="on_stage_pointerup"
+            >
+              <!-- overflow-hidden also clips the brush preview at the edge, so a dot
+                 near the border can never widen the scroll area: an absolutely
+                 positioned box inside a scroll container contributes to its
+                 scrollable overflow, which would grow a scrollbar under the pointer
+                 and shift the whole image sideways mid-stroke. Strokes are clipped
+                 by the canvas the same way, so the preview stays honest. -->
+              <div
+                class="relative m-auto shrink-0 overflow-hidden"
+                :style="{ width: `${display_width}px`, height: `${display_height}px` }"
+              >
+                <canvas
+                  ref="image_canvas"
+                  class="absolute inset-0 h-full w-full"
+                  :width="natural_size.width"
+                  :height="natural_size.height"
+                />
+                <canvas
+                  ref="stroke_canvas"
+                  role="img"
+                  aria-label="图片编辑画布"
+                  class="redact-canvas absolute inset-0 h-full w-full touch-none"
+                  :class="{ 'redact-canvas-hidden': !! cursor_style }"
+                  :width="natural_size.width"
+                  :height="natural_size.height"
+                  @pointerdown="on_pointerdown"
+                  @pointermove="on_pointermove"
+                  @pointerup="on_pointerup"
+                  @pointercancel="on_pointerup"
+                  @pointerleave="on_cursor_leave"
+                />
+                <div
+                  class="redact-crop-frame pointer-events-none absolute border border-white touch-none"
+                  :style="crop_style"
+                  @pointermove="crop_move" @pointerup="crop_end" @pointercancel="crop_end" @lostpointercapture="crop_end"
+                >
+                  <span class="pointer-events-auto absolute inset-x-0 top-0 h-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
+                  <span class="pointer-events-auto absolute inset-x-0 bottom-0 h-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
+                  <span class="pointer-events-auto absolute inset-y-0 left-0 w-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
+                  <span class="pointer-events-auto absolute inset-y-0 right-0 w-2 cursor-grab" @pointerdown="crop_start($event, 'move')" />
+                  <span v-for="handle in crop_handles" :key="handle" class="pointer-events-auto absolute h-8 w-8 -translate-x-1/2 -translate-y-1/2 touch-none" :style="{ left: handle.includes('w') ? '0%' : handle.includes('e') ? '100%' : '50%', top: handle.includes('n') ? '0%' : handle.includes('s') ? '100%' : '50%', cursor: `${handle}-resize` }" @pointerdown="crop_start($event, handle)">
+                    <span class="redact-crop-handle absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 border border-white" />
+                  </span>
+                </div>
+                <!-- The brush's own cross-section, so what is about to be covered is
+                   visible before the button goes down. -->
+                <span
+                  v-if="cursor_style"
+                  class="redact-cursor pointer-events-none absolute rounded-full"
+                  :class="{ 'redact-eraser': erasing }"
+                  :style="cursor_style"
+                  aria-hidden="true"
+                />
+                <!-- While the width slider is worked the pointer is on the slider,
+                   far from here, so the size being dialled in is previewed on the
+                   image itself. -->
+                <Transition name="brush-preview">
+                  <span
+                    v-if="brush_preview_style"
+                    class="redact-cursor pointer-events-none absolute left-1/2 top-1/2 rounded-full"
+                    :class="{ 'redact-eraser': erasing }"
+                    :style="brush_preview_style"
+                    aria-hidden="true"
+                  />
+                </Transition>
+              </div>
+            </div>
+          </div>
+
+          <!-- Label each tool group so short action names retain their context. -->
+          <div class="flex shrink-0 items-center gap-1 overflow-x-auto px-4 py-2" role="group" aria-label="裁剪">
+            <span class="mr-2 shrink-0 text-xs text-slate-500">裁剪</span>
+            <Button size="small" :label="crop_locked ? '比例已锁定' : '自由比例'" severity="secondary" text :aria-pressed="crop_locked" @click="crop_locked = ! crop_locked" />
+            <Button size="small" label="重置" severity="secondary" text @click="cancel_crop" />
+            <Button size="small" label="应用" class="ml-auto" @click="apply_crop">
+              <template #icon>
+                <MyIcon name="lucide:crop" />
+              </template>
+            </Button>
+          </div>
+          <div class="flex shrink-0 items-center gap-4 px-4 pb-3">
+            <span class="shrink-0 text-xs text-slate-500">画笔</span>
+            <span class="flex min-w-0 flex-1 items-center gap-4 text-sm text-slate-600 dark:text-slate-300">
+              <Slider
+                v-model="brush_width"
+                :min="1"
+                :max="brush_width_max"
+                class="min-w-32 flex-1"
+                aria-label="画笔粗细"
+                @change="on_brush_width_change"
               />
-            </Transition>
+            </span>
+
+            <Button
+              :aria-label="erasing ? '切换为画笔' : '切换为橡皮擦'"
+              :title="erasing ? '切换为画笔' : '切换为橡皮擦'"
+              :aria-pressed="erasing"
+              severity="secondary"
+              class="aspect-square shrink-0"
+              @click="erasing = ! erasing"
+            >
+              <template #icon>
+                <MyIcon :name="erasing ? 'lucide:paintbrush' : 'lucide:eraser'" />
+              </template>
+            </Button>
           </div>
         </div>
-      </div>
-
-      <!-- Label each tool group so short action names retain their context. -->
-      <div class="flex shrink-0 items-center gap-1 overflow-x-auto px-4 py-2" role="group" aria-label="裁剪">
-        <span class="mr-2 shrink-0 text-xs text-slate-500">裁剪</span>
-        <Button size="small" :label="crop_locked ? '比例已锁定' : '自由比例'" severity="secondary" text :aria-pressed="crop_locked" @click="crop_locked = ! crop_locked" />
-        <Button size="small" label="重置" severity="secondary" text @click="cancel_crop" />
-        <Button size="small" label="应用" class="ml-auto" @click="apply_crop">
-          <template #icon>
-            <MyIcon name="lucide:crop" />
-          </template>
-        </Button>
-      </div>
-      <div class="flex shrink-0 items-center gap-4 px-4 pb-3">
-        <span class="shrink-0 text-xs text-slate-500">画笔</span>
-        <span class="flex min-w-0 flex-1 items-center gap-4 text-sm text-slate-600 dark:text-slate-300">
-          <Slider
-            v-model="brush_width"
-            :min="1"
-            :max="brush_width_max"
-            class="min-w-32 flex-1"
-            aria-label="画笔粗细"
-            @change="on_brush_width_change"
-          />
-        </span>
-
-        <Button
-          :aria-label="erasing ? '切换为画笔' : '切换为橡皮擦'"
-          :title="erasing ? '切换为画笔' : '切换为橡皮擦'"
-          :aria-pressed="erasing"
-          severity="secondary"
-          class="aspect-square shrink-0"
-          @click="erasing = ! erasing"
-        >
-          <template #icon>
-            <MyIcon :name="erasing ? 'lucide:paintbrush' : 'lucide:eraser'" />
-          </template>
-        </Button>
-      </div>
+      </Transition>
     </div>
 
     <template #footer>
@@ -178,18 +201,28 @@
               {{ source_error }}
             </p>
             <div class="flex flex-wrap items-center gap-3">
-              <span v-if="redacted" class="text-slate-500">将发布删减版，保存后可公开读取</span>
-              <Select v-else v-model="mode" size="small" input-id="image-save-mode" aria-label="保存模式" :options="modes" option-label="label" option-value="value" />
+              <Select
+                :model-value="mode" size="small" input-id="image-save-mode" aria-label="保存模式"
+                :options="modes" option-label="label" option-value="value" :disabled="exporting"
+                @update:model-value="! exporting && (mode = $event)"
+              />
             </div>
             <div class="w-full max-w-sm">
-              <MyFileNameInput v-model="display_name" :disabled="mode !== 'copy'" :suffix="mode === 'copy' ? '.webp' : original_name.locked" aria-label="新图片名称" />
+              <MyFileNameInput
+                :model-value="display_name" :disabled="mode !== 'copy' || exporting" :suffix="name_suffix" aria-label="新图片名称"
+                @update:model-value="! exporting && (display_name = $event)"
+              />
             </div>
           </div>
         </div>
-        <div class="flex shrink-0 justify-end gap-2">
-          <Button size="small" label="取消" severity="secondary" text @click="visible = false" />
+        <div class="flex shrink-0 justify-end">
           <Button
+            ref="save_button"
             label="保存"
+            :disabled="! can_save"
+            :loading="exporting"
+            :aria-busy="exporting"
+            aria-keyshortcuts="Control+S Meta+S"
             @click="submit"
           >
             <template #icon>
@@ -216,14 +249,9 @@ import { useImageEditorViewport } from '~/features/content/image-editor/viewport
 interface Props {
   visible: boolean
   attachment: ContentStoryAttachment | null
-  redacted?: boolean
-  pending?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), {
-  pending: false,
-  redacted: false,
-})
+const props = defineProps<Props>()
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
@@ -232,7 +260,7 @@ const emit = defineEmits<{
 
 const { error: toast_error } = useMyToast()
 const { confirm_require } = useMyConfirm()
-const { mode, base_ready, original_name, display_name, save_confirmation,
+const { mode, base_ready, display_name, name_suffix, save_confirmation,
   source_url, source_error, source_loading, modes,
   save, request_reset, save_disabled } = useImageEditorDialog(props, {
   confirm: confirm_require,
@@ -255,6 +283,7 @@ const visible = computed({
 const stage = ref<HTMLElement | null>(null)
 const image_canvas = ref<HTMLCanvasElement | null>(null)
 const stroke_canvas = ref<HTMLCanvasElement | null>(null)
+const save_button = useTemplateRef<{ $el: HTMLButtonElement }>('save_button')
 
 const brush_width = ref(1)
 const erasing = ref(false)
@@ -270,13 +299,12 @@ let active_stroke: RedactionStroke | null = null
 // until the dialog watcher below runs, after both owners have been initialized.
 let image_session: ReturnType<typeof useImageEditSession>
 let viewport: ReturnType<typeof useImageEditorViewport>
-const processing = computed(() => props.pending || image_session.working.value)
 // Gestures guard commands internally without changing control availability or dialog geometry.
-const busy = computed(() => processing.value || active_pointer.value !== null || viewport.pan_state.value !== null)
+const busy = computed(() => image_session.working.value || active_pointer.value !== null || viewport.pan_state.value !== null || crop_drag.value !== null)
 image_session = useImageEditSession({
   image_canvas, stroke_canvas,
   source_url: () => source_url.value, file_name: () => 'edited.png', output_mime: () => 'image/png',
-  busy: () => busy.value, cropping: () => false,
+  busy: () => busy.value,
   refit: () => viewport.fit_to_stage(),
   reset_tools() {
     cancel_crop()
@@ -293,16 +321,18 @@ image_session = useImageEditSession({
   },
   on_save: save, on_error: toast_error,
 })
-const { working, loading, load_error, natural_size, source_bitmap, can_undo, can_redo,
+const { working, exporting, loading, load_error, natural_size, source_bitmap, can_undo, can_redo,
   load_source, release_source, commit_action, undo, redo, submit: export_submit } = image_session
 viewport = useImageEditorViewport({
   stage, stroke_canvas, natural_size, busy: () => busy.value,
-  loading: () => loading.value, load_error: () => load_error.value, tool: () => 'brush',
+  loading: () => loading.value, load_error: () => load_error.value,
 })
 const { scale, pan_state, cursor_pos, space_held, display_width, display_height,
   on_wheel, on_stage_pointerdown, on_stage_pointermove, on_stage_pointerup,
   is_pan_gesture, to_image_point, update_cursor, on_cursor_leave } = viewport
 
+const image_loading = computed(() => source_loading.value || loading.value)
+const can_save = computed(() => ! working.value && ! save_disabled.value && ! loading.value && ! load_error.value && !! source_bitmap.value)
 const crop_ready = computed(() => natural_size.value.width > 0)
 const crop_style = computed(() => ({ left: `${crop_rect.value.x * scale.value}px`, top: `${crop_rect.value.y * scale.value}px`, width: `${crop_rect.value.width * scale.value}px`, height: `${crop_rect.value.height * scale.value}px` }))
 
@@ -314,7 +344,7 @@ const brush_width_max = computed(() => Math.max(8, Math.round(Math.min(natural_s
 const cursor_style = computed(() => {
   const position = cursor_pos.value
   // A pan gesture is not aiming a brush, so the preview steps aside.
-  if (! position || props.pending || working.value || space_held.value || pan_state.value || pan_modifier.value || crop_drag.value)
+  if (! position || working.value || space_held.value || pan_state.value || pan_modifier.value || crop_drag.value)
     return null
   const diameter = Math.max(1, brush_width.value * scale.value)
   return {
@@ -357,8 +387,6 @@ const brush_preview_style = computed(() => {
  * which is when there is nothing to preview anyway.
  */
 function on_brush_width_change() {
-  if (props.pending)
-    return
   brush_dragging.value = true
   if (brush_preview_timer)
     clearTimeout(brush_preview_timer)
@@ -374,13 +402,13 @@ function hide_brush_preview() {
 }
 
 function submit(event: Event) {
-  if (busy.value || save_disabled.value || loading.value || load_error.value || ! source_bitmap.value)
+  if (busy.value || ! can_save.value)
     return
   const generation = image_session.generation
   const message = save_confirmation.value
   const accept = () => {
     if (visible.value && generation === image_session.generation && message === save_confirmation.value
-      && ! busy.value && ! save_disabled.value) {
+      && ! busy.value && can_save.value) {
       void export_submit(normalize_editor_crop(crop_rect.value, natural_size.value))
     }
   }
@@ -413,8 +441,9 @@ function crop_start(event: PointerEvent, handle: string) {
   event.preventDefault()
   event.stopPropagation()
   const point = to_image_point(event)
+  const grip = event.currentTarget as HTMLElement
+  grip.setPointerCapture(event.pointerId)
   crop_drag.value = { id: event.pointerId, handle, ... point, rect: { ... crop_rect.value } }
-  ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
 }
 function crop_move(event: PointerEvent) {
   const drag = crop_drag.value
@@ -447,7 +476,7 @@ function crop_end(event: PointerEvent) {
 const touches = new Map<number, { x: number, y: number }>()
 let pinch: { distance: number, scale: number, x: number, y: number } | null = null
 function touch_start(event: PointerEvent) {
-  if (event.pointerType !== 'touch' || props.pending || working.value)
+  if (event.pointerType !== 'touch' || working.value)
     return
   touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
   // Blank viewport space has no drawing handler to capture the first finger.
@@ -569,7 +598,17 @@ function on_pointerup(event: PointerEvent) {
 // the buttons, live only while the dialog is open. A drag in progress owns the
 // history: stepping it mid-stroke would strand the live stroke's points.
 function on_keydown(event: KeyboardEvent) {
-  if (event.isComposing || loading.value || load_error.value || uses_space_key(event.target))
+  if (! visible.value)
+    return
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    // The dialog owns this shortcut even when the image cannot be saved yet.
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    if (! event.repeat && ! event.isComposing)
+      save_button.value?.$el.click()
+    return
+  }
+  if (! source_url.value || event.isComposing || loading.value || load_error.value || uses_space_key(event.target))
     return
   pan_modifier.value = event.ctrlKey || event.metaKey
   // Space is the pan modifier, so it is watched regardless of other modifiers.
@@ -586,14 +625,14 @@ function on_keydown(event: KeyboardEvent) {
     space_held.value = true
     return
   }
-  if (busy.value)
-    return
-  if (event.key === 'Escape') {
+  if (event.key === 'Escape' && (crop_drag.value || ! busy.value)) {
     event.preventDefault()
     event.stopImmediatePropagation()
     cancel_crop()
     return
   }
+  if (busy.value)
+    return
   if (! event.ctrlKey && ! event.metaKey && ! event.altKey) {
     const key = event.key.toLowerCase()
     if (['[', ']'].includes(key))
@@ -647,10 +686,11 @@ watch(() => [props.visible, source_url.value] as const, ([open, url]) => {
   stop_key_listeners()
   hide_brush_preview()
   release_source()
-  if (! open || ! url)
+  if (! open)
     return
   start_key_listeners()
-  void load_source()
+  if (url)
+    void load_source()
 }, { immediate: true })
 
 // The listener block is client-only: setup runs on the server too (the dialog
@@ -699,7 +739,7 @@ onBeforeUnmount(() => {
 }
 
 /* Hidden only while the preview stands in for it, so the pointer is never left
-   without a visible cursor (a finger, a pending save, the first entry). */
+   without a visible cursor (a finger, an export, the first entry). */
 .redact-canvas {
   cursor: crosshair;
 }

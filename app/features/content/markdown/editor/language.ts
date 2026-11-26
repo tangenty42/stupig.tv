@@ -6,6 +6,7 @@ import { html as html_lang } from '@codemirror/lang-html'
 import { markdown as markdown_lang, markdownLanguage } from '@codemirror/lang-markdown'
 import { EditorState } from '@codemirror/state'
 import { tags } from '@lezer/highlight'
+import { content_carousel_marks } from '@shared/content-carousel-language'
 import { html_table_tags } from '@shared/content-html'
 import { create_content_markdown_parser } from '@shared/content-markdown-syntax'
 import { html_markdown_wrapper_tags } from '../html'
@@ -238,7 +239,7 @@ const container_aware_html_block: MarkdownExtensionConfig = {
 // parser fields are filled in after both languages exist (configureNesting
 // reads them lazily).
 const markdown_inside_html_tags: { tag: string, parser: typeof markdownLanguage.parser }[]
-  = [... html_markdown_wrapper_tags, 'good'].filter(tag => ! html_table_tags.has(tag)).map(tag => ({ tag, parser: markdownLanguage.parser }))
+  = [... html_markdown_wrapper_tags, 'good', 'carousel'].filter(tag => ! html_table_tags.has(tag)).map(tag => ({ tag, parser: markdownLanguage.parser }))
 
 const editor_html_lang = html_lang({
   matchClosingTags: false,
@@ -248,7 +249,7 @@ const editor_html_lang = html_lang({
 // Markdown nested inside HTML wrappers treats their indentation as cosmetic,
 // matching the renderer's dedenting, so this parser drops IndentedCode.
 const editor_nested_markdown_lang = markdown_lang({
-  extensions: [container_aware_html_block, tables, { remove: ['IndentedCode'] }],
+  extensions: [content_carousel_marks, container_aware_html_block, tables, { remove: ['IndentedCode'] }],
   htmlTagLanguage: editor_html_lang,
 })
 
@@ -260,7 +261,7 @@ for (const entry of markdown_inside_html_tags) {
 // document level), sharing the same html language so HTML it contains re-nests
 // into the nested markdown parser above.
 export const editor_markdown_lang = markdown_lang({
-  extensions: [front_matter, container_aware_html_block, tables],
+  extensions: [front_matter, content_carousel_marks, container_aware_html_block, tables],
   htmlTagLanguage: editor_html_lang,
 })
 

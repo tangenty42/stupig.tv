@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { content_reference_dialect } from './content-dialect'
-import { extract_attachment_names, extract_story_reference_titles, lint_content_refs, parse_story_markdown, rewrite_content_refs, upgrade_legacy_refs } from './content-markdown'
+import { extract_attachment_names, extract_story_reference_titles, lint_content_refs, parse_story_markdown, rewrite_content_refs } from './content-markdown'
 import { content_reference_key, format_attachment_ref, format_story_ref, parse_content_ref } from './content-reference'
 
 const config = {
@@ -41,18 +41,11 @@ describe('content reference dialect', () => {
     expect(extract_attachment_names(markdown)).toEqual(['图片/a.png', 'docs/a.pdf'])
     expect(extract_story_reference_titles(markdown)).toEqual(['其他档案'])
   })
-  it('converts legacy syntax once and preserves external targets, labels, code and HTML', () => {
-    const before = document('![alt [](docs/a.pdf)](<图片/a.png> "标题") [](@其他档案) [](https://example.test) [](#a) [](mailto:a@b)\n`[](x)`\n<a href="x">[](docs/a.pdf)</a>\n<pre>[](x)</pre>')
-    const after = document('![alt [](att://docs/a.pdf)](<att://图片/a.png> "标题") [](content://其他档案) [](https://example.test) [](#a) [](mailto:a@b)\n`[](x)`\n<a href="x">[](att://docs/a.pdf)</a>\n<pre>[](x)</pre>')
-    expect(upgrade_legacy_refs(before)).toBe(after)
-    expect(upgrade_legacy_refs(after)).toBe(after)
-    expect(upgrade_legacy_refs('---\ncover: cover.jpg\n---')).toBe('---\ncover: att://cover.jpg\n---')
-  })
-  it('keeps indented Markdown inside supported HTML wrappers and resumes after void HTML elements', () => {
-    const source = '<div>\n    [](inside.png)\n</div>\n\n<embed src="external">\n\n[](outside.png)'
-    expect(upgrade_legacy_refs(source)).toBe('<div>\n    [](att://inside.png)\n</div>\n\n<embed src="external">\n\n[](att://outside.png)')
-    expect(extract_attachment_names(source)).toEqual([])
-    expect(extract_attachment_names(upgrade_legacy_refs(source))).toEqual(['inside.png', 'outside.png'])
+  it('ignores retired syntax and finds references inside HTML wrappers and after void elements', () => {
+    expect(extract_attachment_names('[](docs/a.pdf) [](@其他档案)')).toEqual([])
+    expect(extract_story_reference_titles('[](@其他档案)')).toEqual([])
+    const source = '<div>\n    [](att://inside.png)\n</div>\n\n<embed src="external">\n\n[](att://outside.png)'
+    expect(extract_attachment_names(source)).toEqual(['inside.png', 'outside.png'])
   })
   it('rewrites a batch simultaneously, including folder roots, descendants, cover and default labels', () => {
     const markdown = '---\ncover: ![](att://X/n)\n---\n[X/n](att://X/n) [](att://Y/n) [](att://X) ![alt [](att://X/n)](att://X/img.png)'

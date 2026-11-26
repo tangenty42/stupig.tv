@@ -14,7 +14,7 @@ describe('editor presentation state', () => {
     const state = parse_editor_view_state({ version: 1, mode: 'wrong', audience: 'wrong', split_ratio: 10, attachments_width: - 50,
       position: { anchor: 12.5, head: - 4, editor: { top: Infinity, left: - 3 }, page: { top: 650, left: 0 } } })!
     expect(state).toMatchObject({ mode: 'edit', audience: 'private', split_ratio: 0.8, attachments_width: 160,
-      position: { anchor: 12, head: 0, editor: { top: 0, left: 0 }, preview: { top: 0, left: 0 }, page: { top: 650, left: 0 } } })
+      position: { anchor: 12, head: 0, focused: false, editor: { top: 0, left: 0 }, preview: { top: 0, left: 0 }, page: { top: 650, left: 0 } } })
     expect(parse_editor_view_state({ version: 1 })?.split_ratio).toBe(0.5)
   })
 })

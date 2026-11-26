@@ -1,5 +1,6 @@
 import { file_icon_names } from '~/features/content/attachments/rules'
 import { alert_icons } from '~/features/content/markdown/alerts'
+import { PRIVATE_ICON, REDACTION_ICON } from '~/features/content/privacy-marker'
 
 // Every icon the rendered v-html (and its DOM wiring) can contain must be
 // pre-registered: Nuxt Icon only bundles statically visible <MyIcon> usages,
@@ -7,7 +8,7 @@ import { alert_icons } from '~/features/content/markdown/alerts'
 // Preview.vue forces these into the bundle via hidden <MyIcon> instances; an
 // icon missing here renders blank. render.test.ts scans the renderer's
 // output and asserts this list covers everything it can emit.
-export const story_compiled_icons = [
+export const story_compiled_icons = [... new Set([
   // file_icon_names entries carry the `lucide:` prefix already.
   ... file_icon_names,
   ... Object.values(alert_icons).map(icon => `lucide:${icon}`),
@@ -18,16 +19,15 @@ export const story_compiled_icons = [
   'lucide:chevron-left',
   'lucide:chevron-right',
   'lucide:book-open',
-  'lucide:book-x',
+  'lucide:triangle-alert',
   'lucide:image-off',
   // The folder card's leading icon.
   'lucide:folder',
-  // The private (机密) chrome: open keyhole for permitted viewers, the closed
-  // one for the 删减版 brand and its substituted card, ban for the denied
-  // placeholders.
-  'lucide:lock-keyhole-open',
-  'lucide:lock-keyhole',
+  // The 机密 / 删减版 markers (<good>, cards, image brands), ban for the
+  // denied placeholders.
+  PRIVATE_ICON,
+  REDACTION_ICON,
   'lucide:ban',
-  // The encrypted image's 解密中 loader.
+  // Loading indicator for images and embedded frames.
   'lucide:loader-circle',
-]
+])]

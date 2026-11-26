@@ -1,6 +1,6 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
 import { readdirSync, readFileSync } from 'node:fs'
-import { CONTENT_ATTACHMENT_DENIED_TEXT, CONTENT_IMAGE_DENIED_TEXT, upgrade_legacy_refs } from '@shared/content-markdown'
+import { CONTENT_ATTACHMENT_DENIED_TEXT, CONTENT_IMAGE_DENIED_TEXT } from '@shared/content-markdown'
 import { CONTENT_PRIVATE_BLOCK_PLACEHOLDER, CONTENT_PRIVATE_DENIED_TEXT, CONTENT_PRIVATE_INLINE_PLACEHOLDER } from '@shared/content-private'
 import { describe, expect, it } from 'vitest'
 import { content_attachment_markdown, content_folder_markdown } from '~/features/content/attachments/drag'
@@ -40,6 +40,7 @@ it('resolves normalized attachment and title references and retains link options
   const md = create_story_markdown({ story_id: () => 1, attachments: () => [file], static_url: path => path, lqip_max_bytes: 1024, folders: () => [], folder_card_openable: () => false,
     stories: () => [{ id: 2, title: 'Other', labels: [], desc: null, cover: null }] as never })
   const html = md.render('![image](ATT://docs/E%CC%81.PNG?version=wrong&download=1#page2) [story](CONTENT://OTHER?view=card#top)', { images: [] })
+  expect(html).toContain('<span class="long-img-cover" aria-hidden="true">点击查看完整图片</span>')
   expect(html).toContain('/api/links/attachments/7?version=server-version&amp;download=1#page2')
   expect(html).not.toContain('version=wrong')
   expect(html).toContain('/content/2?view=card#top')
@@ -65,11 +66,12 @@ const attachments = [
   attachment('solo.png', true),
 ]
 
-function render(markdown: string, list: ContentStoryAttachment[] = attachments, folder_openable = false, folders: string[] = []) {
+function render(markdown: string, list: ContentStoryAttachment[] = attachments, folder_openable = false, folders: string[] = [], can_read_private = false) {
   const md = create_story_markdown({
     story_id: () => 1,
     attachments: () => list,
     folders: () => folders,
+    can_read_private: () => can_read_private,
     stories: () => [],
     static_url: path => path,
     lqip_max_bytes: 1024,
@@ -107,7 +109,7 @@ describe('bilibili embeds', () => {
   })
 
   it('shares a carousel with images without adding the iframe to the lightbox', () => {
-    const { html, images } = render('![图片](att://solo.png)\n![视频](iframe://player.bilibili.com/player.html?bvid=BV1Pvnd6JEVD)')
+    const { html, images } = render('<carousel>\n![图片](att://solo.png)\n![视频](iframe://player.bilibili.com/player.html?bvid=BV1Pvnd6JEVD)\n</carousel>')
     expect(html.match(/class="carousel-item carousel-item-captioned"/g)).toHaveLength(2)
     expect(html).toContain('class="image-carousel"')
     expect(html).toContain('class="img-frame iframe-frame"')
@@ -143,6 +145,7 @@ describe('version-bound JPEG placeholders', () => {
   it('renders a bounded placeholder and reserves the image dimensions', () => {
     const result = render('![](att://sample.png)', [{ ... attachment('sample.png', true), image }])
     expect(result.html).toContain('data-lqip')
+    expect(result.html).toContain('<span class="image-lqip" aria-hidden="true"></span>')
     expect(result.html).toContain('--content-lqip:url(data:image/jpeg;base64,/9j/2Q==)')
     expect(result.html).toContain('width="80" height="60"')
     expect(result.html).toContain('--content-image-width:80px')
@@ -194,12 +197,12 @@ describe('unavailable image placeholders', () => {
       .toBe(normal.slice(normal.indexOf('<span class="carousel-caption"')))
   })
 
-  it.each(['att://missing.png', 'missing.png'])('replaces only the image for %s and keeps the normal formatted caption', (destination) => {
+  it.each(['att://missing.png'])('replaces only the image for %s and keeps the normal formatted caption', (destination) => {
     const result = render(`![**失效** *图片*](${destination})`)
-    expect(result.html).toContain('class="image-unavailable"')
-    expect(result.html).toContain('i-lucide:image-off')
+    expect(result.html).toContain('image-unavailable"')
+    expect(result.html).toContain('i-lucide:triangle-alert')
     expect(result.html).toContain('data-image-error')
-    expect(result.html).toContain('aria-label="附件不存在或引用无效"')
+    expect(result.html).toContain('aria-label="渲染失败：图片无效"')
     expect(result.html).toContain('<span class="carousel-caption"><strong>失效</strong> <em>图片</em></span>')
     expect(result.html).toContain('carousel-item-captioned')
     expect(result.html).not.toContain('<img')
@@ -208,10 +211,23 @@ describe('unavailable image placeholders', () => {
     expect(result.images).toEqual([])
   })
 
-  it.each(['', 'missing.png'])('keeps the existing caption suppression for label %s', (label) => {
-    const { html } = render(`![${label}](att://missing.png)`)
+  it('omits an empty caption on a failed image', () => {
+    const { html } = render('![](att://missing.png)')
     expect(html).toContain('image-unavailable')
     expect(html).not.toContain('carousel-caption')
+  })
+
+  it('preserves an explicit caption equal to the failed image path', () => {
+    const { html } = render('![missing.png](att://missing.png)')
+    expect(html).toContain('image-unavailable')
+    expect(html).toContain('<span class="carousel-caption">missing.png</span>')
+  })
+
+  it('preserves an explicit image path as the caption and accessible label', () => {
+    const { html } = render('![cards/1.png](att://cards/1.png)')
+    expect(html).toContain('<span class="carousel-caption">cards/1.png</span>')
+    expect(html).toContain('alt="cards/1.png"')
+    expect(html).toContain('aria-label="预览：cards/1.png"')
   })
 
   it('keeps valid lightbox indices contiguous around an invalid gallery item', () => {
@@ -223,7 +239,7 @@ describe('unavailable image placeholders', () => {
 
   it('provides the same placeholder for a later load failure without changing caption rendering', () => {
     const { html } = render('![**network** error](https://static.test/missing.png)')
-    expect(html).toContain('class="image-unavailable" role="img" aria-label="图片加载失败"')
+    expect(html).toContain('<span class="image-unavailable" role="img" aria-label="图片加载失败"><span class="iconify i-lucide:image-off" aria-hidden="true"></span></span>')
     expect(html).toContain('<span class="carousel-caption"><strong>network</strong> error</span>')
     expect(html).toContain('image-loading-mask')
   })
@@ -232,13 +248,12 @@ describe('unavailable image placeholders', () => {
 describe('private bucket rendering during release A', () => {
   const private_image = { ... attachment('secret.png.good', true), is_private: true, url: '/api/links/attachments/11?version=v1' }
 
-  it('uses same-origin authorized addresses without a ciphertext decoder or static host prefix', () => {
+  it('renders the image and link directly with their same-origin authorized address', () => {
     const md = create_story_markdown({ story_id: () => 1, attachments: () => [private_image], stories: () => [], static_url: path => `https://static.test${path}`, lqip_max_bytes: 1024, folder_card_openable: () => false })
     const html = md.render('![](att://secret.png.good) [](att://secret.png.good)', { images: [] })
     expect(html).toContain('src="/api/links/attachments/11?version=v1"')
     expect(html).toContain('href="/api/links/attachments/11?version=v1"')
-    expect(html).toContain('data-private')
-    expect(html).not.toContain('data-encrypted')
+    expect(html.match(/\bdata-private\b/g)).toHaveLength(2)
     expect(html).not.toContain('<img hidden')
     expect(html).not.toContain('https://static.test/api/')
   })
@@ -258,10 +273,7 @@ describe('private bucket rendering during release A', () => {
 
 describe('explicit reference rendering', () => {
   it.each(['![](cards)', '[](cards)', '[说明](cards/notes.txt)', '![](其他/x.png)'])('does not resolve the retired expression %s', (markdown) => {
-    const old = render(markdown)
-    expect(old.images).toEqual([])
-    expect(old.html).not.toContain('/objects/')
-    expect(render(upgrade_legacy_refs(markdown)).html).not.toBe(old.html)
+    expect(render(markdown).html).not.toContain('/objects/')
   })
   it('updates literal source in image alt text while preserving nested caption rendering', () => {
     const canonical = render('![alt [](att://cards/notes.txt)](att://solo.png)')
@@ -284,72 +296,23 @@ describe('explicit reference rendering', () => {
   })
 })
 
-describe('folder image expansion', () => {
-  it('expands an image reference to a folder into its images', () => {
-    const { html, images } = render('![](att://cards)')
+describe('image references to directories', () => {
+  it.each(['cards', 'cards/', 'cards/sub', 'lonely', 'docs', 'empty', 'cards?download=1#part'])('renders %s as an invalid image without expanding its contents', (path) => {
+    const list = [... attachments, attachment('lonely/a.png', true), attachment('docs/a.txt', false)]
+    const { html, images } = render(`![**图注**](att://${path} "说明")`, list, false, ['empty'])
 
-    expect(image_sources(html)).toEqual([
-      '/objects/cards/1.png',
-      '/objects/cards/2.png',
-      '/objects/cards/10.png',
-    ])
-    // Every expanded image reaches the lightbox, in the same order.
-    expect(images).toEqual([
-      '/objects/cards/1.png',
-      '/objects/cards/2.png',
-      '/objects/cards/10.png',
-    ])
+    expect(html).toContain('渲染失败：图片无效')
+    expect(html).toContain('<span class="carousel-caption"><strong>图注</strong></span>')
+    expect(html.match(/data-image-error/g)).toHaveLength(1)
+    expect(image_sources(html)).toEqual([])
+    expect(images).toEqual([])
+    expect(html).not.toContain('carousel-shell')
+    expect(html).not.toContain('folder-card')
+    expect(html).not.toContain('/objects/')
   })
 
-  it('orders the images naturally rather than by code point', () => {
-    const { images } = render('![](att://cards)')
-
-    // String order would put 10.png before 2.png.
-    expect(images).toEqual([
-      '/objects/cards/1.png',
-      '/objects/cards/2.png',
-      '/objects/cards/10.png',
-    ])
-  })
-
-  it('takes direct children only, leaving subfolders out', () => {
-    const { images } = render('![](att://cards)')
-
-    expect(images).not.toContain('/objects/cards/sub/9.png')
-  })
-
-  it('skips files that are not images', () => {
-    const { images } = render('![](att://cards)')
-
-    expect(images).not.toContain('/objects/cards/notes.txt')
-  })
-
-  it('accepts a trailing slash', () => {
-    expect(image_sources(render('![](att://cards/)').html)).toEqual([
-      '/objects/cards/1.png',
-      '/objects/cards/2.png',
-      '/objects/cards/10.png',
-    ])
-  })
-
-  it('accepts a nested folder path', () => {
-    expect(image_sources(render('![](att://cards/sub)').html)).toEqual(['/objects/cards/sub/9.png'])
-  })
-
-  it('labels each expanded image with its own file name', () => {
-    const { html } = render('![](att://cards)')
-
-    expect(html).toContain('alt="1.png"')
-    expect(html).toContain('alt="2.png"')
-    expect(html).toContain('alt="10.png"')
-  })
-
-  it('carries a label written on the folder reference onto every image', () => {
-    // The reference is shorthand for the per-file tags, label included:
-    // `![卡片](att://cards)` must render exactly like the spelled-out labeled tags,
-    // captions and all.
-    expect(render('![卡片](att://cards)').html)
-      .toBe(render('![卡片](att://cards/1.png)![卡片](att://cards/2.png)![卡片](att://cards/10.png)').html)
+  it('uses the same failure presentation as any other invalid attachment image', () => {
+    expect(render('![图注](att://cards)').html).toBe(render('![图注](att://missing.png)').html)
   })
 
   it('leaves a plain file reference alone', () => {
@@ -360,11 +323,10 @@ describe('folder image expansion', () => {
   })
 
   it('renders a missing attachment without falling back to the old OSS path', () => {
-    // Not a folder and not a file: the existing dead-image rendering stands.
     const { html } = render('![](att://nope)')
 
     expect(image_sources(html)).toEqual([])
-    expect(html).toContain('附件不存在或引用无效')
+    expect(html).toContain('渲染失败：图片无效')
   })
 
   it('prefers a real file over a folder of the same name', () => {
@@ -373,89 +335,52 @@ describe('folder image expansion', () => {
     expect(image_sources(render('![](att://cards)', list).html)).toEqual(['/objects/cards'])
   })
 
-  it('renders a folder holding no images as nothing', () => {
-    const list = [attachment('docs/a.txt', false)]
-
-    expect(image_sources(render('![](att://docs)', list).html)).toEqual([])
-  })
-
   it('leaves an empty folder path alone', () => {
     expect(image_sources(render('![](/)').html)).toEqual(['/'])
   })
 
-  it('joins a folder run into a carousel like hand-written images', () => {
-    const { html } = render('![](att://cards)')
-
-    // The carousel rule sees a run of consecutive images, exactly as it would
-    // for three literal ![]() tags.
-    expect(html).toContain('image-carousel')
-    expect(html).toContain('carousel-item')
+  it('keeps a failed directory image beside actual images and an ordinary folder card in an explicit carousel', () => {
+    const { html, images } = render('<carousel>\n![旧目录](att://cards)\n![第一张](att://cards/1.png)\n[](att://cards)\n![第二张](att://cards/2.png)\n</carousel>')
+    expect(html.match(/class="image-carousel"/g)).toHaveLength(1)
+    expect(html.match(/data-image-error/g)).toHaveLength(1)
+    expect(html).toContain('data-folder-card="cards"')
+    expect(html).toContain('carousel-caption">第一张</span>')
+    expect(html).toContain('carousel-caption">第二张</span>')
+    expect(images).toEqual(['/objects/cards/1.png', '/objects/cards/2.png'])
+    expect(image_sources(html)).toEqual(images)
   })
 
-  it('matches the literal tag for a single-image folder', () => {
-    const list = [attachment('lonely/a.png', true)]
-
-    expect(render('![](att://lonely)', list).html).toBe(render('![](att://lonely/a.png)', list).html)
+  it('keeps explicit image order rather than sorting or adding neighboring directory entries', () => {
+    const { html, images } = render('<carousel>\n  ![](att://cards/10.png)\n  ![](att://cards/2.png)\n  ![](att://cards/1.png)\n</carousel>')
+    expect(html.match(/class="image-carousel"/g)).toHaveLength(1)
+    expect(images).toEqual(['/objects/cards/10.png', '/objects/cards/2.png', '/objects/cards/1.png'])
+    expect(image_sources(html)).toEqual(images)
   })
 
-  it('renders exactly as the literal image tags would', () => {
-    const expanded = render('![](att://cards)').html
-    // The expansion splices the tags in without adding separators.
-    const literal = render('![](att://cards/1.png)![](att://cards/2.png)![](att://cards/10.png)').html
-
-    // The whole point of the feature: the folder reference is shorthand for the
-    // per-file tags, so the markup must not differ in any way.
-    expect(expanded).toBe(literal)
+  it.each([
+    ['<div class="wrapper">\n\n', '\n\n</div>'],
+    ['<good>\n', '\n</good>'],
+    ['> ', ''],
+    ['- ', ''],
+    ['<carousel>', '</carousel>'],
+  ])('does not expand a directory image inside %s', (before, after) => {
+    const { html, images } = render(`${before}![](att://cards)${after}`, attachments, false, [], true)
+    expect(html.match(/data-image-error/g)).toHaveLength(1)
+    expect(images).toEqual([])
+    expect(image_sources(html)).toEqual([])
   })
 
-  it('stays equivalent when other content shares the paragraph', () => {
-    // The expanded images are spliced in adjacent, the literal spelling has a
-    // line break between tags; both share one strip with the folder card.
-    // data-line differs because the two
-    // spellings occupy a different number of source lines.
-    const strip_lines = (html: string) => html.replaceAll(/ data-line="\d+"/g, '')
-    const shorthand = render('![](att://cards)\n[](att://cards)').html
-    const literal = render('![](att://cards/1.png)\n![](att://cards/2.png)\n![](att://cards/10.png)\n[](att://cards)').html
-
-    expect(shorthand).toContain('image-carousel')
-    expect(strip_lines(shorthand)).toBe(strip_lines(literal))
+  it('keeps a directory image in a caption invalid without changing the enclosing image', () => {
+    const { html, images } = render('![![嵌套图注](att://cards)](att://solo.png)')
+    expect(html.match(/data-image-error/g)).toHaveLength(1)
+    expect(html).toContain('carousel-caption">嵌套图注</span>')
+    expect(images).toEqual(['/objects/solo.png'])
+    expect(image_sources(html)).toEqual(images)
   })
 
-  it('expands inside an html wrapper as well', () => {
-    // html_wrappers_plugin re-renders inner markdown, which must run the same
-    // core rules.
-    const { images } = render('<div class="wrapper">\n\n![](att://cards)\n\n</div>')
-
-    expect(images).toEqual([
-      '/objects/cards/1.png',
-      '/objects/cards/2.png',
-      '/objects/cards/10.png',
-    ])
-  })
-
-  it('mixes with neighbouring images on the same line', () => {
-    const { images } = render('![](att://solo.png) ![](att://cards)')
-
-    expect(images).toEqual([
-      '/objects/solo.png',
-      '/objects/cards/1.png',
-      '/objects/cards/2.png',
-      '/objects/cards/10.png',
-    ])
-  })
-
-  it('expands the same reference twice consistently', () => {
-    const { images } = render('![](att://cards)\n\n![](att://cards)')
-
-    expect(images).toHaveLength(6)
-    expect(images.slice(0, 3)).toEqual(images.slice(3))
-  })
-
-  it('does nothing while the attachments are not loaded yet', () => {
-    // SSR renders before the payload arrives; the reference must not be eaten,
-    // so it falls back to the existing legacy path for an unknown attachment.
-    expect(image_sources(render('![](att://cards)', []).html)).toEqual([])
-    expect(render('![](att://cards)', []).html).toContain('附件不存在或引用无效')
+  it('keeps the directory image invalid after its attachment catalog becomes available', () => {
+    const source = '![图注](att://cards)'
+    expect(render(source, []).html).toBe(render(source, attachments).html)
   })
 })
 
@@ -465,44 +390,77 @@ describe('folder link card', () => {
     expect(html).toContain('folder-card')
     expect(html).toContain(`data-folder-card="${path}"`)
     expect(html).toContain(`file-card-name">${path.split('/').at(- 1)}<`)
-    expect(html).toContain('0 个文件')
+    expect(html).toContain('0 项')
     expect(html.match(/<span/g)?.length).toBe(html.match(/<\/span>/g)?.length)
   })
 
   it('keeps folder cards inside nested Markdown wrappers when only directory nodes exist', () => {
     const { html } = render('<div>\n\n[](att://this_is_a_folder)\n\n</div>', [], false, ['this_is_a_folder'])
     expect(html).toContain('folder-card')
-    expect(html).toContain('0 个文件')
-    expect(html).not.toContain('data-folder-card')
+    expect(html).toContain('0 项')
+    expect(html).toContain('data-folder-card="this_is_a_folder"')
+    expect(html).toContain('role="button"')
   })
+  it.each(['docs.good', 'docs.good/sub'])('shows the private label, item count and folder icon for %s', (path) => {
+    const { html } = render(`[](att://${path})`, [attachment(`${path}/readme.txt`, false)], true, [path, `${path}/empty`], true)
+    expect(html).toContain('folder-card file-card-private')
+    expect(html).toContain(`data-folder-card="${path}"`)
+    expect(html).toContain('file-card-icon iconify i-lucide:folder')
+    expect(html).toMatch(/attachment-privacy-brand[^>]*>.*<span>机密文件夹<\/span><\/span><span class="file-card-body">/)
+    expect(html).toContain('<span class="file-card-size">2 项</span>')
+  })
+
+  it.each(['', '机密目录说明', '**机密目录说明**', '![](att://solo.png)'])('shows the denied placeholder for a private directory link with label %j', (label) => {
+    const path = 'docs.good/nested'
+    const { html, images } = render(`<carousel>[${label}](att://${path}) [](att://open)</carousel>`, [attachment('solo.png', true)], true, [path, 'open'])
+    expect(html).toContain('content-placeholder-denied content-placeholder-inline')
+    expect(html).toContain(CONTENT_ATTACHMENT_DENIED_TEXT)
+    expect(html).not.toContain(path)
+    expect(html).not.toContain('机密目录说明')
+    expect(html.match(/data-folder-card=/g)).toHaveLength(1)
+    expect(html).toContain('data-folder-card="open"')
+    expect(images).toEqual([])
+  })
+
+  it('uses the same denied placeholder for a folder inferred from a public redaction', () => {
+    const path = 'docs.good'
+    const file = { ... attachment(`${path}/public.txt`, false), is_redaction: true }
+    const { html } = render(`[](att://${path}) [](att://${file.file_name})`, [file])
+    expect(html).toContain(CONTENT_ATTACHMENT_DENIED_TEXT)
+    expect(html).not.toContain('folder-card')
+    expect(html).toContain('file-card-redacted')
+    expect(html).toContain(`href="${file.url}"`)
+  })
+
   it('renders a folder card for a label-off link to a folder', () => {
     const { html } = render('[](att://cards)')
 
     expect(html).toContain('folder-card')
     expect(html).toContain('i-lucide:folder')
     expect(html).toContain('file-card-name">cards<')
+    expect(html).toContain('link-card-open iconify i-lucide:external-link')
   })
 
-  it('shows how many files are inside, nested ones included', () => {
-    const { html } = render('[](att://cards)')
-
-    // 1.png, 2.png, 10.png, notes.txt and sub/9.png.
-    expect(html).toContain('5 个文件')
+  it('shows the total of immediate files and subfolders, including empty subfolders', () => {
+    const list = [... attachments, attachment('cards/sub/nested/1.png', true), attachment('cards/sub/2.png', true)]
+    const { html } = render('[](att://cards)', list, true, ['cards', 'cards/sub', 'cards/sub/nested', 'cards/empty'])
+    expect(html).toContain('<span class="file-card-size">6 项</span>')
   })
 
   it('counts files when a directory is inferred from its children', () => {
     const list = [attachment('docs/readme.md', false)]
     const { html } = render('[](att://docs)', list)
 
-    expect(html).toContain('1 个文件')
+    expect(html).toContain('1 项')
   })
 
-  it('does not navigate, since the click behaviour is undecided', () => {
+  it('renders folder references as interactive cards even without an openable host', () => {
     const { html } = render('[](att://cards)')
 
-    // No anchor and no out icon: the card is an inert span for now.
     expect(html).not.toContain('<a')
-    expect(html).not.toContain('link-card-open')
+    expect(html).toContain('data-folder-card="cards"')
+    expect(html).toContain('role="button"')
+    expect(html).toContain('tabindex="0"')
   })
 
   it('leaves balanced markup behind', () => {
@@ -550,15 +508,12 @@ describe('folder card activation', () => {
     expect(html).toContain('aria-label="在附件中展开：cards"')
   })
 
-  it('stays inert where the host has nowhere to open the folder', () => {
+  it('keeps folder-card semantics when the host cannot open the folder', () => {
     const { html } = render('[](att://cards)')
 
-    // A focusable button that does nothing is worse than a plain card, so the
-    // hook the click handler looks for is not emitted at all.
-    expect(html).toContain('folder-card')
-    expect(html).not.toContain('data-folder-card')
-    expect(html).not.toContain('role="button"')
-    expect(html).not.toContain('tabindex')
+    expect(html).toContain('data-folder-card="cards"')
+    expect(html).toContain('role="button"')
+    expect(html).toContain('tabindex="0"')
   })
 
   it('carries the nested path, which is what the host expands', () => {
@@ -587,45 +542,39 @@ describe('folder markdown shorthand', () => {
 
   it('is the same shape a non-image file link uses', () => {
     expect(content_folder_markdown('note.txt'))
-      .toBe(content_attachment_markdown({ file_name: 'note.txt', is_image: false, url: '' }))
+      .toBe(content_attachment_markdown({ file_name: 'note.txt', is_image: false }))
   })
 
   it('what it copies renders the folder card back', () => {
     expect(render(content_folder_markdown('cards')).html).toContain('folder-card')
   })
 
-  it('does not copy the expanding form, which would render the images instead', () => {
+  it('copies a valid folder card while an image-prefixed folder reference is invalid', () => {
     const copied = content_folder_markdown('cards')
 
-    // `![](att://cards)` is still supported by hand, but the menu deliberately copies
-    // the link form only.
     expect(render(copied).html).not.toContain('img-frame')
-    expect(render(`!${copied}`).html).toContain('carousel')
+    const invalid = render(`!${copied}`)
+    expect(invalid.html).toContain('渲染失败：图片无效')
+    expect(invalid.html).not.toContain('carousel-shell')
+    expect(invalid.images).toEqual([])
   })
 })
 
 describe('private (good) elements', () => {
-  it('renders a block element as a dashed lock card with markdown inside', () => {
+  it('renders a block element with the shared privacy label above its Markdown', () => {
     const { html } = render('a\n\n<good>\nsecret **bold**\n</good>\n\nb\n')
 
     expect(html).toContain('class="private-block"')
-    expect(html).toContain('机密内容')
-    expect(html).toContain('<strong>bold</strong>')
+    expect(html).toMatch(/class="attachment-privacy-brand"><span class="iconify i-lucide:lock" aria-hidden="true"><\/span><span>机密内容<\/span><\/span><div class="private-content-body"><p[^>]*>secret <strong>bold<\/strong><\/p>/)
     // The card carries its source line for editor scroll sync.
     expect(html).toContain('data-line="2"')
   })
 
-  it('renders an inline element as a lock span', () => {
-    const { html } = render('before <good>secret</good> after\n')
+  it('stacks the shared privacy label and inline Markdown inside the paragraph', () => {
+    const { html } = render('before <good>**secret**</good> after\n')
 
-    expect(html).toContain('class="private-inline chip-card-gap-l chip-card-gap-r"')
-    expect(html).toContain('>secret</span>')
-  })
-
-  it('skips the side gaps at a line edge', () => {
-    const { html } = render('before <good>secret</good>\n')
-
-    expect(html).toContain('class="private-inline chip-card-gap-l"')
+    expect(html).toContain('before <span class="private-inline">')
+    expect(html).toMatch(/class="attachment-privacy-brand">.*<span>机密内容<\/span><\/span><span class="private-content-body"><strong>secret<\/strong><\/span><\/span> after/)
   })
 
   it('renders a whole-line single-line element as a block', () => {
@@ -643,7 +592,7 @@ describe('private (good) elements', () => {
     expect(html).toMatch(/<\/div>\s*<p[^>]*>tail<\/p>/)
   })
 
-  it('renders a line-start element with trailing text as an inline chip', () => {
+  it('renders a line-start element with trailing text as an inline card', () => {
     const { html } = render('<good>secret</good> tail\n')
 
     expect(html).toContain('private-inline')
@@ -669,18 +618,38 @@ describe('private placeholders', () => {
   it('renders the redacted block placeholder as the denied card', () => {
     const { html } = render(`a\n\n${CONTENT_PRIVATE_BLOCK_PLACEHOLDER}\n\nb\n`)
 
-    expect(html).toContain('private-block-denied')
+    expect(html).toContain('content-placeholder-denied content-placeholder-block')
     expect(html).toContain(CONTENT_PRIVATE_DENIED_TEXT)
   })
 
   it('renders the redacted inline placeholder inline', () => {
     const { html } = render(`before ${CONTENT_PRIVATE_INLINE_PLACEHOLDER} after\n`)
 
-    expect(html).toContain('private-inline-denied chip-card-gap-l chip-card-gap-r')
+    expect(html).toContain(`before ${CONTENT_PRIVATE_INLINE_PLACEHOLDER} after`)
   })
 })
 
+it.each(['`code`', '<code>code</code>'])('keeps source spacing around inline code written as %s', (code) => {
+  const { html } = render(`中文${code}中文 / 中文 ${code} 中文`)
+
+  expect(html).toContain('中文<code>code</code>中文 / 中文 <code>code</code> 中文')
+})
+
+it('renders a soft line break as a space and preserves an explicit hard break', () => {
+  const { html } = render('前文\n`code`  \n后文')
+
+  expect(html).toMatch(/前文 <code>code<\/code><br\s*\/?>\n后文/)
+})
+
 describe('plain link cards', () => {
+  it.each(['cards/sub', 'cards/notes.txt'])('preserves an explicit attachment path as link text: %s', (path) => {
+    const { html } = render(`[${path}](att://${path})`)
+
+    expect(html).toContain('link-chip')
+    expect(html).toContain(`<span class="link-card-label">${path}</span>`)
+    expect(html).not.toContain('file-card')
+  })
+
   it('renders a chain icon on the left of the label', () => {
     const { html } = render('[标签](https://example.com/x)\n')
 
@@ -752,13 +721,12 @@ describe('compiled icons', () => {
       '[标签](https://example.com/x)\n',
       '<good>secret</good>\n',
       '<good>\nsecret\n</good>\n',
-      // Denied placeholders and an encrypted-but-keyless attachment (denied card).
+      // Denied placeholders and a private attachment without a readable URL.
       `before ${CONTENT_PRIVATE_INLINE_PLACEHOLDER} after\n`,
       `${CONTENT_PRIVATE_BLOCK_PLACEHOLDER}\n`,
       '[](att://locked.png.good)\n',
       '![](att://unlocked.png.good)\n',
-      // The 删减版 twin as an image (abridged brand) and as a card
-      // (the substituted encrypted card).
+      // The 删减版 as both an image and a file card.
       '![](att://twin.png.good)\n',
       '[](att://twin.png.good)\n',
     ].join('\n')
@@ -783,6 +751,9 @@ describe('compiled icons', () => {
     const emitter_files = [
       ... readdirSync(new URL('.', import.meta.url)).filter(name => name.endsWith('.ts') && ! name.endsWith('.test.ts') && name !== 'compiled-icons.ts'),
       '../../../../../server/shared/content-private.ts',
+      '../../../../../server/shared/content-placeholder.ts',
+      '../../image-frame.ts',
+      '../../privacy-marker.ts',
     ]
     const registered = new Set(story_compiled_icons.map(icon => icon.replace(/^lucide:/, '')))
     const found = new Map<string, string>()
@@ -799,7 +770,7 @@ describe('compiled icons', () => {
 })
 
 describe('private attachment projection', () => {
-  const encrypted = {
+  const private_attachment = {
     file_name: 'secret.png.good',
     mime_type: 'image/png',
     file_size: 1024,
@@ -808,105 +779,116 @@ describe('private attachment projection', () => {
     url: null,
     is_private: true,
   }
-  const with_key = { ... encrypted, url: '/api/links/attachments/1?version=v1' }
+  const readable_attachment = { ... private_attachment, url: '/api/links/attachments/1?version=v1' }
 
-  it.each([
-    ['same-row', '[](att://secret.png.good)'],
-    ['same-row', '[secret.png.good](att://secret.png.good)'],
-  ])('shares the normal two-line card structure for %s redactions: %s', (kind, markdown) => {
-    const owner = { ... encrypted, id: 1, has_redacted: true,
+  it('shares the normal two-line card structure for same-row redactions', () => {
+    const owner = { ... private_attachment, id: 1, has_redacted: true,
       redacted_url: '/public-redacted', redacted_image: { revision: 1, width: 20, height: 10, has_original: false, lqip: null } }
-    const normal = { ... with_key, file_size: owner.file_size }
+    const normal = { ... owner, url: readable_attachment.url }
     const public_files = [owner]
-    const { html } = render(`${markdown}\n`, public_files)
-    const normal_html = render(`${markdown}\n`, [normal]).html
+    const markdown = '[](att://secret.png.good)'
+    const { html } = render(markdown, public_files)
+    const normal_html = render(markdown, [normal]).html
     const content = (value: string) => /<span class="file-card-content">([\s\S]*?)<span class="link-card-open/.exec(value)?.[1]
     const expected = content(normal_html)
     expect(expected).toBeTruthy()
-    expect(content(html)?.replace('机密附件·删减版', '机密附件')).toBe(expected)
+    expect(normal_html).toMatch(/attachment-privacy-brand[^>]*>.*<span>机密附件<\/span><\/span><span class="file-card-body">/)
+    expect(html).toMatch(/attachment-privacy-brand-redacted[^>]*>.*<span>机密附件删减版<\/span><\/span><span class="file-card-body">/)
+    expect(content(html)).toBe(expected)
     expect(/<a [^>]*class="([^"]*)"/.exec(html)?.[1]?.split(/\s+/)).toContain('file-card')
     expect(html.match(/>secret\.png</g)).toHaveLength(1)
     expect(html).not.toContain('secret.png.good')
-    expect(html).not.toContain(with_key.url)
+    expect(html).not.toContain(readable_attachment.url)
+  })
+
+  it('preserves the explicit full path as link text when opening the redaction', () => {
+    const owner = { ... private_attachment, redacted_url: '/public-redacted' }
+    const { html } = render('[secret.png.good](att://secret.png.good)', [owner])
+
+    expect(html).toContain('link-chip')
+    expect(html).toContain('href="/public-redacted"')
+    expect(html).toContain('<span class="link-card-label">secret.png.good</span>')
+    expect(html).not.toContain(readable_attachment.url)
   })
 
   it('renders a same-row redacted version without a public sibling or private image metadata', () => {
-    const owner = { ... encrypted, id: 1, has_redacted: true, is_redacted_view: true,
+    const owner = { ... private_attachment, id: 1, has_redacted: true, is_redacted_view: true,
       redacted_url: '/api/links/attachments/1?version=v3&role=redacted',
       redacted_image: { revision: 2, width: 40, height: 20, lqip: 'data:image/jpeg;base64,/9j/2Q==', has_original: false } }
     const { html, images } = render('![visible caption](att://secret.png.good)\n', [owner])
-    expect(html).toContain('机密附件·删减版')
+    expect(html).toContain('机密附件删减版')
     expect(html).toContain('visible caption')
     expect(html).toContain('width="40"')
     expect(html).toContain('height="20"')
     expect(images).toEqual([owner.redacted_url])
-    expect(html).not.toContain('encrypted-image-denied')
+    expect(html).not.toContain('content-placeholder-denied content-placeholder-media')
     expect(html).not.toContain('role=original')
   })
 
   it('renders only the privileged same-row image without a per-image representation switch', () => {
-    const owner = { ... with_key, id: 1, has_redacted: true,
+    const owner = { ... readable_attachment, id: 1, has_redacted: true,
       redacted_url: '/api/links/attachments/1?version=v3&role=redacted',
       redacted_image: { revision: 2, width: 40, height: 20, lqip: null, has_original: false } }
     const { html, images } = render('![](att://secret.png.good)\n', [owner])
-    expect(html).toContain('机密附件·完整版')
+    expect(html).toContain('机密附件')
     expect(html).not.toContain('role=redacted')
-    expect(html).not.toContain('encrypted-toggle')
+    expect(html).not.toContain('data-twin-url')
     expect(images).toEqual([owner.url])
   })
 
-  it('marks an encrypted file card for authenticated resolution when access is granted', () => {
-    const { html } = render('[](att://secret.png.good)\n', [with_key])
+  it('marks a private file card for authenticated resolution when access is granted', () => {
+    const { html } = render('[](att://secret.png.good)\n', [readable_attachment])
 
     expect(html).toContain('data-private')
-    expect(html).toContain('i-lucide:lock-keyhole-open')
-    // Amber chrome plus the 机密附件 tag mark the card as encrypted.
-    expect(html).toContain('file-card-encrypted')
-    expect(html).toContain('机密附件')
-    // The card displays the pre-encryption name; the .good suffix only
-    // survives in the ciphertext href.
+    expect(html).toContain('file-card-icon iconify i-lucide:file-image')
+    // Amber chrome plus the 机密附件 tag mark the card as private.
+    expect(html).toContain('file-card-private')
+    expect(html).not.toContain('file-card-redacted')
+    expect(html).toContain('<span>机密附件</span></span><span class="file-card-body">')
+    expect(html).toContain('<span class="file-card-size">1 KB</span>')
+    // The card displays the file name without the private marker.
     expect(html).toContain('file-card-name">secret.png<')
     expect(html).toContain('/api/links/attachments/1?version=v1')
   })
 
   it('renders a nameless denied card when no readable URL is projected', () => {
-    const { html } = render('[](att://secret.png.good)\n', [encrypted])
+    const { html } = render('[](att://secret.png.good)\n', [private_attachment])
 
-    expect(html).toContain('encrypted-card-denied')
+    expect(html).toContain('content-placeholder-denied content-placeholder-inline')
     expect(html).toContain('i-lucide:ban"')
     expect(html).toContain(CONTENT_ATTACHMENT_DENIED_TEXT)
     expect(html).not.toContain('secret.png.good')
   })
 
-  it('denies even a labeled link to an encrypted file without a readable URL', () => {
-    const { html } = render('[下载](att://secret.png.good)\n', [encrypted])
+  it('denies even a labeled link to a private file without a readable URL', () => {
+    const { html } = render('[下载](att://secret.png.good)\n', [private_attachment])
 
-    expect(html).toContain('encrypted-card-denied')
+    expect(html).toContain('content-placeholder-denied content-placeholder-inline')
     expect(html).not.toContain('secret.png.good')
   })
 
-  it('marks an encrypted image for authenticated resolution when access is granted', () => {
-    const { html } = render('![](att://secret.png.good)\n', [with_key])
+  it('marks a private image for authenticated resolution when access is granted', () => {
+    const { html } = render('![](att://secret.png.good)\n', [readable_attachment])
 
     expect(html).toContain('data-private')
     expect(html).toContain('/api/links/attachments/1?version=v1')
     // The amber card announces 机密附件 while the readable image loads.
-    expect(html).toContain('encrypted-block-brand')
-    expect(html).toContain('机密附件·完整版')
-    expect(html).not.toContain('encrypted-image-loading')
+    expect(html).toContain('private-image-block-brand')
+    expect(html).toContain('机密附件')
+    expect(html).toContain('image-loading-mask')
   })
 
   it('keeps the frame and caption, swapping only the img for a placeholder', () => {
-    const { html, images } = render('![背面的故事](att://secret.png.good)\n', [encrypted])
+    const { html, images } = render('![背面的故事](att://secret.png.good)\n', [private_attachment])
 
-    expect(html).toContain('encrypted-image-denied')
+    expect(html).toContain('content-placeholder-denied content-placeholder-media')
     expect(html).toContain(CONTENT_IMAGE_DENIED_TEXT)
     expect(html).toContain('img-frame')
-    // The caption survives; the ciphertext URL and file name do not.
+    // The caption survives; the private URL and file name do not.
     expect(html).toContain('背面的故事')
     expect(html).not.toContain('/api/links/attachments/1?version=v1')
     expect(html).not.toContain('<img')
-    // No lightbox entry for content the viewer cannot decrypt.
+    // No lightbox entry for content the viewer cannot read.
     expect(images).toEqual([])
   })
 })
@@ -920,7 +902,7 @@ describe('same-row redacted version (删减版)', () => {
     version: 'v1',
     url: '/objects/secret.png',
   }
-  const encrypted = {
+  const private_attachment = {
     file_name: 'secret.png.good',
     mime_type: 'image/png',
     file_size: 1024,
@@ -929,58 +911,79 @@ describe('same-row redacted version (删减版)', () => {
     url: null,
     is_private: true,
   }
-  const with_key = { ... encrypted, url: '/api/links/attachments/1?version=v1' }
-  const redacted = { ... encrypted, redacted_url: twin.url,
+  const readable_attachment = { ... private_attachment, url: '/api/links/attachments/1?version=v1' }
+  const redacted = { ... private_attachment, redacted_url: twin.url,
     redacted_image: { revision: 1, width: 2, height: 2, has_original: false, lqip: null } }
 
-  it('renders the twin as an amber card for unauthorized viewers', () => {
+  it('renders the twin with its file type icon in a blue card for unauthorized viewers', () => {
     const { html } = render('[](att://secret.png.good)\n', [redacted, twin])
 
-    expect(html).toContain('file-card-encrypted')
-    expect(html).toContain('机密附件·删减版')
-    // The card links the plaintext twin and never mentions the ciphertext.
+    expect(html).toContain('file-card-private file-card-redacted')
+    expect(html).toContain('file-card-icon iconify i-lucide:file-image')
+    expect(html).toContain('<span>机密附件删减版</span></span><span class="file-card-body">')
+    expect(html).toContain('<span class="file-card-size">1 KB</span>')
+    // The public card links to the redaction and omits the private file name.
     expect(html).toContain('href="/objects/secret.png"')
     expect(html).not.toContain('secret.png.good')
-    expect(html).not.toContain('data-encrypted')
+    expect(html).not.toContain('data-private')
   })
 
   it('renders the twin image with a 删减版 brand for unauthorized viewers', () => {
     const { html, images } = render('![](att://secret.png.good)\n', [redacted, twin])
 
-    expect(html).toContain('机密附件·删减版')
+    expect(html).toContain('机密附件删减版')
+    expect(html).toContain('private-image-block-brand private-image-block-brand-redacted')
+    expect(html).toContain('i-lucide:lock-open')
     expect(html).toContain('src="/objects/secret.png"')
-    expect(html).not.toContain('encrypted-image-denied')
+    expect(html).not.toContain('content-placeholder-denied content-placeholder-media')
     expect(images).toEqual(['/objects/secret.png'])
   })
 
   it('keeps a permitted file card on its full representation without a toggle', () => {
-    const { html } = render('[](att://secret.png.good)\n', [with_key, twin])
+    const { html } = render('[](att://secret.png.good)\n', [readable_attachment, twin])
 
-    expect(html).toContain(`href="${with_key.url}"`)
+    expect(html).toContain(`href="${readable_attachment.url}"`)
     expect(html).not.toContain('data-twin-url')
-    expect(html).not.toContain('encrypted-toggle')
+    expect(html).not.toContain(twin.url)
   })
 
   it('keeps a permitted image on its full representation without a toggle', () => {
-    const { html } = render('![](att://secret.png.good)\n', [with_key, twin])
+    const { html } = render('![](att://secret.png.good)\n', [readable_attachment, twin])
 
-    expect(html).toContain(`src="${with_key.url}"`)
+    expect(html).toContain(`src="${readable_attachment.url}"`)
     expect(html).not.toContain('data-twin-url')
-    expect(html).not.toContain('encrypted-toggle')
-    expect(html).toContain('机密附件·完整版')
+    expect(html).not.toContain(twin.url)
+    expect(html).toContain('机密附件')
   })
 
-  it('points a labeled link at the twin for unauthorized viewers', () => {
-    const { html } = render('[下载](att://secret.png.good)\n', [redacted, twin])
+  it('keeps labeled links neutral while resolving the readable version', () => {
+    const link = '[**下载**](att://secret.png.good)\n'
+    const public_link = render('[**下载**](att://secret.png)\n', [twin]).html
+    for (const [file, href] of [[readable_attachment, readable_attachment.url], [redacted, twin.url]] as const) {
+      const { html } = render(link, [file, twin])
+      const classes = (value: string) => /<a [^>]*class="([^"]*)"/.exec(value)?.[1]
+      expect(html).toContain(`href="${href}"`)
+      expect(html).toContain('<strong>下载</strong>')
+      expect(classes(html)).toBe(classes(public_link))
+      expect(html).not.toContain('file-card-private')
+    }
+  })
 
-    expect(html).toContain('href="/objects/secret.png"')
-    expect(html).not.toContain('encrypted-card-denied')
-    expect(html).not.toContain('data-encrypted')
+  it('uses the same redaction heading for directly referenced file and image cards', () => {
+    const attachments = [{ ... twin, is_redaction: true }]
+    const { html } = render('[](att://secret.png)\n', attachments)
+    expect(html).toContain('file-card-private file-card-redacted')
+    expect(html).toContain('file-card-icon iconify i-lucide:file-image')
+    expect(html).toContain('机密附件删减版')
+    expect(html).toContain(`href="${twin.url}"`)
+    const image = render('![](att://secret.png)\n', attachments)
+    expect(image.html).toContain('private-image-block-brand-text">机密附件删减版</span>')
+    expect(image.images).toEqual([twin.url])
   })
 
   it('falls back to the denied card when there is no twin', () => {
-    const { html } = render('[](att://secret.png.good)\n', [encrypted, twin])
+    const { html } = render('[](att://secret.png.good)\n', [private_attachment, twin])
 
-    expect(html).toContain('encrypted-card-denied')
+    expect(html).toContain('content-placeholder-denied content-placeholder-inline')
   })
 })

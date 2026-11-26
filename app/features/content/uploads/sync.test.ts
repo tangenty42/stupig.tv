@@ -41,6 +41,7 @@ beforeEach(() => {
   setActivePinia(pinia)
   const app = { isHydrating: false, hook: vi.fn(), vueApp: { onUnmount: vi.fn() } }
   vi.stubGlobal('useNuxtApp', () => app)
+  vi.stubGlobal('useReactiveDateNow', () => ref(0))
   state.list.mockResolvedValue({ enabled: true, sessions: [session] })
 })
 afterEach(() => {

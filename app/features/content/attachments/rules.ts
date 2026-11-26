@@ -1,5 +1,5 @@
 import type { ContentStoryAttachment } from '@shared/types/content'
-import { is_encrypted_attachment } from '@shared/content-markdown'
+import { attachment_base_name, attachment_mime_type, attachment_name_without_private_suffix } from '@shared/content-markdown'
 import { content_name_key } from '@shared/content-reference'
 
 export function attachment_is_restricted(attachment: Pick<ContentStoryAttachment, 'is_private'>) {
@@ -16,7 +16,7 @@ export function public_preview_attachments(attachments: ContentStoryAttachment[]
     if (! attachment_is_restricted(attachment))
       return attachment
     const { image: _image, ... public_fields } = attachment
-    return { ... public_fields, url: null, is_redacted_view: Boolean(attachment.redacted_url && attachment.redacted_image) }
+    return { ... public_fields, url: null, is_redacted_view: Boolean(attachment.redacted_url) }
   })
 }
 
@@ -24,11 +24,13 @@ export function attachment_display_url(static_url: (path: string) => string, att
   return attachment.url ? attachment.is_private ? attachment.url : static_url(attachment.url) : ''
 }
 
-/** A redacted presentation belongs to this row; other attachments are independent. */
+/** The public 删减版 file standing in for a private row (`X.good` → `X` in the same folder). */
 export function redacted_version_of(attachments: ContentStoryAttachment[], file_name: string) {
   const source = attachments.find(item => content_name_key(item.file_name) === content_name_key(file_name))
-  if (source?.redacted_url && source.redacted_image)
-    return { ... source, url: source.redacted_url, image: source.redacted_image, is_private: false }
+  if (source?.redacted_url) {
+    const { image: _image, ... fields } = source
+    return { ... fields, url: source.redacted_url, ... (source.redacted_image ? { image: source.redacted_image } : {}), is_private: false }
+  }
   return null
 }
 
@@ -40,19 +42,15 @@ export const file_icon_names = [
   'lucide:file-image',
   'lucide:file-text',
   'lucide:file-video',
-  'lucide:lock',
   'lucide:sheet',
 ] as const
 
 // The names carry the collection prefix so Nuxt Icon's client-bundle scan
-// (which matches literal `lucide:*` strings) picks them up. Admin surfaces
-// (this list, menus, completions) mark confidential attachments with the plain
-// lock; the keyhole variants belong to rendered content (see link-cards).
+// (which matches literal `lucide:*` strings) picks them up.
 export function file_icon(attachment: Pick<ContentStoryAttachment, 'file_name' | 'mime_type'>) {
-  if (is_encrypted_attachment(attachment.file_name))
-    return 'lucide:lock'
-  const mime_type = attachment.mime_type ?? ''
-  const extension = attachment.file_name.split('.').pop()?.toLowerCase() ?? ''
+  const name = attachment_name_without_private_suffix(attachment_base_name(attachment.file_name))
+  const mime_type = attachment.mime_type ?? attachment_mime_type(name) ?? ''
+  const extension = name.split('.').pop()?.toLowerCase() ?? ''
   if (mime_type.startsWith('image/'))
     return 'lucide:file-image'
   if (mime_type.startsWith('video/'))
@@ -85,10 +83,7 @@ export type AttachmentLeadingAction = 'preview' | 'open' | 'download'
 /**
  * The leading action for an attachment: images preview in the lightbox, other
  * media opens in a tab, everything else downloads.
- *
- * Encrypted rows are not distinguished here — they reach the same action through
- * the decrypt path instead of the object URL, which is what keeps a private
- * video as openable as a public one.
+ * Private attachments use the same action with their authorized read URL.
  */
 export function attachment_leading_action(attachment: Pick<ContentStoryAttachment, 'is_image' | 'mime_type'>): AttachmentLeadingAction {
   if (attachment.is_image)

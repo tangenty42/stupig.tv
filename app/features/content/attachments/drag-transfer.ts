@@ -31,7 +31,6 @@ export function get_content_attachment_drag_data(data_transfer: DataTransfer | n
       is_image: data.is_image,
       url: data.url,
       file_names,
-      ... (typeof data.markdown === 'string' ? { markdown: data.markdown } : {}),
     }
   }
   catch {
@@ -39,7 +38,7 @@ export function get_content_attachment_drag_data(data_transfer: DataTransfer | n
   }
 }
 
-export function set_content_folder_drag_data(event: DragEvent, folder: string, file_names?: string[], markdown?: string) {
+export function set_content_folder_drag_data(event: DragEvent, folder: string, file_names?: string[]) {
   if (! event.dataTransfer)
     return
   // 'copyMove', for the same reason the attachment payload uses it: a folder is
@@ -51,7 +50,6 @@ export function set_content_folder_drag_data(event: DragEvent, folder: string, f
   event.dataTransfer.setData(content_folder_drag_type, JSON.stringify({
     folder,
     file_names: file_names?.length ? file_names : undefined,
-    markdown,
   } satisfies ContentFolderDragData))
 }
 
@@ -66,7 +64,7 @@ export function get_content_folder_drag_data(data_transfer: DataTransfer | null)
     const file_names = Array.isArray(data.file_names) && data.file_names.every(name => typeof name === 'string')
       ? data.file_names
       : undefined
-    return { folder: data.folder, file_names, ... (typeof data.markdown === 'string' ? { markdown: data.markdown } : {}) }
+    return { folder: data.folder, file_names }
   }
   catch {
     // Older drags used the folder path directly as the payload.

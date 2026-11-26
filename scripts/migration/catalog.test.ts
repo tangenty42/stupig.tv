@@ -2,6 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { retired_migrations } from './baseline'
 import { build_migration_scripts } from './build'
 import { migration_script_names, plan_migrations, read_migrations, sha256 } from './catalog'
 import { migration_options } from './cli'
@@ -47,6 +48,20 @@ describe('script migration artifacts', () => {
   it('不允许在已有完成版本之前插入迁移', () => {
     const files = ['20261024030000_a.sql', '20261024040000_b.sql'].map(filename => ({ filename, sql: '', checksum: sha256(filename) }))
     expect(plan_migrations(files, new Map([[files[1]!.filename, files[1]!.checksum]])).inconsistent).toContainEqual({ filename: files[0]!.filename, reason: 'out_of_order' })
+  })
+
+  it('已退役版本的旧回执不算文件缺失，其他缺失文件仍然拦截', () => {
+    const files = ['20261024020000_a.sql', '20261024040000_b.sql'].map(filename => ({ filename, sql: '', checksum: sha256(filename) }))
+    const [retired, checksum] = [... retired_migrations][0]!
+    const applied = new Map([... files.map(file => [file.filename, file.checksum] as const), [retired, checksum]])
+    expect(plan_migrations(files, applied)).toEqual({ pending: [], inconsistent: [] })
+    expect(plan_migrations(files, applied, new Map([['20261101133000_content_webp.ts', 'unused']])).inconsistent).toContainEqual({ filename: '20261101133000_content_webp.ts', reason: 'missing' })
+    applied.set(retired, sha256('changed'))
+    applied.set('20261024035000_removed.sql', sha256('removed'))
+    expect(plan_migrations(files, applied).inconsistent).toEqual([
+      { filename: retired, reason: 'modified' },
+      { filename: '20261024035000_removed.sql', reason: 'missing' },
+    ])
   })
 
   it('非法命名的根目录 TS 不会被静默忽略', () => {

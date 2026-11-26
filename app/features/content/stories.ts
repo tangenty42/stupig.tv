@@ -7,14 +7,20 @@ export function useContentStories() {
   const { content } = useApi()
   const stories = useSyncedState<ContentStorySummary[] | null>('content_stories', () => null)
   const loading = useState('content_stories_loading', () => false)
+  const error = useState('content_stories_error', () => false)
   const ready = useSyncedData(
     sync_resource('content_stories', 'all'),
     () => content.list_stories(),
     stories,
     loading,
+    {
+      on_data: () => { error.value = false },
+      on_error: () => { error.value = true },
+      default_error_toast: true,
+    },
   )
 
-  return { stories, loading, ready }
+  return { stories, loading, error, ready }
 }
 
 /** One story body with the same shared absence, refresh and hydration semantics. */
@@ -23,13 +29,19 @@ export function useContentStory(story_key: Readonly<Ref<string | number>>) {
   const scope = String(story_key.value)
   const story = useSyncedState<ContentStoryBody | null>(`content_story_view_${scope}`, () => null)
   const loading = useState(`content_story_view_loading_${scope}`, () => false)
+  const error = useState(`content_story_view_error_${scope}`, () => false)
   const story_id = computed(() => Number(story_key.value))
   const ready = useSyncedData(
     computed(() => Number.isInteger(story_id.value) && story_id.value > 0 ? sync_resource('content_story', story_id.value) : null),
     () => read_content_resource(() => content.get_story_body(story_id.value)),
     story,
     loading,
+    {
+      on_data: () => { error.value = false },
+      on_error: () => { error.value = true },
+      default_error_toast: true,
+    },
   )
 
-  return { story, loading, ready }
+  return { story, loading, error, ready }
 }

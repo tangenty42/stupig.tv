@@ -1,7 +1,17 @@
 import type { ContentStoryAttachment, ContentWorkspaceNode } from '@shared/types/content'
 import type { WorkspaceListRow } from './workspace-model'
-import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_inherits_private, attachment_mime_type, attachment_path_is_private, compare_attachment_items, decrypted_attachment_name } from '@shared/content-markdown'
+import { attachment_ancestor_folders, attachment_base_name, attachment_folder_of, attachment_has_private_suffix, attachment_inherits_private, attachment_mime_type, attachment_name_without_private_suffix, attachment_path_is_private, attachment_redaction_path, compare_attachment_items } from '@shared/content-markdown'
 import { attachment_name_key } from '@shared/content-workspace'
+
+/** Path-based state for rows not yet stored: a file next to `X.good` is its public 删减版. */
+export function attachment_upload_privacy(file_paths: readonly string[]) {
+  const files = new Set(file_paths.map(attachment_name_key))
+  return (path: string) => {
+    const twin = `${path}.good`
+    const is_redaction = attachment_redaction_path(twin) !== null && files.has(attachment_name_key(twin))
+    return { is_private: ! is_redaction && attachment_path_is_private(path), is_redaction }
+  }
+}
 
 /** A batch remains available while any selected row is eligible. */
 export function attachment_batch_action(rows: WorkspaceListRow[], assess: (row: WorkspaceListRow) => { allowed: boolean, reasons: readonly string[] }) {
@@ -16,18 +26,17 @@ export function attachment_privacy_actions(rows: WorkspaceListRow[], capabilitie
   const nodes = rows.filter(row => row.node)
   if (! nodes.length)
     return []
-  const is_private = (row: WorkspaceListRow) => !! row.node?.attachment?.is_private || attachment_path_is_private(row.path)
-  const states = rows.length === 1 ? [! is_private(rows[0]!)] : [true, false]
+  const declares_private = (row: WorkspaceListRow) => attachment_has_private_suffix(row.path)
+    || (!! row.node?.attachment?.is_private && ! attachment_inherits_private(row.path))
+  const states = rows.length === 1 ? [! declares_private(rows[0]!)] : [true, false]
   return states.map(private_value => ({
     private: private_value,
     ... attachment_batch_action(nodes, (row) => {
       const cap = capabilities(row)
       if (! cap.private)
         return { allowed: false, reasons: cap.reasons.private }
-      if (! private_value && attachment_inherits_private(row.path))
-        return { allowed: false, reasons: ['机密状态由父目录继承，不能单独取消'] }
-      if (is_private(row) === private_value)
-        return { allowed: false, reasons: [private_value ? '已设为机密' : '无机密附件'] }
+      if (declares_private(row) === private_value)
+        return { allowed: false, reasons: [private_value ? '已有自身机密标记' : '没有自身机密标记'] }
       return { allowed: true, reasons: [] }
     }),
   }))
@@ -46,7 +55,7 @@ export interface MyContentAttachmentRow {
   depth: number
   source: WorkspaceListRow
   data: (ContentStoryAttachment & { kind: 'stored' })
-    | { kind: 'upload', file_name: string, mime_type: string | null, file_size: number }
+    | { kind: 'upload', file_name: string, mime_type: string | null, file_size: number, is_private?: boolean, is_redaction?: boolean }
     | { kind: 'folder', path: string, name: string, collapsed: boolean, count: number, drop_target: boolean, drop_disabled: boolean }
   upload: AttachmentListUpload | null
   state: {
@@ -56,24 +65,29 @@ export interface MyContentAttachmentRow {
     move_pending: boolean
     draggable: boolean
     error?: boolean
+    result_pending?: boolean
+    unused_label?: string
   }
 }
 
 /** Read-only summaries use the exact list row, without transfer or task state. */
-export function attachment_summary_rows(paths: string[], nodes: readonly ContentWorkspaceNode[], prefer_private = false): MyContentAttachmentRow[] {
+export function attachment_summary_rows(paths: string[], nodes: readonly ContentWorkspaceNode[], prefer_private = false, target_kinds?: ReadonlyMap<string, boolean>): MyContentAttachmentRow[] {
+  const upload_privacy = attachment_upload_privacy([... nodes.filter(node => node.kind !== 'folder').map(node => node.path), ... paths])
   return paths.map((path, index) => {
     const key = attachment_name_key(path)
-    const private_source = nodes.find(node => node.attachment?.is_private && attachment_name_key(decrypted_attachment_name(node.path)) === key)
-    const node = (prefer_private ? private_source : undefined) ?? nodes.find(node => attachment_name_key(node.path) === key) ?? private_source
+    const private_source = nodes.find(node => node.attachment?.is_private && attachment_name_key(attachment_name_without_private_suffix(node.path)) === key)
+    const is_folder = target_kinds?.get(key)
+    const match = (prefer_private ? private_source : undefined) ?? nodes.find(node => attachment_name_key(node.path) === key) ?? private_source
+    const node = ! match || is_folder === undefined || (match.kind === 'folder') === is_folder ? match : undefined
     const file = node?.attachment
     const source: WorkspaceListRow = { key: `summary:${index}:${path}`, path, name: path, parent_id: node?.parent_id ?? 0, depth: 0, node }
     return {
       key: source.key, depth: 0, source, upload: null,
-      data: node?.kind === 'folder'
+      data: is_folder || node?.kind === 'folder'
         ? { kind: 'folder', path, name: path, collapsed: true, count: 0, drop_target: false, drop_disabled: false }
         : file
           ? { ... file, file_name: path, kind: 'stored' }
-          : { kind: 'upload', file_name: path, mime_type: attachment_mime_type(attachment_base_name(path)), file_size: 0 },
+          : { kind: 'upload', file_name: path, mime_type: attachment_mime_type(attachment_base_name(path)), file_size: 0, ... upload_privacy(path) },
       state: { selected: false, selection_edges: 'both', pending: false, move_pending: false, draggable: false },
     }
   })
@@ -84,13 +98,16 @@ export function attachment_summary_tree(paths: string[], nodes: readonly Content
   prefer_private?: boolean
   conflicts?: ReadonlySet<string>
   collapsed?: ReadonlySet<string>
+  target_kinds?: ReadonlyMap<string, boolean>
 } = {}): MyContentAttachmentRow[] {
   // Invalid separators are themselves a possible conflict. Keep such targets
   // visible at the root instead of inventing blank or relative folder nodes.
   const nestable = (path: string) => path.split('/').every(part => part !== '' && part !== '.' && part !== '..')
   const entries = new Map<string, MyContentAttachmentRow>()
-  for (const row of attachment_summary_rows(paths, nodes, options.prefer_private))
-    entries.set(attachment_name_key(row.source.path), row)
+  for (const row of attachment_summary_rows(paths, nodes, options.prefer_private, options.target_kinds)) {
+    const key = attachment_name_key(row.source.path)
+    entries.set(key, { ... row, state: { ... row.state, error: options.conflicts?.has(key) ?? false } })
+  }
   const folders = new Map<string, string>()
   for (const path of paths) {
     if (! nestable(path))

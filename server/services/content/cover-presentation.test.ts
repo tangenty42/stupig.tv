@@ -24,16 +24,15 @@ it('resolves case and Unicode variants after fetching the story scope', async ()
   expect(mocks.execute.mock.calls[0]![1]).toEqual([1])
 })
 
-it('uses only the redaction metadata for a private cover and omits a private cover without a redaction', async () => {
-  const private_row = { ... base, is_private: 1, redacted_display_key: 'redacted-webp', redacted_fallback_key: 'redacted-jpeg', redacted_revision: 3,
-    redacted_metadata: { width: 40, height: 30 }, redacted_lqip: Buffer.from([255, 216, 0, 255, 217]) }
-  mocks.execute.mockResolvedValueOnce([[private_row]]).mockResolvedValueOnce([[private_row]])
-    .mockResolvedValueOnce([[{ ... base, is_private: 1 }]]).mockResolvedValueOnce([[{ ... base, is_private: 1 }]])
-  const result = (await list_cover_presentations([{ story_id: 1, file_name: 'cover.png' }])).get('1:cover.png')!
-  expect(result.url).toContain('&role=redacted')
-  expect(result.image).toEqual({ revision: 3, width: 40, height: 30, lqip: 'data:image/jpeg;base64,/9gA/9k=', has_original: false })
-  expect(JSON.stringify(result)).not.toContain('/9j/2Q==')
-  expect(await list_cover_presentations([{ story_id: 1, file_name: 'cover.png' }])).toEqual(new Map())
+it('shows the public 删减版 for a private cover and omits a private cover without one', async () => {
+  const private_row = { ... base, file_name: 'cover.png.good', is_private: 1 }
+  const twin = { ... base, id: 9, file_name: 'cover.png', image_metadata: { width: 40, height: 30 }, lqip: Buffer.from([255, 216, 0, 255, 217]) }
+  mocks.execute.mockResolvedValueOnce([[private_row, twin]]).mockResolvedValueOnce([[private_row, twin]])
+    .mockResolvedValueOnce([[private_row]]).mockResolvedValueOnce([[private_row]])
+  const result = (await list_cover_presentations([{ story_id: 1, file_name: 'cover.png.good' }])).get('1:cover.png.good')!
+  expect(result.url).toMatch(/^\/api\/links\/attachments\/9\?/)
+  expect(result.image).toEqual({ revision: 2, width: 40, height: 30, lqip: 'data:image/jpeg;base64,/9gA/9k=', has_original: false })
+  expect(await list_cover_presentations([{ story_id: 1, file_name: 'cover.png.good' }])).toEqual(new Map())
 })
 
 it('keeps unprocessed formats readable without fabricating image metadata', async () => {
@@ -44,33 +43,21 @@ it('keeps unprocessed formats readable without fabricating image metadata', asyn
 })
 
 it.each([
-  { name: 'cover.png', private_exists: true },
-  { name: 'renamed.png', private_exists: true },
-  { name: 'cover.png', private_exists: false },
-])('does not substitute an independent public attachment: %j', async ({ name, private_exists }) => {
-  const public_row = { ... base, id: 9, file_name: name }
-  const private_row = { ... base, file_name: `${name}.good`, is_private: 1 }
-  const rows = private_exists ? [private_row, public_row] : [public_row]
+  { private_name: 'cover.png.good', public_name: 'other.png', private_folder: false },
+  { private_name: 'a.good/cover.png', public_name: 'a.good/cover.png.png', private_folder: true },
+])('uses only the file named without `.good` in the same folder: %j', async ({ private_name, public_name }) => {
+  const public_row = { ... base, id: 9, file_name: public_name }
+  const private_row = { ... base, file_name: private_name, is_private: 1 }
+  const rows = [private_row, public_row]
   mocks.execute.mockResolvedValue([rows])
-
   expect(attachment_cover_url(private_row.file_name, rows)).toBeNull()
   expect(await list_cover_presentations([{ story_id: 1, file_name: private_row.file_name }])).toEqual(new Map())
   expect(attachment_cover_url(public_row.file_name, rows)).toMatch(/^\/api\/links\/attachments\/9\?/)
 })
 
-it('keeps the cover on its own redaction and clears it when that redaction is removed', async () => {
-  const public_row = { ... base, id: 9 }
-  const private_row = { ... base, file_name: 'cover.png.good', is_private: 1,
-    redacted_display_key: 'redacted-webp', redacted_fallback_key: 'redacted-jpeg', redacted_revision: 3,
-    redacted_metadata: { width: 40, height: 30 }, redacted_lqip: Buffer.from([255, 216, 0, 255, 217]) }
-  const cover = { story_id: 1, file_name: private_row.file_name }
-  mocks.execute.mockResolvedValue([[private_row, public_row]])
-  const result = (await list_cover_presentations([cover])).get('1:cover.png.good')!
-  expect(result.url).toMatch(/^\/api\/links\/attachments\/4\?.*&role=redacted$/)
-  expect(result.image).toMatchObject({ width: 40, height: 30 })
-
-  const without_redaction = { ... private_row, redacted_display_key: null, redacted_fallback_key: null }
-  mocks.execute.mockResolvedValue([[without_redaction, public_row]])
-  expect(attachment_cover_url(cover.file_name, [without_redaction, public_row])).toBeNull()
-  expect(await list_cover_presentations([cover])).toEqual(new Map())
+it('follows a 删减版 inside a private folder and drops it when the 删减版 is removed', async () => {
+  const twin = { ... base, id: 9, file_name: 'a.good/cover.png' }
+  const private_row = { ... base, file_name: 'a.good/cover.png.good', is_private: 1 }
+  expect(attachment_cover_url(private_row.file_name, [private_row, twin])).toMatch(/^\/api\/links\/attachments\/9\?/)
+  expect(attachment_cover_url(private_row.file_name, [private_row])).toBeNull()
 })

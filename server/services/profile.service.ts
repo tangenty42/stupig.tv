@@ -1,5 +1,5 @@
 import type { AuthUser } from '@server/types/auth'
-import type { RowDataPacket } from 'mysql2/promise'
+import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 import { runtime_config } from '@config/loader'
@@ -7,12 +7,13 @@ import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import { verify_captcha } from '@server/lib/captcha'
 import { db } from '@server/lib/db'
+import { hash_password, verify_password } from '@server/lib/password'
 import { check_otp_sms } from '@server/lib/sms'
 import { delete_avatar_best_effort, put_avatar } from '@server/lib/static-storage'
 import { publish_refresh, sync_resource } from '@server/lib/sync'
 import { logout_session } from '@server/services/session.service'
 import { has_permission, normalize_permission_grants } from '@shared/permissions'
-import bcrypt from 'bcryptjs'
+import { settings } from '@shared/settings'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc.js'
 
@@ -39,7 +40,7 @@ export interface UserRow extends RowDataPacket {
 }
 
 interface PasswordHashRow extends RowDataPacket {
-  password_hash: string
+  password_hash: string | null
 }
 
 interface UserIdRow extends RowDataPacket {
@@ -62,10 +63,6 @@ interface CaptchaInput {
   gen_time?: string
 }
 
-interface AvatarUploadOptions {
-  max_size_mb: number
-}
-
 const mime_to_ext: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
@@ -82,13 +79,19 @@ export function is_profile_editable(viewer: AuthUser | null, target_id: number) 
   return has_permission(viewer, 'admin_access', 'full') || viewer?.id === target_id
 }
 
+/** 手机号与登录记录：本人和『控制台』任一级别可读，只有本人和管理员可改。 */
+export function is_profile_sensitive_readable(viewer: AuthUser | null, target_id: number) {
+  return has_permission(viewer, 'admin_access', 'readonly') || viewer?.id === target_id
+}
+
 export function format_profile_row(viewer: AuthUser | null, user: UserRow, target_id: number) {
   const editable = is_profile_editable(viewer, target_id)
+  const sensitive_readable = is_profile_sensitive_readable(viewer, target_id)
 
   return {
     id: user.id,
     username: user.username,
-    phone: editable ? user.phone : null,
+    phone: sensitive_readable ? user.phone : null,
     avatar_file: user.avatar_file,
     avatar_version: user.avatar_version,
     birthday: user.birthday,
@@ -98,10 +101,11 @@ export function format_profile_row(viewer: AuthUser | null, user: UserRow, targe
     is_verified: Boolean(user.is_verified),
     is_admin: Boolean(user.is_admin),
     is_banned: Boolean(user.is_banned),
-    verified_note: user.verified_note,
+    verified_note: user.is_verified ? user.verified_note : null,
     // 权限列表对所有人公开；is_admin 用户的列表恒为空，等价于全部权限
     permissions: normalize_permission_grants(user.permissions),
     editable,
+    sensitive_readable,
   }
 }
 
@@ -169,17 +173,16 @@ export async function change_profile_password(user_id: number, payload: ChangePa
     throw new ApiError(404, '用户不存在')
   }
 
-  const valid = await bcrypt.compare(payload.old_password, user.password_hash)
+  if (user.password_hash === null) {
+    throw new ApiError(400, '尚未设置密码，请使用手机号验证码设置密码')
+  }
+
+  const valid = await verify_password(payload.old_password, user.password_hash)
   if (! valid) {
     throw new ApiError(400, '旧密码不正确')
   }
 
-  const new_hash = await bcrypt.hash(payload.new_password, config.app.auth.bcryptRounds)
-  await db.execute(
-    'UPDATE users SET password_hash = ? WHERE id = ?',
-    [new_hash, user_id],
-  )
-  publish_refresh({ resource: sync_resource('auth_user', user_id) })
+  await reset_profile_password(user_id, payload.new_password)
 }
 
 interface ChangePasswordByOtpInput extends CaptchaInput {
@@ -200,12 +203,24 @@ export async function change_profile_password_by_otp(auth_user: AuthUser, payloa
 }
 
 export async function reset_profile_password(user_id: number, new_password: string) {
-  const new_hash = await bcrypt.hash(new_password, config.app.auth.bcryptRounds)
+  const new_hash = await hash_password(new_password)
   await db.execute(
     'UPDATE users SET password_hash = ? WHERE id = ?',
     [new_hash, user_id],
   )
   publish_refresh({ resource: sync_resource('auth_user', user_id) })
+}
+
+export async function set_initial_profile_password(user: AuthUser, password: string) {
+  const new_hash = await hash_password(password)
+  const [result] = await db.execute<ResultSetHeader>(
+    'UPDATE users SET password_hash = ? WHERE id = ? AND phone = ? AND is_banned = 0 AND password_hash IS NULL',
+    [new_hash, user.id, user.phone],
+  )
+  if (result.affectedRows !== 1) {
+    throw new ApiError(409, '无法设置密码，请在个人主页的安全设置中重试')
+  }
+  publish_refresh({ resource: sync_resource('auth_user', user.id) })
 }
 
 interface ChangePhoneInput extends CaptchaInput {
@@ -275,7 +290,7 @@ export async function delete_profile_avatar(user_id: number) {
   publish_profile_refresh(user_id)
 }
 
-export async function force_logout_session(user_id: number, session_id: number) {
+export async function force_logout_session(user_id: number, session_id: number, current_session_id: number) {
   const [rows] = await db.execute<SessionUserIdRow[]>(
     'SELECT user_id FROM user_login_sessions WHERE id = ?',
     [session_id],
@@ -284,6 +299,9 @@ export async function force_logout_session(user_id: number, session_id: number) 
   if (! session || session.user_id !== user_id) {
     throw new ApiError(403, '无权限操作该会话')
   }
+  if (session_id === current_session_id) {
+    throw new ApiError(400, '不能强制退出当前设备')
+  }
 
   await logout_session(session_id)
   publish_refresh({ resource: sync_resource('auth_user', user_id) })
@@ -291,15 +309,15 @@ export async function force_logout_session(user_id: number, session_id: number) 
   publish_refresh({ resource: sync_resource('profile_sessions', user_id) })
 }
 
-export async function upload_profile_avatar(user_id: number, input: FormData, get_options: () => AvatarUploadOptions) {
+export async function upload_profile_avatar(user_id: number, input: FormData) {
   const avatar = input.get('avatar')
   if (! (avatar instanceof Blob) || avatar.size === 0) {
     throw new ApiError(400, '请先选择头像文件')
   }
 
-  const options = get_options()
-  if (avatar.size > options.max_size_mb * 1024 * 1024) {
-    throw new ApiError(413, `头像文件太大了，不能超过 ${options.max_size_mb} MB`)
+  const max_size_mb = settings.app.avatar.maxSizeMb
+  if (avatar.size > max_size_mb * 1024 * 1024) {
+    throw new ApiError(413, `头像文件太大了，不能超过 ${max_size_mb} MB`)
   }
   const file_data = Buffer.from(await avatar.arrayBuffer())
 

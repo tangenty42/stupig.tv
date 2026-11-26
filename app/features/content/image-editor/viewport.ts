@@ -7,7 +7,6 @@ interface ImageEditorViewportOptions {
   busy: () => boolean
   loading: () => boolean
   load_error: () => string
-  tool: () => 'move' | 'brush' | 'crop'
 }
 
 /** Viewport coordinates, zoom anchors and pan capture belong to this dialog. */
@@ -108,14 +107,10 @@ export function useImageEditorViewport(options: ImageEditorViewportOptions) {
     scroll_top: number
   }
 
-  /**
-   * The two gestures every drawing app shares: hold Space and drag, or drag with
-   * the middle button. Space is what a stylus user falls back on; the middle
-   * button is what a mouse user does.
-   */
+  /** Pan with the middle button, or hold Space or Ctrl/Cmd for a primary-button drag. */
   function is_pan_gesture(event: PointerEvent) {
-    return event.button === 1 || (event.button === 0 && (space_held.value || options.tool() === 'move'
-      || (event.pointerType !== 'touch' && Boolean(event.ctrlKey || event.metaKey))))
+    const ctrl_or_cmd = event.pointerType !== 'touch' && Boolean(event.ctrlKey || event.metaKey)
+    return event.button === 1 || (event.button === 0 && (space_held.value || ctrl_or_cmd))
   }
 
   function on_stage_pointerdown(event: PointerEvent) {

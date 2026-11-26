@@ -29,9 +29,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function mount(width = 1000, src = `/carousel-unit-${serial ++}.png`, body = `<img src="${src}">`) {
-  document.body.innerHTML = `<div class="carousel-shell" style="--carousel-fade-width:48px"><button class="carousel-prev"></button><div class="image-carousel"><span>${body}</span><span></span></div><button class="carousel-next"></button></div>`
-  const carousel = document.querySelector<HTMLElement>('.image-carousel')!
+function measure(carousel: HTMLElement, width = 1000, next_offset = 412) {
   const image = carousel.querySelector('img')
   if (image)
     Object.defineProperty(image, 'complete', { value: false, configurable: true })
@@ -41,9 +39,26 @@ function mount(width = 1000, src = `/carousel-unit-${serial ++}.png`, body = `<i
     clientWidth: { value: 400, configurable: true },
     scrollLeft: { get: () => left, set: value => left = Math.max(0, Math.min(value, carousel.scrollWidth - carousel.clientWidth)) },
   })
-  Object.defineProperty(carousel.children[1], 'offsetLeft', { value: 412 })
+  Object.defineProperty(carousel.children[1], 'offsetLeft', { value: next_offset })
+}
+
+function mount(width = 1000, src = `/carousel-unit-${serial ++}.png`, body = `<img src="${src}">`) {
+  document.body.innerHTML = `<div class="carousel-shell" style="--carousel-fade-width:48px"><button class="carousel-prev"></button><div class="image-carousel"><span>${body}</span><span></span></div><button class="carousel-next"></button></div>`
+  const carousel = document.querySelector<HTMLElement>('.image-carousel')!
+  measure(carousel, width)
   cleanup = setup_carousels(document.body)
   return carousel
+}
+
+function mount_nested(identity: string) {
+  const controls = (body: string) => `<div class="carousel-shell" style="--carousel-fade-width:48px"><button class="carousel-prev"></button><div class="image-carousel">${body}</div><button class="carousel-next"></button></div>`
+  document.body.innerHTML = controls(`<div class="carousel-content-item">${controls(`<span><img src="/${identity}.png"></span><span>inner text</span>`)}</div><div class="carousel-content-item">outer text</div>`)
+  const [outer, inner] = [... document.querySelectorAll<HTMLElement>('.image-carousel')]
+  measure(outer!, 1000, 612)
+  measure(inner!)
+  const button = (carousel: HTMLElement) => carousel.parentElement!.querySelector<HTMLButtonElement>(':scope > .carousel-next')!
+  cleanup = setup_carousels(document.body)
+  return { outer: outer!, inner: inner!, outer_next: button(outer!), inner_next: button(inner!) }
 }
 
 it.each(['restore', 'hidden', 'wheel', 'next'])('retains a clamped snapshot until media settles, with takeover=%s', (manual) => {
@@ -93,6 +108,115 @@ it.each(['iframe', 'file', 'folder', 'denied'])('restores %s-only strips indepen
   const restored = mount(1000, '', content(key))
   expect(restored.scrollLeft).toBe(420)
   expect(document.querySelector('.carousel-next')?.getAttribute('data-hint')).toBeNull()
+})
+
+it('distinguishes ordinary Markdown beside shared media and ignores runtime overlays when restoring', () => {
+  const key = `mixed-markdown-${serial ++}`
+  const content = (text: string) => `<img src="/${key}.png"><code>${text}</code>`
+  const original = mount(1000, '', content('original text'))
+  original.scrollLeft = 420
+  original.dispatchEvent(new Event('scroll'))
+  cleanup!()
+  const other = mount(1000, '', content('different text'))
+  expect(other.scrollLeft).toBe(0)
+  other.scrollLeft = 150
+  other.dispatchEvent(new Event('scroll'))
+  cleanup!()
+  const restored = mount(1000, '', `${content('original text')}<span class="long-img-cover">runtime crop text</span><span class="image-loading-mask">runtime loading text</span><span class="image-lqip"></span>`)
+  expect(restored.scrollLeft).toBe(420)
+})
+
+it('releases old content snapshots while retaining recently used scroll positions', () => {
+  const key = `snapshot-history-${serial ++}`
+  const content = (identity: string) => `<code>${key}-${identity}</code>`
+  const oldest = mount(1000, '', content('oldest'))
+  oldest.scrollLeft = 240
+  oldest.dispatchEvent(new Event('scroll'))
+  cleanup!()
+  const recent = mount(1000, '', content('recent'))
+  recent.scrollLeft = 420
+  recent.dispatchEvent(new Event('scroll'))
+  cleanup!()
+  for (let index = 0; index < 40; index ++) {
+    mount(1000, '', content(String(index)))
+    cleanup!()
+    if (index % 10 === 0) {
+      expect(mount(1000, '', content('recent')).scrollLeft).toBe(420)
+      cleanup!()
+    }
+  }
+  expect(mount(1000, '', content('oldest')).scrollLeft).toBe(0)
+  cleanup!()
+  expect(mount(1000, '', content('recent')).scrollLeft).toBe(420)
+})
+
+it('binds each nested shell to its own buttons', () => {
+  reduced = true
+  const { outer, inner, outer_next, inner_next } = mount_nested(`nested-buttons-${serial ++}`)
+  const outer_scroll = vi.spyOn(outer, 'scrollTo')
+  const inner_scroll = vi.spyOn(inner, 'scrollTo')
+  inner_next.click()
+  expect(inner_scroll).toHaveBeenCalledExactlyOnceWith({ left: 364, behavior: 'auto' })
+  expect(outer_scroll).not.toHaveBeenCalled()
+  outer_next.click()
+  expect(outer_scroll).toHaveBeenCalledExactlyOnceWith({ left: 564, behavior: 'auto' })
+  expect(inner_scroll).toHaveBeenCalledTimes(1)
+})
+
+it('restores outer and inner strips independently even when their only media destination is the same', () => {
+  const identity = `nested-restore-${serial ++}`
+  const original = mount_nested(identity)
+  original.inner.dispatchEvent(new Event('scroll', { bubbles: true }))
+  expect(original.outer_next.dataset.hint).toBe('true')
+  expect(original.inner_next.dataset.hint).toBeUndefined()
+  original.outer.scrollLeft = 510
+  original.outer.dispatchEvent(new Event('scroll'))
+  original.inner.scrollLeft = 120
+  original.inner.dispatchEvent(new Event('scroll', { bubbles: true }))
+  cleanup!()
+  const restored = mount_nested(identity)
+  expect(restored.outer.scrollLeft).toBe(510)
+  expect(restored.inner.scrollLeft).toBe(120)
+})
+
+it.each(['wheel', 'pointerdown'])('keeps the outer scroll animation running after nested %s input', (type) => {
+  vi.stubGlobal('CSS', { supports: () => false })
+  const { outer, inner, outer_next, inner_next } = mount_nested(`nested-input-${type}-${serial ++}`)
+  outer_next.click()
+  inner_next.click()
+  vi.advanceTimersByTime(100)
+  const inner_left = inner.scrollLeft
+  const target = type === 'wheel' ? inner.firstElementChild! : inner_next
+  target.dispatchEvent(new Event(type, { bubbles: true }))
+  vi.advanceTimersByTime(300)
+  expect(outer.scrollLeft).toBe(564)
+  expect(inner.scrollLeft).toBe(type === 'wheel' ? inner_left : 364)
+})
+
+it('skips authored spacing markers when navigating ordinary Markdown items', () => {
+  reduced = true
+  const carousel = mount(1000, '', '<code>ordinary item</code>')
+  const space = document.createElement('span')
+  space.className = 'carousel-space'
+  Object.defineProperty(space, 'offsetLeft', { value: 100 })
+  carousel.insertBefore(space, carousel.children[1]!)
+  const scroll = vi.spyOn(carousel, 'scrollTo')
+  document.querySelector<HTMLButtonElement>('.carousel-next')!.click()
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ left: 364, behavior: 'auto' })
+})
+
+it('advances when the first text item ends before the fade width', () => {
+  reduced = true
+  document.body.innerHTML = '<div class="carousel-shell" style="--carousel-fade-width:48px"><button class="carousel-prev"></button><div class="image-carousel"><span>短字</span><span>第二项</span><span>第三项</span></div><button class="carousel-next"></button></div>'
+  const carousel = document.querySelector<HTMLElement>('.image-carousel')!
+  measure(carousel, 840, 40)
+  Object.defineProperty(carousel.children[2], 'offsetLeft', { value: 150 })
+  cleanup = setup_carousels(document.body)
+  const scroll = vi.spyOn(carousel, 'scrollTo')
+
+  document.querySelector<HTMLButtonElement>('.carousel-next')!.click()
+
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ left: 102, behavior: 'auto' })
 })
 
 it('updates fades after resize without restarting them on repeated observations and cancels on unmount', () => {

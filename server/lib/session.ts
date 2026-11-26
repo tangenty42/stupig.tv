@@ -1,5 +1,6 @@
 import type { User } from '@shared/types/user'
 import type { H3Event } from 'h3'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { runtime_config } from '@config/loader'
 import { ApiError } from '@server/errors/ApiError'
 import jwt from 'jsonwebtoken'
@@ -78,6 +79,41 @@ export function set_auth_token_cookie(event: H3Event, token: string) {
 
 export function clear_auth_token_cookie(event: H3Event) {
   deleteCookie(event, config.app.auth.cookie.tokenName, AUTH_COOKIE_OPTIONS)
+}
+
+function password_setup_cookie_name() {
+  return `${config.app.auth.cookie.tokenName}_password_setup`
+}
+
+function password_setup_signature(token: string, phone: string, expires: number) {
+  return createHmac('sha256', config.app.auth.jwt.secret)
+    .update(JSON.stringify(['password-setup', token, phone, expires]))
+    .digest()
+}
+
+/** Let only the session created by SMS login set the initial password. */
+export function set_password_setup_proof(event: H3Event, token: string, phone: string) {
+  const max_age = config.app.otp.expiresMinutes * 60
+  const expires = Math.floor(Date.now() / 1000) + max_age
+  const signature = password_setup_signature(token, phone, expires)
+  setCookie(event, password_setup_cookie_name(), `${expires}.${signature.toString('base64url')}`, {
+    ... AUTH_COOKIE_OPTIONS,
+    maxAge: max_age,
+  })
+}
+
+export function has_password_setup_proof(event: H3Event, phone: string) {
+  const token = get_auth_token_from_cookie(event)
+  const proof = /^(\d{1,12})\.([\w-]{43})$/.exec(getCookie(event, password_setup_cookie_name()) ?? '')
+  if (! token || ! proof)
+    return false
+  const expires = Number(proof[1])
+  return expires > Math.floor(Date.now() / 1000)
+    && timingSafeEqual(password_setup_signature(token, phone, expires), Buffer.from(proof[2]!, 'base64url'))
+}
+
+export function clear_password_setup_proof(event: H3Event) {
+  deleteCookie(event, password_setup_cookie_name(), AUTH_COOKIE_OPTIONS)
 }
 
 // The header renders from this cookie, and unlike the token it is readable by

@@ -1,7 +1,7 @@
 import type { MigrationFile } from './catalog'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { legacy_baseline_through, runtime_migration, sha256, single_ledger_migration } from './catalog'
+import { legacy_baseline_through, runtime_migration, sha256 } from './catalog'
 
 /** New SQL requires maintenance unless its exact bytes were reviewed for online use. */
 export function sql_execution(files: MigrationFile[], dir: string) {
@@ -19,7 +19,7 @@ export function sql_execution(files: MigrationFile[], dir: string) {
     }
   }
   return (file: MigrationFile): 'automatic' | 'maintenance' =>
-    file.filename <= legacy_baseline_through || [runtime_migration, single_ledger_migration].includes(file.filename) || automatic[file.filename] === file.checksum
+    file.filename <= legacy_baseline_through || file.filename === runtime_migration || automatic[file.filename] === file.checksum
       ? 'automatic'
       : 'maintenance'
 }
@@ -30,6 +30,7 @@ export interface DeploymentMigration {
   status: string
   phase: string
   execution: 'automatic' | 'maintenance'
+  action?: 'initialize' | 'record'
 }
 
 export interface DeploymentPreflight {
@@ -37,7 +38,6 @@ export interface DeploymentPreflight {
   fingerprint: string
   database: { host: string, port: number, name: string, server_uuid: string }
   catalog: { filename: string, checksum: string }[]
-  legacy: { filename: string, checksum: string }[]
   ledger: { filename: string, checksum: string, status: string, phase: string, attempts: number, finished: boolean }[]
   pending: DeploymentMigration[]
   requires_maintenance: boolean

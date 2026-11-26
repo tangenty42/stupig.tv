@@ -12,6 +12,7 @@ interface DraftApi {
 
 type Phase = 'readonly' | 'acquiring' | 'editing' | 'uncertain' | 'releasing' | 'forbidden'
 interface Execution { receipt?: DraftReceipt, absent?: true }
+interface ExecuteOptions { immediate_sync?: boolean, before_publish?: (markdown: string) => boolean }
 
 /** Uses getRandomValues rather than newer randomUUID, including supported old engines. */
 export function draft_random_id(bytes = 16) {
@@ -29,7 +30,9 @@ export function useContentDraftStore(target: string | number | null) {
     const action_pending = ref(false)
     const reference_pending = ref(false)
     const recovery = ref('')
-    const message = ref('')
+    const operation_message = ref('')
+    const connection_message = ref('')
+    const message = computed(() => connection_message.value || operation_message.value)
     const review = shallowRef<{ text: string, token: string } | null>(null)
     const removed = ref(false)
     const initialized = computed(() => !! cloud.value)
@@ -38,7 +41,7 @@ export function useContentDraftStore(target: string | number | null) {
     const unpublished_changes = computed(() => unconfirmed_changes.value || !! cloud.value?.unpublished_changes)
     const clock = ref(0)
     let deadline = 0
-    const writable = computed(() => visible.value && phase.value === 'editing' && ! action_pending.value && ! reference_pending.value && clock.value < deadline)
+    const writable = computed(() => visible.value && phase.value === 'editing' && ! action_pending.value && clock.value < deadline)
     let api: DraftApi | null = null
     let current = () => false
     let apply_editor: ((before: string, result: ContentReferenceRewriteResult) => boolean) | null = null
@@ -47,6 +50,7 @@ export function useContentDraftStore(target: string | number | null) {
     let page_id = ''
     let seq = 0
     let generation = 0
+    let reset_generation = 0
     let pending: { command: DraftCommand, text: string | undefined } | null = null
     let flight: Promise<Execution | undefined> | null = null
     let release_task: Promise<void> | null = null
@@ -90,7 +94,8 @@ export function useContentDraftStore(target: string | number | null) {
       review.value = null
       removed.value = false
       blocked_text = null
-      message.value = ''
+      operation_message.value = ''
+      connection_message.value = ''
       phase.value = 'forbidden'
       request_pending.value = false
       action_pending.value = false
@@ -126,7 +131,7 @@ export function useContentDraftStore(target: string | number | null) {
       phase.value = 'readonly'
       cloud.value = snapshot
       replace_text(snapshot.markdown, snapshot.namespace_revision, snapshot.title_revision)
-      message.value = recovery.value ? '编辑权已变更，未上传文字仅保留在本页恢复区' : ''
+      operation_message.value = ''
     }
     function set_deadline(snapshot: ContentDraftSnapshot, started: number) {
       clock.value = now()
@@ -140,6 +145,8 @@ export function useContentDraftStore(target: string | number | null) {
       }, Math.max(0, deadline - now()))
     }
     async function accept(result: DraftResult, started: number, sent?: typeof pending) {
+      // A successful exchange clears the connection warning, including a keepalive without text.
+      connection_message.value = ''
       const snapshot = result.snapshot
       if (! snapshot) {
         clear()
@@ -147,7 +154,9 @@ export function useContentDraftStore(target: string | number | null) {
         return
       }
       if (! snapshot.owned && lease) {
-        if (result.receipt?.ok && result.receipt.kind === 'release' && sent?.text !== undefined && markdown.value === sent.text) {
+        if (sent?.command.kind === 'release' && result.receipt?.kind === 'release' && result.receipt.ok
+          && result.receipt.seq === sent.command.seq && markdown.value === sent.text) {
+          pending_text.value = false
           cloud.value = snapshot
           replace_text(snapshot.markdown, snapshot.namespace_revision, snapshot.title_revision)
         }
@@ -159,6 +168,8 @@ export function useContentDraftStore(target: string | number | null) {
       // matching receipt is known, including retries after a lost response.
       const reset = sent?.command.kind === 'reset' && result.receipt?.kind === 'reset'
         && result.receipt.seq === sent.command.seq && result.receipt.ok
+      if (reset)
+        reset_generation ++
       const unchanged = ! previous || reset || (sent?.text !== undefined
         ? result.receipt?.ok === true && markdown.value === sent.text
         : markdown.value === previous.markdown)
@@ -195,14 +206,14 @@ export function useContentDraftStore(target: string | number | null) {
         pending = null
         pending_text.value = false
         if (! receipt.ok) {
-          message.value = receipt.message ?? '草稿操作未完成'
+          operation_message.value = receipt.message ?? '草稿操作未完成'
           if (receipt.error === 'reference_review_required' && sent?.text !== undefined && receipt.review_token)
             review.value = { text: sent.text, token: receipt.review_token }
           if (sent?.text !== undefined)
             blocked_text = sent.text
         }
         else if (sent?.text !== undefined || receipt.kind !== 'sync') {
-          message.value = ''
+          operation_message.value = ''
           review.value = null
           blocked_text = null
         }
@@ -220,11 +231,15 @@ export function useContentDraftStore(target: string | number | null) {
           const result = await api!.rewrite(snapshot.story_id ?? 0, { markdown: text, base_namespace_revision, base_title_revision })
           if (! alive(owner))
             return
-          if (markdown.value !== text)
-            throw new Error('引用更新期间原文已变化，请重新核对草稿')
-          if (! result.baseline_unavailable.namespace && ! result.baseline_unavailable.title) {
-            if (apply_editor && ! apply_editor(text, result))
-              throw new Error('引用更新快照已变化，请重新核对草稿')
+          // A newer edit will sync against the same original revisions. Only
+          // apply a replay to the exact input from which its offsets were built.
+          if (markdown.value === text && ! result.baseline_unavailable.namespace && ! result.baseline_unavailable.title) {
+            applying = true
+            try {
+              if (apply_editor && ! apply_editor(text, result))
+                throw new Error('引用更新快照已变化，请重新核对草稿')
+            }
+            finally { applying = false }
             replace_text(result.markdown, result.namespace_revision, result.title_revision)
           }
           // A live lease still allows review of unreplayable input. Returning
@@ -252,7 +267,7 @@ export function useContentDraftStore(target: string | number | null) {
       pending_text.value = text !== undefined
       return pending
     }
-    async function execute_one(kind: DraftCommandKind = 'sync', confirmation?: string, expected_revision?: number): Promise<Execution | undefined> {
+    async function execute_one(kind: DraftCommandKind = 'sync', confirmation?: string, expected_revision?: number, options: ExecuteOptions = {}): Promise<Execution | undefined> {
       if (! api || ! alive() || ! cloud.value || (! visible.value && kind !== 'release'))
         return
       const owner = generation
@@ -296,10 +311,25 @@ export function useContentDraftStore(target: string | number | null) {
           if (! lease || phase.value !== 'editing')
             return
         }
-        if (! pending && kind === 'sync' && dirty.value && markdown.value !== blocked_text && ! action_pending.value && ! confirmation
+        if (! pending && kind === 'sync' && dirty.value && markdown.value !== blocked_text && ! action_pending.value && ! confirmation && ! options.immediate_sync
           && now() - last_save_started < settings.app.content.draft.saveThrottleMs) {
           schedule()
           return
+        }
+        if (! pending && kind === 'publish') {
+          const snapshot = cloud.value
+          if (! snapshot || dirty.value || review.value || reference_pending.value)
+            return
+          const { id, draft_revision, markdown: text } = snapshot
+          if (options.before_publish && ! options.before_publish(text))
+            return
+          // No await may separate this check from creation of the publish
+          // command. A lease refresh above may have supplied different text.
+          if (! alive(owner) || ! visible.value || ! lease || phase.value !== 'editing' || reference_pending.value
+            || dirty.value || markdown.value !== text || cloud.value?.id !== id
+            || cloud.value?.draft_revision !== draft_revision || cloud.value?.markdown !== text) {
+            return
+          }
         }
         const sent = pending ?? make_command(kind, confirmation, expected_revision)
         if (sent.text !== undefined && kind === 'sync')
@@ -319,7 +349,7 @@ export function useContentDraftStore(target: string | number | null) {
             || (pending?.command.kind === 'reset' && cloud.value?.story_id === null)
           clear()
           removed.value = status === 404
-          message.value = status === 404 ? '云端草稿已删除' : '当前身份无权访问云端草稿'
+          operation_message.value = status === 404 ? '云端草稿已删除' : '当前身份无权访问云端草稿'
           // An absent target completes deletion, including a lost delete reply.
           // This observes absence; it does not invent a stored command receipt.
           if (status === 404 && deleting)
@@ -327,7 +357,7 @@ export function useContentDraftStore(target: string | number | null) {
         }
         else {
           phase.value = 'uncertain'
-          message.value = error instanceof Error ? error.message : '连接中断，已暂停编辑'
+          connection_message.value = error instanceof Error ? error.message : '连接中断，已暂停编辑'
         }
         throw error
       }
@@ -336,10 +366,10 @@ export function useContentDraftStore(target: string | number | null) {
           request_pending.value = false
       }
     }
-    function execute(kind: DraftCommandKind = 'sync', confirmation?: string, expected_revision?: number) {
+    function execute(kind: DraftCommandKind = 'sync', confirmation?: string, expected_revision?: number, options: ExecuteOptions = {}) {
       if (flight)
         return flight
-      const task = execute_one(kind, confirmation, expected_revision).finally(() => {
+      const task = execute_one(kind, confirmation, expected_revision, options).finally(() => {
         if (flight === task)
           flight = null
       })
@@ -355,6 +385,22 @@ export function useContentDraftStore(target: string | number | null) {
       await execute()
       if (alive(owner) && dirty.value && phase.value === 'editing')
         schedule()
+    }
+    async function flush_changes(signal: AbortSignal) {
+      const owner = generation
+      while (alive(owner) && ! signal.aborted && unconfirmed_changes.value) {
+        if (flight) {
+          const result = await flight
+          if (result?.receipt?.ok === false)
+            return
+          continue
+        }
+        if (! visible.value || ! lease || action_pending.value || markdown.value === blocked_text)
+          return
+        const result = await execute('sync', undefined, undefined, { immediate_sync: true })
+        if (! result?.receipt?.ok)
+          return
+      }
     }
     async function open(input: { id?: string, story_id?: number }) {
       const owner = generation
@@ -374,8 +420,8 @@ export function useContentDraftStore(target: string | number | null) {
         void wake().catch(() => {})
       }, delay)
     }
-    async function action(kind: 'publish' | 'reset' | 'delete', expected_revision?: number) {
-      if (! writable.value || action_pending.value)
+    async function action(kind: 'publish' | 'reset' | 'delete', expected_revision?: number, before_publish?: (markdown: string) => boolean) {
+      if (! writable.value || reference_pending.value)
         return
       action_pending.value = true
       stop_timer()
@@ -390,7 +436,7 @@ export function useContentDraftStore(target: string | number | null) {
           if (dirty.value || pending || review.value || ! lease || phase.value !== 'editing')
             return
         }
-        const result = await execute(kind, undefined, expected_revision)
+        const result = await execute(kind, undefined, expected_revision, { before_publish })
         return result?.absent === true
           || (result?.receipt?.kind === kind && result.receipt.ok)
       }
@@ -415,7 +461,8 @@ export function useContentDraftStore(target: string | number | null) {
           return
         blocked_text = null
         review.value = null
-        await execute('sync', token)
+        const result = await execute('sync', token)
+        return result?.receipt?.kind === 'sync' && result.receipt.ok
       }
       finally {
         if (alive(owner))
@@ -434,22 +481,27 @@ export function useContentDraftStore(target: string | number | null) {
       if (! lease || release_task)
         return
       phase.value = 'releasing'
-      release_task = (async () => {
+      const owner = generation
+      const task = (async () => {
         try {
           if (flight)
-            await flight
+            await flight.catch(() => {})
+          if (! alive(owner))
+            return
           if (pending)
             await execute('release')
-          if (lease && ! pending)
+          if (alive(owner) && lease && ! pending)
             await execute('release')
         }
         catch {}
-        finally {
+      })().finally(() => {
+        if (release_task === task) {
           release_task = null
-          if (visible.value && alive())
+          if (visible.value && alive(owner))
             void cycle().catch(() => {})
         }
-      })()
+      })
+      release_task = task
     }
     function check_writable() {
       clock.value = now()
@@ -458,13 +510,14 @@ export function useContentDraftStore(target: string | number | null) {
       return writable.value
     }
     function can_write_now() {
-      return visible.value && phase.value === 'editing' && ! action_pending.value && ! reference_pending.value && now() < deadline
+      return ! applying && visible.value && phase.value === 'editing' && ! action_pending.value && now() < deadline
     }
     function capture_write_permit() {
       const allowed = can_write_now()
       const owner = generation
       const epoch = lease?.epoch
-      return () => allowed && alive(owner) && lease?.epoch === epoch && can_write_now()
+      const reset = reset_generation
+      return () => allowed && alive(owner) && lease?.epoch === epoch && reset === reset_generation && can_write_now()
     }
     watch(markdown, () => {
       if (applying)
@@ -476,7 +529,7 @@ export function useContentDraftStore(target: string | number | null) {
       schedule()
     }, { flush: 'sync' })
     return { markdown, cloud, phase, visible, writable, initialized, dirty, unconfirmed_changes, unpublished_changes, request_pending, action_pending, reference_pending, recovery, message, review, removed,
-      configure, clear, open, cycle, action, confirm_review, set_visible, check_writable,
+      configure, clear, open, cycle, flush_changes, action, confirm_review, set_visible, check_writable,
       can_write_now, capture_write_permit,
       owns: (owner: number) => owner === generation, set_cycle_trigger: (trigger: () => Promise<unknown>) => { wake = trigger } }
   })()

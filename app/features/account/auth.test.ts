@@ -68,9 +68,10 @@ describe('account authentication flow', () => {
   it('owns challenge, pending state and successful identity application', async () => {
     let complete_login!: (value: { user: LoginUser }) => void
     const result = { user: current_user }
+    const phone_result = { ... result, needs_password_setup: true as const }
     const auth = {
       login_with_password: vi.fn(() => new Promise<{ user: LoginUser }>(resolve => complete_login = resolve)),
-      login_with_phone: vi.fn(async () => result),
+      login_with_phone: vi.fn(async () => phone_result),
       register: vi.fn(async () => result),
       send_otp: vi.fn(async () => {}),
     }
@@ -87,14 +88,21 @@ describe('account authentication flow', () => {
     expect(flow.pending.value).toBe(true)
     await Promise.resolve()
     complete_login(result)
-    await expect(login).resolves.toBe(true)
+    await expect(login).resolves.toBe(result)
     expect(flow.pending.value).toBe(false)
     expect(auth.login_with_password).toHaveBeenCalledWith({ username_or_phone: 'user', password: 'secret', captcha_verify_param: 'verified' })
     expect(apply_auth).toHaveBeenCalledWith(result)
 
     await flow.send_otp('13800000000', 'login')
     expect(auth.send_otp).toHaveBeenCalledWith({ phone: '13800000000', purpose: 'login', captcha_verify_param: 'verified' })
-    expect(toast.info).toHaveBeenCalledWith('验证码发送成功！')
+    expect(toast.info).toHaveBeenCalledWith('验证码已发送！')
+
+    // The submit-time challenge is sent along, so the server can verify it too.
+    await expect(flow.login_with_phone({ phone: '13800000000', otp: '123456' })).resolves.toBe(phone_result)
+    expect(auth.login_with_phone).toHaveBeenCalledWith({ phone: '13800000000', otp: '123456', captcha_verify_param: 'verified' })
+    const registration = { username: 'newbie', phone: '13800000000', password: 'Example!123', confirm_password: 'Example!123', otp: '123456' }
+    await flow.register(registration)
+    expect(auth.register).toHaveBeenCalledWith({ ... registration, captcha_verify_param: 'verified' })
   })
 
   it('reports a rejected login without replacing identity', async () => {

@@ -7,7 +7,8 @@ try {
   console.log(JSON.stringify(await get_background_status(), null, 2))
   if (process.argv.includes('--storage-findings')) {
     const { get_storage_audit_findings } = await import('@server/services/storage-audit/service')
-    console.log(JSON.stringify({ storage_audit_findings: await get_storage_audit_findings({ after_id: 0, limit: 100 }) }, null, 2))
+    const { rows } = await get_storage_audit_findings({ page: 1, page_size: 100 })
+    console.log(JSON.stringify({ storage_audit_findings: rows }, null, 2))
   }
 }
 catch {

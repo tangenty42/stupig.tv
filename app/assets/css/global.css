@@ -2,9 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Shared by homepage/header Vue covers and Markdown story reference cards. */
+@media (prefers-reduced-motion: no-preference) {
+  .site-page-enter-active {
+    transition: opacity 300ms ease-out;
+  }
+
+  .site-page-leave-active {
+    pointer-events: none;
+    transition: opacity 180ms ease-in;
+  }
+
+  .site-page-enter-from,
+  .site-page-leave-to {
+    opacity: 0;
+  }
+}
+
+/* Shared by story cards, media frames and their placeholders. */
+:root {
+  --content-card-surface: theme('colors.slate.100');
+  --content-accent-neutral: theme('colors.slate.400');
+  --content-accent-private: theme('colors.amber.600');
+  --content-accent-redacted: theme('colors.sky.600');
+  --image-state-duration: 450ms;
+  --image-state-easing: ease;
+  --image-reveal-duration: 1400ms;
+  --image-breathe-duration: 2200ms;
+}
+
+.dark {
+  --content-card-surface: theme('colors.slate.800');
+  --content-accent-neutral: theme('colors.slate.500');
+  --content-accent-private: theme('colors.amber.400');
+  --content-accent-redacted: theme('colors.sky.400');
+}
+
+.content-accent-neutral {
+  color: var(--content-accent-neutral);
+}
+
+.content-accent-private {
+  color: var(--content-accent-private);
+}
+
+.content-accent-redacted {
+  color: var(--content-accent-redacted);
+}
+
+.img-frame {
+  background-color: var(--content-card-surface);
+}
+
+.img-frame[data-image-loaded]:not(.iframe-frame) {
+  --image-state-duration: var(--image-reveal-duration);
+  --image-state-easing: ease-in-out;
+}
+
+/* Shared by list covers, story headers and Markdown story reference cards. */
 .content-cover {
-  @apply relative block w-full overflow-hidden bg-slate-200 dark:bg-slate-700;
+  @apply relative block w-full overflow-hidden;
+}
+
+.content-cover[aria-busy] {
+  @apply min-h-32;
+}
+
+.content-cover-constrained[aria-busy] {
+  @apply min-w-32;
 }
 
 .content-cover > img {
@@ -15,18 +79,19 @@
 .img-frame > img {
   @apply relative z-[1] block;
   opacity: 0;
-  transition: opacity 450ms ease, filter 300ms ease;
+  transition: opacity var(--image-opacity-duration, var(--image-state-duration)) var(--image-state-easing), filter 300ms ease;
 }
 
 .img-frame.iframe-frame > iframe {
   @apply relative z-[1] block;
   opacity: 0;
-  transition: opacity 450ms ease;
+  transition: opacity var(--image-state-duration) ease;
 }
 
 .img-frame.iframe-frame::before {
   content: '';
-  @apply pointer-events-none absolute inset-0 bg-slate-200 dark:bg-slate-700;
+  @apply pointer-events-none absolute inset-0;
+  background-color: var(--content-card-surface);
   animation: image-placeholder-breathe 1.5s ease-in-out infinite;
 }
 
@@ -37,7 +102,7 @@
 /* Markdown images are buttons, so their transition must also win over the
    global control transition without overriding the loaded opacity. */
 html .img-frame > img[role='button'] {
-  transition: opacity 450ms ease, filter 300ms ease;
+  transition: opacity var(--image-opacity-duration, var(--image-state-duration)) var(--image-state-easing), filter 300ms ease;
 }
 
 .content-cover-constrained {
@@ -48,17 +113,59 @@ html .img-frame > img[role='button'] {
   @apply max-h-60 w-auto max-w-full;
 }
 
-.img-frame[data-lqip]::before {
+/* CSS auto dimensions lose the unloaded image's HTML aspect hint in older
+   engines. Size the frame before the image has intrinsic dimensions. */
+.content-cover[data-image-sized][aria-busy] {
+  min-width: 0;
+  min-height: 0;
+}
+
+.content-cover-constrained[data-image-sized][aria-busy] {
+  width: min(var(--content-image-width), calc(theme('spacing.60') * var(--content-image-ratio)));
+}
+
+.img-frame[data-image-sized][aria-busy] > img {
+  @apply absolute inset-0;
+}
+
+.img-frame[data-image-sized][aria-busy]::after {
   content: '';
-  @apply pointer-events-none absolute inset-0;
+  display: block;
+  padding-top: calc(100% / var(--content-image-ratio));
+}
+
+/* The opaque placeholder sits on top of the ready image. Fading this one
+   layer reveals the image in the same proportion without exposing the page. */
+.img-frame[data-lqip] {
+  --image-opacity-duration: 0ms;
+}
+
+.img-frame[data-lqip] > img {
+  background-color: var(--content-card-surface);
+}
+
+.img-frame > .image-lqip {
+  @apply pointer-events-none absolute inset-0 z-[1] overflow-hidden;
+  background-color: var(--content-card-surface);
+  transition: opacity var(--image-state-duration) var(--image-state-easing);
+}
+
+.img-frame > .image-lqip::before {
+  content: '';
+  @apply absolute inset-0;
   background: var(--content-lqip) center / cover no-repeat;
   filter: blur(0.5rem);
   transform: scale(1.05);
-  transition: opacity 200ms ease;
-  animation: image-placeholder-breathe 1.5s ease-in-out infinite;
+  animation: image-placeholder-breathe var(--image-breathe-duration) ease-in-out infinite;
 }
 
-.img-frame[data-lqip][data-image-loaded]::before {
+.img-frame[data-image-loaded] > .image-lqip,
+.img-frame[data-image-error] > .image-lqip {
+  opacity: 0;
+}
+
+.img-frame[data-image-loaded] > .image-lqip::before,
+.img-frame[data-image-error] > .image-lqip::before {
   animation-play-state: paused;
 }
 
@@ -67,12 +174,32 @@ html .img-frame > img[role='button'] {
   50% { filter: blur(0.5rem) opacity(1); }
 }
 
-.img-frame > .image-loading-mask {
-  @apply pointer-events-none absolute inset-0 z-[2] flex items-center justify-center bg-slate-100/30 text-xl text-slate-500 dark:bg-slate-900/30 dark:text-slate-400;
-  transition: opacity 450ms ease, visibility 0s linear 450ms;
+.img-frame > .image-loading-mask,
+.viewer-canvas > .image-loading-mask {
+  @apply pointer-events-none absolute inset-0 z-[2] flex items-center justify-center text-xl text-slate-800 dark:text-white;
+  transition: opacity var(--image-state-duration) var(--image-state-easing), visibility 0s linear;
 }
 
-.img-frame > .image-loading-mask .iconify {
+/* Hold the fallback box until load settles, even if the browser discovers
+   intrinsic dimensions early while downloading an image without size hints. */
+.img-frame[aria-busy] > img:not([width]) {
+  @apply absolute top-0 left-0 h-full w-full;
+}
+
+.img-frame[aria-busy] > img:not([width]) ~ .image-loading-mask {
+  @apply relative h-32 min-w-32;
+}
+
+.img-frame > .image-loading-mask::before,
+.viewer-canvas > .image-loading-mask::before {
+  content: '';
+  @apply absolute h-9 w-9 rounded-full;
+  background-color: var(--content-card-surface);
+}
+
+.img-frame > .image-loading-mask .iconify,
+.viewer-canvas > .image-loading-mask .iconify {
+  @apply relative;
   animation: image-loading-spin 1s linear infinite;
 }
 
@@ -80,38 +207,40 @@ html .img-frame > img[role='button'] {
   to { transform: rotate(360deg); }
 }
 
-.img-frame[data-image-loaded] > .image-loading-mask {
+.img-frame[data-image-loaded] > .image-loading-mask,
+.img-frame[data-image-error] > .image-loading-mask {
   opacity: 0;
   visibility: hidden;
+  transition-delay: 0s, var(--image-state-duration);
 }
 
-.img-frame[data-image-error] > .image-loading-mask {
-  @apply invisible opacity-0;
-  transition: none;
-}
-
-/* Keep the placeholder opaque underneath until the image has faded in. */
-.img-frame[data-lqip][data-image-loaded]::before {
-  opacity: 0;
-  transition: opacity 150ms ease 450ms;
-}
-
-.img-frame[data-lqip][data-image-error]::before {
-  opacity: 0;
-  transition: none;
-}
-
+.img-frame[data-lqip][data-image-ready] > img,
 .img-frame[data-image-loaded] > img,
 .img-frame.iframe-frame[data-image-loaded] > iframe {
   opacity: 1;
 }
 
 .img-frame > .image-unavailable {
-  @apply hidden;
+  @apply pointer-events-none invisible absolute inset-0 flex opacity-0;
+  transition: opacity var(--image-state-duration) ease, visibility 0s linear var(--image-state-duration);
 }
 
-.content-cover > .image-unavailable {
-  @apply aspect-video w-full min-w-32 items-center justify-center text-3xl text-slate-400 dark:text-slate-500;
+.image-unavailable:not(.content-placeholder) {
+  @apply items-center justify-center text-3xl text-slate-500 dark:text-slate-400;
+}
+
+.img-frame > .image-unavailable:not(.content-placeholder) {
+  @apply w-64 max-w-full;
+}
+
+.content-cover:not(.content-cover-constrained) > .image-unavailable {
+  @apply w-full;
+}
+
+/* The zero-width spacer reserves a 16:9 box, including in older browsers. */
+.img-frame > .image-unavailable:not(.content-placeholder)::before {
+  content: '';
+  padding-top: 56.25%;
 }
 
 .img-frame[data-image-error] > img {
@@ -119,18 +248,26 @@ html .img-frame > img[role='button'] {
 }
 
 .img-frame[data-image-error] > .image-unavailable {
-  @apply flex;
+  @apply visible relative inset-auto opacity-100;
+  transition-delay: 0s;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --image-state-duration: 0ms;
+    --image-reveal-duration: 0ms;
+  }
+
   .img-frame > img,
   .img-frame.iframe-frame > iframe,
   .img-frame.iframe-frame::before,
   html .img-frame > img[role='button'],
-  .img-frame[data-lqip]::before,
-  .img-frame[data-lqip][data-image-loaded]::before,
+  .img-frame > .image-lqip,
+  .img-frame > .image-lqip::before,
   .img-frame > .image-loading-mask,
-  .img-frame > .image-loading-mask .iconify {
+  .img-frame > .image-unavailable,
+  .img-frame > .image-loading-mask .iconify,
+  .viewer-canvas > .image-loading-mask .iconify {
     transition: none;
     animation: none;
   }
@@ -202,19 +339,19 @@ html [role='option'] {
 .content-item-muted > .content-item-icon,
 .content-item-muted > .content-item-title,
 .content-item-muted > .cm-completionLabel {
-  @apply text-slate-400 dark:text-slate-500;
+  color: var(--content-accent-neutral);
 }
 
 .content-item-private > .content-item-icon,
 .content-item-private > .content-item-title,
 .content-item-private > .cm-completionLabel {
-  @apply text-amber-600 dark:text-amber-400;
+  color: var(--content-accent-private);
 }
 
 .content-item-redacted > .content-item-icon,
 .content-item-redacted > .content-item-title,
 .content-item-redacted > .cm-completionLabel {
-  @apply text-sky-600 dark:text-sky-400;
+  color: var(--content-accent-redacted);
 }
 
 .content-item-active > .content-item-icon,
@@ -352,14 +489,9 @@ html [role='option'] {
     transform: translateY(30px);
   }
 
-  /* Faint diagonal rating-badge watermark behind a block's content: one
-     oversized tiled layer rotated to run ↗, clipped by the block's
-     overflow clip and faded out at its edges. Set --watermark-url inline
-     to enable; light mode darkens the tiles so pale badges (gray 拉完了,
-     yellow 人上人) stay readable. */
+  /* Clip the oversized diagonal rating layer behind the content. */
   .watermark {
     @apply relative;
-    /* clip keeps the oversized ::before tile layer inside the block's box. */
     overflow: clip;
   }
 
@@ -370,21 +502,7 @@ html [role='option'] {
     }
   }
 
-  .watermark::before {
-    content: '';
-    @apply pointer-events-none absolute opacity-[0.035] dark:opacity-[0.07] dark:brightness-125;
-    inset: -60%;
-    background-image: var(--watermark-url, none);
-    background-repeat: repeat;
-    background-size: 10rem auto;
-    transform: rotate(-30deg);
-    filter: brightness(0.1);
-    /* The layer box is 2.2× the block, so the block's edge sits at ~46% of
-       it — the mask fades the tiles out right at the block's edges. */
-    mask-image: radial-gradient(ellipse 46% 46% at 50% 50%, #000 20%, transparent 100%);
-  }
-
-  .watermark > * {
+  .watermark > :not(.story-watermark-image) {
     @apply relative;
   }
 

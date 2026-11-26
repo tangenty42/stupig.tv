@@ -1,32 +1,45 @@
 import { useToast } from 'primevue/usetoast'
 
 const TOAST_LIFE = 3000
-let deadly = false
+
+interface ToastDetailWithBadge {
+  before: string
+  badge: string
+  after: string
+}
 
 export function useMyToast() {
   const toast = useToast()
+  const muted = useState('toast-muted', () => false)
 
-  function error(title_or_error: unknown) {
-    const msg = error_message(title_or_error)
-    if (deadly || ! msg) {
+  function show_error(detail: string | readonly ToastDetailWithBadge[]) {
+    if (muted.value || ! detail.length) {
       return
     }
 
     onNuxtReady(() => toast.add({
-      detail: msg,
+      detail,
       life: TOAST_LIFE,
       severity: 'warn',
       summary: '出错了',
     }))
   }
 
-  function ok(title: string) {
-    if (deadly) {
+  function error(title_or_error: unknown) {
+    show_error(error_message(title_or_error))
+  }
+
+  function grouped_error(details: readonly ToastDetailWithBadge[]) {
+    show_error(details)
+  }
+
+  function ok(detail: string | ToastDetailWithBadge) {
+    if (muted.value) {
       return
     }
 
     onNuxtReady(() => toast.add({
-      detail: title,
+      detail,
       life: TOAST_LIFE,
       severity: 'success',
       summary: '搞定',
@@ -34,7 +47,7 @@ export function useMyToast() {
   }
 
   function info(title: string) {
-    if (deadly) {
+    if (muted.value) {
       return
     }
 
@@ -47,7 +60,7 @@ export function useMyToast() {
   }
 
   function dead() {
-    deadly = true
+    muted.value = true
   }
 
   function clear() {
@@ -56,6 +69,7 @@ export function useMyToast() {
 
   return {
     error,
+    grouped_error,
     ok,
     info,
     dead,

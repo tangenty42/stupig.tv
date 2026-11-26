@@ -14,7 +14,7 @@ export function useContentUploadsStore(scope: number) {
   return defineStore(`content-uploads:${scope}`, () => {
     const { content } = useApi()
     const user = useCookie<LoginUser | null>(settings.app.auth.cookie.userName)
-    const identity_key = computed(() => `${user.value?.id ?? 'anonymous'}:${has_permission(user.value, 'content_manage', 'full')}:${has_permission(user.value, 'content_private', 'read')}`)
+    const identity_key = computed(() => `${user.value?.id ?? 'anonymous'}:${has_permission(user.value, 'content_access', 'full')}:${has_permission(user.value, 'content_access', 'private_read')}`)
     const resource = createContentUploadResource(scope)
     const workspace = useState<ContentAttachmentWorkspace | null>(`content_attachment_workspace:${scope}`, () => null)
     const sessions = computed(() => resource.state.value.sessions)
@@ -55,7 +55,7 @@ export function useContentUploadsStore(scope: number) {
       is_paused: id => runtime.paused.has(id),
       resume,
     })
-    const { preparations, can_cancel_preparation, cancel_preparation, resolution, admission_error, admitting, submit, dismiss_resolution, start } = admission
+    const { preparations, can_cancel_preparation, cancel_preparation, resolution, privacy_confirmation, admission_error, admitting, submit, dismiss_resolution, confirm_privacy, dismiss_privacy, start } = admission
     const busy = computed(() => admitting.value || active.size > 0)
     function apply_list(value: { enabled: boolean, sessions: ContentUploadSession[], reservations?: ContentUploadReservation[] }, epoch = generation) {
       if (epoch !== generation)
@@ -74,6 +74,6 @@ export function useContentUploadsStore(scope: number) {
     }
     // Pinia's own effect scope survives the component that first created it.
     watch(identity_key, reset, { flush: 'sync' })
-    return { identity_key, snapshot_epoch, enabled, loaded, sessions, reservations, progress, errors, active, queued, finalizing, preparations, can_cancel_preparation, cancel_preparation, busy, resolution, admission_error, admitting, submit, dismiss_resolution, has_file, apply_list, start, resume, pause, cancel, reset }
+    return { identity_key, snapshot_epoch, enabled, loaded, sessions, reservations, progress, errors, active, queued, finalizing, preparations, can_cancel_preparation, cancel_preparation, busy, resolution, privacy_confirmation, admission_error, admitting, submit, dismiss_resolution, confirm_privacy, dismiss_privacy, has_file, apply_list, start, resume, pause, cancel, reset }
   })()
 }

@@ -120,6 +120,7 @@
 <script setup lang="ts">
 import type { FormInstance, FormSubmitEvent } from '@primevue/forms'
 import type { Profile } from '@shared/types/user'
+import type { RefinementCtx } from 'zod'
 import { Form } from '@primevue/forms'
 import { zodResolver } from '@primevue/forms/resolvers/zod'
 import { form_default, form_schema } from '@shared/schemas'
@@ -156,16 +157,13 @@ const new_phone = computed(() => String(phone_form.value?.getFieldState('new_pho
 const password_resolver = zodResolver(form_schema.profile_change_password)
 const password_otp_resolver = zodResolver(form_schema.profile_change_password_by_otp)
 const operate_password_resolver = zodResolver(form_schema.profile_operate_password_reset)
-const operate_phone_resolver = zodResolver(form_schema.profile_operate_phone_change.superRefine(({ new_phone }, context) => {
+function require_changed_phone({ new_phone }: { new_phone: string }, context: RefinementCtx) {
   if (new_phone === profile.value.phone) {
     context.addIssue({ code: 'custom', message: '如改！', path: ['new_phone'] })
   }
-}))
-const phone_resolver = zodResolver(form_schema.profile_change_phone.superRefine(({ new_phone }, context) => {
-  if (new_phone === profile.value.phone) {
-    context.addIssue({ code: 'custom', message: '如改！', path: ['new_phone'] })
-  }
-}))
+}
+const operate_phone_resolver = zodResolver(form_schema.profile_operate_phone_change.superRefine(require_changed_phone))
+const phone_resolver = zodResolver(form_schema.profile_change_phone.superRefine(require_changed_phone))
 
 function scroll_to_phone_form() {
   scroll_to(phone_form_section.value?.el)

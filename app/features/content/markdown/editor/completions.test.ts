@@ -5,7 +5,7 @@ import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
 import { attachment_item_presentation, folder_item_presentation } from '~/features/content/attachments/presentation'
 import { project_workspace_rows } from '~/features/content/attachments/workspace-model'
-import { compare_reference_completions, reference_completion_source } from './completions'
+import { compare_reference_completions, completion_source_messages, label_completion_source, reference_completion_source } from './completions'
 import { editor_close_brackets, editor_markdown_lang } from './language'
 
 function attachment(file_name: string, is_image: boolean): ContentStoryAttachment {
@@ -52,13 +52,72 @@ function labels(doc: string) {
 }
 
 describe('attachment destination completion', () => {
-  it('keeps default basenames in sync when completion replaces a destination, without changing custom labels', () => {
-    expect(apply('![1.png](att://cards/1.png', '2.png', ')').doc).toBe('![2.png](att://cards/2.png)')
-    expect(apply('[cards/1.png](att://cards/1.png', '2.png', ')').doc).toBe('[cards/2.png](att://cards/2.png)')
+  it.each([
+    ['@', ['档案来源暂不可用', '附件来源暂不可用']],
+    ['[](att://', ['附件来源暂不可用']],
+    ['[](content://', ['档案来源暂不可用']],
+    ['---\nlabel: existing', ['档案来源暂不可用']],
+    ['label: #', []],
+    ['label: existing', []],
+    ['---\ntitle: Test\n---\nlabel: existing', []],
+    ['```yaml\nlabel: existing', []],
+    ['<pre>\nlabel: existing', []],
+    ['> [!N', []],
+    ['just prose', []],
+    ['```md\n@', []],
+    ['`@', []],
+  ])('only names unavailable sources relevant to %s', (doc, expected) => {
+    const state = EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [editor_markdown_lang] })
+    const sources = { stories: () => stories, story_id: () => 1, attachments: () => attachments, folders: () => folders }
+    expect(completion_source_messages(state, sources)).toEqual([])
+    expect(completion_source_messages(state, { ... sources, stories_failure: () => 'load', attachments_failure: () => 'load' })).toEqual(expected)
+  })
+
+  it.each([
+    ['---\nlabel: #', true],
+    ['---\ntitle: Test\nlabel: #', true],
+    ['label: #', false],
+    ['---\ntitle: Test\n---\nlabel: #', false],
+    ['```yaml\nlabel: #', false],
+    ['<pre>\nlabel: #', false],
+  ] as const)('completes labels only inside the initial Front Matter: %s', (doc, expected) => {
+    const state = EditorState.create({ doc, extensions: [editor_markdown_lang] })
+    const complete = label_completion_source({ stories: () => stories, story_id: () => 1, attachments: () => [], folders: () => [] })
+    const result = complete(new CompletionContext(state, doc.length, false))
+    expect(result?.options.some(option => option.label === '#置顶') ?? false).toBe(expected)
+  })
+
+  it('preserves labels even when they match the previous destination', () => {
+    expect(apply('![1.png](att://cards/1.png', '2.png', ')').doc).toBe('![1.png](att://cards/2.png)')
+    expect(apply('[cards/1.png](att://cards/1.png', '2.png', ')').doc).toBe('[cards/1.png](att://cards/2.png)')
     expect(apply('![说明：1.png](att://cards/1.png', '2.png', ')').doc).toBe('![说明：1.png](att://cards/2.png)')
     expect(apply('![](att://cards/1.png', '2.png', ')').doc).toBe('![](att://cards/2.png)')
-    const next = apply('![1.png](att://cards/1.png', '10.png', ')')
-    expect(next.cursor).toBe(next.doc.length)
+    expect(apply('[档案1](content://档案1', '档案2', ')').doc).toBe('[档案1](content://档案2)')
+  })
+  it('keeps the caption when completing a path inside a matching private folder', () => {
+    const file_name = 'CS.8_Objects_pt.3.1.docx'
+    const private_source = reference_completion_source({
+      stories: () => [],
+      story_id: () => 1,
+      attachments: () => [{ ... attachment(`111.good/${file_name}`, false), is_private: true }],
+      folders: () => ['111.good'],
+    })
+    const doc = `![111](att://111.good/${file_name})`
+    expect(apply('![111](att://111.good/', file_name, ')', private_source)).toEqual({ doc, cursor: doc.length })
+  })
+  it('replaces the whole destination, eating a leftover extension after the cursor', () => {
+    // `this_is_a_file_|.png` — the cursor sits before the old `.png`; picking
+    // another file must replace the entire destination, not just the stem.
+    expect(apply('![](att://cards/1', '2.png', '.png)').doc).toBe('![](att://cards/2.png)')
+    expect(apply('[](att://cards/1', '2.png', '.png)').doc).toBe('[](att://cards/2.png)')
+    expect(apply('![1.png](att://cards/1', '2.png', '.png)').doc).toBe('![1.png](att://cards/2.png)')
+    expect(apply('![说明：1.png](att://cards/1', '2.png', '.png)').doc).toBe('![说明：1.png](att://cards/2.png)')
+    // An unclosed destination swallows its tail too and gains the paren.
+    expect(apply('[](att://cards/1', '2.png', '.png more text').doc).toBe('[](att://cards/2.png) more text')
+    // The tail never crosses the line end.
+    expect(apply('[](att://cards/1', '2.png', '.png\nnext line').doc).toBe('[](att://cards/2.png)\nnext line')
+    // Folder picks land before the closing paren, leftovers or not.
+    expect(apply('[](att://car', 'cards', 'ds/1.png)')).toEqual({ doc: '[](att://cards)', cursor: '[](att://cards'.length })
   })
   it('uses the workspace directory order in both source options and CodeMirror comparisons', () => {
     const files = ['10.txt', '2.txt', '1.txt'].map(name => attachment(name, false))
@@ -116,8 +175,8 @@ describe('attachment destination completion', () => {
     const result = private_source(new CompletionContext(state, 1, false))!
     expect(result.options.map(option => option.label)).toEqual(['@a-denied.pdf.good', '@b-public.txt', '@c-private.png.good'])
     expect(result.options.every(option => option.section === result.options[0]?.section)).toBe(true)
-    expect(result.options[0]).toMatchObject({ type: 'encrypted-denied', presentation: { icon: 'lucide:lock', tone: 'private' } })
-    expect(result.options[2]).toMatchObject({ type: 'encrypted', presentation: { icon: 'lucide:lock', tone: 'private' } })
+    expect(result.options[0]).toMatchObject({ type: 'private-denied', presentation: { icon: 'lucide:file-text', tone: 'private' } })
+    expect(result.options[2]).toMatchObject({ type: 'private', presentation: { icon: 'lucide:file-image', tone: 'private' } })
     expect(apply('@', '@c-private.png.good', '', private_source).doc).toBe('![](att://c-private.png.good)')
     expect(apply('@', '@a-denied.pdf.good', '', private_source).doc).toBe('[](att://a-denied.pdf.good)')
     expect(apply('[](att://', 'c-private.png.good', ')', private_source).doc).toBe('[](att://c-private.png.good)')

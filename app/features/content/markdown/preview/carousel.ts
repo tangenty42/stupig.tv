@@ -1,6 +1,6 @@
 import { carousel_motion } from './carousel-motion'
 
-// Image carousel post-render wiring for a rendered story body. Each carousel
+// Carousel post-render wiring for a rendered story body. Each carousel
 // gets its own scroll listener plus direct button clicks — no event
 // delegation and no `disabled` toggling, so a button can never get stuck
 // inert; visibility is driven purely by a data attribute recomputed from the
@@ -13,38 +13,54 @@ interface CarouselSnapshot {
   hint: boolean
 }
 
-// v-html re-renders replace the whole story body on every edit; without a
+// Preview patches and remounts can replace a carousel; without a
 // snapshot each keystroke would reset scroll position, nav visibility, and
 // the dismissed first-scroll hint, flickering the buttons. Keyed by content
-// so entries match the same carousel across re-renders.
+// so entries match the same carousel across re-renders. Bound retention as
+// editing ordinary text produces new content keys.
 const carousel_snapshots = new Map<string, CarouselSnapshot>()
+const carousel_snapshot_limit = 32
 
-// Runtime markers drift after setup. Use destination identities instead;
-// card-only and iframe-only strips must not all share an empty image key.
-function carousel_key(carousel: HTMLElement) {
-  const destinations = [... carousel.querySelectorAll('img, iframe, a[href], [data-folder-card]')]
-    .map(element => [element.tagName, element.getAttribute('src') ?? element.getAttribute('href') ?? element.getAttribute('data-folder-card')])
-  return JSON.stringify(destinations.length ? destinations : [carousel.textContent])
+// Include ordinary Markdown alongside media, but omit runtime-only overlays
+// and controls. A nested shell is one content node, distinct from its own strip.
+function carousel_content_identity(node: Node): unknown {
+  if (node.nodeType === 3)
+    return ['text', node.nodeValue]
+  if (node.nodeType !== 1)
+    return null
+  const element = node as Element
+  if (['carousel-nav', 'carousel-space', 'carousel-end-anchor', 'image-loading-mask', 'image-lqip', 'long-img-cover'].some(name => element.classList.contains(name))
+    || element.hasAttribute('data-story-heading-spacer')) {
+    return null
+  }
+  if (element.classList.contains('carousel-shell')) {
+    const nested = element.querySelector(':scope > .image-carousel')
+    return ['carousel', nested ? Array.from(nested.childNodes, carousel_content_identity).filter(value => value !== null) : []]
+  }
+  const attributes = ['src', 'href', 'data-folder-card', 'alt', 'title', 'type']
+    .flatMap(name => element.hasAttribute(name) ? [[name, element.getAttribute(name)]] : [])
+  return [element.tagName, attributes, Array.from(element.childNodes, carousel_content_identity).filter(value => value !== null)]
 }
 
-function update_carousel_navs(carousel: HTMLElement, restore_left = 0) {
-  const shell = carousel.closest('.carousel-shell')
-  const prev = shell?.querySelector<HTMLElement>('.carousel-prev')
-  const next = shell?.querySelector<HTMLElement>('.carousel-next')
-  if (! prev || ! next) {
-    return
-  }
+function carousel_key(carousel: HTMLElement) {
+  return JSON.stringify(carousel_content_identity(carousel))
+}
+
+function update_carousel_navs(carousel: HTMLElement, prev: HTMLElement, next: HTMLElement, key: string, restore_left = 0) {
   const max_left = carousel.scrollWidth - carousel.clientWidth
   const prev_on = carousel.scrollLeft > 1
   const next_on = carousel.scrollLeft < max_left - 1
   prev.dataset.on = String(prev_on)
   next.dataset.on = String(next_on)
-  carousel_snapshots.set(carousel_key(carousel), {
+  carousel_snapshots.delete(key)
+  carousel_snapshots.set(key, {
     left: restore_left || carousel.scrollLeft,
     prev: prev_on,
     next: next_on,
     hint: next.dataset.hint === 'true',
   })
+  if (carousel_snapshots.size > carousel_snapshot_limit)
+    carousel_snapshots.delete(carousel_snapshots.keys().next().value!)
   return { prev: prev_on, next: next_on }
 }
 
@@ -63,10 +79,15 @@ function setup_carousel(carousel: HTMLElement) {
   if (! shell || shell.dataset.wired) {
     return
   }
+  const prev_button = shell.querySelector<HTMLElement>(':scope > .carousel-prev')
+  const next_button = shell.querySelector<HTMLElement>(':scope > .carousel-next')
+  if (! prev_button || ! next_button)
+    return
   shell.dataset.wired = 'true'
   let active = true
   let initialized = false
-  const snapshot = carousel_snapshots.get(carousel_key(carousel))
+  const key = carousel_key(carousel)
+  const snapshot = carousel_snapshots.get(key)
   let restore_left = snapshot?.left ?? 0
   let frame: number | undefined
   const release_fx = () => {
@@ -98,26 +119,23 @@ function setup_carousel(carousel: HTMLElement) {
         frame = requestAnimationFrame(release_fx)
       }
     }
-    const navs = update_carousel_navs(carousel, restore_left)
-    if (! navs)
-      return
+    const navs = update_carousel_navs(carousel, prev_button, next_button, key, restore_left)
     const width = carousel_fade_width(shell)
     fades.set([navs.prev ? width : 0, navs.next ? width : 0], restoring || ! initialized || reduced_motion())
     initialized = true
   }
-  // Scroll to the start of the next/previous image rather than a raw
-  // viewport step, so an image always lands at the strip's leading edge.
-  // The landing target shifts back by the edge-fade width so the image
-  // clears the faded zone instead of arriving underneath it, and the
-  // search pivots on that same fade edge (active only once scrolled).
-  const scroll_to_image = (direction: number) => {
+  // Align a target item just past the edge fade. Search past that offset
+  // even at the start: a short first item can put its neighbor inside the
+  // fade width, where trying to align that neighbor would not scroll.
+  const scroll_to_item = (direction: number) => {
     restore_left = 0
     release_fx()
     const max_left = carousel.scrollWidth - carousel.clientWidth
     const fade = carousel_fade_width(shell)
-    const pivot = carousel.scrollLeft + (carousel.scrollLeft > 1 ? fade : 0)
-    const offsets = [... carousel.children].map(child =>
-      (child as HTMLElement).offsetLeft - carousel.offsetLeft)
+    const pivot = carousel.scrollLeft + fade
+    const offsets = [... carousel.children]
+      .filter(child => ! child.classList.contains('carousel-space'))
+      .map(child => (child as HTMLElement).offsetLeft - carousel.offsetLeft)
     const target = direction > 0
       ? offsets.find(offset => offset > pivot + 1)
       : [... offsets].reverse().find(offset => offset < pivot - 1)
@@ -137,10 +155,8 @@ function setup_carousel(carousel: HTMLElement) {
       motion.set([destination])
     }
   }
-  const prev_button = shell.querySelector<HTMLElement>('.carousel-prev')
-  const next_button = shell.querySelector<HTMLElement>('.carousel-next')
-  const on_prev = () => scroll_to_image(- 1)
-  const on_next = () => scroll_to_image(1)
+  const on_prev = () => scroll_to_item(- 1)
+  const on_next = () => scroll_to_item(1)
   prev_button?.addEventListener('click', on_prev)
   next_button?.addEventListener('click', on_next)
   // First-scroll nudge: the next button shows a "右边还有" label until the
@@ -157,7 +173,9 @@ function setup_carousel(carousel: HTMLElement) {
   if (next_button && snapshot?.hint !== false) {
     next_button.dataset.hint = 'true'
   }
-  const on_scroll = () => {
+  const on_scroll = (event: Event) => {
+    if (event.target !== carousel)
+      return
     if (! restore_left && next_button?.dataset.hint) {
       delete next_button.dataset.hint
     }
@@ -165,7 +183,11 @@ function setup_carousel(carousel: HTMLElement) {
   }
   carousel.addEventListener('scroll', on_scroll, { passive: true })
   // Manual input takes over from the smooth-scroll fallback immediately.
-  const interrupt_scroll = () => {
+  const interrupt_scroll = (event: Event) => {
+    const target = event.target as Element | null
+    const owner = target?.closest?.('.carousel-shell')
+    if (owner && owner !== shell)
+      return
     stop_scroll?.()
     restore_left = 0
     release_fx()

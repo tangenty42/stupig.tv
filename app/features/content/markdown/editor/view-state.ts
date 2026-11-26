@@ -6,6 +6,7 @@ export interface EditorScrollPosition {
 export interface StoryEditorPosition {
   anchor: number
   head: number
+  focused: boolean
   editor: EditorScrollPosition
   preview: EditorScrollPosition
   page: EditorScrollPosition
@@ -48,7 +49,7 @@ export function parse_editor_view_state(value: unknown): StoryEditorViewState | 
     split_ratio: Math.min(0.8, Math.max(0.2, finite(input.split_ratio, 0.5))),
     attachments_width: Math.min(384, Math.max(160, finite(input.attachments_width, 256))),
     position: position && typeof position === 'object'
-      ? { anchor: Math.floor(finite(position.anchor)), head: Math.floor(finite(position.head)), editor: scroll_position(position.editor), preview: scroll_position(position.preview), page: scroll_position(position.page) }
+      ? { anchor: Math.floor(finite(position.anchor)), head: Math.floor(finite(position.head)), focused: position.focused === true, editor: scroll_position(position.editor), preview: scroll_position(position.preview), page: scroll_position(position.page) }
       : null,
   }
 }

@@ -17,14 +17,13 @@ function setup() {
   const rect = { left: 10, top: 20, width: 400, height: 200 }
   const canvas = { width: 800, height: 400, getBoundingClientRect: () => rect }
   const size = ref({ width: 800, height: 400 })
-  const tool = ref<'move' | 'brush' | 'crop'>('move')
   const busy = ref(false)
   const loading = ref(false)
   const error = ref('')
   const api: ReturnType<typeof useImageEditorViewport> = useImageEditorViewport({ stage: shallowRef(stage as unknown as HTMLElement), stroke_canvas: shallowRef(canvas as unknown as HTMLCanvasElement),
     natural_size: size, busy: () => busy.value || api.pan_state.value !== null,
-    loading: () => loading.value, load_error: () => error.value, tool: () => tool.value })
-  return { api, stage, canvas, rect, size, tool, busy, loading, error }
+    loading: () => loading.value, load_error: () => error.value })
+  return { api, stage, canvas, rect, size, busy, loading, error }
 }
 function pointer(values: Partial<PointerEvent> = {}) {
   return { pointerId: 1, button: 0, pointerType: 'mouse', clientX: 110, clientY: 70, preventDefault: vi.fn(), ... values } as unknown as PointerEvent
@@ -87,6 +86,7 @@ it.each(['plain', 'busy', 'loading', 'error'])('leaves %s wheel handling to its 
 
 it('captures one pan pointer, ignores another finger and releases capture on reset', () => {
   const f = setup()
+  f.api.space_held.value = true
   f.api.on_stage_pointerdown(pointer())
   expect(f.stage.setPointerCapture).toHaveBeenCalledExactlyOnceWith(1)
   f.api.on_stage_pointerdown(pointer({ pointerId: 2 }))
@@ -96,7 +96,6 @@ it('captures one pan pointer, ignores another finger and releases capture on res
   expect([f.stage.scrollLeft, f.stage.scrollTop]).toEqual([- 40, - 20])
   f.api.on_stage_pointerup(pointer({ pointerId: 2 }))
   expect(f.api.pan_state.value).not.toBeNull()
-  f.api.space_held.value = true
   f.api.reset()
   expect(f.stage.releasePointerCapture).toHaveBeenCalledExactlyOnceWith(1)
   expect(f.api.pan_state.value).toBeNull()
@@ -105,8 +104,10 @@ it('captures one pan pointer, ignores another finger and releases capture on res
 
 it('keeps brush strokes separate from space/middle-button panning and maps coordinates to image pixels', () => {
   const f = setup()
-  f.tool.value = 'brush'
   expect(f.api.is_pan_gesture(pointer())).toBe(false)
+  f.api.on_stage_pointerdown(pointer())
+  expect(f.stage.setPointerCapture).not.toHaveBeenCalled()
+  expect(f.api.pan_state.value).toBeNull()
   f.api.space_held.value = true
   expect(f.api.is_pan_gesture(pointer())).toBe(true)
   f.api.space_held.value = false

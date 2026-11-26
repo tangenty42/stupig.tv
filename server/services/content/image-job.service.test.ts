@@ -20,14 +20,17 @@ const base = {
   profile: { maxInputBytes: 100, maxPixels: 100, webpQuality: 60, webpEffort: 0, jpegQuality: 85, jpegBackground: '#ffffff', lqipMaxDimension: 24, lqipQuality: 30, timeoutSeconds: 10 },
 }
 describe('durable image intent', () => {
-  it('requires a confidential source for redaction and preserves privacy on ordinary copies', () => {
+  it('keeps overwrite privacy fixed and requires the redaction flag for private-to-public copies', () => {
     expect(image_job_intent_schema.safeParse(base).success).toBe(true)
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'redacted' }).success).toBe(false)
     const source = { id: 2, revision: 1, node_revision: 3, key: 'content/att/images/a.webp', is_private: true }
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'redacted', source }).success).toBe(true)
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'redacted', source, is_private: true }).success).toBe(false)
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'copy', source }).success).toBe(false)
+    expect(image_job_intent_schema.safeParse({ ... base, mode: 'copy', source, redaction: true }).success).toBe(true)
     expect(image_job_intent_schema.safeParse({ ... base, mode: 'copy', source, is_private: true }).success).toBe(true)
+    expect(image_job_intent_schema.safeParse({ ... base, mode: 'overwrite', source }).success).toBe(false)
+    expect(image_job_intent_schema.safeParse({ ... base, mode: 'overwrite', source, is_private: true }).success).toBe(true)
   })
   it('does not accept arbitrary external input URLs or invalid encoding profiles', () => {
     expect(image_job_intent_schema.safeParse({ ... base, input: { ... base.input, key: 'https://other/secret' } }).success).toBe(false)
@@ -48,7 +51,7 @@ async function pipeline() {
       intent: { ... base, input, profile: { ... base.profile, maxInputBytes: 1000 } } as ImageJobIntent,
       result: null as Record<string, unknown> | null, attachment_id: null as number | null },
     attempts: [] as { id: string, job_id: string, display_key: string, fallback_key: string, cleanup_required: number, adopted: number }[],
-    attachment: { id: 2, story_id: 1, object_key: input.key, storage_provider: 'aliyun', encryption_key: null, node_revision: 1, is_private: 0, original_key: null } as Record<string, unknown>,
+    attachment: { id: 2, story_id: 1, object_key: input.key, node_revision: 1, is_private: 0, original_key: null } as Record<string, unknown>,
     retired: [] as string[],
     preloads: [] as string[],
     events: [] as { resource: string }[],
@@ -390,12 +393,14 @@ it.each(['keep', 'discard'] as const)('honors the %s decision when overwriting n
   expect(f.state.retired.includes('redacted.webp')).toBe(policy === 'discard')
 })
 
-async function copy_pipeline() {
+async function copy_pipeline(is_private = false) {
   const f = await pipeline()
-  const source = { id: 77, story_id: 1, storage_provider: 'aliyun', encryption_key: null, is_private: 0,
+  const source = { id: 77, story_id: 1, is_private: 0,
     object_key: 'source.webp', display_key: 'source.webp', image_revision: 1, node_revision: 1, original_key: 'source-original' }
   f.state.job.intent.mode = 'copy'
-  f.state.attachment.file_name = 'docs/副本.webp'
+  f.state.job.intent.is_private = is_private
+  f.state.attachment.is_private = Number(is_private)
+  f.state.attachment.file_name = is_private ? 'vault.good/副本.webp' : 'docs/副本.webp'
   f.state.job.intent.source = { id: 77, revision: 1, node_revision: 1, key: source.display_key, is_private: false }
   const execute = f.connection.execute.getMockImplementation()!
   f.connection.execute.mockImplementation(async (sql, values = []) => {
@@ -406,8 +411,8 @@ async function copy_pipeline() {
   return { f, source }
 }
 
-it('publishes an independent edited copy with its own initial WebP archive and no source pointers', async () => {
-  const { f, source } = await copy_pipeline()
+it.each([false, true])('publishes an independent edited copy (private: %s) with its own initial WebP archive and no source pointers', async (is_private) => {
+  const { f, source } = await copy_pipeline(is_private)
   await f.jobs.run(f.state.job.id, 1)
   const key = image_original_key(f.state.job.id, f.state.job.active_attempt_id!)
   const display = f.state.job.result!.display as { key: string, size: number, sha256: string }
@@ -416,7 +421,7 @@ it('publishes an independent edited copy with its own initial WebP archive and n
   expect(f.objects.get(key)?.bytes).toEqual(f.objects.get(display.key)?.bytes)
   expect(f.storage.copy_object).toHaveBeenCalledExactlyOnceWith(display.key, key, 'private')
   await f.adopt()
-  expect(f.state.attachment).toMatchObject({ original_key: key, display_key: display.key, fallback_key: expect.stringMatching(/\.jpg$/), source_display_key: null,
+  expect(f.state.attachment).toMatchObject({ is_private: Number(is_private), original_key: key, display_key: display.key, fallback_key: expect.stringMatching(/\.jpg$/), source_display_key: null,
     image_metadata: { original: { key, name: '副本.webp', mime: 'image/webp' }, source_id: null, source_revision: null, redaction_source_id: null } })
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_id')
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_key')
@@ -435,8 +440,8 @@ it('still fences a changed source before an independent copy has published', asy
   expect(f.state.attachment.original_key).toBeNull()
 })
 
-it('keeps the initial copy archive through subsequent overwrite edits and retires only replaced roles', async () => {
-  const { f } = await copy_pipeline()
+it.each([false, true])('keeps the initial copy archive through overwrite edits (private: %s) and retires only replaced roles', async (is_private) => {
+  const { f } = await copy_pipeline(is_private)
   await f.jobs.run(f.state.job.id, 1)
   await f.adopt()
   Object.assign(f.state.attachment.image_metadata as object, { archive_source_id: 77, archive_source_key: 'obsolete' })
@@ -449,11 +454,11 @@ it('keeps the initial copy archive through subsequent overwrite edits and retire
   Object.assign(input, uploaded)
   Object.assign(f.state.job, { id: 'd'.repeat(32), status: 'queued', result: null })
   Object.assign(f.state.job.intent, { mode: 'overwrite', input,
-    source: { id: 2, revision: Number(f.state.attachment.image_revision), node_revision: Number(f.state.attachment.node_revision), key: display, is_private: false } })
+    source: { id: 2, revision: Number(f.state.attachment.image_revision), node_revision: Number(f.state.attachment.node_revision), key: display, is_private } })
   await f.jobs.run(f.state.job.id, 1)
   expect(f.state.job.result?.original).toBeNull()
   await f.adopt(Number(f.state.attachment.node_revision))
-  expect(f.state.attachment.original_key).toBe(archive)
+  expect(f.state.attachment).toMatchObject({ original_key: archive, is_private: Number(is_private) })
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_id')
   expect(f.state.attachment.image_metadata).not.toHaveProperty('archive_source_key')
   expect(f.objects.get(archive)?.bytes).toEqual(initial)

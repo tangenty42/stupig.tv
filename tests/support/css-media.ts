@@ -98,7 +98,7 @@ export async function check_css_media(browser: MediaBrowser) {
   expect(loaded.height).toBeCloseTo(loading.height, 0)
   await browser.capture?.('media-narrow-loaded')
   await browser.click('[data-testid="media-public"]')
-  await expect.poll(() => browser.execute('return document.querySelectorAll(".encrypted-image-denied").length')).toBe(5)
+  await expect.poll(() => browser.execute('return document.querySelectorAll(".content-placeholder-denied.content-placeholder-media").length')).toBe(5)
   expect(await browser.execute('return document.querySelectorAll(".story-body img, .story-body .image-loading-mask").length')).toBe(0)
   return { initial, at_end, loading, loaded, failed, samples, final: await state() }
 }

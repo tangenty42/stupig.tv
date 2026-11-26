@@ -101,12 +101,13 @@ export async function get_draft(actor: AuthUser, input: { id?: string, story_id?
   })
 }
 
-export async function list_drafts(actor: AuthUser, after = '', limit = 30) {
+export async function list_drafts(actor: AuthUser) {
   return transaction(async (connection) => {
     await require_draft_actor(connection, actor)
-    const [rows] = await connection.execute<RowDataPacket[]>(`SELECT id, story_id, LEFT(markdown, 4096) AS prefix, CHAR_LENGTH(markdown) <= 4096 AS complete, updated_at FROM content_story_drafts WHERE (story_id IS NULL OR unpublished_changes = 1) AND id > ? ORDER BY id LIMIT ${limit + 1}`, [after])
-    const items: ContentDraftSummary[] = rows.slice(0, limit).map(row => ({ id: String(row.id), story_id: row.story_id === null ? null : Number(row.story_id), title: draft_title(String(row.prefix), Boolean(row.complete)), updated_at: new Date(row.updated_at).toISOString() }))
-    return { items, next: rows.length > limit ? String(rows[limit - 1]!.id) : null, channel: wire_resource('content_drafts:all') }
+    const [rows] = await connection.execute<RowDataPacket[]>(`SELECT id, story_id, LEFT(markdown, 4096) AS prefix, CHAR_LENGTH(markdown) <= 4096 AS complete, updated_at
+      FROM content_story_drafts WHERE (story_id IS NULL OR unpublished_changes = 1) ORDER BY updated_at DESC, id DESC`)
+    const items: ContentDraftSummary[] = rows.map(row => ({ id: String(row.id), story_id: row.story_id === null ? null : Number(row.story_id), title: draft_title(String(row.prefix), Boolean(row.complete)), updated_at: new Date(row.updated_at).toISOString() }))
+    return { items, channel: wire_resource('content_drafts:all') }
   })
 }
 
@@ -115,7 +116,7 @@ export async function create_draft(actor: AuthUser, request_id: string): Promise
     const title = await lock_title_namespace(connection)
     await require_draft_actor(connection, actor)
     const id = randomBytes(16).toString('hex')
-    const markdown = story_markdown_template(new Date().toISOString().slice(0, 10).replaceAll('-', '/'))
+    const markdown = story_markdown_template()
     await connection.execute(`INSERT INTO content_story_drafts (id, create_request_id, markdown, title_revision, created_by, updated_by)
       VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`, [id, request_id, markdown, title.revision, actor.id, actor.id])
     const [rows] = await connection.execute<DraftRow[]>(`${draft_select} WHERE d.created_by = ? AND d.create_request_id = ? FOR UPDATE`, [actor.id, request_id])
@@ -192,10 +193,12 @@ export async function command_draft(actor: AuthUser, input: DraftCommand): Promi
         }
       }
       if (receipt.ok && input.kind === 'reset' && row.story_id) {
-        const [mains] = row.story_id ? await connection.execute<RowDataPacket[]>('SELECT markdown, revision, namespace_revision FROM content_stories WHERE id = ?', [row.story_id]) : [[]]
+        // 档案已在 lock_draft 中锁定；档案删除会级联删除草稿，所以必有一行
+        const [mains] = await connection.execute<RowDataPacket[]>('SELECT markdown, revision, namespace_revision FROM content_stories WHERE id = ?', [row.story_id])
+        const main = mains[0]!
         await connection.execute(`UPDATE content_story_drafts SET markdown = ?, published_main_revision = ?, namespace_revision = ?, title_revision = ?,
-          draft_revision = draft_revision + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP(3), unpublished_changes = ? WHERE id = ?`,
-        [mains[0]?.markdown ?? story_markdown_template(new Date().toISOString().slice(0, 10).replaceAll('-', '/')), mains[0]?.revision ?? null, mains[0]?.namespace_revision ?? 0, title!.revision, actor.id, mains[0] ? 0 : 1, input.id])
+          draft_revision = draft_revision + 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP(3), unpublished_changes = 0 WHERE id = ?`,
+        [main.markdown, main.revision, main.namespace_revision, title!.revision, actor.id, input.id])
       }
       if (receipt.ok && (input.kind === 'delete' || (input.kind === 'reset' && ! row.story_id))) {
         if (row.story_id)

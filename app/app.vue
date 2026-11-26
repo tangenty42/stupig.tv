@@ -1,6 +1,25 @@
 <template>
   <div class="min-h-screen overflow-x-clip" :style="app_layout_vars">
-    <Toast position="center" />
+    <Toast position="center">
+      <template #message="{ message }">
+        <MyIcon :name="toast_icons[message.severity ?? 'info'] ?? 'lucide:info'" class="p-toast-message-icon" aria-hidden="true" />
+        <div class="p-toast-message-text min-w-0" :data-p="message.severity">
+          <span class="p-toast-summary" :data-p="message.severity">{{ message.summary }}</span>
+          <div v-if="message.detail" class="p-toast-detail" :data-p="message.severity">
+            <template v-if="typeof message.detail === 'string'">
+              {{ message.detail }}
+            </template>
+            <template v-else>
+              <div v-for="(detail, index) in Array.isArray(message.detail) ? message.detail : [message.detail]" :key="index" class="break-words">
+                {{ detail.before }}<MyBadge outlined type="info" class="mx-1 max-w-full [overflow-wrap:anywhere]">
+                  {{ detail.badge }}
+                </MyBadge>{{ detail.after }}
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </Toast>
     <ConfirmPopup :pt="{ transition: confirm_popup_transition }">
       <template #accepticon>
         <MyIcon name="lucide:check" />
@@ -36,7 +55,7 @@
 
         <NuxtLink
           class="absolute left-3 top-[0.6rem] z-20 transition-[filter] duration-300 hover:blur-[1px] active:blur-[1px]"
-          :class="{ 'pointer-events-none': header_shift_progress === 1 }"
+          :class="{ invisible: header_shift_progress === 1 }"
           :style="logo_style"
           to="/"
         >
@@ -55,7 +74,7 @@
         </NuxtLink>
 
         <div class="absolute right-2 top-2 z-30 flex items-center gap-2">
-          <Button aria-label="切换浅色 / 深色模式" text severity="secondary" @click="toggle_color_mode">
+          <Button aria-label="切换浅色 / 深色模式" class="aspect-square" text severity="secondary" @click="toggle_color_mode">
             <template #icon>
               <MyIcon :name="my_color_mode === 'dark' ? 'lucide:sun' : 'lucide:moon'" />
             </template>
@@ -92,7 +111,7 @@
     </header>
 
     <main class="mx-auto max-w-5xl px-4 pt-36">
-      <NuxtPage />
+      <NuxtPage :transition="page_transition" />
     </main>
 
     <MyAccountAuthDialog v-model:visible="auth_dialog_visible" />
@@ -105,11 +124,19 @@ import { useAccountIdentity } from '~/features/account/auth'
 
 const static_url = useStaticUrl()
 const { clear: clear_toasts } = useMyToast()
+const toast_icons: Record<string, string> = {
+  success: 'lucide:check',
+  info: 'lucide:info',
+  warn: 'lucide:triangle-alert',
+  error: 'lucide:circle-x',
+}
 const account = useAccountIdentity()
 const { user, logout } = account
 const color_mode = useColorMode()
 const my_color_mode = useMyColorMode()
 const route = useRoute()
+const nuxt_app = useNuxtApp()
+const page_transition = { name: 'site-page', mode: 'out-in', appear: true } as const
 // Page-loading state emitted around client-side navigations; throttled by
 // Nuxt so quick route changes don't flash the icon.
 const { isLoading: route_loading } = useLoadingIndicator()
@@ -233,6 +260,10 @@ function on_escape_key(event: KeyboardEvent) {
 }
 let header_observer: ResizeObserver | null = null
 let viewport_observer: ResizeObserver | null = null
+let stop_hydration_hook: (() => void) | undefined
+function hide_app_loading_mask() {
+  (window as Window & { __hide_app_loading_mask?: () => void }).__hide_app_loading_mask?.()
+}
 onMounted(() => {
   if (! CSS.supports('overflow', 'clip')) {
     // Full-bleed bands must exclude scrollbar gutters when the app root
@@ -242,8 +273,11 @@ onMounted(() => {
     viewport_observer = new ResizeObserver(measure_viewport)
     viewport_observer.observe(document.documentElement)
   }
-  // The first-paint mask is injected by the inline head script in nuxt.config.ts.
-  (window as Window & { __hide_app_loading_mask?: () => void }).__hide_app_loading_mask?.()
+  // The app shell may mount before a page has finished hydrating.
+  if (nuxt_app.isHydrating)
+    stop_hydration_hook = nuxt_app.hooks.hookOnce('app:suspense:resolve', hide_app_loading_mask)
+  else
+    hide_app_loading_mask()
 
   on_scroll()
   window.addEventListener('scroll', on_scroll, { passive: true })
@@ -256,6 +290,7 @@ onMounted(() => {
   }
 })
 onUnmounted(() => {
+  stop_hydration_hook?.()
   window.removeEventListener('scroll', on_scroll)
   window.removeEventListener('keydown', on_escape_key)
   header_observer?.disconnect()

@@ -74,6 +74,26 @@ it('admits the complete selection without reading any file bytes', async () => {
   expect(store.preparations).toEqual([])
 })
 
+it('can start a new upload after ID generation fails on a browser without randomUUID', async () => {
+  const store = useContentUploadsStore(24)
+  const file = new File(['abc'], 'a.txt')
+  const entries = [{ file, file_name: file.name }]
+  const browser_crypto = { getRandomValues: vi.fn(crypto.getRandomValues.bind(crypto)) }
+  const stub = vi.spyOn(globalThis, 'crypto', 'get').mockReturnValue(browser_crypto as unknown as Crypto)
+  try {
+    browser_crypto.getRandomValues.mockImplementationOnce(() => {
+      throw new Error('unavailable')
+    })
+    await expect(store.start(entries)).rejects.toThrow('unavailable')
+    expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+    expect(store.preparations).toEqual([])
+    await store.start(entries)
+    expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
+    expect(state.api.begin_upload_batch.mock.calls[0]![0].request_id).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/)
+  }
+  finally { stub.mockRestore() }
+})
+
 it('forgets a mismatched selection so continuing can request another file', async () => {
   const store = useContentUploadsStore(24)
   const handle = { queryPermission: vi.fn().mockResolvedValue('granted'), getFile: vi.fn() } as unknown as FileSystemFileHandle
@@ -84,6 +104,25 @@ it('forgets a mismatched selection so continuing can request another file', asyn
   await vi.waitFor(() => expect(state.delete_handle).toHaveBeenCalledOnce())
   expect(await store.resume(session.id)).toBe(false)
   expect(state.api.adopt_upload_session).not.toHaveBeenCalled()
+})
+
+it('keeps a read failure visible, releases the stale source and continues the same session with a reselected file', async () => {
+  const store = useContentUploadsStore(24)
+  const handle = { queryPermission: vi.fn().mockResolvedValue('granted'), getFile: vi.fn() } as unknown as FileSystemFileHandle
+  state.run.mockRejectedValueOnce(Object.assign(new Error('无法读取原文件，请重新选择'), { code: 'UPLOAD_FILE_UNREADABLE' }))
+  await store.start([{ file: new File(['abc'], 'a.txt'), file_name: 'a.txt', handle }])
+  await vi.waitFor(() => expect(store.active.size).toBe(0))
+  expect(store.sessions).toHaveLength(1)
+  expect(store.errors.get(session.id)).toContain('重新选择')
+  expect(store.has_file(session.id)).toBe(false)
+  expect(await store.resume(session.id)).toBe(false)
+  expect(store.errors.get(session.id)).toContain('读取')
+  expect(handle.getFile).not.toHaveBeenCalled()
+  const reselected = new File(['abc'], 'a.txt')
+  await store.resume(session.id, reselected)
+  expect(state.run).toHaveBeenLastCalledWith(reselected)
+  expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
+  expect(store.sessions).toEqual([])
 })
 
 it('rejects over-limit selections before reading bytes or creating sessions', async () => {
@@ -100,21 +139,28 @@ it('rejects over-limit selections before reading bytes or creating sessions', as
   expect(read).not.toHaveBeenCalled()
 })
 
-it('keeps oversized images in the existing preparation error row without admission or a thrown popup error', async () => {
+it('rejects an oversized image in its preparation row and admits an image at the long-side and pixel limits', async () => {
   const header = new Uint8Array(32)
   const view = new DataView(header.buffer)
   view.setUint32(0, 0x89504E47)
   view.setUint32(4, 0x0D0A1A0A)
   view.setUint32(12, 0x49484452)
-  view.setUint32(16, 4097)
+  view.setUint32(16, 8193)
   view.setUint32(20, 2)
   const file = new File([header], 'wide.png', { type: 'image/png' })
   const store = useContentUploadsStore(24)
   await expect(store.start([{ file, file_name: file.name }])).resolves.toBeUndefined()
-  expect(store.preparations[0]).toMatchObject({ path: 'wide.png', phase: 'failed', error: expect.stringContaining('4097×2') })
+  expect(store.preparations[0]).toMatchObject({ path: 'wide.png', phase: 'failed', error: expect.stringContaining('8193×2') })
   expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
   expect(state.run).not.toHaveBeenCalled()
   expect(store.can_cancel_preparation).toBe(true)
+
+  store.cancel_preparation()
+  view.setUint32(16, 8192)
+  view.setUint32(20, 2048)
+  const accepted = new File([header], file.name, { type: file.type })
+  await store.start([{ file: accepted, file_name: accepted.name }])
+  expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
 })
 
 it('cancels an in-flight header read without letting it admit the old selection', async () => {
@@ -129,6 +175,19 @@ it('cancels an in-flight header read without letting it admit the old selection'
   await pending
   expect(store.preparations).toEqual([])
   expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+})
+
+it('ends the whole preparation when an image read is denied, then accepts a fresh selection', async () => {
+  const store = useContentUploadsStore(24)
+  const image = image_file('denied.png')
+  vi.spyOn(image, 'slice').mockReturnValue({ arrayBuffer: vi.fn().mockRejectedValue(new DOMException('Access revoked', 'NotReadableError')) } as unknown as Blob)
+  const text = new File(['abc'], 'a.txt')
+  await store.start([text, image].map(file => ({ file, file_name: file.name })))
+  expect(store.preparations).toMatchObject([{ path: 'denied.png', phase: 'failed', error: expect.stringContaining('读取权限') }])
+  expect(state.api.begin_upload_batch).not.toHaveBeenCalled()
+  await store.start([{ file: text, file_name: text.name }])
+  await vi.waitFor(() => expect(store.sessions).toEqual([]))
+  expect(state.api.begin_upload_batch).toHaveBeenCalledOnce()
 })
 
 it('does not pretend to cancel an unknown admission result and retries its original identity', async () => {
@@ -330,6 +389,43 @@ it('records the selected original filename independently of a replacement logica
   await vi.waitFor(() => expect(store.active.size).toBe(0))
 })
 
+it('marks image editor operations while uploads wait for admission', async () => {
+  const response = deferred<unknown>()
+  state.api.begin_upload_batch.mockReturnValueOnce(response.promise)
+  const store = useContentUploadsStore(24)
+  const pending = store.start([
+    { file: image_file('edited.png', 'image/png'), file_name: 'edit.png', purpose: 'replace', source: { id: 9, version: 'v1' }, image_mode: 'overwrite' },
+    { file: image_file('external.png', 'image/png'), file_name: 'other.png', purpose: 'replace', source: { id: 10, version: 'v1' } },
+    { file: image_file('edited.png', 'image/png'), file_name: 'copy.png', image_mode: 'copy', source: { id: 9, version: 'v1' } },
+    { file: image_file('edited.png', 'image/png'), file_name: 'vault.good/photo.png', image_mode: 'copy', source: { id: 11, version: 'v1' }, save_as_redaction: true },
+    { file: image_file('new.png', 'image/png'), file_name: 'new.png' },
+  ])
+  try {
+    await vi.waitFor(() => expect(state.api.begin_upload_batch).toHaveBeenCalledOnce())
+    expect(store.preparations.map(item => [item.path, item.image_overwrite, item.image_save_as])).toEqual([
+      ['edit.png', true, undefined],
+      ['other.png', undefined, undefined],
+      ['copy.png', undefined, true],
+      ['vault.good/photo.png', undefined, true],
+      ['new.png', undefined, undefined],
+    ])
+  }
+  finally {
+    response.resolve({ accepted: [], sessions: [], skipped: [], renamed: [] })
+    await pending
+  }
+})
+
+it('forwards explicit redaction intent with the edited image admission request', async () => {
+  state.api.begin_upload_batch.mockResolvedValue({ accepted: [], sessions: [], skipped: [], renamed: [] })
+  const store = useContentUploadsStore(24)
+  const source = { id: 9, version: 'v1' }
+  await store.start([{ file: image_file('edited.png', 'image/png'), file_name: 'vault.good/photo.jpg', image_mode: 'copy', source, save_as_redaction: true }])
+  expect(state.api.begin_upload_batch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ entries: [expect.objectContaining({
+    path: 'vault.good/photo.jpg', purpose: 'create', image_mode: 'copy', source, save_as_redaction: true,
+  })] }))
+})
+
 it.each([
   ['create', 'Photo.JPG', 'Photo.jpg', undefined],
   ['create', 'Album.JPG/Camera/Photo.PNG', 'Album.JPG/Camera/Photo.png', 'Album.JPG'],
@@ -410,15 +506,21 @@ it('keeps the request identity on network retry and changes it only after explic
   state.api.begin_upload_batch.mockRejectedValueOnce(new Error('network'))
   await store.start([{ file: new File(['abc'], 'a.txt'), file_name: 'a.txt' }])
   const original = state.api.begin_upload_batch.mock.calls[0]![0].request_id
-  expect(store.admission_error).toBe('network')
+  expect(store.admission_error).toBe('上传受理结果待确认')
   expect(state.run).not.toHaveBeenCalled()
-  state.api.begin_upload_batch.mockRejectedValueOnce({ code: 'BATCH_REJECTED', details: { items: [{ target: 'a.txt', category: 'name_conflict', code: 'NAME_TAKEN', reason: 'taken', allowed: ['fail', 'suffix'] }], valid_count: 0 } })
+  state.api.begin_upload_batch.mockRejectedValueOnce({ code: 'BATCH_REJECTED', details: { items: [{ item: 0, target: 'a.txt', category: 'name_conflict', code: 'NAME_TAKEN', reason: 'taken', allowed: ['fail', 'suffix'] }], valid_count: 0 } })
   await store.submit()
   expect(state.api.begin_upload_batch.mock.calls[1]![0].request_id).toBe(original)
   expect(store.resolution?.items[0]?.code).toBe('NAME_TAKEN')
+  state.api.begin_upload_batch.mockRejectedValueOnce(new Error('resubmission reply lost'))
   await store.submit(error_policy_schema.parse({ name_conflict: 'suffix' }))
-  expect(state.api.begin_upload_batch.mock.calls[2]![0].request_id).not.toBe(original)
+  const resubmitted = state.api.begin_upload_batch.mock.calls[2]![0].request_id
+  expect(resubmitted).not.toBe(original)
   expect(store.resolution).toBeNull()
+  await store.submit()
+  expect(state.api.begin_upload_batch.mock.calls[3]![0]).toMatchObject({
+    request_id: resubmitted, on_error: { name_conflict: 'fail', by_item: { 0: { name_conflict: 'suffix' } } },
+  })
   await vi.waitFor(() => expect(store.sessions).toEqual([]))
 })
 
